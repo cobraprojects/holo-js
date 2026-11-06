@@ -1,10 +1,11 @@
+import { TableQueryBuilder } from '@holo-js/db'
 import type { DatabaseMutationEvent } from './dependencies'
 import {
   matchesGroupedCountHaving,
   readMatchingGroupedAggregateValue,
   sortGroupedAggregateRows,
 } from './query-grouped-aggregate-common'
-import { createBackfillQuery, getBackfillDatabaseConnection } from './query-backfill'
+import { getBackfillDatabaseConnection, readBackfilledValue } from './query-backfill'
 import {
   UNCHANGED_QUERY_RESULT,
   UNPATCHED_RESULT,
@@ -178,6 +179,21 @@ function createGroupedAggregateValueBackfillKey(
     + '}'
 }
 
+function whereGroupValues(
+  builder: TableQueryBuilder<string, Record<string, unknown>>,
+  groupColumn: string,
+  values: readonly unknown[],
+): TableQueryBuilder<string, Record<string, unknown>> {
+  const presentValues = values.filter(value => value !== null)
+  if (presentValues.length === values.length) {
+    return builder.where(groupColumn, 'in', values)
+  }
+
+  return builder.where(group => presentValues.length === 0
+    ? group.whereNull(groupColumn)
+    : group.where(groupColumn, 'in', presentValues).orWhereNull(groupColumn))
+}
+
 async function fetchGroupedAggregateValues(
   query: DatabaseQueryObservation,
   groupedAggregate: DatabaseQueryGroupedAggregateObservation,
@@ -189,13 +205,12 @@ async function fetchGroupedAggregateValues(
     return undefined
   }
 
-  let builder = createBackfillQuery(query, connection)
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
   for (const predicate of query.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
 
-  let aggregateBuilder = builder
-    .where(groupedAggregate.groupColumn, 'in', values)
+  let aggregateBuilder = whereGroupValues(builder, groupedAggregate.groupColumn, values)
     .select(groupedAggregate.groupColumn)
   if (groupedAggregate.kind === 'count') {
     aggregateBuilder = aggregateBuilder.addSelectCount(GROUPED_AGGREGATE_VALUE_KEY)
@@ -231,7 +246,7 @@ async function fetchGroupedAggregateValues(
     .get<Record<string, unknown>>()
   const results = new Map<unknown, GroupedAggregateValueBackfillResult>()
   for (const row of rows) {
-    const groupValue = row[groupedAggregate.groupColumn]
+    const groupValue = readBackfilledValue(query.table, groupedAggregate.groupColumn, row[groupedAggregate.groupColumn])
     const value = normalizeAggregateValue(row[GROUPED_AGGREGATE_VALUE_KEY])
     const rowCount = normalizeAggregateMetadataNumber(row[GROUPED_AGGREGATE_ROW_COUNT_KEY])
     if (typeof value === 'undefined') {
@@ -369,13 +384,12 @@ async function fetchGroupedAggregateValueCounts(
     return undefined
   }
 
-  let builder = createBackfillQuery(query, connection)
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
   for (const predicate of query.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
 
-  const rows = await builder
-    .where(groupedAggregate.groupColumn, 'in', values)
+  const rows = await whereGroupValues(builder, groupedAggregate.groupColumn, values)
     .select(groupedAggregate.groupColumn, column)
     .addSelectCount(GROUPED_AGGREGATE_VALUE_COUNT_KEY)
     .groupBy(groupedAggregate.groupColumn)
@@ -394,7 +408,7 @@ async function fetchGroupedAggregateValueCounts(
       return undefined
     }
 
-    pushGroupedAggregateValueCount(groups, row[groupedAggregate.groupColumn], Object.freeze({ count, value }))
+    pushGroupedAggregateValueCount(groups, readBackfilledValue(query.table, groupedAggregate.groupColumn, row[groupedAggregate.groupColumn]), Object.freeze({ count, value }))
   }
 
   const results = new Map<unknown, readonly GroupedAggregateValueCountBackfillResult[]>()

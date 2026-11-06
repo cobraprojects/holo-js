@@ -1,3 +1,4 @@
+import { TableQueryBuilder } from '@holo-js/db'
 import {
   createMutationIndexKey,
   EMPTY_DATABASE_MUTATIONS,
@@ -11,7 +12,6 @@ import {
   createAggregateScopeKey,
 } from './query-metadata'
 import {
-  createBackfillQuery,
   getBackfillDatabaseConnection,
 } from './query-backfill'
 import type {
@@ -195,7 +195,7 @@ async function fetchPaginationCountBackfill(query: DatabaseQueryObservation): Pr
     return undefined
   }
 
-  let builder = createBackfillQuery(query, connection)
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
   for (const predicate of query.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
@@ -217,7 +217,7 @@ async function fetchGroupedPaginationCountBackfill(
     return undefined
   }
 
-  const rows = await createBackfillQuery(query, connection)
+  const rows = await new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
     .where(groupColumn, 'in', values)
     .select(groupColumn)
     .addSelectCount('__holo_count')

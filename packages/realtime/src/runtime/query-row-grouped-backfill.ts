@@ -1,4 +1,4 @@
-import { queryCacheInternals, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
+import { TableQueryBuilder, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
 import {
   readQueryRowWindowMode,
 } from './query-metadata'
@@ -11,10 +11,11 @@ import {
   isQueryObservationContradictedByExactPredicates,
 } from './predicate-dependency-matching'
 import {
-  createBackfillQuery,
   createBackfillSelection,
   getBackfillDatabaseConnection,
-  readBackfillTableKey,
+  observedTableKey,
+  readBackfilledRows,
+  quoteTableReference,
 } from './query-backfill'
 import type {
   BackfillRows,
@@ -116,7 +117,6 @@ function exactRowBackfillQueriesShareScope(
     && readQueryExactIdPredicateValue(candidate) !== NO_EXACT_ID_PREDICATE
     && query.connectionName === candidate.connectionName
     && query.tableName === candidate.tableName
-    && query.table === candidate.table
     && readPrimaryKey(query) === readPrimaryKey(candidate)
     && selectionsEqual(query.selections ?? [], candidate.selections ?? [])
 }
@@ -173,10 +173,8 @@ function createGroupedExactRowBackfillKey(
     + stableStringify(readPrimaryKey(query))
     + ',"selections":'
     + stableStringify(query.selections ?? [])
-    + ',"table":'
-    + stableStringify(readBackfillTableKey(query))
     + ',"tableName":'
-    + stableStringify(query.tableName)
+    + stableStringify(observedTableKey(query))
     + '}'
 }
 
@@ -190,7 +188,7 @@ async function fetchGroupedExactRowBackfill(
   }
 
   const primaryKey = readPrimaryKey(query)
-  let builder = createBackfillQuery(query, connection)
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
   const selections = query.selections ?? []
   const usesHiddenIdentity = selections.length > 0
   if (usesHiddenIdentity) {
@@ -212,7 +210,7 @@ async function fetchGroupedExactRowBackfill(
       return undefined
     }
 
-    rowsById.set(id, Object.freeze([stripGroupedRowIdentity(row, usesHiddenIdentity)]))
+    rowsById.set(id, Object.freeze(readBackfilledRows(query.table, [stripGroupedRowIdentity(row, usesHiddenIdentity)], selections)))
   }
 
   for (const value of values) {
@@ -282,7 +280,6 @@ function groupedWindowBackfillQueriesShareScope(
     && rightPredicate
     && query.connectionName === candidate.connectionName
     && query.tableName === candidate.tableName
-    && query.table === candidate.table
     && query.limit === candidate.limit
     && (query.offset ?? 0) === (candidate.offset ?? 0)
     && leftPredicate.column === rightPredicate.column
@@ -352,10 +349,8 @@ function createGroupedWindowBackfillKey(
     + stableStringify(groupColumn)
     + ',"selections":'
     + stableStringify(query.selections ?? [])
-    + ',"table":'
-    + stableStringify(readBackfillTableKey(query))
     + ',"tableName":'
-    + stableStringify(query.tableName)
+    + stableStringify(observedTableKey(query))
     + '}'
 }
 
@@ -374,10 +369,11 @@ async function fetchGroupedWindowBackfill(
   const rows = await connection.queryCompiled<Record<string, unknown>>(
     compileGroupedWindowBackfillStatement(connection, query, groupColumn, values, offset, limit),
   )
-  return groupWindowRows(queryCacheInternals.readObservedRows(query, connection.getDriver(), rows.rows), values)
+  return groupWindowRows(query, rows.rows, values)
 }
 
 function groupWindowRows(
+  query: DatabaseQueryObservation,
   rows: readonly Readonly<Record<string, unknown>>[],
   values: readonly unknown[],
 ): ReadonlyMap<unknown, BackfillRows> | undefined {
@@ -396,7 +392,7 @@ function groupWindowRows(
       ...result
     } = row
 
-    group.push(Object.freeze(result))
+    group.push(...readBackfilledRows(query.table, [Object.freeze(result)], query.selections))
     rowsByGroup.set(groupValue, group)
   }
 
@@ -433,7 +429,7 @@ function compileGroupedWindowBackfillStatement(
   const upperBoundPlaceholder = placeholder(windowUpperBound)
   const derivedAlias = quote('__holo_grouped_rows')
   const rowNumberColumn = quote(GROUPED_ROW_NUMBER_ALIAS)
-  const sql = `SELECT * FROM (SELECT ${innerSelections}, ${rowNumber} FROM ${quote(query.tableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} > ${lowerBoundPlaceholder} AND ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
+  const sql = `SELECT * FROM (SELECT ${innerSelections}, ${rowNumber} FROM ${quoteTableReference(dialect, query.tableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} > ${lowerBoundPlaceholder} AND ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
 
   return {
     bindings,

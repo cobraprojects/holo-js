@@ -1,5 +1,5 @@
-import type { DatabaseContext, TableQueryBuilder } from '@holo-js/db'
-import { createBackfillQuery, getBackfillDatabaseConnection } from './query-backfill'
+import { TableQueryBuilder, type DatabaseContext } from '@holo-js/db'
+import { getBackfillDatabaseConnection } from './query-backfill'
 import {
   createAggregateBackfillKey,
   createAggregateSqlBackfillKey,
@@ -53,7 +53,7 @@ function createAggregateBackfillBuilder(query: DatabaseQueryObservation): TableQ
     return undefined
   }
 
-  let builder = createBackfillQuery(query, connection)
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
   for (const predicate of query.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
@@ -76,7 +76,6 @@ async function fetchAggregateSqlBackfill(
     const column = columns[index]!
     aggregateBuilder = aggregateBuilder
       .addSelectSum(`__holo_sum_${index}`, column)
-      .addSelectAvg(`__holo_avg_${index}`, column)
       .addSelectMin(`__holo_min_${index}`, column)
       .addSelectMax(`__holo_max_${index}`, column)
   }
@@ -100,7 +99,7 @@ async function fetchGroupedAggregateSqlBackfill(
     return undefined
   }
 
-  let aggregateBuilder = createBackfillQuery(query, connection)
+  let aggregateBuilder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
     .where(groupColumn, 'in', values)
     .select(groupColumn)
     .addSelectCount('__holo_count')
@@ -108,7 +107,6 @@ async function fetchGroupedAggregateSqlBackfill(
     const column = columns[index]!
     aggregateBuilder = aggregateBuilder
       .addSelectSum(`__holo_sum_${index}`, column)
-      .addSelectAvg(`__holo_avg_${index}`, column)
       .addSelectMin(`__holo_min_${index}`, column)
       .addSelectMax(`__holo_max_${index}`, column)
   }
@@ -307,7 +305,7 @@ async function attachGroupedAggregateSqlExtremeValueCounts(
       continue
     }
 
-    const rows = await createBackfillQuery(query, connection)
+    const rows = await new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
       .where(groupColumn, 'in', values)
       .where(column, 'in', extremeValues)
       .select(groupColumn)
@@ -430,18 +428,6 @@ function createAggregateBackfillResult(
     })
   }
 
-  if (aggregate.kind === 'avg') {
-    return Object.freeze({
-      nextAggregate: Object.freeze({
-        column,
-        count: result.count,
-        kind: 'avg',
-        sum: columnResult.sum,
-      }),
-      value: columnResult.avg,
-    })
-  }
-
   if (aggregate.kind === 'min') {
     return Object.freeze({
       nextAggregate: Object.freeze({
@@ -484,6 +470,10 @@ async function fetchAggregateBackfillResult(
   aggregate: DatabaseQueryAggregateObservation,
   backfills: BackfillCache<AggregateBackfillEntry>,
 ): Promise<AggregateBackfillResult | undefined> {
+  if (aggregate.kind === 'avg') {
+    return await backfillAverageAggregate(query, aggregate)
+  }
+
   const columns = getAggregateBackfillColumns(query, backfills)
   if (columns.length > 0) {
     const result = await getGroupedAggregateSqlBackfill(query, columns, backfills)
@@ -502,6 +492,67 @@ async function fetchAggregateBackfillResult(
   return builder && aggregate.kind === 'count'
     ? backfillCountAggregate(builder, aggregate)
     : undefined
+}
+
+async function backfillAverageAggregate(
+  query: DatabaseQueryObservation,
+  aggregate: DatabaseQueryAggregateObservation,
+): Promise<AggregateBackfillResult | undefined> {
+  const column = aggregate.column
+  if (!column) {
+    return undefined
+  }
+
+  let builder = createAggregateBackfillBuilder(query)
+  if (!builder) {
+    return undefined
+  }
+
+  for (const order of query.orderBy) {
+    builder = builder.orderBy(order.column, order.direction)
+  }
+
+  const rows = await builder.select(column).get<Record<string, unknown>>()
+  const values: number[] = []
+  for (const row of rows) {
+    const value = normalizeAverageValue(row[column])
+    if (typeof value === 'undefined') {
+      return undefined
+    }
+
+    if (value !== null) {
+      values.push(value)
+    }
+  }
+
+  const sum = values.reduce((total, value) => total + value, 0)
+  return Object.freeze({
+    nextAggregate: Object.freeze({
+      column,
+      count: values.length,
+      kind: 'avg',
+      sum,
+    }),
+    value: values.length > 0 ? sum / values.length : null,
+  })
+}
+
+function normalizeAverageValue(value: unknown): number | null | undefined {
+  if (value === null || typeof value === 'number') {
+    return typeof value === 'number' && !Number.isFinite(value) ? undefined : value
+  }
+
+  if (typeof value === 'bigint') {
+    const numericValue = Number(value)
+    return Number.isSafeInteger(numericValue) ? numericValue : undefined
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const numericValue = Number(value)
+    return Number.isFinite(numericValue) ? numericValue : undefined
+  }
+
+  return undefined
 }
 
 async function backfillCountAggregate(

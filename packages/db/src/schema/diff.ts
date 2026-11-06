@@ -5,7 +5,7 @@ import type {
   TableIndexDefinition,
 } from './types'
 import { getSchemaServiceConnection, type IntrospectedForeignKey, type IntrospectedIndex, type SchemaService } from './SchemaService'
-import { locateTable, resolveReferencedTableSchema, type TableLocation } from './introspection'
+import { listedTablePath, locateTable, resolveReferencedTableSchema, type TableLocation } from './introspection'
 import { resolveDialectComparisonColumnType, type SchemaDialectName } from './typeMapping'
 import { SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { createConventionalIndexName, createGeneratedUniqueIndexName } from './generatedNames'
@@ -108,7 +108,7 @@ export async function diffSchema(
   for (const name of actualTables) {
     if (unqualifiedNames.has(name)) continue
     const candidates = qualifiedLocations.filter(location => location.table === name)
-    const resolvedSchema = candidates.length > 0 ? (await tableLocations.table(name))?.schema : undefined
+    const resolvedSchema = candidates.length > 0 ? (await tableLocations.table(tableLocations.listedPath(name)))?.schema : undefined
     if (!candidates.some(location => location.schema === resolvedSchema)) extraTables.push(name)
   }
 
@@ -128,6 +128,7 @@ export async function diffSchema(
 interface TableLocator {
   table(tableName: string): Promise<TableLocation | undefined>
   reference(tableName: string, ownerSchema: string): Promise<string | undefined>
+  listedPath(tableName: string): string
 }
 
 function memoize<TResult>(lookup: (key: string) => Promise<TResult>): (key: string) => Promise<TResult> {
@@ -146,6 +147,7 @@ function createTableLocator(schema: SchemaService): TableLocator {
   const references = new Map<string, (tableName: string) => Promise<string | undefined>>()
   return {
     table: memoize(tableName => locateTable(connection, tableName)),
+    listedPath: tableName => listedTablePath(connection, tableName),
     reference(tableName, ownerSchema) {
       let lookup = references.get(ownerSchema)
       if (!lookup) {
@@ -165,7 +167,7 @@ async function resolveReferencedTable(
   const owner = splitTablePath(ownerTableName)
   const referenced = splitTablePath(referencedTableName)
   if (owner.schema === undefined && referenced.schema === undefined) return referencedTableName
-  const ownerSchema = (await tableLocations.table(ownerTableName))?.schema
+  const ownerSchema = (await tableLocations.table(owner.schema === undefined ? tableLocations.listedPath(ownerTableName) : ownerTableName))?.schema
   if (ownerSchema === undefined) return referencedTableName
   const referencedSchema = await tableLocations.reference(referencedTableName, ownerSchema)
   if (referencedSchema === undefined) return referencedTableName
@@ -203,10 +205,11 @@ async function diffTable(
   table: TableDefinition,
   tableLocations: TableLocator,
 ): Promise<TableSchemaDiff> {
+  const actualTablePath = splitTablePath(table.tableName).schema === undefined ? tableLocations.listedPath(table.tableName) : table.tableName
   const [actualColumns, actualIndexes, introspectedForeignKeys] = await Promise.all([
-    schema.getColumns(table.tableName),
-    schema.getIndexes(table.tableName),
-    schema.getForeignKeys(table.tableName),
+    schema.getColumns(actualTablePath),
+    schema.getIndexes(actualTablePath),
+    schema.getForeignKeys(actualTablePath),
   ])
   const actualForeignKeys = await canonicalActualForeignKeys(tableLocations, table.tableName, introspectedForeignKeys)
 

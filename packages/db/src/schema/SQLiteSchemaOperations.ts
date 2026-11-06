@@ -2,7 +2,7 @@ import { currentPinnedConnection } from '../concurrency/pinnedConnection'
 import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
 import { readTableStructure } from './introspection'
-import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteDependentObjects, readSQLiteIndexKey, readSQLiteStoredTableName, readSQLiteTableObjects, resolveSQLiteTablePath, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
+import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteDependentObjects, readSQLiteIndexKey, readSQLiteStoredTableName, readSQLiteTableObjects, qualifyWithMainSchema, resolveSQLiteTablePath, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { findStoredColumn, findUnshadowedRowIdName, hasAutoIncrement, isGeneratedColumn, keepsRowIdOnlyAsHiddenColumn, readPreservedColumnConstraints, renderDefinitions, withAddedColumn, withChangedColumn, withoutForeignKeys, withoutPrimaryKeys, withoutUniquesBackingIndex } from './introspection/sqlDefinitions'
 import { parseCreateTableSql, type StoredTable } from './introspection/sqliteDefinitionGrammar'
 import { sameIdentifier, sameIdentifiers } from './introspection/sqliteTokens'
@@ -50,6 +50,21 @@ export class SQLiteSchemaOperations {
     )
   }
 
+  async compileAddColumnInPlace(tableName: string, column: AnyColumnDefinition): Promise<DDLStatement[]> {
+    return [
+      this.compiler.compileAddColumn(tableName, column),
+      ...this.compiler.compileAddedColumnIndexesOn(tableName, await this.resolveTablePath(tableName), column),
+    ]
+  }
+
+  createdTablePath(tableName: string): string {
+    return qualifyWithMainSchema(tableName)
+  }
+
+  async resolveTablePath(tableName: string): Promise<string> {
+    return await resolveSQLiteTablePath(this.connection, tableName) ?? tableName
+  }
+
   async changeColumn(tableName: string, column: AnyColumnDefinition): Promise<void> {
     await this.rebuildTable(tableName, (_structure, table) => {
       const stored = findStoredColumn(table, column.name)
@@ -80,7 +95,7 @@ export class SQLiteSchemaOperations {
   }
 
   async renameIndex(tableName: string, fromIndexName: string, toIndexName: string): Promise<void> {
-    const resolvedTableName = await resolveSQLiteTablePath(this.connection, tableName) ?? tableName
+    const resolvedTableName = await this.resolveTablePath(tableName)
     const index = (await readTableStructure(this.connection, resolvedTableName))?.indexes
       .find(candidate => sameIdentifier(candidate.name, fromIndexName))
     if (!index) {
@@ -143,7 +158,7 @@ export class SQLiteSchemaOperations {
   }
 
   private async resolveInlineUniqueRewrite(tableName: string, indexName: string): Promise<UniqueRewrite | undefined> {
-    const resolvedTableName = await resolveSQLiteTablePath(this.connection, tableName) ?? tableName
+    const resolvedTableName = await this.resolveTablePath(tableName)
     const index = (await readTableStructure(this.connection, resolvedTableName))?.indexes.find(candidate => sameIdentifier(candidate.name, indexName))
     if (!index?.name.startsWith(SQLITE_AUTOINDEX_PREFIX)) {
       return undefined

@@ -6,14 +6,14 @@ import { ConfigurationError } from './core/errors'
 import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
-import type { TableDefinition } from './schema/types'
+import { coerceBoolean, isStoredBoolean, readsAsInteger } from './schema/normalization'
+import { readCanonicalInteger } from './query/resultColumns'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { CaseInsensitiveColumns } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
+import type { TableDefinition } from './schema/types'
 import { NumericAdjustment } from './query/NumericAdjustment'
-import { createSelectQueryPlan, createTableSource } from './query/ast'
-import { readConvertedResultColumns, resolveConvertedResultColumns } from './query/resultColumns'
-import type { SchemaDialectName } from './schema/typeMapping'
+import { canonicalTableName } from './schema/tableIdentityRegistry'
 
 export type QueryCacheTtlInput = number | Date
 export type QueryCacheFlexibleTtlInput
@@ -234,6 +234,7 @@ export interface DatabaseQueryObservation {
   readonly cursorRowCountKnown?: boolean
   readonly cursorRows?: readonly Readonly<Record<string, unknown>>[]
   readonly tableName: string
+  readonly table?: TableDefinition
   readonly dependencies: readonly string[]
   readonly emptyRecordValue?: null
   readonly groupedAggregate?: DatabaseQueryGroupedAggregateObservation
@@ -253,7 +254,6 @@ export interface DatabaseQueryObservation {
   readonly relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[]
   readonly selections: readonly DatabaseQuerySelectionObservation[]
   readonly serialized?: boolean
-  readonly table?: TableDefinition
 }
 
 export interface DatabaseQueryBelongsToHydrationObservation {
@@ -263,6 +263,7 @@ export interface DatabaseQueryBelongsToHydrationObservation {
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
+  readonly relatedTable?: TableDefinition
 }
 
 export interface DatabaseQueryRelatedHydrationObservation {
@@ -274,6 +275,7 @@ export interface DatabaseQueryRelatedHydrationObservation {
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
+  readonly relatedTable?: TableDefinition
 }
 
 export type DatabaseQueryRelationObservation =
@@ -290,6 +292,7 @@ export interface DatabaseQueryBelongsToManyRelationObservation {
   readonly relatedKey: string
   readonly relatedPivotKey: string
   readonly relatedTableName: string
+  readonly relatedTable?: TableDefinition
 }
 
 export interface DatabaseQueryBelongsToParentKeyRelationObservation {
@@ -299,6 +302,7 @@ export interface DatabaseQueryBelongsToParentKeyRelationObservation {
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
+  readonly relatedTable?: TableDefinition
 }
 
 export interface DatabaseMutationEvent {
@@ -310,6 +314,7 @@ export interface DatabaseMutationEvent {
   readonly primaryKey?: string
   readonly rows?: readonly Readonly<Record<string, unknown>>[]
   readonly values?: Readonly<Record<string, unknown>>
+  readonly convertedColumns?: readonly string[]
 }
 
 type DatabaseDependencyPredicateMetadata = {
@@ -448,8 +453,9 @@ function setMutationPreviousRowsRequirement(listener: DatabaseDependencyInvalida
 function requiresMutationPreviousRows(connectionName: string, tableName: string, columns: readonly string[]): boolean {
   const requirements = getQueryCacheBridgeState().mutationPreviousRowsRequirements
   if (!requirements) return false
+  const canonicalName = canonicalTableName(connectionName, tableName)
   for (const requirement of requirements.values()) {
-    if (requirement(connectionName, tableName, columns)) return true
+    if (requirement(connectionName, canonicalName, columns)) return true
   }
   return false
 }
@@ -596,6 +602,7 @@ export function rebindDatabaseQueryObservationPagination(
       belongsToHydrations: belongsToHydrations ?? query.belongsToHydrations,
       connectionName: query.connectionName,
       tableName: query.tableName,
+      table: query.table,
       dependencies: query.dependencies,
       limit: pagination.perPage,
       offset,
@@ -613,13 +620,13 @@ export function rebindDatabaseQueryObservationPagination(
       scalarListRows: undefined,
       selections: query.selections,
       serialized: query.serialized,
-      table: query.table,
     })
     state.queries.push(Object.freeze({
       aggregate: undefined,
       belongsToHydrations: undefined,
       connectionName: query.connectionName,
       tableName: query.tableName,
+      table: query.table,
       dependencies: query.dependencies,
       limit: undefined,
       offset: undefined,
@@ -637,7 +644,6 @@ export function rebindDatabaseQueryObservationPagination(
       scalarListRows: undefined,
       selections: query.selections,
       serialized: query.serialized,
-      table: query.table,
     }))
     return
   }
@@ -667,6 +673,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       belongsToHydrations: belongsToHydrations ?? query.belongsToHydrations,
       connectionName: query.connectionName,
       tableName: query.tableName,
+      table: query.table,
       cursorRowCount: pagination.rowCount,
       cursorRowCountKnown: pagination.rowCountKnown,
       cursorRows: pagination.rows,
@@ -687,13 +694,13 @@ export function rebindDatabaseQueryObservationCursorPagination(
       scalarListRows: undefined,
       selections: query.selections,
       serialized: query.serialized,
-      table: query.table,
     })
     state.queries.push(Object.freeze({
       aggregate: undefined,
       belongsToHydrations: undefined,
       connectionName: query.connectionName,
       tableName: query.tableName,
+      table: query.table,
       dependencies: query.dependencies,
       limit: undefined,
       offset: undefined,
@@ -711,7 +718,6 @@ export function rebindDatabaseQueryObservationCursorPagination(
       scalarListRows: undefined,
       selections: query.selections,
       serialized: query.serialized,
-      table: query.table,
     }))
     return
   }
@@ -737,6 +743,7 @@ export function disableDatabaseQueryObservationPatching(
       belongsToHydrations: query.belongsToHydrations,
       connectionName: query.connectionName,
       tableName: query.tableName,
+      table: query.table,
       dependencies: query.dependencies,
       limit: query.limit,
       offset: query.offset,
@@ -754,7 +761,6 @@ export function disableDatabaseQueryObservationPatching(
       scalarListRows: query.scalarListRows,
       selections: query.selections,
       serialized: options.serialized || query.serialized,
-      table: query.table,
     })
     return
   }
@@ -827,11 +833,12 @@ function rebindDatabaseQueryObservation(
       belongsToHydrations,
       connectionName: query.connectionName,
       tableName: query.tableName,
+      table: query.table,
       dependencies: query.dependencies,
       limit: query.limit,
       offset: query.offset,
       orderBy: query.orderBy,
-      patchable: query.patchable,
+      patchable: query.patchable && !(aggregate?.column !== undefined && isBooleanColumn(query.table, aggregate.column)),
       pagination: query.pagination,
       predicates: query.predicates,
       primaryKey: query.primaryKey,
@@ -844,7 +851,6 @@ function rebindDatabaseQueryObservation(
       scalarListRows,
       selections: query.selections,
       serialized: query.serialized,
-      table: query.table,
     })
     return
   }
@@ -1031,7 +1037,7 @@ export function createTableCacheDependency(
   connectionName: string,
   tableName: string,
 ): string {
-  return `db:${connectionName}:${tableName}`
+  return `db:${connectionName}:${canonicalTableName(connectionName, tableName)}`
 }
 
 function encodeDependencyValue(value: unknown): string {
@@ -1106,14 +1112,14 @@ export function createTableRowCacheDependency(
     return undefined
   }
 
-  return `db:${connectionName}:${tableName}:row:${columnName}:${encodeDependencyValue(value)}`
+  return `${createTableCacheDependency(connectionName, tableName)}:row:${columnName}:${encodeDependencyValue(value)}`
 }
 
 export function createTableRowWildcardCacheDependency(
   connectionName: string,
   tableName: string,
 ): string {
-  return `db:${connectionName}:${tableName}:row:*`
+  return `${createTableCacheDependency(connectionName, tableName)}:row:*`
 }
 
 export function createTablePredicateCacheDependency(
@@ -1144,7 +1150,7 @@ function createTableMutationCacheDependency(
   connectionName: string,
   tableName: string,
 ): string {
-  return `db:${connectionName}:${tableName}:mutation`
+  return `${createTableCacheDependency(connectionName, tableName)}:mutation`
 }
 
 function createTableExactPredicateCacheDependency(
@@ -1302,6 +1308,18 @@ function createDatabaseDependencyInvalidationEvent(
   })
 
   return Object.freeze(event)
+}
+
+export async function invalidateReplacedTableIdentity(
+  connection: DatabaseContext,
+  identity: string,
+): Promise<void> {
+  if (!getDatabaseQueryCacheBridge() && !hasDatabaseDependencyInvalidationListeners() && !hasDatabaseDependencyInvalidationPublisher()) {
+    return
+  }
+
+  const tableKey = `${DATABASE_DEPENDENCY_PREFIX}${connection.getConnectionName()}:${identity}`
+  await invalidateQueryCacheDependencies(connection, [tableKey, `${tableKey}:row:*`])
 }
 
 export function normalizeQueryCacheDependencies(
@@ -2116,6 +2134,7 @@ function createDatabaseQueryObservationFromPlan(
     belongsToHydrations: undefined,
     relatedHydrations: undefined,
     tableName: plan.source.tableName,
+    table: plan.source.table,
     dependencies: Object.freeze([...dependencies]),
     groupedAggregate: findGroupedAggregateObservation(plan, groupedAverageStates, groupedAggregateStates),
     limit: plan.limit,
@@ -2127,7 +2146,6 @@ function createDatabaseQueryObservationFromPlan(
     primaryKey,
     result,
     selections: collectQuerySelectionObservations(plan),
-    table: plan.source.table,
   })
 }
 
@@ -2176,16 +2194,114 @@ export function createDatabaseMutationEvent(
   rows?: readonly Readonly<Record<string, unknown>>[],
   previousRows?: readonly Readonly<Record<string, unknown>>[],
 ): DatabaseMutationEvent {
+  const table = source.table ?? getConnectionGeneratedTableDefinition(source.tableName, connectionName)
+  const convertedColumns = convertedBooleanColumns(table, [...rows ?? [], ...previousRows ?? [], ...values ? [values] : []])
   return Object.freeze({
     connectionName,
-    tableName: source.tableName,
+    tableName: canonicalTableName(connectionName, source.tableName),
     kind,
     predicates: collectQueryPredicateObservations(predicates),
-    previousRows: previousRows ? Object.freeze([...previousRows]) : undefined,
+    previousRows: previousRows ? readMutationRows(table, previousRows) : undefined,
     primaryKey: resolveObservedRowKey(source, connectionName),
-    rows: rows ? Object.freeze([...rows]) : undefined,
-    values,
+    rows: rows ? readMutationRows(table, rows) : undefined,
+    values: values ? readStoredBooleans(table, values) : values,
+    ...convertedColumns.length > 0 ? { convertedColumns } : {},
   })
+}
+
+function isDriverScalar(value: unknown): boolean {
+  return typeof value === 'number' || typeof value === 'bigint' || typeof value === 'string'
+}
+
+function isBooleanColumn(table: TableDefinition | undefined, column: string): boolean {
+  return table !== undefined && Object.hasOwn(table.columns, column) && table.columns[column]?.kind === 'boolean'
+}
+
+function convertedBooleanColumns(table: TableDefinition | undefined, records: readonly Readonly<Record<string, unknown>>[]): readonly string[] {
+  if (!table) return []
+  return Object.freeze(Object.keys(table.columns).filter(column => isBooleanColumn(table, column)
+    && records.some(record => Object.hasOwn(record, column) && isDriverScalar(record[column]))))
+}
+
+function hasUnreadBoolean(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
+  return table !== undefined && Object.keys(row).some(key => isBooleanColumn(table, key) && isDriverScalar(row[key]) && !isStoredBoolean(row[key]))
+}
+
+function booleanResultKeys(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[],
+  reads: (value: unknown) => boolean,
+): readonly string[] {
+  if (!table) return []
+  return Object.keys(row).filter((key) => {
+    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
+    return reads(row[key]) && isBooleanColumn(table, selection ? selection.column : key)
+  })
+}
+
+function hasUnstoredFetchedBoolean(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[] = [],
+): boolean {
+  return booleanResultKeys(table, row, selections, value => isDriverScalar(value) && !isStoredBoolean(value)).length > 0
+}
+
+function readBooleanColumns(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[],
+  reads: (value: unknown) => boolean,
+): Readonly<Record<string, unknown>> {
+  const booleanKeys = booleanResultKeys(table, row, selections, reads)
+  if (booleanKeys.length === 0) return row
+  return Object.freeze({ ...row, ...Object.fromEntries(booleanKeys.map(key => [key, coerceBoolean(row[key])])) })
+}
+
+function readIntegerColumns(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[],
+): Readonly<Record<string, unknown>> {
+  if (!table) return row
+  const integerKeys = Object.keys(row).filter((key) => {
+    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
+    const column = selection ? selection.column : key
+    const definition = Object.hasOwn(table.columns, column) ? table.columns[column] : undefined
+    return definition !== undefined && readsAsInteger(definition) && readCanonicalInteger(row[key]) !== row[key]
+  })
+  if (integerKeys.length === 0) return row
+  return Object.freeze({ ...row, ...Object.fromEntries(integerKeys.map(key => [key, readCanonicalInteger(row[key])])) })
+}
+
+function readStoredBooleans(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return readBooleanColumns(table, row, [], isStoredBoolean)
+}
+
+function readMutationRow(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return readIntegerColumns(table, readStoredBooleans(table, row), [])
+}
+
+function readFetchedRow(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[] = [],
+): Readonly<Record<string, unknown>> {
+  return readIntegerColumns(table, readBooleanColumns(table, row, selections, isDriverScalar), selections)
+}
+
+function readMutationRows(
+  table: TableDefinition | undefined,
+  rows: readonly Readonly<Record<string, unknown>>[],
+): readonly Readonly<Record<string, unknown>>[] {
+  return Object.freeze(rows.map(row => readStoredBooleans(table, row)))
 }
 
 export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): boolean {
@@ -2503,30 +2619,19 @@ export async function invalidateQueryCacheDependencies(
   connection.afterCommit(invalidate)
 }
 
-function readObservedRows(
-  query: { readonly selections?: readonly DatabaseQuerySelectionObservation[], readonly table?: TableDefinition },
-  driver: string,
-  rows: readonly Readonly<Record<string, unknown>>[],
-): readonly Readonly<Record<string, unknown>>[] {
-  if (!query.table) return rows
-  const plan: SelectQueryPlan = {
-    ...createSelectQueryPlan(createTableSource(query.table)),
-    selections: (query.selections ?? []).map(selection => selection.resultKey === selection.column
-      ? { kind: 'column' as const, column: selection.column }
-      : { kind: 'column' as const, column: selection.column, alias: selection.resultKey }),
-  }
-  const columns = resolveConvertedResultColumns(driver as SchemaDialectName, plan)
-  return columns.size === 0 ? rows : rows.map(row => Object.freeze(readConvertedResultColumns({ ...row }, columns)))
-}
-
 export const queryCacheInternals = {
   getRootDatabaseContext,
+  hasUnreadBoolean,
+  hasUnstoredFetchedBoolean,
+  readFetchedRow,
+  readMutationRow,
   setMutationPreviousRowsRequirement,
   requiresMutationPreviousRows,
   collectDatabaseQueryDependencies: collectDatabaseQueryDependenciesInternal,
   configureDatabaseQueryCacheBridge,
   createDatabaseMutationEvent,
   createDatabaseQueryObservation,
+  canonicalTableName,
   createDeterministicQueryCacheKey,
   createTablePredicateCacheDependency,
   createTableCacheDependency,
@@ -2551,7 +2656,6 @@ export const queryCacheInternals = {
   rebindDatabaseQueryObservationScalar,
   rebindDatabaseQueryObservationScalarList,
   onDatabaseDependencyInvalidated,
-  readObservedRows,
   recordDatabaseQueryDependencies,
   recordDatabaseQueryObservation,
   resolveQueryCacheDependencies,
