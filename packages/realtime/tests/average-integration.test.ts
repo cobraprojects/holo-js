@@ -388,6 +388,48 @@ describe.each(drivers)('realtime averages on %s', (driver) => {
     expect(runs).toBe(2)
     expect(subscription.current.data).toEqual(await db.table(scores).select('group_id').addSelectAvg('average', 'ratio').groupBy('group_id').orderBy('group_id', 'desc').get())
   })
+  it('keeps relation aggregates of a parent with a null key equal to a fresh query', async () => {
+    const { db, name, schema, scores } = await openScores(driver)
+    const groupsName = `${name}_groups`
+    await schema.createTable(groupsName, (table) => {
+      table.id()
+      table.integer('code').nullable()
+    })
+    onTestFinished(() => schema.dropTable(groupsName))
+    const groups = defineGeneratedTable(groupsName, { id: column.id(), code: column.integer().nullable() })
+    const Score = defineModel(scores)
+    const Group = defineModel(groups, { relations: { scores: hasMany(() => Score, 'group_id', 'code') } })
+    await db.table(groups).insert([{ id: 1, code: 1 }, { id: 2, code: null }])
+    await db.table(scores).insert({ id: 6, group_id: null, points: 4, amount: '1.00' })
+    const handler = async () => (await Group.query().withCount('scores').withAvg('scores', 'points').orderBy('id').get()).toJSON()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+    const mutate = (mutation: () => Promise<unknown>) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: mutation }))
+
+    await mutate(() => db.table(scores).insert({ id: 7, group_id: null, points: 8, amount: '1.00' }))
+    expect(subscription.current.data).toEqual(await handler())
+    await mutate(() => db.table(scores).where('id', 1).update({ group_id: null }))
+    expect(subscription.current.data).toEqual(await handler())
+    await mutate(() => db.table(scores).whereNull('group_id').update({ points: 2 }))
+    expect(subscription.current.data).toEqual(await handler())
+    await mutate(() => db.table(scores).whereNull('group_id').delete())
+    expect(subscription.current.data).toEqual(await handler())
+  })
+  it('keeps a grouped integer average by a bigint group equal to a fresh query after a backfill refreshes its states', async () => {
+    const { db, scores } = await openScores(driver)
+    await db.table(scores).where('id', '>', 0).delete()
+    await db.table(scores).insert([
+      { id: 1, group_id: 2, points: 1, amount: '1.00', total: 5 },
+      { id: 2, group_id: 4, points: 1, amount: '1.00', total: 5 },
+    ])
+    const handler = () => db.table(scores).select('total').addSelectAvg('average', 'group_id').groupBy('total').orderBy('total').get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+    const mutate = (mutation: () => Promise<unknown>) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: mutation }))
+
+    await mutate(() => db.table(scores).insert({ id: 3, group_id: null, points: 1, amount: '1.00', total: 5 }))
+    expect(subscription.current.data).toEqual(await handler())
+    await mutate(() => db.table(scores).insert({ id: 4, group_id: 6, points: 1, amount: '1.00', total: 5 }))
+    expect(subscription.current.data).toEqual(await handler())
+  })
   it('keeps scalar and paginated subscriptions over the null group equal to a fresh query', async () => {
     const { db, scores } = await openScores(driver)
     await db.table(scores).insert({ id: 6, group_id: null, points: 2, amount: '2.00' })

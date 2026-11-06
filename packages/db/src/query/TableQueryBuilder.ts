@@ -2225,14 +2225,6 @@ export class TableQueryBuilder<
     })
   }
 
-  private readsIntegerColumn(column: string): boolean {
-    const separator = column.lastIndexOf('.')
-    if (separator >= 0 && this.resolveSourceColumnName(column) === undefined) return false
-    const name = column.slice(separator + 1)
-    const kind = Object.entries(this.source.table?.columns ?? {}).find(([key]) => key === name)?.[1].kind
-    return kind === 'integer' || kind === 'bigInteger'
-  }
-
   private observesSQLiteDecimalColumn(): boolean {
     if (this.connection.getDriver() !== 'sqlite') return false
     const tables = new Map<string, TableDefinition | undefined>([[this.plan.source.alias ?? this.plan.source.tableName, this.source.table]])
@@ -2286,7 +2278,7 @@ export class TableQueryBuilder<
       return
     }
 
-    const averageStates = groupedAggregate.kind === 'avg' && groupedAggregate.aggregateColumn && this.connection.getDriver() === 'postgres' && this.readsIntegerColumn(groupedAggregate.aggregateColumn)
+    const averageStates = groupedAggregate.kind === 'avg' && groupedAggregate.aggregateColumn && this.connection.getDriver() === 'postgres' && groupedAggregate.integerColumn
       ? await this.readGroupedAverageStates(groupedAggregate)
       : undefined
     const aggregateStates = (

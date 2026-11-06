@@ -316,7 +316,7 @@ async function fetchGroupedAverageStates(
 
     states.push(Object.freeze({
       count,
-      groupValue: row[groupedAggregate.groupColumn],
+      groupValue: readBackfilledValue(query.table, groupedAggregate.groupColumn, row[groupedAggregate.groupColumn]),
       rowCount,
       sum,
     }))
