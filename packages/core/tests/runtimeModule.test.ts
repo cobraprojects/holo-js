@@ -830,6 +830,8 @@ try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ o
     await writeFile(join(packageRoot, 'cjs.cjs'), '')
     await writeFile(entryPath, [
       'const meta = import.meta',
+      'const globalThis = {}, process = {}, Bun = {}',
+      'export const shadows = [globalThis, process, Bun]',
       'const attempt = (run) => { try { return run() } catch (error) { return `${error.code}: ${error.message}` } }',
       'export const report = () => [',
       "  meta.resolve('./helper.ts'),",
