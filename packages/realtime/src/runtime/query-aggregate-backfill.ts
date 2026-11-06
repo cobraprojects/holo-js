@@ -33,6 +33,7 @@ import {
   type AggregateBackfillEntry,
   createCountAggregateObservation,
   formatCountAggregateValue,
+  isSafeIntegerNumber,
 } from './query-aggregate-common'
 import {
   normalizeSqlAggregateCount,
@@ -525,9 +526,15 @@ async function backfillAverageAggregate(
     }
   }
 
+  const absoluteSum = readExactAbsoluteSum(values)
+  if (typeof absoluteSum === 'undefined') {
+    return undefined
+  }
+
   const sum = values.reduce((total, value) => total + value, 0)
   return Object.freeze({
     nextAggregate: Object.freeze({
+      absoluteSum,
       column,
       count: values.length,
       kind: 'avg',
@@ -535,6 +542,18 @@ async function backfillAverageAggregate(
     }),
     value: values.length > 0 ? sum / values.length : null,
   })
+}
+
+function readExactAbsoluteSum(values: readonly number[]): number | undefined {
+  let absoluteSum = 0
+  for (const value of values) {
+    absoluteSum += Math.abs(value)
+    if (!isSafeIntegerNumber(value) || !isSafeIntegerNumber(absoluteSum)) {
+      return undefined
+    }
+  }
+
+  return absoluteSum
 }
 
 function normalizeAverageValue(value: unknown): number | null | undefined {

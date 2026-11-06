@@ -122,6 +122,7 @@ export type DatabaseQueryCursorPaginationObservation = {
 }
 
 export type DatabaseQueryAggregateObservation = {
+  readonly absoluteSum?: number
   readonly column?: string
   readonly count?: number
   readonly currentValueCount?: number
@@ -141,7 +142,7 @@ export type DatabaseQueryGroupedAggregateObservation = {
   readonly aggregateColumn?: string
   readonly aggregateResultKey: string
   readonly aggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[]
-  readonly averageStates?: readonly DatabaseQueryGroupedAverageStateObservation[]
+  readonly integerColumn?: true
   readonly groupColumn: string
   readonly groupResultKey: string
   readonly having?: DatabaseQueryGroupedAggregateHavingObservation
@@ -158,13 +159,6 @@ export type DatabaseQueryGroupedAggregateStateObservation = {
 export type DatabaseQueryGroupedAggregateValueCountObservation = {
   readonly count: number
   readonly value: number
-}
-
-export type DatabaseQueryGroupedAverageStateObservation = {
-  readonly count: number
-  readonly groupValue: unknown
-  readonly rowCount: number
-  readonly sum: number
 }
 
 export type DatabaseQueryGroupedAggregateHavingObservation = {
@@ -426,6 +420,7 @@ export type RowOrderingAnalysis = 'invalid' | 'sorted' | 'unsorted'
 export type RowWindowMode = 'invalid' | 'limited' | 'single' | 'unwindowed'
 
 export type AggregateCountState = {
+  absoluteSum: number
   count: number
   sum: number
 }
