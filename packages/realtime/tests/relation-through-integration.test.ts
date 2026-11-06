@@ -85,7 +85,7 @@ async function openLibrary(driver: ReturnType<typeof integrationDrivers<'sqlite'
 
 type Library = Awaited<ReturnType<typeof openLibrary>>
 
-const ordered = (query: { orderBy: (column: string) => unknown }) => query.orderBy('id')
+const ordered = (query: { orderBy: (column: 'id') => unknown }) => query.orderBy('id')
 const bothOrdered = { reviews: ordered, review: ordered }
 
 async function subscribe(read: () => Promise<unknown>) {
