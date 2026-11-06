@@ -142,6 +142,7 @@ import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolv
 import { currentRootTransaction } from '../core/openTransactions'
 import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalization, deferPredicateNormalization } from './deferredPredicateValues'
 import { assertQueryTablePath, validateQueryPlan } from './validator'
+import { requalifyAliasedSource } from './requalifyAliasedSource'
 
 import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
 
@@ -189,6 +190,8 @@ export const hasQueryCache = Symbol('hasQueryCache')
 export const whereResolvedColumn = Symbol('whereResolvedColumn')
 export const resolveAggregateSource = Symbol('resolveAggregateSource')
 export const projectModelRows = Symbol('projectModelRows')
+export const aliasSource = Symbol('aliasSource')
+export const requalifySource = Symbol('requalifySource')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -2043,6 +2046,14 @@ export class TableQueryBuilder<
   dump(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     console.log(this.debug())
     return this
+  }
+
+  [aliasSource](alias: string): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.clone(withSource(this.plan, Object.freeze({ ...this.source, alias })))
+  }
+
+  [requalifySource](): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.clone(requalifyAliasedSource(this.plan))
   }
 
   [hasQueryCache](): boolean {

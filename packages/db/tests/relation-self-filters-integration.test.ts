@@ -1,0 +1,315 @@
+import { randomUUID } from 'node:crypto'
+import { describe, expect, it, onTestFinished } from 'vitest'
+import { DB, belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, hasManyThrough, hasOne, resetDB, type Entity, type ModelDefinitionLike, type TableDefinition } from '../src'
+import { integrationDrivers, mysqlTestConnection, openDatabase } from './support/database'
+
+type Category = Entity<TableDefinition>
+
+function id(entity: Category): number {
+  return Number(entity.get('id' as never))
+}
+
+function sorted(values: readonly number[]): number[] {
+  return [...values].sort((left, right) => left - right)
+}
+
+function related(entity: Category, name: string): Category[] {
+  const value = entity.getRelation<Category | Category[] | null>(name)
+  if (Array.isArray(value)) return value
+  return value ? [value] : []
+}
+
+async function openSelfFixtures(driver: 'sqlite' | 'postgres' | 'mysql') {
+  const { schema } = await openDatabase(driver)
+  onTestFinished(() => resetDB())
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+  const names = { categories: `sr_categories_${suffix}`, links: `sr_links_${suffix}`, posts: `sr_posts_${suffix}`, grants: `sr_grants_${suffix}` }
+  await schema.createTable(names.categories, (table) => {
+    table.integer('id').primaryKey()
+    table.integer('parent_id').nullable()
+    table.string('name')
+  })
+  onTestFinished(() => schema.dropTable(names.categories))
+  await schema.createTable(names.links, (table) => {
+    table.integer('id').primaryKey()
+    table.integer('category_id')
+    table.integer('related_id')
+  })
+  onTestFinished(() => schema.dropTable(names.links))
+  await schema.createTable(names.posts, (table) => {
+    table.integer('id').primaryKey()
+    table.integer('category_id')
+  })
+  onTestFinished(() => schema.dropTable(names.posts))
+  await schema.createTable(names.grants, (table) => {
+    table.integer('id').primaryKey()
+    table.integer('category_id')
+  })
+  onTestFinished(() => schema.dropTable(names.grants))
+
+  const categories = defineGeneratedTable(names.categories, { id: column.integer().primaryKey(), parent_id: column.integer().nullable(), name: column.string() })
+  const posts = defineGeneratedTable(names.posts, { id: column.integer().primaryKey(), category_id: column.integer() })
+  const links = defineGeneratedTable(names.links, { id: column.integer().primaryKey(), category_id: column.integer(), related_id: column.integer() })
+
+  await DB.table(categories).insert([
+    { id: 1, parent_id: null, name: 'root' },
+    { id: 2, parent_id: 1, name: 'branch' },
+    { id: 3, parent_id: 1, name: 'leaf' },
+    { id: 4, parent_id: 2, name: 'leaf' },
+    { id: 5, parent_id: null, name: 'lonely' },
+  ])
+  await DB.table(links).insert([
+    { id: 1, category_id: 1, related_id: 2 },
+    { id: 2, category_id: 2, related_id: 5 },
+    { id: 3, category_id: 3, related_id: 4 },
+    { id: 4, category_id: 4, related_id: 4 },
+  ])
+  const grants = defineGeneratedTable(names.grants, { id: column.integer().primaryKey(), category_id: column.integer() })
+  await DB.table(grants).insert([{ id: 1, category_id: 1 }, { id: 2, category_id: 2 }, { id: 3, category_id: 3 }])
+  await DB.table(posts).insert([{ id: 1, category_id: 3 }, { id: 2, category_id: 1 }, { id: 3, category_id: 2 }])
+
+  const Post = defineModel(posts, { timestamps: false })
+  const Leaf = defineModel(categories, { timestamps: false })
+  const selfRelations = <TModel extends ModelDefinitionLike<TableDefinition>>(Target: TModel) => ({
+    children: hasMany(() => Target, 'parent_id'),
+    firstChild: hasOne(() => Target, 'parent_id'),
+    parent: belongsTo(() => Target, 'parent_id'),
+    linked: belongsToMany(() => Target, links, 'category_id', 'related_id'),
+    grandchildren: hasManyThrough(() => Target, () => Target, 'parent_id', 'parent_id'),
+    posts: hasMany(() => Post, 'category_id'),
+    pivotChildren: belongsToMany(() => Target, categories, 'parent_id', 'id'),
+    childPosts: hasManyThrough(() => Post, () => Target, 'parent_id', 'category_id'),
+  })
+  const Branch = defineModel(categories, { timestamps: false, relations: selfRelations(Leaf) })
+  const Category = defineModel(categories, { timestamps: false, relations: selfRelations(Branch) })
+  const WithPosts = defineModel(categories, { timestamps: false, relations: { posts: hasMany(() => Post, 'category_id') }, globalScopes: { withPosts: query => query.has('posts') } })
+  const ScopedParent = defineModel(categories, { timestamps: false, relations: { children: hasMany(() => WithPosts, 'parent_id') } })
+  const Granted = defineModel(categories, {
+    timestamps: false,
+    globalScopes: { granted: query => query.whereExists(DB.table(grants).whereColumn(`${names.grants}.category_id` as never, '=', `${names.categories}.id`)) },
+  })
+  const GrantedParent = defineModel(categories, { timestamps: false, relations: { children: hasMany(() => Granted, 'parent_id') } })
+  const schemaName = driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : mysqlTestConnection().database
+  const qualifiedCategories = defineGeneratedTable(`${schemaName}.${names.categories}`, { id: column.integer().primaryKey(), parent_id: column.integer().nullable(), name: column.string() })
+  const QualifiedLeaf = defineModel(qualifiedCategories, { name: `QualifiedLeaf${suffix}`, timestamps: false })
+  const QualifiedParent = defineModel(qualifiedCategories, { name: `QualifiedParent${suffix}`, timestamps: false, relations: { children: hasMany(() => Leaf, 'parent_id'), parent: belongsTo(() => Leaf, 'parent_id') } })
+  const PlainParent = defineModel(categories, { timestamps: false, relations: { children: hasMany(() => QualifiedLeaf, 'parent_id'), parent: belongsTo(() => QualifiedLeaf, 'parent_id') } })
+  return { Category, Leaf, ScopedParent, GrantedParent, QualifiedParent, PlainParent, schemaName, table: names.categories }
+}
+
+const relationNames = ['children', 'firstChild', 'parent', 'linked'] as const
+const matchingReference = { children: 'children', firstChild: 'children', parent: 'parent', linked: 'linked' } as const
+
+describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('relation filters on self-referencing relations on %s', (driver) => {
+  describe.each(relationNames)('through %s', (name) => {
+    it('matches eager loading for has, whereHas and whereDoesntHave', async () => {
+      const { Category } = await openSelfFixtures(driver)
+      const loaded = await Category.with(name, matchingReference[name]).orderBy('id').get() as unknown as Category[]
+      const all = sorted(loaded.map(id))
+      const having = sorted(loaded.filter(entity => related(entity, name).length > 0).map(id))
+      const havingBranch = sorted(loaded.filter(entity => related(entity, matchingReference[name]).some(item => item.get('name' as never) === 'branch')).map(id))
+
+      const has = await Category.has(name).get() as unknown as Category[]
+      const whereHas = await Category.whereHas(name, query => query.where('name', 'branch')).get() as unknown as Category[]
+      const doesntHave = await Category.doesntHave(name).get() as unknown as Category[]
+      const whereDoesntHave = await Category.whereDoesntHave(name, query => query.where('name', 'branch')).get() as unknown as Category[]
+
+      expect(having.length).toBeGreaterThan(0)
+      expect(havingBranch.length).toBeGreaterThan(0)
+      expect(sorted(has.map(id))).toEqual(having)
+      expect(sorted(whereHas.map(id))).toEqual(havingBranch)
+      expect(sorted(doesntHave.map(id))).toEqual(all.filter(value => !having.includes(value)))
+      expect(sorted(whereDoesntHave.map(id))).toEqual(all.filter(value => !havingBranch.includes(value)))
+    })
+
+    it('matches eager loading for withCount', async () => {
+      const { Category } = await openSelfFixtures(driver)
+      const reference = matchingReference[name]
+      const loaded = await Category.with(reference).orderBy('id').get() as unknown as Category[]
+      const counted = await Category.withCount(name).orderBy('id').get() as unknown as Category[]
+      const leafCounted = await Category.withCount({ [name]: (query: { where(column: string, value: unknown): unknown }) => query.where('name', 'leaf') } as never).orderBy('id').get() as unknown as Category[]
+
+      expect(counted.map(entity => Number(entity.get(`${name}_count` as never)))).toEqual(loaded.map(entity => related(entity, reference).length))
+      expect(leafCounted.map(entity => Number(entity.get(`${name}_count` as never)))).toEqual(
+        loaded.map(entity => related(entity, reference).filter(item => item.get('name' as never) === 'leaf').length),
+      )
+    })
+  })
+
+  it('matches eager loading for has, doesntHave and withCount through the same table', async () => {
+    const { Category } = await openSelfFixtures(driver)
+    const loaded = await Category.with('grandchildren').orderBy('id').get() as unknown as Category[]
+    const having = sorted(loaded.filter(entity => related(entity, 'grandchildren').length > 0).map(id))
+
+    const has = await Category.has('grandchildren').get() as unknown as Category[]
+    const doesntHave = await Category.doesntHave('grandchildren').get() as unknown as Category[]
+    const counted = await Category.withCount('grandchildren').orderBy('id').get() as unknown as Category[]
+
+    expect(having).toEqual([1])
+    expect(sorted(has.map(id))).toEqual(having)
+    expect(sorted(doesntHave.map(id))).toEqual(loaded.map(id).filter(value => !having.includes(value)))
+    expect(counted.map(entity => Number(entity.get('grandchildren_count' as never)))).toEqual(loaded.map(entity => related(entity, 'grandchildren').length))
+  })
+
+  it('matches eager loading through the parent table to another table', async () => {
+    const { Category } = await openSelfFixtures(driver)
+    const loaded = await Category.with('childPosts').orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'childPosts').length > 0).map(id)
+
+    const has = await Category.has('childPosts').orderBy('id').get() as unknown as Category[]
+    const doesntHave = await Category.doesntHave('childPosts').orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1])
+    expect(has.map(id)).toEqual(expected)
+    expect(doesntHave.map(id)).toEqual([2, 3, 4, 5])
+  })
+
+  it('correlates nested self-relation filters against their own parent level', async () => {
+    const { Category } = await openSelfFixtures(driver)
+
+    const grandparents = await Category.has('children.children').get() as unknown as Category[]
+    const constrained = await Category.whereHas('children', query => query.whereHas('children', inner => inner.where('name', 'leaf'))).get() as unknown as Category[]
+    const grandchildren = await Category.whereHas('parent.parent', query => query.where('name', 'root')).get() as unknown as Category[]
+    const childOfLinked = await Category.whereHas('children', query => query.has('linked')).orderBy('id').get() as unknown as Category[]
+
+    expect(grandparents.map(id)).toEqual([1])
+    expect(constrained.map(id)).toEqual([1])
+    expect(grandchildren.map(id)).toEqual([4])
+    expect(childOfLinked.map(id)).toEqual([1, 2])
+  })
+
+  it('correlates other relations nested under a self-relation filter against the aliased level', async () => {
+    const { Category } = await openSelfFixtures(driver)
+
+    const childWithPosts = await Category.has('children.posts').get() as unknown as Category[]
+    const grouped = await Category.whereHas('children', query => query.where(inner => inner.has('children').orWhere('name', 'leaf'))).orderBy('id').get() as unknown as Category[]
+    const childWithoutPosts = await Category.whereHas('children', query => query.doesntHave('posts')).orderBy('id').get() as unknown as Category[]
+
+    expect(childWithPosts.map(id)).toEqual([1])
+    expect(grouped.map(id)).toEqual([1, 2])
+    expect(childWithoutPosts.map(id)).toEqual([2])
+  })
+
+  it('applies the related model global scopes to the aliased self-relation row', async () => {
+    const { ScopedParent } = await openSelfFixtures(driver)
+    const loaded = await ScopedParent.with('children').orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
+
+    const has = await ScopedParent.has('children').orderBy('id').get() as unknown as Category[]
+    const doesntHave = await ScopedParent.doesntHave('children').orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1])
+    expect(has.map(id)).toEqual(expected)
+    expect(doesntHave.map(id)).toEqual([2, 3, 4, 5])
+  })
+
+  it('reads the table name in constraint joins and subqueries as the aliased row', async () => {
+    const { Category, table } = await openSelfFixtures(driver)
+    const postsTable = table.replace('sr_categories_', 'sr_posts_')
+    const joined = (query: { join(...args: string[]): { where(column: string, value: unknown): unknown } }) => query
+      .join(postsTable, `${postsTable}.category_id`, '=', `${table}.id`)
+      .where(`${postsTable}.id`, 3)
+    const loaded = await Category.with('children', joined as never).orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
+
+    const viaJoin = await Category.whereHas('children', joined as never).orderBy('id').get() as unknown as Category[]
+    const viaExists = await Category.whereHas('children', query => query.whereExists(DB.table(postsTable).whereColumn(`${postsTable}.category_id`, '=', `${table}.id`).where('id', 3))).orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1])
+    expect(viaJoin.map(id)).toEqual(expected)
+    expect(viaExists.map(id)).toEqual(expected)
+  })
+
+  it('keeps a nested query alias that reuses the table name bound to that query', async () => {
+    const { Category, table } = await openSelfFixtures(driver)
+    const postsTable = table.replace('sr_categories_', 'sr_posts_')
+    const constraint = (query: { whereExists(subquery: unknown): unknown }) => query.whereExists(DB.table(`${postsTable} as ${table}`).where(`${table}.id`, 3))
+    const loaded = await Category.with('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
+
+    const filtered = await Category.whereHas('children', constraint as never).orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1, 2])
+    expect(filtered.map(id)).toEqual(expected)
+  })
+
+  it.each(['QualifiedParent', 'PlainParent'] as const)('aliases the same table named with and without its schema from %s', async (parentName) => {
+    const fixtures = await openSelfFixtures(driver)
+    const Parent = fixtures[parentName]
+
+    const children = await Parent.has('children').orderBy('id').get() as unknown as Category[]
+    const parents = await Parent.has('parent').orderBy('id').get() as unknown as Category[]
+
+    expect(children.map(id)).toEqual([1, 2])
+    expect(parents.map(id)).toEqual([2, 3, 4])
+  })
+
+  it('keeps a schema-qualified nested query on the table bound to that query', async () => {
+    const { Category, table, schemaName } = await openSelfFixtures(driver)
+    const constraint = (query: { whereExists(subquery: unknown): unknown }) => query.whereExists(DB.table(`${schemaName}.${table}`).where(`${table}.name`, 'root'))
+    const loaded = await Category.with('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
+
+    const filtered = await Category.whereHas('children', constraint as never).orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1, 2])
+    expect(filtered.map(id)).toEqual(expected)
+  })
+
+  it('aliases a constraint that returns a fresh query on the same table', async () => {
+    const { Category, Leaf } = await openSelfFixtures(driver)
+    const constraint = () => Leaf.where('name', 'leaf')
+    const loaded = await Category.with('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
+
+    const filtered = await Category.whereHas('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const nested = await Category.whereHas('children', () => Category.has('children')).orderBy('id').get() as unknown as Category[]
+    const nestedThrough = await Category.whereHas('grandchildren', () => Category.has('children')).orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1, 2])
+    expect(filtered.map(id)).toEqual(expected)
+    expect(nested.map(id)).toEqual([1])
+    expect(nestedThrough.map(id)).toEqual([])
+  })
+
+  it('reads the table name inside a related global scope subquery as the aliased row', async () => {
+    const { GrantedParent } = await openSelfFixtures(driver)
+    const loaded = await GrantedParent.with('children').orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
+
+    const has = await GrantedParent.has('children').orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1])
+    expect(has.map(id)).toEqual(expected)
+  })
+
+  it('correlates a belongsToMany whose pivot is the parent table against the outer row', async () => {
+    const { Category } = await openSelfFixtures(driver)
+    const loaded = await Category.with('pivotChildren').orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'pivotChildren').length > 0).map(id)
+
+    const has = await Category.has('pivotChildren').orderBy('id').get() as unknown as Category[]
+    const nested = await Category.has('pivotChildren.pivotChildren').orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1, 2])
+    expect(has.map(id)).toEqual(expected)
+    expect(nested.map(id)).toEqual([1])
+  })
+
+  it('reads table-qualified constraint columns from the related row, as eager loading does', async () => {
+    const { Category, table, schemaName } = await openSelfFixtures(driver)
+    const loaded = await Category.with('children', query => query.where(`${table}.name` as never, 'branch')).orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
+
+    const filtered = await Category.whereHas('children', query => query.where(`${table}.name`, 'branch').whereColumn(`${table}.id`, '>', `${table}.parent_id`)).orderBy('id').get() as unknown as Category[]
+    const grouped = await Category.whereHas('children', query => query.where(inner => inner.whereNull(`${table}.name`).orWhere(`${table}.name`, 'branch'))).orderBy('id').get() as unknown as Category[]
+    const excluded = await Category.whereDoesntHave('parent', query => query.where(`${table}.name`, 'root')).orderBy('id').get() as unknown as Category[]
+    const schemaQualified = await Category.whereHas('children', query => query.where(`${schemaName}.${table}.name`, 'branch')).orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1])
+    expect(filtered.map(id)).toEqual(expected)
+    expect(grouped.map(id)).toEqual(expected)
+    expect(excluded.map(id)).toEqual([1, 4, 5])
+    expect(schemaQualified.map(id)).toEqual(expected)
+  })
+})
