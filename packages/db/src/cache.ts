@@ -2284,17 +2284,31 @@ function hasUnreadBoolean(table: TableDefinition | undefined, row: Readonly<Reco
   return table !== undefined && Object.keys(row).some(key => isBooleanColumn(table, key) && isDriverScalar(row[key]) && !isStoredBoolean(row[key]))
 }
 
+function resultKeys(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[],
+  readsColumn: (table: TableDefinition, column: string) => boolean,
+  reads: (value: unknown) => boolean,
+): readonly string[] {
+  if (!table) return []
+  return Object.keys(row).filter((key) => {
+    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
+    return reads(row[key]) && readsColumn(table, selection ? selection.column : key)
+  })
+}
+
+function isIntegerColumn(table: TableDefinition, column: string): boolean {
+  return Object.hasOwn(table.columns, column) && readsAsInteger(table.columns[column]!)
+}
+
 function booleanResultKeys(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
   selections: readonly DatabaseQuerySelectionObservation[],
   reads: (value: unknown) => boolean,
 ): readonly string[] {
-  if (!table) return []
-  return Object.keys(row).filter((key) => {
-    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
-    return reads(row[key]) && isBooleanColumn(table, selection ? selection.column : key)
-  })
+  return resultKeys(table, row, selections, isBooleanColumn, reads)
 }
 
 function hasUnstoredFetchedBoolean(
@@ -2322,13 +2336,7 @@ function integerResultKeys(
   selections: readonly DatabaseQuerySelectionObservation[],
   reads: (value: unknown) => boolean,
 ): readonly string[] {
-  if (!table) return []
-  return Object.keys(row).filter((key) => {
-    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
-    const column = selection ? selection.column : key
-    const definition = Object.hasOwn(table.columns, column) ? table.columns[column] : undefined
-    return definition !== undefined && readsAsInteger(definition) && reads(row[key])
-  })
+  return resultKeys(table, row, selections, isIntegerColumn, reads)
 }
 
 function hasUnreadableFetchedInteger(

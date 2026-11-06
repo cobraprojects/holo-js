@@ -205,7 +205,7 @@ async function fetchGroupedExactRowBackfill(
   const requestedValues = new Set(values)
   const rowsById = new Map<unknown, BackfillRows>()
   for (const row of rows) {
-    const id = usesHiddenIdentity ? row[GROUPED_ROW_ID_ALIAS] : row[primaryKey]
+    const id = readBackfilledValue(query.table, primaryKey, usesHiddenIdentity ? row[GROUPED_ROW_ID_ALIAS] : row[primaryKey])
     if (typeof id === 'undefined' || !requestedValues.has(id)) {
       return undefined
     }
