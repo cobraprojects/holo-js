@@ -459,7 +459,7 @@ describe('native database and cache integration', () => {
 })
 
 describe('query cache BigInt values', () => {
-  it('encodes BigInt dependency values and cache keys as the integers they hold', () => {
+  it('encodes BigInt dependency values as the integers they hold and keeps BigInt cache keys apart from numbers', () => {
     const { createDeterministicQueryCacheKey, createTablePredicateCacheDependency, createTableRowCacheDependency } = queryCacheInternals
 
     expect(createTablePredicateCacheDependency('main', 'users', 'score', 0n)).toBe(createTablePredicateCacheDependency('main', 'users', 'score', 0))
@@ -478,7 +478,9 @@ describe('query cache BigInt values', () => {
     expect(createTablePredicateCacheDependency('main', 'users', 'status', { at: new Date('2026-01-01T00:00:00.000Z'), n: 1n, skip: undefined }))
       .toBe(createTablePredicateCacheDependency('main', 'users', 'status', { at: '2026-01-01T00:00:00.000Z', n: 1 }))
     expect(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1n] }, 'main'))
-      .toBe(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1] }, 'main'))
+      .not.toBe(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1] }, 'main'))
+    expect(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1n] }, 'main'))
+      .toBe(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1n] }, 'main'))
     expect(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1n] }, 'main'))
       .not.toBe(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: ['1'] }, 'main'))
     expect(createDeterministicQueryCacheKey({ sql: 'select cardinality(?)', bindings: [Array(1)] }, 'main'))

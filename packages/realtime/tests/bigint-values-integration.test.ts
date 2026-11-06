@@ -221,6 +221,25 @@ describe.each(drivers)('realtime BigInt values on %s', (driver) => {
     await expectFresh()
   })
 
+  it('keeps cached queries on a text column by BigInt apart from the same query by number', async () => {
+    const { configureCacheRuntime, resetCacheRuntime } = await import('../../cache/src')
+    for (const order of [[1n, 1], [1, 1n]] as const) {
+      const { db, counters } = await openFixture(driver)
+      configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+      onTestFinished(() => resetCacheRuntime())
+      await db.table(counters.tableName).insert([{ id: 6, n: 1, label: '1' }, { id: 7, n: 1, label: '01' }])
+      const read = (value: bigint | number, cache: boolean) => {
+        const query = db.table(counters.tableName).select('id').where('label', value).orderBy('id')
+        return (cache ? query.cache(60) : query).get()
+      }
+
+      for (const value of order) {
+        expect(await read(value, true)).toEqual(await read(value, false))
+      }
+      resetCacheRuntime()
+    }
+  })
+
   it('keeps cached queries on an unsafe BigInt apart from the unequal number with the same digits', async () => {
     const { db, counters } = await openFixture(driver)
     const { configureCacheRuntime, resetCacheRuntime } = await import('../../cache/src')

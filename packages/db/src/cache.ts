@@ -1086,7 +1086,7 @@ function stringifyIntegers(value: unknown, exactNumbers: boolean): string | unde
     return exactNumbers && typeof element === 'number' && Number.isInteger(element) && !Number.isSafeInteger(element)
       ? `${INTEGER_MARKER}${BigInt(element)}`
       : element
-  })?.replace(INTEGER_MARKER_PATTERN, (_marker, digits: string, bigint: string) => exactNumbers || Number.isSafeInteger(Number(digits)) ? digits : `${digits}${bigint}`)
+  })?.replace(INTEGER_MARKER_PATTERN, (_marker, digits: string, bigint: string) => exactNumbers ? digits : `${digits}${bigint}`)
 }
 
 function stringifyQueryCacheKey(value: unknown): string | undefined {
