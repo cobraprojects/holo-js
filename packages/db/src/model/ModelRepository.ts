@@ -20,7 +20,7 @@ import {
   type DatabaseQueryResultPathSegment,
 } from '../cache'
 import { TableQueryBuilder, aliasSource, insertGetIdByKey, joinOnKeyColumns, requalifySource, selectKeyColumn, whereKeyColumn } from '../query/TableQueryBuilder'
-import { bindsTable, boundTableNames } from '../query/requalifyAliasedSource'
+import { sameTable, boundTableNames } from '../query/requalifyAliasedSource'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadTableDefinition } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition, isUnresolvedGeneratedPrimaryKey } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
@@ -2774,7 +2774,7 @@ export class ModelRepository<
     morphTypes?: readonly string[],
   ): readonly TableQueryBuilder<TableDefinition, Record<string, unknown>>[] {
     const parent = (column: string) => this.qualifyParentColumn(column, parentAlias)
-    const aliasFor = (repository: ModelRepository, reserved: number = 0) => bindsTable(repository.definition.table.tableName, this.definition.table.tableName)
+    const aliasFor = (repository: ModelRepository, reserved: number = 0) => sameTable(repository.definition.table.tableName, this.definition.table.tableName)
       ? this.selfRelationAlias(parentAlias, reserved)
       : undefined
     const existenceQuery = (repository: ModelRepository, alias = aliasFor(repository)) => {
@@ -2786,7 +2786,7 @@ export class ModelRepository<
       for (let reserved = 2; bound.has(unused); reserved += 2) unused = this.selfRelationAlias(parentAlias, reserved)
       return query[aliasSource](unused)[requalifySource]()
     }
-    const pivotQuery = <TQuery extends TableQueryBuilder<string | TableDefinition>>(query: TQuery) => bindsTable(query.getTableName(), this.definition.table.tableName)
+    const pivotQuery = <TQuery extends TableQueryBuilder<string | TableDefinition>>(query: TQuery) => sameTable(query.getTableName(), this.definition.table.tableName)
       ? query[aliasSource](this.selfRelationAlias(parentAlias, 1))[requalifySource]()
       : query
 

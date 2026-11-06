@@ -387,4 +387,45 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(expected).toEqual([1])
     expect(filtered.map(id)).toEqual(expected)
   })
+
+  it('keeps same-named tables in different schemas apart', async () => {
+    const { adapter, db, schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const name = `sr_tenants_${suffix}`
+    const home = driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : mysqlTestConnection().database
+    const audit = `sr_audit_${suffix}`
+    const quote = (identifier: string) => driver === 'mysql' ? `\`${identifier}\`` : `"${identifier}"`
+    if (driver === 'sqlite') {
+      await db.executeCompiled({ sql: `ATTACH DATABASE ':memory:' AS ${quote(audit)}`, source: 'schema' })
+    }
+    else {
+      await adapter.execute(`${driver === 'postgres' ? 'CREATE SCHEMA' : 'CREATE DATABASE'} ${quote(audit)}`)
+      onTestFinished(async () => {
+        await adapter.execute(`${driver === 'postgres' ? 'DROP SCHEMA IF EXISTS' : 'DROP DATABASE IF EXISTS'} ${quote(audit)}${driver === 'postgres' ? ' CASCADE' : ''}`)
+      })
+    }
+    await schema.createTable(`${home}.${name}`, (table) => {
+      table.integer('id').primaryKey()
+      table.integer('tenant_id')
+    })
+    onTestFinished(() => schema.dropTable(`${home}.${name}`))
+    await schema.createTable(`${audit}.${name}`, (table) => {
+      table.integer('id').primaryKey()
+      table.integer('owner_id')
+      table.integer('tenant_id')
+    })
+    const homeTable = defineGeneratedTable(`${home}.${name}`, { id: column.integer().primaryKey(), tenant_id: column.integer() })
+    const auditTable = defineGeneratedTable(`${audit}.${name}`, { id: column.integer().primaryKey(), owner_id: column.integer(), tenant_id: column.integer() })
+    await DB.table(homeTable).insert([{ id: 1, tenant_id: 1 }, { id: 2, tenant_id: 2 }])
+    await DB.table(auditTable).insert([{ id: 10, owner_id: 1, tenant_id: 1 }, { id: 20, owner_id: 2, tenant_id: 9 }])
+    const Audit = defineModel(auditTable, { name: `Audit${suffix}`, timestamps: false })
+    const Home = defineModel(homeTable, { name: `Home${suffix}`, timestamps: false, relations: { audits: hasMany(() => Audit, 'owner_id') } })
+
+    const sameTenant = await Home.whereHas('audits', query => query.whereColumn(`${audit}.${name}.tenant_id` as never, '=', `${home}.${name}.tenant_id`)).orderBy('id').get() as unknown as Category[]
+    const has = await Home.has('audits').orderBy('id').get() as unknown as Category[]
+
+    expect(has.map(id)).toEqual([1, 2])
+    expect(sameTenant.map(id)).toEqual([1])
+  })
 })

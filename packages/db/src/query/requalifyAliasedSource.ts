@@ -5,8 +5,19 @@ function shortName(name: string): string {
   return name.slice(name.lastIndexOf('.') + 1)
 }
 
-export function bindsTable(binding: string, tableName: string): boolean {
+function schemaOf(name: string): string | undefined {
+  const separator = name.lastIndexOf('.')
+  return separator < 0 ? undefined : name.slice(0, separator)
+}
+
+function bindsTable(binding: string, tableName: string): boolean {
   return shortName(binding) === shortName(tableName)
+}
+
+export function sameTable(left: string, right: string): boolean {
+  const leftSchema = schemaOf(left)
+  const rightSchema = schemaOf(right)
+  return bindsTable(left, right) && (leftSchema === undefined || rightSchema === undefined || leftSchema === rightSchema)
 }
 
 function requalifyColumn(column: string, tableName: string, alias: string): string {
@@ -15,7 +26,7 @@ function requalifyColumn(column: string, tableName: string, alias: string): stri
   const separator = root.lastIndexOf('.')
   if (separator < 0) return column
 
-  return bindsTable(root.slice(0, separator), tableName) ? `${alias}${column.slice(separator)}` : column
+  return sameTable(root.slice(0, separator), tableName) ? `${alias}${column.slice(separator)}` : column
 }
 
 function joinsShadowTable(plan: SelectQueryPlan, tableName: string): boolean {
