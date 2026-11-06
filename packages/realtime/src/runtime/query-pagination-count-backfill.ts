@@ -224,21 +224,34 @@ async function fetchGroupedPaginationCountBackfill(
     .groupBy(groupColumn)
     .get<Record<string, unknown>>()
   const counts = new Map<unknown, number>()
+  const requestedValues = new Map<unknown, unknown[]>()
   for (const value of values) {
     counts.set(value, 0)
+    const key = readGroupMatchKey(value)
+    requestedValues.set(key, [...requestedValues.get(key) ?? [], value])
   }
 
   for (const row of rows) {
-    const value = row[groupColumn]
+    const matches = requestedValues.get(readGroupMatchKey(row[groupColumn]))
     const count = normalizePaginationCount(row.__holo_count)
-    if (typeof count === 'undefined') {
+    if (!matches || typeof count === 'undefined') {
       return undefined
     }
 
-    counts.set(value, count)
+    for (const value of matches) {
+      counts.set(value, count)
+    }
   }
 
   return counts
+}
+
+const CANONICAL_INTEGER_TEXT = /^(?:0|-?[1-9]\d*)$/
+
+function readGroupMatchKey(value: unknown): unknown {
+  return typeof value === 'number' || typeof value === 'bigint' || (typeof value === 'string' && CANONICAL_INTEGER_TEXT.test(value))
+    ? `integer:${String(value)}`
+    : value
 }
 
 function normalizePaginationCount(value: unknown): number | undefined {

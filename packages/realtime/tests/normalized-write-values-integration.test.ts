@@ -5,6 +5,9 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, mysqlTestConnection, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
+import { createMutationIndexKey } from '../src/runtime/dependencies'
+import { getPaginationCountBackfill } from '../src/runtime/query-pagination-count-backfill'
+import type { BackfillCache } from '../src/runtime/state'
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)
 
@@ -81,6 +84,7 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     await expectFresh()
     await mutate(() => db.table(rates).where('id', 1).update({ rate: '4.5', group_id: '2' }))
     await expectFresh()
+    expect(JSON.stringify((subscriptions[4]!.current.data as Array<{ id: number }>).find(group => group.id === 1))).not.toContain('"pivot":{"id":1,')
     await mutate(() => db.model(Rate).query().where('id', 3).update({ rate: '1.255' }))
     await expectFresh()
     await mutate(() => db.table(rates).upsert([{ id: '3', group_id: '1', tag_id: '2', rate: '2.5' }, { id: '4', group_id: '2', tag_id: '2', rate: '3' }], ['id'], ['rate']))
@@ -236,6 +240,120 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     expect(subscriptions.map(subscription => subscription.current.data)).toEqual(fresh)
   })
 
+  it('keeps name-only subscriptions in the representation their own reads return', async () => {
+    const { db, rates } = await openFixture(driver)
+    const name = rates.tableName
+    const queries: Record<string, () => Promise<unknown>> = {
+      rows: () => db.table(name).orderBy('id').get(),
+      first: () => db.table(name).where('id', 2).first(),
+      window: () => db.table(name).orderBy('id').limit(1).get(),
+    }
+    const subscriptions = await Promise.all(Object.values(queries).map(handler => subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )))
+    const expectFresh = async () => {
+      const fresh = await Promise.all(Object.values(queries).map(handler => handler()))
+      expect(subscriptions.map(subscription => subscription.current.data)).toEqual(fresh)
+    }
+
+    await mutate(() => db.table(rates).insert({ id: 2, group_id: 2, tag_id: 2, rate: '2.00' }))
+    await expectFresh()
+    await mutate(() => db.table(rates).where('id', 2).update({ tag_id: 3 }))
+    await expectFresh()
+    await mutate(() => db.table(rates).where('id', 1).delete())
+    await expectFresh()
+  })
+
+  it('keeps grouped aggregate backfills apart for name-only and declared subscriptions', async () => {
+    const { db, schema } = await openDatabase(driver)
+    onTestFinished(() => resetRealtimeRuntime())
+    const name = `holo_norm_minimums_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.bigInteger('category')
+      table.bigInteger('score')
+    })
+    onTestFinished(() => schema.dropTable(name))
+    const scores = defineGeneratedTable(name, { id: column.id(), category: column.bigInteger(), score: column.bigInteger() })
+    await db.table(scores).insert([{ id: 1, category: 1, score: 10 }, { id: 2, category: 1, score: 20 }, { id: 3, category: 1, score: 30 }])
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const queries: Record<string, () => Promise<unknown>> = {
+      nameOnly: () => db.table(name).select('category').addSelectMin('score_min', 'score').groupBy('category').orderBy('category').get(),
+      declared: () => db.table(scores).select('category').addSelectMin('score_min', 'score').groupBy('category').orderBy('category').get(),
+    }
+    const subscriptions = []
+    for (const handler of Object.values(queries)) {
+      subscriptions.push(await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } }))
+    }
+
+    await mutate(() => db.table(scores).where('id', 1).delete())
+
+    const fresh = await Promise.all(Object.values(queries).map(handler => handler()))
+    expect(subscriptions.map(subscription => subscription.current.data)).toEqual(fresh)
+  })
+
+  it('counts grouped paginated subscriptions filtering a bigint group column by text and by number', async () => {
+    const { db, rates } = await openFixture(driver)
+    await db.table(rates).insert([{ id: 2, group_id: 2, tag_id: 1, rate: '1.00' }, { id: 3, group_id: 2, tag_id: 1, rate: '1.00' }])
+    const queries: Record<string, () => Promise<unknown>> = {
+      first: () => db.table(rates).select('id', 'group_id').where('group_id', '1').orderBy('id').paginate(1, 1).then(page => page.toJSON()),
+      second: () => db.table(rates).select('id', 'group_id').where('group_id', '2').orderBy('id').paginate(1, 1).then(page => page.toJSON()),
+      firstByNumber: () => db.table(rates).select('id', 'tag_id').where('group_id', 1).orderBy('id').paginate(1, 1).then(page => page.toJSON()),
+      secondByNumber: () => db.table(rates).select('id', 'tag_id').where('group_id', 2).orderBy('id').paginate(1, 1).then(page => page.toJSON()),
+    }
+    const subscriptions = await Promise.all(Object.values(queries).map(handler => subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )))
+
+    await mutate(() => db.table(rates).insert([{ id: 4, group_id: 1, tag_id: 1, rate: '1.00' }, { id: 5, group_id: 2, tag_id: 1, rate: '1.00' }]))
+    await mutate(() => db.table(rates).whereIn('group_id', [1, 2]).update({ tag_id: 5 }))
+
+    const fresh = await Promise.all(Object.values(queries).map(handler => handler()))
+    expect(subscriptions.map(subscription => subscription.current.data)).toEqual(fresh)
+  })
+
+  it('maps grouped pagination counts back to the predicate values that requested them', async () => {
+    const { db, rates } = await openFixture(driver)
+    await db.table(rates).insert([{ id: 2, group_id: 2, tag_id: 1, rate: '1.00' }, { id: 3, group_id: 2, tag_id: 1, rate: '1.00' }])
+    const observe = (value: unknown) => ({
+      connectionName: db.getConnectionName(),
+      dependencies: [],
+      orderBy: [],
+      pagination: { currentPage: 1, kind: 'standard' as const, pageName: 'page', perPage: 1, total: 0 },
+      patchable: true,
+      predicates: [{ column: 'group_id', operator: '=' as const, value }],
+      selections: [],
+      table: rates,
+      tableName: rates.tableName,
+    })
+    const mutation = Object.freeze({ connectionName: db.getConnectionName(), kind: 'update' as const, predicates: [], tableName: rates.tableName })
+    const tableKey = `db:${db.getConnectionName()}:${rates.tableName}`
+    const countFor = async (values: readonly unknown[]) => {
+      const queries = values.map(observe)
+      const backfills = {
+        aggregates: new Map(),
+        aggregateSql: new Map(),
+        entries: [{ queries }],
+        mutationExactPredicates: new WeakMap([[mutation, new Map([[tableKey, new Map([['group_id', new Set(values.map(value => encodeURIComponent(JSON.stringify(value))))]])]])]]),
+        mutationMetadata: new WeakMap(),
+        mutations: new Map([[createMutationIndexKey(db.getConnectionName(), rates.tableName), Object.freeze([mutation])]]),
+        paginationGroupedCounts: new Map(),
+        paginationCounts: new Map(),
+        rowGroups: new Map(),
+        rows: new Map(),
+      } as unknown as BackfillCache
+      return Promise.all(queries.map(query => getPaginationCountBackfill(query as never, backfills)))
+    }
+
+    expect(await countFor([1, 2])).toEqual([1, 2])
+    expect(await countFor(['1', '2'])).toEqual([1, 2])
+    expect(await countFor([1, '1', '2'])).toEqual([1, 1, 2])
+  })
+
   it('refreshes subscriptions filtering an integer column by text after writes of either representation', async () => {
     const { db, rates } = await openFixture(driver)
     const queries: Record<string, () => Promise<unknown>> = {
@@ -324,6 +442,8 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     await mutate(() => db.table(rates).insert({ id: '05', group_id: '+2', tag_id: '01', rate: '9.5' }))
     await expectFresh()
     await mutate(() => db.table(rates).where('id', 5).update({ group_id: '+1', rate: '3' }))
+    await expectFresh()
+    await mutate(() => db.table(rates).insert({ id: 6, group_id: ' 2 ', tag_id: 1, rate: '1' }))
     await expectFresh()
     expect(JSON.stringify(subscriptions[0]!.current.data)).toContain('"id":5,"group_id":1,"tag_id":1,"rate":"3.00"')
   })
