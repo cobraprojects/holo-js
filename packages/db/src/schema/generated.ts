@@ -161,6 +161,16 @@ export function isAwaitingGeneratedTableIdentity(tableName: string, connectionNa
   return schemaConnection !== undefined && hasOtherGeneratedSpelling(tableName) && !isTableIdentityResolved(schemaConnection, tableName)
 }
 
+export function findPendingGeneratedPrimaryKey(tableName: string, connectionName: string | undefined): string | undefined {
+  if (generatedSchemaConnectionFor(connectionName) === undefined || !hasOtherGeneratedSpelling(tableName)) return undefined
+  const keys = new Set(listGeneratedTableSpellings(tableName).map((spelling) => {
+    const primaryKeys = Object.values(generatedTables.get(spelling)?.columns ?? {}).filter(column => column.primaryKey)
+    return primaryKeys.length === 1 ? primaryKeys[0]!.name : undefined
+  }))
+  const [key] = keys
+  return keys.size === 1 ? key : undefined
+}
+
 export function isUnresolvedGeneratedPrimaryKey(tableName: string, connectionName: string | undefined, columnName: string): boolean {
   const schemaConnection = generatedSchemaConnectionFor(connectionName)
   return schemaConnection !== undefined

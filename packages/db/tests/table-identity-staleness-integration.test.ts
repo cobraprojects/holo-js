@@ -459,6 +459,43 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
       expect(await DB.table(qualified).pluck('code')).toEqual([7])
     })
 
+    it('finds a model defined by the qualified name by its generated primary key before any other query', async () => {
+      const { schema } = await openDatabase(driver)
+      const name = uniqueName('holo_found')
+      const { qualified } = tableSpellings(driver, name)
+      await schema.createTable(qualified, (columns) => {
+        columns.integer('code').primaryKey()
+        columns.string('name')
+      })
+      onTestFinished(() => schema.dropTable(qualified))
+      const found = defineGeneratedTable(name, { code: column.integer().primaryKey(), name: column.string() })
+      useGeneratedTables({ found })
+      const Found = defineModel(qualified, { timestamps: false })
+
+      expect(await Found.find(7)).toBeUndefined()
+      await schema.getTables()
+      expect(Found.definition.primaryKey).toBe('code')
+    })
+
+    it('binds the generated definition of a bare spelling registered by its qualified name after an unrelated cached read', async () => {
+      const { table, schema } = await openDatabase(driver)
+      const { bare, qualified } = tableSpellings(driver, table.tableName)
+      const other = `${bare}_other`
+      await schema.createTable(other, (columns) => {
+        columns.integer('id').primaryKey()
+        columns.string('name')
+      })
+      onTestFinished(() => schema.dropTable(other))
+      const items = defineGeneratedTable(qualified, itemColumns)
+      useGeneratedTables({ items, other: defineGeneratedTable(other, { id: column.integer().primaryKey(), name: column.string() }) })
+      await DB.table(items).insert({ id: 1, name: 'first', active: true, settings: { theme: 'dark' } })
+      useMemoryCache()
+      expect(await cachedNames(other)).toEqual([])
+
+      expect(await DB.table(bare).where('settings', { theme: 'dark' }).value('id')).toBe(1)
+      expect((await defineModel(bare, { timestamps: false }).firstOrFail()).get('settings')).toEqual({ theme: 'dark' })
+    })
+
     it('normalizes a where() value on the qualified name again after an unrelated schema change', async () => {
       const { table, schema } = await openDatabase(driver)
       const { bare, qualified } = tableSpellings(driver, table.tableName)

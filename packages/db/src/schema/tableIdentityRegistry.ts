@@ -1,6 +1,5 @@
 import { openSchemaChangingTransactions } from '../core/openTransactions'
 import { currentSchemaGeneration } from '../core/schemaGeneration'
-import { splitTablePath } from './identifiers'
 import type { TransactionFrame } from '../core/openTransactions'
 
 export type TableNameFolding = 'none' | 'ascii' | 'lower'
@@ -61,12 +60,10 @@ export function rememberCanonicalTableName(connectionName: string, tableName: st
 }
 
 export function isTableIdentityResolved(connectionName: string, tableName: string): boolean {
-  if (splitTablePath(tableName).schema === undefined) return foldings.has(connectionName)
   return currentCanonicalEntry(connectionName, tableName) !== undefined
 }
 
 export function lastKnownCanonicalTableName(connectionName: string, tableName: string): string | undefined {
-  if (splitTablePath(tableName).schema === undefined) return foldings.has(connectionName) ? foldTableName(connectionName, tableName) : undefined
   return canonicalNames.get(connectionName)?.get(tableName)?.identity
 }
 
