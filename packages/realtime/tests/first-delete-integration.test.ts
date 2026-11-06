@@ -36,7 +36,7 @@ async function createPosts(driver: TestDriver) {
   await adapter.execute(`INSERT INTO ${tableName} (id, title) VALUES (1, 'First'), (2, 'Second')`)
   configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
-  return { adapter, tableName }
+  return { adapter, db, tableName }
 }
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a first() subscription on %s', (driver) => {
@@ -44,42 +44,50 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a f
     ['ordered by id', true],
     ['without an order', false],
   ] as const)('%s follows deletes of its loaded row to a fresh read', async (_label, ordered) => {
-    const { tableName } = await createPosts(driver)
-    const snapshots: unknown[] = []
-    const query = defineRealtimeQuery({ access: 'public', handler: async ({ db }) => {
+    const { db, tableName } = await createPosts(driver)
+    const read = async () => {
       const posts = db.table(tableName).select('id', 'title')
       return await (ordered ? posts.orderBy('id') : posts).first()
-    } })
+    }
+    const snapshots: unknown[] = []
+    const query = defineRealtimeQuery({ access: 'public', handler: read })
     await subscribeRealtimeQuery(query, {}, { onData: (snapshot) => { snapshots.push(snapshot.data) }, onError: (error) => { throw error } })
     const deleteLoadedRow = () => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: async ({ db }) => {
       const loaded = snapshots.at(-1) as { id: number }
       await db.table(tableName).where('id', loaded.id).delete()
     } }))
 
-    const initial = snapshots[0] as { id: number }
-    const remaining = initial.id === 1 ? { id: 2, title: 'Second' } : { id: 1, title: 'First' }
-    expect(snapshots).toEqual([{ id: initial.id, title: initial.id === 1 ? 'First' : 'Second' }])
+    if (ordered) {
+      expect(snapshots).toEqual([{ id: 1, title: 'First' }])
+    }
+    expect(snapshots).toEqual([await read()])
     await deleteLoadedRow()
-    expect(snapshots).toEqual([snapshots[0], remaining])
+    expect(snapshots).toHaveLength(2)
+    expect(snapshots.at(-1)).toEqual(await read())
+    expect(snapshots.at(-1)).not.toEqual(snapshots[0])
+    expect(snapshots.at(-1)).toBeDefined()
 
     await deleteLoadedRow()
-    expect(snapshots).toEqual([snapshots[0], remaining, undefined])
+    expect(snapshots).toHaveLength(3)
+    expect(snapshots.at(-1)).toEqual(await read())
+    expect(snapshots.at(-1)).toBeUndefined()
   })
 
   it('follows an update that moves its loaded row out of the filter to a fresh read', async () => {
-    const { adapter, tableName } = await createPosts(driver)
+    const { adapter, db, tableName } = await createPosts(driver)
     await adapter.execute(`UPDATE ${tableName} SET title = 'Open'`)
+    const read = async () => await db.table(tableName).select('id', 'title').where('title', 'Open').orderBy('id').first()
     const snapshots: unknown[] = []
-    const query = defineRealtimeQuery({ access: 'public', handler: async ({ db }) => {
-      return await db.table(tableName).select('id', 'title').where('title', 'Open').orderBy('id').first()
-    } })
+    const query = defineRealtimeQuery({ access: 'public', handler: read })
     await subscribeRealtimeQuery(query, {}, { onData: (snapshot) => { snapshots.push(snapshot.data) }, onError: (error) => { throw error } })
     const closeRow = (id: number) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: async ({ db }) => {
       await db.table(tableName).where('id', id).update({ title: 'Closed' })
     } }))
 
     await closeRow(1)
+    expect(snapshots.at(-1)).toEqual(await read())
     await closeRow(2)
+    expect(snapshots.at(-1)).toEqual(await read())
     expect(snapshots).toEqual([{ id: 1, title: 'Open' }, { id: 2, title: 'Open' }, undefined])
   })
 })
