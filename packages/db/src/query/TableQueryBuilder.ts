@@ -3814,6 +3814,7 @@ export class TableQueryBuilder<
     const ownColumns = Object.keys(this.source.table?.columns ?? {})
     const connectionName = this.connection.getConnectionName()
     const outputsName = (selection: QuerySelection, name: string, unknownOverwrites: boolean): boolean => {
+      if (selection.kind === 'raw') return unknownOverwrites
       if (selection.kind !== 'column' || (!selection.column.endsWith('.*') && selection.column !== '*')) return selectionOutputName(selection) === name
       if (this.resolveSourceColumnName(selection.column) === '*') return name === sourceColumn || ownColumns.includes(name)
       const qualifier = selection.column.slice(0, -2)

@@ -9,8 +9,8 @@ function uniqueName(prefix: string) {
   return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 12)}`
 }
 
-async function createFixture(driver: typeof drivers[number]) {
-  const { schema } = await openDatabase(driver)
+async function createFixture(driver: typeof drivers[number], options: Parameters<typeof openDatabase>[1] = {}) {
+  const { schema } = await openDatabase(driver, options)
   const products = uniqueName('products')
   const orders = uniqueName('orders')
   onTestFinished(async () => {
@@ -372,6 +372,15 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     expect(read(await labelled().get())).toEqual([[1, 10, 'first'], [2, 20, 'second']])
     expect(read(await labelled().distinct().get())).toEqual([[1, 10, 'first'], [2, 20, 'second']])
     expect(read(await labelled().where(`${notes}.id` as never, 11).union(labelled().where(`${notes}.id` as never, 12)).get())).toEqual([[1, 10, 'first'], [2, 20, 'second']])
+  })
+
+  it('reads a cursor from a surviving alias when a raw selection may replace the order column', async () => {
+    const { products } = await createFixture(driver, { security: { allowUnsafeRawSql: true } })
+
+    const raw = DB.table(products).select(`${products}.id as product_key`, `${products}.id`).addUnsafeSelect('price AS id', []).orderBy(`${products}.id`)
+    const rawPage = await raw.cursorPaginate(1)
+    const rawNext = await raw.cursorPaginate(1, rawPage.nextCursor)
+    expect([rawPage, rawNext].map(result => result.data.map(row => Number(row.product_key)))).toEqual([[1], [2]])
   })
 
   it('shows the projected SQL that a joined model query runs', async () => {
