@@ -146,6 +146,12 @@ async function readLifecycle(projectRoot: string): Promise<{
   }
 }
 
+async function readFrameworkLaunch(projectRoot: string): Promise<{ mode: string } | undefined> {
+  return await readFile(join(projectRoot, '.generic-project-fixture/framework.json'), 'utf8')
+    .then(contents => JSON.parse(contents) as { mode: string })
+    .catch(() => undefined)
+}
+
 async function runPublicHoloLifecycle(
   projectRoot: string,
   publicCliEntrypoint: string,
@@ -165,13 +171,17 @@ async function runPublicHoloLifecycle(
     child.once('close', (code, signal) => resolvePromise({ code, signal }))
   })
   try {
-    const observed = await vi.waitFor(async () => {
+    const isPrepared = async (): Promise<boolean> => {
+      const frameworkLaunch = await readFrameworkLaunch(projectRoot)
       const lifecycle = await readLifecycle(projectRoot).catch(() => undefined)
-      if (lifecycle?.command === command && lifecycle.kind === 'full') {
+      return frameworkLaunch?.mode === command && lifecycle?.command === command && lifecycle.kind === 'full'
+    }
+    const observed = await vi.waitFor(async () => {
+      if (await isPrepared()) {
         return true
       }
       if (child.exitCode !== null) {
-        return false
+        return await isPrepared()
       }
       throw new Error('Public holo lifecycle is not prepared yet.')
     }, { timeout: 20_000, interval: 50 }).catch(() => false)
