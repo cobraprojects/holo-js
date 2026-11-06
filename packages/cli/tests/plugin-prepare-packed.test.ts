@@ -146,6 +146,12 @@ async function readLifecycle(projectRoot: string): Promise<{
   }
 }
 
+async function readFrameworkLaunch(projectRoot: string): Promise<{ mode: string } | undefined> {
+  return await readFile(join(projectRoot, '.generic-project-fixture/framework.json'), 'utf8')
+    .then(contents => JSON.parse(contents) as { mode: string })
+    .catch(() => undefined)
+}
+
 async function runPublicHoloLifecycle(
   projectRoot: string,
   publicCliEntrypoint: string,
@@ -166,8 +172,9 @@ async function runPublicHoloLifecycle(
   })
   try {
     const observed = await vi.waitFor(async () => {
+      const frameworkLaunch = await readFrameworkLaunch(projectRoot)
       const lifecycle = await readLifecycle(projectRoot).catch(() => undefined)
-      if (lifecycle?.command === command && lifecycle.kind === 'full') {
+      if (frameworkLaunch?.mode === command && lifecycle?.command === command && lifecycle.kind === 'full') {
         return true
       }
       if (child.exitCode !== null) {
