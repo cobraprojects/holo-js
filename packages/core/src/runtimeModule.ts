@@ -863,16 +863,40 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+function specifierSubpath(specifier: string): string {
+  return specifier.slice(packageNameOf(specifier).length + 1)
+}
+
+function installedPackagePath(message: string, specifier: string): string | undefined {
+  const marker = `/node_modules/${packageNameOf(specifier)}/`
+  const start = message.indexOf(marker)
+  if (start < 0) return undefined
+  return message.slice(start + marker.length).split(/['\s]/, 1)[0]
+}
+
+function missingPackageFile(message: string, specifier: string): string | undefined {
+  if (specifierSubpath(specifier) === '' || !message.startsWith('Cannot find module')) return undefined
+  return installedPackagePath(message, specifier)
+}
+
 function loadErrorSource(message: string, sources: BundleSources): string | undefined {
-  const importers = Object.entries(sources.importers)
-  const mentions = [
-    (specifier: string) => `'${specifier}'`,
-    (specifier: string) => `'${packageNameOf(specifier)}'`,
-    (specifier: string) => `/node_modules/${packageNameOf(specifier)}/`,
-  ]
   const normalizedMessage = message.replaceAll('\\', '/')
-  for (const mention of mentions) {
-    const importer = importers.find(([specifier]) => normalizedMessage.includes(mention(specifier)))
+  const importers = Object.entries(sources.importers)
+  const matchers: Array<(specifier: string) => boolean> = [
+    specifier => normalizedMessage.includes(`'${specifier}'`),
+    specifier => specifierSubpath(specifier) !== '' && installedPackagePath(normalizedMessage, specifier) !== undefined
+      && normalizedMessage.includes(`Package subpath './${specifierSubpath(specifier)}'`),
+    specifier => specifierSubpath(specifier) === '' && installedPackagePath(normalizedMessage, specifier) !== undefined
+      && normalizedMessage.includes('No "exports" main defined in'),
+    specifier => missingPackageFile(normalizedMessage, specifier) === specifierSubpath(specifier),
+    specifier => missingPackageFile(normalizedMessage, specifier)?.replace(/\.[^./]+$/, '') === specifierSubpath(specifier),
+    specifier => specifierSubpath(specifier) === '' && normalizedMessage.includes(`'${specifier}'`),
+    specifier => normalizedMessage.includes(`'${packageNameOf(specifier)}'`),
+    specifier => specifierSubpath(specifier) === '' && installedPackagePath(normalizedMessage, specifier) !== undefined,
+    specifier => installedPackagePath(normalizedMessage, specifier) !== undefined,
+  ]
+  for (const matches of matchers) {
+    const importer = importers.find(([specifier]) => matches(specifier))
     if (importer) return importer[1]
   }
   return sources.sourcePath
