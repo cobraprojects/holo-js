@@ -18,6 +18,7 @@ import {
   validateTouches,
 } from './defineModelHelpers'
 import type { ColumnInput } from '../schema/columns'
+import { findPendingGeneratedPrimaryKey } from '../schema/generated'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { BoundTableDefinition } from '../schema/defineTable'
 import type { TableDefinitionBuilder } from '../schema/TableDefinitionBuilder'
@@ -237,7 +238,7 @@ function defineModelFromGeneratedTableName<
     resolveGeneratedModelTable(tableName, options.connectionName) as GeneratedSchemaTable<TName> | undefined
   )
   const resolvePrimaryKeyFromTable = (table: GeneratedSchemaTable<TName> | undefined): ColumnName => (
-    (options.primaryKey ?? (table ? inferPrimaryKey(table) : 'id')) as ColumnName
+    (options.primaryKey ?? (table ? inferPrimaryKey(table) : findPendingGeneratedPrimaryKey(tableName, options.connectionName) ?? 'id')) as ColumnName
   )
   const resolveUniqueIdFromTable = (
     table: GeneratedSchemaTable<TName> | undefined,

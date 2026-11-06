@@ -21,7 +21,7 @@ import {
 } from '../cache'
 import { TableQueryBuilder, insertGetIdByKey, joinOnKeyColumns, selectKeyColumn, whereKeyColumn } from '../query/TableQueryBuilder'
 import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
-import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { getConnectionGeneratedTableDefinition, isUnresolvedGeneratedPrimaryKey } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
 import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
@@ -53,6 +53,7 @@ import type { TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { canonicalTableName } from '../schema/tableIdentityRegistry'
+import { resolveGeneratedTableIdentity } from '../query/tableIdentity'
 import type {
   AnyModelDefinition,
   ModelDefinitionLike,
@@ -312,7 +313,12 @@ export class ModelRepository<
     return this.createQuery(true, true, false)
   }
 
+  async resolveTableIdentity(): Promise<void> {
+    await resolveGeneratedTableIdentity(this.getConnection(), this.definition.table.tableName)
+  }
+
   async find(value: unknown): Promise<Entity<TTable> | undefined> {
+    await this.resolveTableIdentity()
     return this.query().find(value, this.definition.primaryKey)
   }
 
@@ -351,6 +357,7 @@ export class ModelRepository<
   }
 
   async findMany(values: readonly unknown[]): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
+    await this.resolveTableIdentity()
     const primaryKey = this.definition.primaryKey
     const keys = [...new Set(values)]
     if (keys.length === 0) {
@@ -1859,6 +1866,7 @@ export class ModelRepository<
   }
 
   async restore(id: unknown): Promise<Entity<TTable>> {
+    await this.resolveTableIdentity()
     const primaryKey = this.definition.primaryKey
     const existing = await this.query().withTrashed().find(id, primaryKey)
     if (!existing) {
@@ -1869,6 +1877,7 @@ export class ModelRepository<
   }
 
   async forceDelete(id: unknown): Promise<void> {
+    await this.resolveTableIdentity()
     const primaryKey = this.definition.primaryKey
     const existing = await this.query().withTrashed().find(id, primaryKey)
     if (!existing) {
@@ -3921,6 +3930,7 @@ export class ModelRepository<
   }
 
   async loadGuardableColumns(): Promise<void> {
+    await this.resolveTableIdentity()
     if (this.guardsByColumnListing()) {
       await loadColumnListing(this.getConnection(), this.definition.table.tableName)
     }
@@ -3971,6 +3981,7 @@ export class ModelRepository<
 
     if (guarded.has('*') || guarded.has(column)) return false
     if (fillable.has(column)) return true
+    if (isUnresolvedGeneratedPrimaryKey(this.definition.table.tableName, this.definition.connectionName, column)) return false
     if (this.isAutomaticallyGuardedColumn(column)) return false
     if (fillable.has('*')) return true
     return this.definition.hasExplicitFillable !== true && this.definition.hasExplicitGuarded === true

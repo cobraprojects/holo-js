@@ -26,7 +26,8 @@ import {
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
-import { projectModelRows, resolveAggregateSource, TableQueryBuilder } from '../query/TableQueryBuilder'
+import { projectModelRows, resolveAggregateSource, TableQueryBuilder, whereResolvedColumn } from '../query/TableQueryBuilder'
+import { isAwaitingGeneratedTableIdentity } from '../schema/generated'
 import { knownJoinedColumns, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn } from '../query/modelRowProjection'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
@@ -242,6 +243,11 @@ class ModelQueryBuilderBase<
     }
   }
 
+  private isAwaitingTableIdentity(): boolean {
+    const { definition } = this.repository
+    return isAwaitingGeneratedTableIdentity(definition.table.tableName, definition.connectionName)
+  }
+
   private qualifiedKeyName(): ModelColumnName<TTable> {
     const { source } = this.tableQuery.getPlan()
     return `${source.alias ?? source.tableName}.${this.repository.definition.primaryKey}` as ModelColumnName<TTable>
@@ -424,11 +430,17 @@ class ModelQueryBuilderBase<
   }
 
   whereKey(value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+    if (this.isAwaitingTableIdentity()) {
+      return this.clone(this.tableQuery[whereResolvedColumn](() => this.qualifiedKeyName(), Array.isArray(value) ? 'in' : '=', value))
+    }
     const key = this.qualifiedKeyName()
     return Array.isArray(value) ? this.whereIn(key, value) : this.where(key, value)
   }
 
   whereKeyNot(value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+    if (this.isAwaitingTableIdentity()) {
+      return this.clone(this.tableQuery[whereResolvedColumn](() => this.qualifiedKeyName(), Array.isArray(value) ? 'not in' : '!=', value))
+    }
     const key = this.qualifiedKeyName()
     return Array.isArray(value) ? this.whereNotIn(key, value) : this.where(key, '!=', value)
   }
@@ -1622,6 +1634,7 @@ class ModelQueryBuilderBase<
     assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
     normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
     decodeValueCursor(cursor, message => new HydrationError(message))
+    await this.repository.resolveTableIdentity()
     const ordered = this.tableQuery.getPlan().orderBy.length === 0
       ? this.orderBy(this.repository.definition.primaryKey as never)
       : this
@@ -1644,6 +1657,7 @@ class ModelQueryBuilderBase<
     callback: (rows: readonly EntityWithLoaded<TTable, TRelations, TLoaded>[], page: number) => unknown | Promise<unknown>,
   ): Promise<void> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
+    await this.repository.resolveTableIdentity()
 
     let page = 1
     for await (const rows of queryBatches(this.getModelRowsQuery(), size, {
@@ -1657,7 +1671,7 @@ class ModelQueryBuilderBase<
   async chunkById(
     size: number,
     callback: (rows: readonly EntityWithLoaded<TTable, TRelations, TLoaded>[], page: number) => unknown | Promise<unknown>,
-    column: ModelAttributeKey<TTable> = this.repository.definition.primaryKey,
+    column?: ModelAttributeKey<TTable>,
   ): Promise<void> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
@@ -1667,7 +1681,7 @@ class ModelQueryBuilderBase<
   async chunkByIdDesc(
     size: number,
     callback: (rows: readonly EntityWithLoaded<TTable, TRelations, TLoaded>[], page: number) => unknown | Promise<unknown>,
-    column: ModelAttributeKey<TTable> = this.repository.definition.primaryKey,
+    column?: ModelAttributeKey<TTable>,
   ): Promise<void> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
     return this.chunkIds(size, callback, column, 'desc')
@@ -1676,7 +1690,7 @@ class ModelQueryBuilderBase<
   private async chunkIds(
     size: number,
     callback: (rows: readonly EntityWithLoaded<TTable, TRelations, TLoaded>[], page: number) => unknown | Promise<unknown>,
-    column: ModelAttributeKey<TTable>,
+    column: ModelAttributeKey<TTable> | undefined,
     direction: 'asc' | 'desc',
   ): Promise<void> {
     let page = 1
@@ -1686,9 +1700,10 @@ class ModelQueryBuilderBase<
     }
   }
 
-  private idBatches(size: number, column: ModelAttributeKey<TTable>, direction: 'asc' | 'desc') {
-    return queryBatches(this.getModelRowsQuery(), size, {
-      column,
+  private async* idBatches(size: number, column: ModelAttributeKey<TTable> | undefined, direction: 'asc' | 'desc') {
+    await this.repository.resolveTableIdentity()
+    yield* queryBatches(this.getModelRowsQuery(), size, {
+      column: column ?? this.repository.definition.primaryKey,
       direction,
       fallbackOrder: direction === 'asc' ? 'database' : 'rows',
       primaryKey: this.repository.definition.primaryKey,
@@ -1705,14 +1720,14 @@ class ModelQueryBuilderBase<
   async eachById(
     callback: (entity: EntityWithLoaded<TTable, TRelations, TLoaded>, index: number) => unknown | Promise<unknown>,
     count = 1000,
-    column: ModelAttributeKey<TTable> = this.repository.definition.primaryKey,
+    column?: ModelAttributeKey<TTable>,
   ): Promise<void> {
     await this.chunkById(count, rows => visitRows(rows, callback), column)
   }
 
   async* lazyById(
     size = 1000,
-    column: ModelAttributeKey<TTable> = this.repository.definition.primaryKey,
+    column?: ModelAttributeKey<TTable>,
   ): AsyncGenerator<EntityWithLoaded<TTable, TRelations, TLoaded>, void, unknown> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
     for await (const rows of this.idBatches(size, column, 'asc')) {
@@ -1722,7 +1737,7 @@ class ModelQueryBuilderBase<
 
   async* lazyByIdDesc(
     size = 1000,
-    column: ModelAttributeKey<TTable> = this.repository.definition.primaryKey,
+    column?: ModelAttributeKey<TTable>,
   ): AsyncGenerator<EntityWithLoaded<TTable, TRelations, TLoaded>, void, unknown> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
     for await (const rows of this.idBatches(size, column, 'desc')) {
@@ -1740,6 +1755,7 @@ class ModelQueryBuilderBase<
 
   async* lazy(size = 1000): AsyncGenerator<EntityWithLoaded<TTable, TRelations, TLoaded>, void, unknown> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
+    await this.repository.resolveTableIdentity()
 
     for await (const rows of queryBatches(this.getModelRowsQuery(), size, {
       primaryKey: this.repository.definition.primaryKey,
@@ -1932,6 +1948,7 @@ class ModelQueryBuilderBase<
   }
 
   async find(value: unknown, column?: string): Promise<EntityWithLoaded<TTable, TRelations, TLoaded> | undefined> {
+    if (column === undefined) await this.repository.resolveTableIdentity()
     return this.where(column as ModelColumnName<TTable> ?? this.qualifiedKeyName(), value).first()
   }
 
