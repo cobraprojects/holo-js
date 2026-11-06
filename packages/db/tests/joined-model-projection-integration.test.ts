@@ -430,6 +430,10 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const page = await Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).orderBy(`${notes}.note_id` as never).cursorPaginate(2)
     expect(page.data.map(entity => [Number(entity.toAttributes().id), Number((entity.toAttributes() as Record<string, unknown>).__holo_cursor_0)])).toEqual([[2, 8], [1, 7]])
 
+    const wildcardSub = DB.table(notes).select(`${notes}.*`)
+    const wildcardSubPage = await Product.query().joinSub(wildcardSub as never, 'n', 'n.product_id' as never, '=', `${products}.id`).orderBy('n.note_id' as never).cursorPaginate(2)
+    expect(wildcardSubPage.data.map(entity => [Number(entity.toAttributes().id), Number((entity.toAttributes() as Record<string, unknown>).__holo_cursor_0)])).toEqual([[2, 8], [1, 7]])
+
     const sub = DB.table(notes).select('note_id', 'product_id', '__holo_cursor_0')
     const subPage = await Product.query().joinSub(sub as never, 'n', 'n.product_id' as never, '=', `${products}.id`).orderBy('n.note_id' as never).cursorPaginate(2)
     expect(subPage.data.map(entity => [Number(entity.toAttributes().id), Number((entity.toAttributes() as Record<string, unknown>).__holo_cursor_0)])).toEqual([[2, 8], [1, 7]])

@@ -9,15 +9,24 @@ type JoinedColumns = (join: QueryJoinClause) => readonly string[] | undefined
 type SelectionRole = 'own' | 'joined' | 'other'
 
 function knownSubqueryColumns(subquery: SelectQueryPlan, connectionName: string): readonly string[] | undefined {
-  if (subquery.selections.length === 0) {
-    const tables = [
-      knownTableColumns(subquery.source.table?.tableName ?? subquery.source.tableName, subquery.source.table, connectionName),
-      ...subquery.joins.map(join => knownJoinedColumns(join, connectionName)),
-    ]
+  const sourceColumns = () => knownTableColumns(subquery.source.table?.tableName ?? subquery.source.tableName, subquery.source.table, connectionName)
+  const allColumns = () => {
+    const tables = [sourceColumns(), ...subquery.joins.map(join => knownJoinedColumns(join, connectionName))]
     return tables.every((columns): columns is readonly string[] => typeof columns !== 'undefined') ? tables.flat() : undefined
   }
-  const outputs = subquery.selections.map(selection => selectionOutputName(selection))
-  return outputs.every((output): output is string => typeof output === 'string' && output !== '*') ? outputs : undefined
+  if (subquery.selections.length === 0) return allColumns()
+  const outputs = subquery.selections.map((selection): readonly string[] | undefined => {
+    if (selection.kind !== 'column' || (selection.column !== '*' && !selection.column.endsWith('.*'))) {
+      const output = selectionOutputName(selection)
+      return typeof output === 'string' ? [output] : undefined
+    }
+    if (selection.column === '*') return allColumns()
+    const qualifier = selection.column.slice(0, -2)
+    if (qualifiesTable(qualifier, subquery.source.tableName, subquery.source.alias)) return sourceColumns()
+    const join = subquery.joins.find(candidate => qualifiesTable(qualifier, candidate.table, candidate.alias))
+    return join ? knownJoinedColumns(join, connectionName) : undefined
+  })
+  return outputs.every((columns): columns is readonly string[] => typeof columns !== 'undefined') ? outputs.flat() : undefined
 }
 
 function knownTableColumns(tableName: string | undefined, definition: TableDefinition | undefined, connectionName: string): readonly string[] | undefined {
