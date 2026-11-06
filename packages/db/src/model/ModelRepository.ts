@@ -1366,6 +1366,8 @@ export class ModelRepository<
         relatedTable: related.definition.table,
       })
       const relatedComparable = related.readsKeysAsStored([relation.relatedKey])
+        && Object.keys(related.definition.globalScopes).length === 0
+        && !related.definition.softDeletes
 
       recordDatabaseQueryObservation(Object.freeze({
         connectionName: this.getConnectionName(),
@@ -1396,7 +1398,7 @@ export class ModelRepository<
           ...relatedMetadata.dependencies,
         ]),
         orderBy: [],
-        patchable: relatedRowsArePatchable(related),
+        patchable: relatedRowsArePatchable(related) && relatedComparable,
         ...serializedFlag(!relatedRowsArePatchable(related)),
         predicates: Object.freeze([Object.freeze({
           column: relation.relatedKey,

@@ -289,6 +289,25 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await expectFresh(false)
   })
 
+  it('keeps belongsToMany rows hidden by a related global scope out of patched results', async () => {
+    const { db, owners, tags, ownerTags } = await openFixture(variant)
+    await db.table(tags).where('id', 3).delete()
+    const ScopedTag = defineModel(tags, { timestamps: false, casts: variant.casts, globalScopes: { visible: query => query.where('id', '!=', 3) } })
+    const Scoped = defineModel(owners, { timestamps: false, casts: variant.casts, relations: {
+      tags: belongsToMany(() => ScopedTag, ownerTags, 'owner_id', 'tag_id').withPivot('pinned').orderByPivot('tag_id'),
+    } })
+    const expectFresh = await subscribeAll(variant, {
+      scoped: () => db.model(Scoped).query().with('tags').orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(ownerTags).insert({ id: 2, owner_id: 1, tag_id: 3, pinned: true }))
+    await expectFresh(false)
+    await mutate(() => db.table(ownerTags).insert({ id: 3, owner_id: 2, tag_id: 2, pinned: false }))
+    await expectFresh(false)
+    await mutate(() => db.table(tags).where('id', 1).update({ id: 3 }))
+    await expectFresh(false)
+  })
+
   it('keeps eager-loaded belongsToMany rows equal to a fresh read', async () => {
     const { db, owners, tags, ownerTags, Parent } = await openFixture(variant)
     const expectFresh = await subscribeAll(variant, {
