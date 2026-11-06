@@ -215,7 +215,7 @@ function hasUpsertMutation(mutations: readonly DatabaseMutationEvent[]): boolean
   return mutations.some(mutation => mutation.kind === 'upsert')
 }
 
-export function collectPredicateDependencies(
+function collectPredicateDependencies(
   dependencies: readonly string[],
   parseDependency: (dependency: string) => ParsedPredicateDependency | undefined = parsePredicateDependency,
 ): PredicateDependencyIndex {
