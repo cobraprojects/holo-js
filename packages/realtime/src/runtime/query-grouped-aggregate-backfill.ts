@@ -76,7 +76,7 @@ export async function backfillGroupedAggregateRows(
       })
 }
 
-function collectAffectedGroupValues(
+export function collectAffectedGroupValues(
   query: DatabaseQueryObservation,
   groupedAggregate: DatabaseQueryGroupedAggregateObservation,
   mutations: readonly DatabaseMutationEvent[],

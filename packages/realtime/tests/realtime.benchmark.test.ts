@@ -3985,7 +3985,7 @@ function createAggregatePatchBenchmarkQuery(counters: BenchmarkCounters, rows: r
         tableName,
       })
       recordDatabaseQueryObservation({
-        aggregate: { column: 'score', count, kind: 'avg', sum: scoreSum },
+        aggregate: { absoluteSum: scoreSum, column: 'score', count, kind: 'avg', sum: scoreSum },
         connectionName,
         dependencies,
         orderBy: [],
@@ -6014,7 +6014,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table having grouped average patch transport without rerunning or backfilling', async () => {
+  it('measures table having grouped average patch transport with one shared backfill', async () => {
     const rows = createAggregatePatchBenchmarkRows()
     rows.push({
       id: patchRowCount + 1,
@@ -6081,14 +6081,14 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedFirstGroupAverage).toBe(expectedInitialAverage)
     expect(observedSecondGroupAverage).toBe(0)
-    expect(aggregateBackfillQueries).toBe(0)
+    expect(aggregateBackfillQueries).toBe(1)
     expect(subscriptions[0]?.current.data).toEqual([
       { user_id: 1, average_score: expectedInitialAverage },
       { user_id: 2, average_score: 8.5 },
     ])
 
     reportBenchmark({
-      benchmark: '@holo-js/realtime table having grouped average patch transport without backfill',
+      benchmark: '@holo-js/realtime table having grouped average patch transport with shared backfill',
       metrics: {
         aggregateBackfillQueries,
         emittedPatches,
@@ -6102,7 +6102,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures observed table having grouped average patch transport without aggregate backfill', async () => {
+  it('measures observed table having grouped average patch transport with one shared backfill', async () => {
     const rows = createAggregatePatchBenchmarkRows()
     const adapter = new BenchmarkModelAdapter(rows)
     const db = createDatabase({
@@ -6164,7 +6164,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedAverage).toBe(expectedInitialAverage)
-    expect(aggregateBackfillQueries).toBe(0)
+    expect(aggregateBackfillQueries).toBe(1)
     expect(subscriptions[0]?.current.data).toEqual([
       { user_id: 1, average_score: expectedPatchedAverage },
     ])

@@ -14,6 +14,10 @@ export type AggregateBackfillEntry = {
   readonly queries: readonly DatabaseQueryObservation[]
 }
 
+export function isSafeIntegerNumber(value: unknown): value is number {
+  return Number.isSafeInteger(value)
+}
+
 export function canPatchAggregateQuery(query: DatabaseQueryObservation): boolean {
   return query.patchable && typeof query.limit === 'undefined'
 }

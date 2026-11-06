@@ -7,6 +7,7 @@ import {
   disableDatabaseQueryObservationPatching,
   hasActiveDatabaseDependencyCollector,
   rebindDatabaseQueryObservationHydratedResult,
+  createAverageAggregateObservation,
   rebindDatabaseQueryObservationAggregate,
   rebindDatabaseQueryObservationResult,
   rebindDatabaseQueryObservationSerializedResult,
@@ -1871,7 +1872,7 @@ class ModelQueryBuilderBase<
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
-        this.rebindModelAggregate(entities, null, Object.freeze({ column, count: 0, kind: 'avg', sum: 0 }))
+        this.rebindModelAggregate(entities, null, createAverageAggregateObservation(column, []))
       }
       return null
     }
@@ -1880,7 +1881,7 @@ class ModelQueryBuilderBase<
     const sum = values.reduce((total, value) => total + value, 0)
     const result = values.length > 0 ? sum / values.length : null
     if (hasActiveDatabaseDependencyCollector()) {
-      this.rebindModelAggregate(entities, result, Object.freeze({ column, count: values.length, kind: 'avg', sum }))
+      this.rebindModelAggregate(entities, result, createAverageAggregateObservation(column, values))
     }
     return result
   }
