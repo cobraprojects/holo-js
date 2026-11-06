@@ -1458,6 +1458,11 @@ function isNumericText(value: unknown): boolean {
   return typeof value === 'string' && NUMERIC_TEXT_PATTERN.test(value)
 }
 
+function isUnsafeInteger(value: unknown): boolean {
+  return (typeof value === 'bigint' && !Number.isSafeInteger(Number(value)))
+    || (typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value))
+}
+
 function mayEqualOtherLiteral(column: string, value: unknown, caseInsensitiveColumns: CaseInsensitiveColumns): boolean {
   return typeof readLiteralDependencyValues(column, value, caseInsensitiveColumns) === 'undefined'
 }
@@ -1491,12 +1496,12 @@ function readLiteralDependencyValues(
   if (Array.isArray(value)) {
     return value.some(element => Array.isArray(element)
       ? typeof readLiteralDependencyValues(column, element, caseInsensitiveColumns) === 'undefined'
-      : comparesLoosely(column, element, caseInsensitiveColumns) || isNumericText(element))
+      : comparesLoosely(column, element, caseInsensitiveColumns) || isNumericText(element) || isUnsafeInteger(element))
       ? undefined
       : [value]
   }
 
-  if (comparesLoosely(column, value, caseInsensitiveColumns)) {
+  if (comparesLoosely(column, value, caseInsensitiveColumns) || isUnsafeInteger(value)) {
     return undefined
   }
 
@@ -1568,6 +1573,10 @@ function collectMutationLooseColumns(
 function queryTextMayMatchOtherValues(column: string, value: unknown, textMatching: QueryTextMatching): boolean {
   if (Array.isArray(value)) {
     return value.some(element => queryTextMayMatchOtherValues(column, element, textMatching))
+  }
+
+  if (isUnsafeInteger(value)) {
+    return true
   }
 
   if (typeof textMatching === 'boolean') {
