@@ -55,6 +55,20 @@ export class UnreadableBackfillError extends Error {
   }
 }
 
+const readerIds = new WeakMap<DatabaseQueryRowReader, number>()
+let nextReaderId = 0
+
+export function readerCacheKey(readRow: DatabaseQueryRowReader | undefined): string {
+  if (!readRow) return ''
+  let id = readerIds.get(readRow)
+  if (id === undefined) {
+    nextReaderId += 1
+    id = nextReaderId
+    readerIds.set(readRow, id)
+  }
+  return `:reader:${id}`
+}
+
 export function observedTableKey(query: { readonly tableName: string, readonly table?: TableDefinition }): string {
   return query.table ? `typed:${query.tableName}` : query.tableName
 }

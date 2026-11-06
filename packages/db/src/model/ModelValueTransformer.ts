@@ -175,6 +175,10 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return this.applySchemaWriteNormalization(key, casted)
   }
 
+  readStoredAttributes(row: Readonly<Record<string, unknown>>, dialect: SchemaDialectName, written = false): Readonly<Record<string, unknown>> {
+    return Object.freeze(this.normalizeFromStorage(row as Partial<ModelRecord<TTable>>, {}, written ? 'serialized' : 'database', dialect))
+  }
+
   readStoredRow(row: Readonly<Record<string, unknown>>, dialect: SchemaDialectName, written = false): Readonly<Record<string, unknown>> {
     const normalized = this.normalizeFromStorage(row as Partial<ModelRecord<TTable>>, {}, written ? 'serialized' : 'database', dialect)
     return Object.freeze(Object.fromEntries(Object.entries(normalized).map(([key, value]) => [key, this.serializeAttributeValue(key, value)])))
@@ -188,7 +192,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
       return storesDate(column) && !this.definition.serializeDate
     }
     const builtInCast = this.parseBuiltInCast(cast)
-    if (builtInCast?.name === 'boolean') return !column || !isConvertedByModelReads(column)
+    if (builtInCast?.name === 'boolean') return column?.kind === 'boolean'
     if (builtInCast?.name === 'number') return column !== undefined && readsAsInteger(column)
     return this.hasBuiltInDateCast(key)
       && builtInCast?.parameter === undefined
@@ -198,8 +202,8 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   readsRowsAsStored(): boolean {
-    const { createdAtColumn, updatedAtColumn, deletedAtColumn, table } = this.definition
-    const keys = new Set([...Object.keys(table.columns), ...[createdAtColumn, updatedAtColumn, deletedAtColumn].filter(key => key !== undefined)])
+    const { casts, createdAtColumn, updatedAtColumn, deletedAtColumn, table } = this.definition
+    const keys = new Set([...Object.keys(table.columns), ...Object.keys(casts), ...[createdAtColumn, updatedAtColumn, deletedAtColumn].filter(key => key !== undefined)])
     return [...keys].every((key) => {
       const column = ownEntry(table.columns, key)
       return !(column && isConvertedByModelReads(column)) && this.resolveCast(key) === undefined

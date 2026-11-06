@@ -1785,14 +1785,18 @@ class ModelQueryBuilderBase<
       : this
     const { collection, rows } = await query.getRowsAndEntities()
     const result = collection.map(entity => entity.get(column)) as Array<ModelRecord<TTable>[TColumn]>
-    rebindDatabaseQueryObservationScalarList(rows, result, column)
+    if (query.rowsCompareWithStoredValues()) {
+      rebindDatabaseQueryObservationScalarList(rows, result, column, this.repository.attributeReader())
+    } else {
+      disableDatabaseQueryObservationPatching(rows, { serialized: true })
+    }
     return result
   }
 
   async value<TColumn extends ModelAttributeKey<TTable>>(column: TColumn): Promise<ModelRecord<TTable>[TColumn] | undefined> {
     const entity = await this.first()
     const value = entity?.get(column)
-    rebindDatabaseQueryObservationScalar(entity, value, column)
+    rebindDatabaseQueryObservationScalar(entity, value, column, this.repository.attributeReader())
     return value
   }
 
@@ -1807,7 +1811,7 @@ class ModelQueryBuilderBase<
       throw new HydrationError(`${this.repository.definition.name} query returned no value for column "${column}".`)
     }
 
-    rebindDatabaseQueryObservationScalar(entity, value, column)
+    rebindDatabaseQueryObservationScalar(entity, value, column, this.repository.attributeReader())
     return value
   }
 
@@ -1818,7 +1822,7 @@ class ModelQueryBuilderBase<
       throw new HydrationError(`${this.repository.definition.name} query returned no value for column "${column}".`)
     }
 
-    rebindDatabaseQueryObservationScalar(entity, value, column)
+    rebindDatabaseQueryObservationScalar(entity, value, column, this.repository.attributeReader())
     return value
   }
 

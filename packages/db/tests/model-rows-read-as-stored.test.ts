@@ -28,5 +28,6 @@ describe('model rows read as stored', () => {
   it('treats untyped models with timestamps as converted', () => {
     expect(readsRowsAsStored(defineModel('stored_untyped_notes', { connectionName: 'stored_untyped' }))).toBe(false)
     expect(readsRowsAsStored(defineModel('stored_untyped_plain_notes', { connectionName: 'stored_untyped', timestamps: false }))).toBe(true)
+    expect(readsRowsAsStored(defineModel('stored_untyped_cast_notes', { connectionName: 'stored_untyped', timestamps: false, casts: { secret: { get: value => `masked:${String(value)}` } } }))).toBe(false)
   })
 })

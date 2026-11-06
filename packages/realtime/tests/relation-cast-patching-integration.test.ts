@@ -336,3 +336,44 @@ describe.each(drivers)('realtime relation patches with a cast that rejects a sto
     expect(String(errors[0])).toContain('rejects "rejected"')
   })
 })
+
+describe.each(drivers)('realtime patches through models with different casts on one table on %s', (driver) => {
+  it('backfills each subscription with its own model read', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, items } = await openFixture(variant)
+    const Plain = defineModel(items, { timestamps: false })
+    const Masked = defineModel(items, { timestamps: false, casts: { secret: { get: (value: unknown) => `masked:${String(value)}`, set: (value: unknown) => value } } })
+    const expectFresh = await subscribeAll(variant, {
+      plain: () => db.model(Plain).query().orderBy('id').limit(2).getJson(),
+      masked: () => db.model(Masked).query().orderBy('id').limit(2).getJson(),
+    })
+
+    await mutate(() => db.table(items).where('id', 1).delete())
+    await expectFresh(false)
+  })
+
+  it('keeps a filter on a boolean-cast integer column equal to a fresh read', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, items } = await openFixture(variant)
+    const Flagged = defineModel(items, { timestamps: false, casts: { flag: 'boolean' } })
+    const expectFresh = await subscribeAll(variant, {
+      flagged: () => db.model(Flagged).query().where('flag', 1).orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(items).where('id', 1).update({ flag: 2 }))
+    await expectFresh(false)
+  })
+
+  it('keeps scalar reads of a cast column equal to a fresh read', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, items } = await openFixture(variant)
+    const Masked = defineModel(items, { timestamps: false, casts: { secret: { get: (value: unknown) => `masked:${String(value)}`, set: (value: unknown) => value } } })
+    const expectFresh = await subscribeAll(variant, {
+      value: () => db.model(Masked).query().where('id', 2).value('secret'),
+      pluck: () => db.model(Masked).query().where('owner_id', 1).orderBy('id').pluck('secret'),
+    })
+
+    await mutate(() => db.table(items).where('id', 2).update({ secret: 'updated' }))
+    await expectFresh(false)
+  })
+})

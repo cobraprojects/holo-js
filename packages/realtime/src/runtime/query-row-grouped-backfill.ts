@@ -16,6 +16,7 @@ import {
   observedTableKey,
   readBackfilledRows,
   readBackfilledValue,
+  readerCacheKey,
 } from './query-backfill'
 import type {
   BackfillRows,
@@ -175,6 +176,7 @@ function createGroupedExactRowBackfillKey(
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
     + stableStringify(observedTableKey(query))
+    + readerCacheKey(query.readRow)
     + '}'
 }
 
@@ -351,6 +353,7 @@ function createGroupedWindowBackfillKey(
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
     + stableStringify(observedTableKey(query))
+    + readerCacheKey(query.readRow)
     + '}'
 }
 

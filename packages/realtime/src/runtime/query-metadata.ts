@@ -17,7 +17,7 @@ import {
   type DatabaseQuerySelectionObservation,
   type RowWindowMode,
 } from './query-state'
-import { observedTableKey } from './query-backfill'
+import { observedTableKey, readerCacheKey } from './query-backfill'
 import { stableStringify } from './stable-stringify'
 
 export function readQueryOrderColumns(query: DatabaseQueryObservation): readonly string[] {
@@ -163,6 +163,7 @@ export function createRowBackfillKeyPrefix(query: DatabaseQueryObservation): str
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
     + stableStringify(observedTableKey(query))
+    + readerCacheKey(query.readRow)
 }
 
 export function createAggregateBackfillKey(query: DatabaseQueryObservation): string {

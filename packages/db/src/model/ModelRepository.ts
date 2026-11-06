@@ -122,6 +122,7 @@ function relatedRowsArePatchable(related: ModelRepository): boolean {
 }
 
 const storedRowReaders = new WeakMap<object, DatabaseQueryRowReader>()
+const storedAttributeReaders = new WeakMap<object, DatabaseQueryRowReader>()
 
 function relatedReadRow(related: ModelRepository): { readonly relatedReadRow?: DatabaseQueryRowReader } {
   const reader = related.rowReader()
@@ -2651,6 +2652,15 @@ export class ModelRepository<
     if (cached) return cached
     const reader: DatabaseQueryRowReader = (row, written) => this.valueTransformer.readStoredRow(row, this.getConnection().getDriver() as SchemaDialectName, written)
     storedRowReaders.set(this.definition, reader)
+    return reader
+  }
+
+  attributeReader(): DatabaseQueryRowReader | undefined {
+    if (this.valueTransformer.readsRowsAsStored()) return undefined
+    const cached = storedAttributeReaders.get(this.definition)
+    if (cached) return cached
+    const reader: DatabaseQueryRowReader = (row, written) => this.valueTransformer.readStoredAttributes(row, this.getConnection().getDriver() as SchemaDialectName, written)
+    storedAttributeReaders.set(this.definition, reader)
     return reader
   }
 

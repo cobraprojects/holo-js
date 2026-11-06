@@ -883,16 +883,18 @@ export function rebindDatabaseQueryObservationScalar(
   source: unknown,
   result: unknown,
   column: string,
+  readRow?: DatabaseQueryRowReader,
 ): void {
-  rebindDatabaseQueryObservation(source, result, undefined, column)
+  rebindDatabaseQueryObservation(source, result, undefined, column, undefined, undefined, undefined, undefined, readRow)
 }
 
 export function rebindDatabaseQueryObservationScalarList(
   rows: readonly Readonly<Record<string, unknown>>[],
   result: readonly unknown[],
   column: string,
+  readRow?: DatabaseQueryRowReader,
 ): void {
-  rebindDatabaseQueryObservation(rows, result, undefined, undefined, column, rows)
+  rebindDatabaseQueryObservation(rows, result, undefined, undefined, column, readRow ? Object.freeze(rows.map(row => readRow(row))) : rows, undefined, undefined, readRow)
 }
 
 function rebindDatabaseQueryObservation(
