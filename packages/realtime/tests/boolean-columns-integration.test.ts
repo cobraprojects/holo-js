@@ -101,6 +101,16 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
     await expectPatched()
   })
 
+  it.runIf(driver === 'sqlite')('re-runs a schema-qualified name-only subscription when a typed write converts a column it reads', async () => {
+    const { db, flags } = await openFlags(driver)
+    const handler = () => db.table(`main.${flags.tableName}`).select('id', 'enabled').orderBy('id').get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 3, group_id: 1, enabled: true }) }))
+
+    expect(subscription.current.data).toEqual(await handler())
+  })
+
   it('re-runs a name-only subscription over a boolean column, which reads the values the driver returns', async () => {
     const { db, flags } = await openFlags(driver)
     registerGeneratedTables({ [flags.tableName]: flags })

@@ -171,8 +171,7 @@ function readsConvertedColumnsAsDriverValues(
   query: DatabaseQueryObservation,
   mutations: readonly DatabaseMutationEvent[],
 ): boolean {
-  return query.table === undefined && mutations.some(mutation => mutation.connectionName === query.connectionName
-    && mutation.tableName === query.tableName
+  return query.table === undefined && mutations.some(mutation => createMutationIndexKey(mutation.connectionName, mutation.tableName) === createMutationIndexKey(query.connectionName, query.tableName)
     && mutation.convertedColumns !== undefined
     && hasReadColumn(query, mutation.convertedColumns))
 }
