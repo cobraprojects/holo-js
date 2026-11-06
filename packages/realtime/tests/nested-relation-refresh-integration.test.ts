@@ -174,25 +174,24 @@ const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, 
     },
   },
   {
-    name: 'post inserts and moves',
+    name: 'post inserts',
     seed: seedPivotChanges,
     run: async (mutate, { db, posts, postTags }) => {
       await mutate('inserting a post', () => db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping', published: 1 }))
       await mutate('tagging the new post', () => db.table(postTags).insert({ post_id: 30, tag_id: 3 }))
-      await mutate('moving a post to another author', () => db.table(posts).where('id', 20).update({ author_id: 1 }))
     },
   },
   {
-    name: 'author writes and a post deletion',
+    name: 'post moves, author writes and a post deletion',
     seed: async (blog) => {
       const { db, posts, postTags, tags } = blog
       await seedPivotChanges(blog)
       await db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping', published: 1 })
       await db.table(postTags).insert({ post_id: 30, tag_id: 3 })
       await db.table(tags).where('id', 3).delete()
-      await db.table(posts).where('id', 20).update({ author_id: 1 })
     },
     run: async (mutate, { db, authors, posts }) => {
+      await mutate('moving a post to another author', () => db.table(posts).where('id', 20).update({ author_id: 1 }))
       await mutate('inserting an author', () => db.table(authors).insert({ id: 4, name: 'Radia' }))
       await mutate('writing a post for the new author', () => db.table(posts).insert({ id: 40, author_id: 4, title: 'Spanning Trees', published: 0 }))
       await mutate('renaming an author', () => db.table(authors).where('id', 2).update({ name: 'Grace Hopper' }))
