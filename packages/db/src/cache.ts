@@ -368,6 +368,7 @@ type DatabaseDependencyCollectorState = {
   readonly contexts: Map<string, Set<number>>
   readonly dependencies: Set<string>
   readonly queries: DatabaseQueryObservation[]
+  readonly refreshQueries: DatabaseQueryObservation[]
   serializationOverridden: boolean
 }
 
@@ -384,6 +385,7 @@ const NUMERIC_TEXT_PATTERN = /^\s*[+-]?(?:(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?
 
 const databaseDependencyCollector = new AsyncLocalStorage<DatabaseDependencyCollectorState>()
 const refreshOnlyObservationIndexes = new AsyncLocalStorage<Set<number>>()
+const refreshOnlyObservations = new WeakSet<DatabaseQueryObservation>()
 
 type MutationPreviousRowsRequirement = (connectionName: string, tableName: string, columns: readonly string[]) => boolean
 
@@ -483,6 +485,7 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     contexts: new Map(),
     dependencies: new Set<string>(),
     queries: [],
+    refreshQueries: [],
     serializationOverridden: false,
   }
   const value = await databaseDependencyCollector.run(state, callback)
@@ -491,7 +494,7 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     value,
     contexts: state.contexts,
     dependencies: Object.freeze([...state.dependencies]),
-    queries: Object.freeze([...state.queries]),
+    queries: Object.freeze([...state.queries, ...state.refreshQueries]),
   })
 }
 
@@ -576,11 +579,39 @@ export async function runRequiringDatabaseQueryRefresh<TValue>(load: () => Promi
   for (const index of indexes) {
     const query = state.queries[index]
     if (query) {
-      state.queries[index] = serializedQueryObservation(query)
+      state.queries[index] = refreshOnlyQueryObservation(query)
     }
   }
 
   return value
+}
+
+function refreshQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
+  return Object.freeze({
+    connectionName: observation.connectionName,
+    dependencies: observation.dependencies,
+    orderBy: observation.orderBy,
+    patchable: false,
+    predicates: observation.predicates,
+    selections: observation.selections,
+    serialized: true,
+    tableName: observation.tableName,
+    ...(observation.table ? { table: observation.table } : {}),
+  })
+}
+
+function replaceDatabaseQueryObservation(state: DatabaseDependencyCollectorState, index: number, next: DatabaseQueryObservation): void {
+  const current = state.queries[index]
+  if (current && refreshOnlyObservations.has(current)) {
+    refreshOnlyObservations.add(next)
+  }
+  state.queries[index] = next
+}
+
+function refreshOnlyQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
+  const refreshOnly = serializedQueryObservation(observation)
+  refreshOnlyObservations.add(refreshOnly)
+  return refreshOnly
 }
 
 export function truncateDatabaseQueryObservations(count: number): void {
@@ -590,8 +621,14 @@ export function truncateDatabaseQueryObservations(count: number): void {
   }
 
   const length = Math.max(0, count)
-  state.queries.length = length
   const indexes = refreshOnlyObservationIndexes.getStore()
+  for (let index = length; index < state.queries.length; index += 1) {
+    const query = state.queries[index]!
+    if (refreshOnlyObservations.has(query) || indexes?.has(index)) {
+      state.refreshQueries.push(refreshQueryObservation(query))
+    }
+  }
+  state.queries.length = length
   if (indexes) {
     for (const index of indexes) {
       if (index >= length) {
@@ -634,7 +671,7 @@ export function rebindDatabaseQueryObservationPagination(
       continue
     }
 
-    state.queries[index] = Object.freeze({
+    replaceDatabaseQueryObservation(state, index, Object.freeze({
       aggregate: undefined,
       belongsToHydrations: belongsToHydrations ?? query.belongsToHydrations,
       connectionName: query.connectionName,
@@ -657,7 +694,7 @@ export function rebindDatabaseQueryObservationPagination(
       scalarListRows: undefined,
       selections: query.selections,
       serialized: query.serialized,
-    })
+    }))
     pushDatabaseQueryObservation(state, Object.freeze({
       aggregate: undefined,
       belongsToHydrations: undefined,
@@ -705,7 +742,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       continue
     }
 
-    state.queries[index] = Object.freeze({
+    replaceDatabaseQueryObservation(state, index, Object.freeze({
       aggregate: undefined,
       belongsToHydrations: belongsToHydrations ?? query.belongsToHydrations,
       connectionName: query.connectionName,
@@ -731,7 +768,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       scalarListRows: undefined,
       selections: query.selections,
       serialized: query.serialized,
-    })
+    }))
     pushDatabaseQueryObservation(state, Object.freeze({
       aggregate: undefined,
       belongsToHydrations: undefined,
@@ -775,7 +812,7 @@ export function disableDatabaseQueryObservationPatching(
       continue
     }
 
-    state.queries[index] = Object.freeze({
+    replaceDatabaseQueryObservation(state, index, Object.freeze({
       aggregate: query.aggregate,
       belongsToHydrations: query.belongsToHydrations,
       connectionName: query.connectionName,
@@ -798,7 +835,7 @@ export function disableDatabaseQueryObservationPatching(
       scalarListRows: query.scalarListRows,
       selections: query.selections,
       serialized: options.serialized || query.serialized,
-    })
+    }))
     return
   }
 }
@@ -816,7 +853,7 @@ export function markDatabaseQueryObservationsSerialized(): void {
       continue
     }
 
-    state.queries[index] = serializedQueryObservation(query)
+    replaceDatabaseQueryObservation(state, index, serializedQueryObservation(query))
   }
 }
 
@@ -865,7 +902,7 @@ function rebindDatabaseQueryObservation(
       continue
     }
 
-    state.queries[index] = Object.freeze({
+    replaceDatabaseQueryObservation(state, index, Object.freeze({
       aggregate,
       belongsToHydrations,
       connectionName: query.connectionName,
@@ -888,7 +925,7 @@ function rebindDatabaseQueryObservation(
       scalarListRows,
       selections: query.selections,
       serialized: query.serialized,
-    })
+    }))
     return
   }
 }
