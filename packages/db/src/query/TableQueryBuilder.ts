@@ -3813,20 +3813,21 @@ export class TableQueryBuilder<
     const selections = this.plan.selections
     const ownColumns = Object.keys(this.source.table?.columns ?? {})
     const connectionName = this.connection.getConnectionName()
-    const outputsName = (selection: QuerySelection, name: string): boolean => {
+    const outputsName = (selection: QuerySelection, name: string, unknownOverwrites: boolean): boolean => {
       if (selection.kind !== 'column' || (!selection.column.endsWith('.*') && selection.column !== '*')) return selectionOutputName(selection) === name
       if (this.resolveSourceColumnName(selection.column) === '*') return name === sourceColumn || ownColumns.includes(name)
       const qualifier = selection.column.slice(0, -2)
       const join = this.plan.joins.find(candidate => qualifiesTable(qualifier, candidate.table, candidate.alias))
-      return join ? knownJoinedColumns(join, connectionName)?.includes(name) ?? false : false
+      const columns = join ? knownJoinedColumns(join, connectionName) : undefined
+      return columns ? columns.includes(name) : unknownOverwrites
     }
-    const survives = (index: number, name: string) => !selections.slice(index + 1).some(selection => outputsName(selection, name))
+    const survives = (index: number, name: string, unknownOverwrites = false) => !selections.slice(index + 1).some(selection => outputsName(selection, name, unknownOverwrites))
     const selectsColumn = (selection: QuerySelection): selection is QueryColumnSelection => selection.kind === 'column'
       && (selection.column === column || (typeof sourceColumn !== 'undefined' && this.resolveSourceColumnName(selection.column) === sourceColumn))
     const ownOutput = typeof sourceColumn === 'undefined'
       ? -1
       : selections.findIndex((selection, index) => selection.kind === 'column' && !selection.alias
-        && [sourceColumn, '*'].includes(this.resolveSourceColumnName(selection.column) ?? '') && survives(index, sourceColumn))
+        && [sourceColumn, '*'].includes(this.resolveSourceColumnName(selection.column) ?? '') && survives(index, sourceColumn, true))
     if (typeof sourceColumn !== 'undefined' && ownOutput !== -1 && sourceColumn in row) return row[sourceColumn]
     const aliased = selections.find((selection, index) => selectsColumn(selection) && typeof selection.alias === 'string' && survives(index, selection.alias))
     if (aliased?.kind === 'column' && aliased.alias) return row[aliased.alias]

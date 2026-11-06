@@ -322,7 +322,7 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
   })
 
   it('reads a cursor from an aliased selection of the qualified order column', async () => {
-    const { products } = await createFixture(driver)
+    const { products, orders } = await createFixture(driver)
 
     const query = DB.table(products).select('id as product_key', 'price').orderBy(`${products}.id`)
     const first = await query.cursorPaginate(1)
@@ -343,6 +343,11 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const replacedPage = await replaced.cursorPaginate(1)
     const replacedNext = await replaced.cursorPaginate(1, replacedPage.nextCursor)
     expect([replacedPage, replacedNext].map(result => result.data.map(row => Number(row.product_key)))).toEqual([[1], [2]])
+
+    const shadowed = DB.table(products).join(orders, `${orders}.product_id`, '=', `${products}.id`).select(`${products}.id as product_key`, `${products}.id`, `${orders}.*`).orderBy(`${products}.id`)
+    const shadowedPage = await shadowed.cursorPaginate(1)
+    const shadowedNext = await shadowed.cursorPaginate(1, shadowedPage.nextCursor)
+    expect([shadowedPage, shadowedNext].map(result => result.data.map(row => Number(row.product_key)))).toEqual([[1], [2]])
   })
 
   it('keeps the precedence of non-model outputs of a joined wildcard that also shadows a model column', async () => {
