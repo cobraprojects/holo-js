@@ -2,7 +2,6 @@ import { CompilerError, ConfigurationError, HydrationError, ModelNotFoundExcepti
 import { readNumericValue } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
 import {
-  createDatabaseQueryObservation,
   disableDatabaseQueryObservationPatching,
   hasActiveDatabaseDependencyCollector,
   rebindDatabaseQueryObservationHydratedResult,
@@ -62,7 +61,6 @@ import type {
   ModelColumnName,
   ModelColumnReference,
   ModelJsonColumnPath,
-  ModelDefinitionLike,
   ModelInsertPayload,
   ModelRecord,
   ModelRelationName,
@@ -87,9 +85,6 @@ type BuilderCallback<TBuilder> = (query: TBuilder) => unknown
 type ValueBuilderCallback<TBuilder, TValue> = (query: TBuilder, value: TValue) => unknown
 type RelationConstraint = (query: ModelQueryBuilder<TableDefinition>) => unknown
 type MorphRelationConstraint = (query: ModelQueryBuilder<TableDefinition>, morphType: string) => unknown
-type QueryableModelReference = ModelDefinitionLike<TableDefinition> & {
-  query(): ModelQueryBuilder<TableDefinition>
-}
 type SubqueryBuilder<TSubTable extends TableDefinition = TableDefinition>
   = TableQueryBuilder<TSubTable, Record<string, unknown>> | ModelQueryBuilder<TSubTable>
 type RelationFilter = {
@@ -2667,19 +2662,17 @@ class ModelQueryBuilderBase<
 
       const relation = this.repository.getRelationDefinition(load.relation)
       if (relation.kind === 'belongsTo') {
-        if (relation.constraint || load.constraint) {
+        const predicates = this.repository.resolveBelongsToOwnerPredicates(relation, load.constraint)
+        if (!predicates) {
           return undefined
         }
 
         const related = relation.related()
         const relatedDefinition = 'definition' in related ? related.definition : related
-        if (!this.repository.relatedRowsArePatchable(relation.related)) {
-          return undefined
-        }
-
         belongsToHydrations.push(Object.freeze({
           foreignKey: relation.foreignKey,
           ownerKey: relation.ownerKey,
+          predicates,
           primaryKey: resolveModelRowKey(relatedDefinition),
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
@@ -2739,41 +2732,15 @@ class ModelQueryBuilderBase<
       })
     }
 
-    const related = relation.related()
-    if (!this.isQueryableModelReference(related)) {
-      return undefined
-    }
-
-    let query = related.query()
-    const relationResult = relation.constraint?.(query)
-    query = relationResult instanceof ModelQueryBuilderBase ? relationResult as typeof query : query
-
-    if (constraint) {
-      const result = constraint(query)
-      query = result instanceof ModelQueryBuilderBase ? result as typeof query : query
-    }
-
-    const plan = query.getTableQueryBuilder().getPlan()
-    const relatedDefinition = 'definition' in related ? related.definition : related
-    const observation = createDatabaseQueryObservation(
-      plan,
-      relatedDefinition.connectionName ?? this.getConnectionName(),
-      Object.freeze([]),
-    )
-    if (!observation?.patchable || typeof observation.limit !== 'undefined' || typeof observation.offset !== 'undefined') {
+    const resolved = this.repository.resolveRelationHydrationQuery(relation, constraint)
+    if (!resolved) {
       return undefined
     }
 
     return Object.freeze({
-      orderBy: observation.orderBy,
-      predicates: observation.predicates,
+      orderBy: resolved.observation.orderBy,
+      predicates: resolved.observation.predicates,
     })
-  }
-
-  private isQueryableModelReference(
-    value: ModelDefinitionLike<TableDefinition>,
-  ): value is QueryableModelReference {
-    return 'query' in value && typeof value.query === 'function'
   }
 
   private rebindRowsToSerializedResult(

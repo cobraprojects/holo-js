@@ -7,6 +7,10 @@ function stableStringifyValue(value: unknown, ancestors: WeakSet<object>): strin
     return JSON.stringify(value)
   }
 
+  if (value instanceof Date) {
+    return JSON.stringify(`Date(${value.getTime()})`)
+  }
+
   if (ancestors.has(value)) {
     return '"[Circular]"'
   }

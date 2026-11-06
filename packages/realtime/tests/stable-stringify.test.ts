@@ -25,4 +25,9 @@ describe('@holo-js/realtime stable stringification', () => {
     expect(stableStringify(record)).toBe('{"name":"post","self":"[Circular]"}')
     expect(stableStringify(items)).toBe('["[Circular]"]')
   })
+
+  it('keeps distinct dates distinct', () => {
+    expect(stableStringify({ at: new Date('2026-01-01T00:00:00.000Z') }))
+      .not.toBe(stableStringify({ at: new Date('2026-02-01T00:00:00.000Z') }))
+  })
 })
