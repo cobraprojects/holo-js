@@ -19,6 +19,7 @@ async function openLibrary(driver: ReturnType<typeof integrationDrivers<'sqlite'
     posts: `tr_posts_${suffix}`,
     reviews: `tr_reviews_${suffix}`,
     users: `tr_users_${suffix}`,
+    teams: `tr_teams_${suffix}`,
   }
   const created: string[] = []
   onTestFinished(async () => {
@@ -28,10 +29,14 @@ async function openLibrary(driver: ReturnType<typeof integrationDrivers<'sqlite'
     await schema.createTable(name, build)
     created.push(name)
   }
+  await create(names.teams, (table) => {
+    table.integer('id').primaryKey()
+    table.string('name')
+  })
   await create(names.authors, (table) => {
     table.integer('id').primaryKey()
     table.string('name')
-    table.integer('mentor_id').nullable()
+    table.integer('team_id').nullable()
   })
   await create(names.users, (table) => {
     table.integer('id').primaryKey()
@@ -49,12 +54,14 @@ async function openLibrary(driver: ReturnType<typeof integrationDrivers<'sqlite'
     table.string('body')
   })
 
-  const authors = defineGeneratedTable(names.authors, { id: column.integer().primaryKey(), name: column.string(), mentor_id: column.integer().nullable() })
+  const authors = defineGeneratedTable(names.authors, { id: column.integer().primaryKey(), name: column.string(), team_id: column.integer().nullable() })
+  const teams = defineGeneratedTable(names.teams, { id: column.integer().primaryKey(), name: column.string() })
   const posts = defineGeneratedTable(names.posts, { id: column.integer().primaryKey(), author_id: column.integer(), title: column.string() })
   const users = defineGeneratedTable(names.users, { id: column.integer().primaryKey(), name: column.string() })
   const reviews = defineGeneratedTable(names.reviews, { id: column.integer().primaryKey(), post_id: column.integer(), reviewer_id: column.integer(), body: column.string() })
 
-  await DB.table(authors).insert([{ id: 1, name: 'Ada', mentor_id: null }, { id: 2, name: 'Grace', mentor_id: 1 }, { id: 3, name: 'Linus', mentor_id: 1 }])
+  await DB.table(teams).insert([{ id: 1, name: 'Compilers' }])
+  await DB.table(authors).insert([{ id: 1, name: 'Ada', team_id: null }, { id: 2, name: 'Grace', team_id: 1 }, { id: 3, name: 'Linus', team_id: 1 }])
   await DB.table(posts).insert([{ id: 10, author_id: 1, title: 'Engines' }, { id: 20, author_id: 2, title: 'Compilers' }, { id: 30, author_id: 1, title: 'Notes' }])
   await DB.table(users).insert([{ id: 7, name: 'Barbara' }, { id: 8, name: 'Edsger' }])
   await DB.table(reviews).insert([{ id: 100, post_id: 10, reviewer_id: 7, body: 'great' }, { id: 300, post_id: 30, reviewer_id: 8, body: 'fine' }, { id: 200, post_id: 20, reviewer_id: 7, body: 'sharp' }])
@@ -68,12 +75,12 @@ async function openLibrary(driver: ReturnType<typeof integrationDrivers<'sqlite'
       reviews: hasManyThrough(() => Review, () => Post, 'author_id', 'post_id'),
       review: hasOneThrough(() => Review, () => Post, 'author_id', 'post_id'),
       posts: hasMany(() => Post, 'author_id'),
-      mentees: hasMany(() => Author, 'mentor_id'),
     },
   })
+  const Team = defineModel(teams, { timestamps: false, relations: { members: hasMany(() => Author, 'team_id') } })
 
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
-  return { names, Author, Post, Review, User }
+  return { names, Author, Post, Review, User, Team }
 }
 
 type Library = Awaited<ReturnType<typeof openLibrary>>
@@ -109,8 +116,8 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
       'summed through rows': (Author: Library['Author']) => Author.query().with(bothOrdered).withSum('posts', 'id').orderBy('id').getJson(),
       'counted through relations': (Author: Library['Author']) => Author.query().withCount('reviews').withCount('posts').orderBy('id').getJson(),
       'summed through relations': (Author: Library['Author']) => Author.query().withSum('reviews', 'id').withCount('posts').orderBy('id').getJson(),
-      'nested in a relation callback': async (Author: Library['Author'], Post: Library['Post']) => ({
-        mentors: await Author.query().with('mentees', query => query.with('reviews', ordered).orderBy('id')).where('id', 1).getJson(),
+      'nested in a relation callback': async (_Author: Library['Author'], Post: Library['Post'], _Review: Library['Review'], _User: Library['User'], Team: Library['Team']) => ({
+        teams: await Team.query().with('members', query => query.with('reviews', ordered).orderBy('id')).where('id', 1).getJson(),
         posts: await Post.query().orderBy('id').getJson(),
       }),
       'loading relations of the related rows': async (Author: Library['Author'], _Post: Library['Post'], _Review: Library['Review'], User: Library['User']) => ({
@@ -128,8 +135,8 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
     }
     for (const [name, readWith] of Object.entries(reads)) {
       it(`keeps ${name} subscriptions equal to a fresh read across through row and key writes`, async () => {
-        const { names, Author, Post, Review, User } = await openLibrary(driver)
-        const read = async () => await readWith(Author, Post, Review, User)
+        const { names, Author, Post, Review, User, Team } = await openLibrary(driver)
+        const read = async () => await readWith(Author, Post, Review, User, Team)
         const live = await subscribe(read)
         const expectFresh = async () => {
           expect(JSON.parse(JSON.stringify(live.current.data))).toEqual(JSON.parse(JSON.stringify(await read())))
