@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { CompilerError, ConfigurationError, HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
 import { readNumericValue } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
@@ -222,7 +223,13 @@ class ModelQueryBuilderBase<
       ...plan.joins.flatMap(join => knownJoinedColumns(join, connectionName) ?? []),
       ...plan.selections.flatMap(selection => selectionOutputName(selection) ?? []),
     ])
-    const freeAlias = (index: number): string => reservedNames.has(`__holo_cursor_${index}`) ? freeAlias(index + 1) : `__holo_cursor_${index}`
+    const suffix = createHash('sha256').update(JSON.stringify([
+      plan.source.alias ?? plan.source.tableName,
+      plan.joins.map(join => join.alias ?? join.table),
+      plan.selections.map(selection => selection.kind === 'column' ? [selection.column, selection.alias] : selectionOutputName(selection)),
+      joinedOrders,
+    ])).digest('hex').slice(0, 12)
+    const freeAlias = (index: number): string => reservedNames.has(`__holo_cursor_${suffix}_${index}`) ? freeAlias(index + 1) : `__holo_cursor_${suffix}_${index}`
     const cursorColumns = joinedOrders.map(() => {
       const alias = freeAlias(0)
       reservedNames.add(alias)
@@ -233,6 +240,11 @@ class ModelQueryBuilderBase<
       query: selected.addSelect(...joinedOrders.map((column, index) => `${column} as ${cursorColumns[index]}`) as never[]) as ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables>,
       cursorColumns,
     }
+  }
+
+  private qualifiedKeyName(): ModelColumnName<TTable> {
+    const { source } = this.tableQuery.getPlan()
+    return `${source.alias ?? source.tableName}.${this.repository.definition.primaryKey}` as ModelColumnName<TTable>
   }
 
   private getModelRowsQuery(): TableQueryBuilder<TTable, Record<string, unknown>> {
@@ -412,12 +424,12 @@ class ModelQueryBuilderBase<
   }
 
   whereKey(value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    const key = this.repository.definition.primaryKey as ModelColumnName<TTable>
+    const key = this.qualifiedKeyName()
     return Array.isArray(value) ? this.whereIn(key, value) : this.where(key, value)
   }
 
   whereKeyNot(value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    const key = this.repository.definition.primaryKey as ModelColumnName<TTable>
+    const key = this.qualifiedKeyName()
     return Array.isArray(value) ? this.whereNotIn(key, value) : this.where(key, '!=', value)
   }
 
@@ -625,7 +637,7 @@ class ModelQueryBuilderBase<
   [whereIntegerKeysIn](values: readonly (number | bigint)[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
     return this.clone(this.tableQuery.withPredicates([
       ...this.tableQuery.getPlan().predicates,
-      { kind: 'integer-in', boolean: 'and', column: this.repository.definition.primaryKey, values },
+      { kind: 'integer-in', boolean: 'and', column: this.qualifiedKeyName(), values },
     ]))
   }
 
@@ -1920,8 +1932,7 @@ class ModelQueryBuilderBase<
   }
 
   async find(value: unknown, column?: string): Promise<EntityWithLoaded<TTable, TRelations, TLoaded> | undefined> {
-    const key = (column ?? this.repository.definition.primaryKey) as ModelColumnName<TTable>
-    return this.where(key, value).first()
+    return this.where(column as ModelColumnName<TTable> ?? this.qualifiedKeyName(), value).first()
   }
 
   async findOrFail(value: unknown, column?: string): Promise<EntityWithLoaded<TTable, TRelations, TLoaded>> {

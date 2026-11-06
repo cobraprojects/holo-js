@@ -216,13 +216,13 @@ const posts = await Post.query()
   .get()
 ```
 
-When the joined table has a column with a model column's name, such as `id`, the model reads its own column: `post.id` is `posts.id`, `sum('views')` and the other unqualified aggregates read `posts.views`, and `orderBy('id')` orders by `posts.id`.
+When the joined table has a column with a model column's name, such as `id`, the model reads its own column: `post.id` is `posts.id`, `sum('views')` and the other unqualified aggregates read `posts.views`, and `orderBy('id')` orders by `posts.id`. `find()`, `findOrFail()`, `whereKey()` and `whereKeyNot()` filter by the qualified key, `posts.id`, as Laravel's do. A `where('id', …)` you write stays unqualified, so on a joined query qualify it yourself. Selected columns that aren't model columns keep the selection order, so when two of them share a name, the later one wins, as in the database's own result.
 
 A selection that would put a joined column into a model column throws a `CompilerError` before the query runs. That covers `select('users.id as id')`, and `select('posts.title', 'users.id')` when the query doesn't also select the model's own `id`. Alias the joined column to a name that isn't a model column, such as `users.id as author_id`, or select the model's own column too, such as `posts.*`.
 
 A joined wildcard such as `users.*` throws the same way unless the query also selects the model's columns it would replace, such as `posts.*`. When Holo doesn't know the joined table's columns, select `posts.*` with it. Each query in a union of joined model queries must select the same tables' columns in the same order.
 
-To cursor paginate a union, a `distinct()` query or a grouped query by a joined column, select that column under an alias and order by the alias, such as `select('posts.*', 'users.created_at as author_joined_at').orderBy('author_joined_at')`.
+To cursor paginate a union, a `distinct()` query or a grouped query by a joined column, select that column under an alias and order by the alias, such as `select('posts.*', 'users.created_at as author_joined_at').orderBy('author_joined_at')`. A union is ordered by its output column names, and the cursor applies to every query in the union: to the column each query selects at the ordered column's position, or, when a wildcard such as `posts.*` comes before it, to the column of the same name.
 
 ::: info Differs from Laravel
 In Laravel, a joined column overwrites the model attribute of the same name, so a model can carry another table's `id`, and a later `save()` writes to the wrong row. Holo keeps the model's own columns and rejects selections that would replace them.

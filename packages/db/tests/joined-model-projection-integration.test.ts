@@ -473,4 +473,135 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     expect((await DB.table(products).orderBy('id').get()).map(row => [Number(row.id), Number(row.factor)])).toEqual([[1, 9], [2, 4]])
     expect((await DB.table(orders).orderBy('id').get()).map(row => [Number(row.id), Number(row.factor)])).toEqual([[101, 7], [102, 5]])
   })
+
+  it('looks up the model key on a joined query by the qualified key', async () => {
+    const { products, orders, joined } = await createFixture(driver)
+
+    expect(attributes([(await joined().find(2))!])).toEqual([ownRows[1]])
+    expect(attributes([await joined().findOrFail(1)])).toEqual([ownRows[0]])
+    expect(attributes(await joined().whereKey(2).get())).toEqual([ownRows[1]])
+    expect(attributes(await joined().whereKey([1, 2]).get())).toEqual(ownRows)
+    expect(attributes(await joined().whereKeyNot(1).get())).toEqual([ownRows[1]])
+    expect(attributes(await joined().whereKeyNot([2]).get())).toEqual([ownRows[0]])
+    expect(attributes([(await joined().find(101, `${orders}.id`))!])).toEqual([ownRows[0]])
+    expect(joined().whereKey(1).toSQL().sql).toMatch(new RegExp(`WHERE [\`"]${products}[\`"]\\.[\`"]id[\`"]`))
+    await expect(joined().where('id', 1).get()).rejects.toThrow(/ambiguous/i)
+  })
+
+  it('normalizes the value of a qualified model key lookup like the column it names', async () => {
+    const { schema } = await createFixture(driver)
+    const stamps = uniqueName('stamps')
+    onTestFinished(async () => {
+      await schema.dropTable(stamps)
+    })
+    await schema.createTable(stamps, (table) => {
+      table.datetime('stamp')
+      table.string('label')
+      table.primary(['stamp'])
+    })
+    const stamp = new Date('2026-01-01T12:00:00.000Z')
+    const Stamp = defineModel(defineGeneratedTable(stamps, { stamp: column.datetime().primaryKey(), label: column.string() }), { timestamps: false })
+    await DB.table(stamps).insert({ stamp, label: 'noon' })
+
+    const iso = stamp.toISOString()
+    expect((await Stamp.query().find(iso))?.get('label')).toBe('noon')
+    expect((await Stamp.query().whereKey(iso).get()).map(entity => entity.get('label'))).toEqual(['noon'])
+    expect((await Stamp.query().whereKey([iso]).get()).map(entity => entity.get('label'))).toEqual(['noon'])
+    expect((await Stamp.query().whereKeyNot(iso).get()).map(entity => entity.get('label'))).toEqual([])
+    expect((await Stamp.query().where(`${stamps}.stamp`, iso).get()).map(entity => entity.get('label'))).toEqual(['noon'])
+  })
+
+  it('cursor paginates a union of joined queries by output column names', async () => {
+    const { products, orders, joined } = await createFixture(driver)
+
+    const pages = async (query: ReturnType<typeof joined>) => {
+      const seen: number[][] = []
+      let cursor: string | null = null
+      do {
+        const page = await query.cursorPaginate(1, cursor)
+        seen.push(attributes(page.data).map(row => row.id))
+        cursor = page.nextCursor
+      } while (cursor !== null && seen.length < 4)
+      return seen
+    }
+    const aliased = () => joined().select(`${products}.*`, `${orders}.id as order_id` as never)
+    expect(await pages(aliased().where(`${orders}.id`, 101).union(aliased().where(`${orders}.id`, 102)).orderBy('order_id' as never, 'desc'))).toEqual([[2], [1]])
+    const own = () => joined().select(`${products}.*`)
+    expect(await pages(own().where(`${orders}.id`, 102).union(own().where(`${orders}.id`, 101)))).toEqual([[1], [2]])
+    expect(await pages(own().where(`${orders}.id`, 102).union(own().where(`${orders}.id`, 101)).orderBy('price', 'desc'))).toEqual([[2], [1]])
+    const descending = own().where(`${orders}.id`, 102).union(own().where(`${orders}.id`, 101)).orderBy('price', 'desc')
+    const last = await descending.cursorPaginate(1, (await descending.cursorPaginate(1)).nextCursor)
+    expect(attributes((await descending.cursorPaginate(1, last.prevCursor)).data).map(row => row.id)).toEqual([2])
+
+    const positional = DB.table(products).select('price').where('id', 1).union(DB.table(products).select('factor').where('id', 2)).orderBy('price')
+    const firstValues = await positional.cursorPaginate(1)
+    const secondValues = await positional.cursorPaginate(1, firstValues.nextCursor)
+    expect([firstValues, secondValues].map(page => page.data.map(row => Number(row.price)))).toEqual([[4], [10]])
+    expect(secondValues.nextCursor).toBeNull()
+
+    const renamed = () => DB.table(products).select('price as value', 'factor as price')
+    const swapped = renamed().where('id', 2).union(renamed().where('id', 1)).orderBy('price')
+    const firstSwapped = await swapped.cursorPaginate(1)
+    const secondSwapped = await swapped.cursorPaginate(1, firstSwapped.nextCursor)
+    expect([firstSwapped, secondSwapped].map(page => page.data.map(row => [Number(row.value), Number(row.price)]))).toEqual([[[10, 2]], [[20, 4]]])
+
+    const Reordered = defineModel(defineGeneratedTable(products, { price: column.integer(), id: column.id(), parent_id: column.integer().nullable(), factor: column.integer().nullable() }), { timestamps: false })
+    await DB.table(products).insert({ id: 3, price: 30, parent_id: 3, factor: 6 })
+    const mixed = Reordered.query().select(`${products}.*`).where('id', 1).union(Reordered.query().select('id', 'price', 'parent_id', 'factor').whereIn('id', [2, 3])).orderBy('id')
+    expect(await pages(mixed as never)).toEqual([[1], [2], [3]])
+    const wildcardLast = Reordered.query().select('id', 'price', 'parent_id', 'factor').where('id', 1).union(Reordered.query().whereIn('id', [2, 3])).orderBy('id')
+    expect(await pages(wildcardLast as never)).toEqual([[1], [2], [3]])
+  })
+
+  it('keeps the selection order between outputs that are not model columns', async () => {
+    const { schema, products, Product } = await createFixture(driver)
+    const notes = uniqueName('notes')
+    onTestFinished(async () => {
+      await schema.dropTable(notes)
+    })
+    await schema.createTable(notes, (table) => {
+      table.integer('id')
+      table.integer('product_id')
+      table.string('label')
+    })
+    await DB.table(notes).insert([{ id: 11, product_id: 1, label: 'first' }, { id: 12, product_id: 2, label: 'second' }])
+
+    const labels = async (...selections: string[]) => {
+      const rows = await Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).select(...selections as never[]).get()
+      return rows.map(entity => [Number(entity.toAttributes().id), (entity.toAttributes() as Record<string, unknown>).label]).sort((left, right) => Number(left[0]) - Number(right[0]))
+    }
+    expect(await labels(`${products}.*`, `${products}.price as label`, `${notes}.*`)).toEqual([[1, 'first'], [2, 'second']])
+    expect(await labels(`${products}.*`, `${notes}.*`, `${products}.price as label`)).toEqual([[1, 10], [2, 20]])
+    const labelled = () => Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).select(`${products}.*`, `${products}.price as label` as never, `${notes}.*`)
+    const union = labelled().where(`${notes}.id` as never, 11).union(labelled().where(`${notes}.id` as never, 12))
+    expect((await union.get()).map(entity => [Number(entity.toAttributes().id), (entity.toAttributes() as Record<string, unknown>).label]).sort((left, right) => Number(left[0]) - Number(right[0]))).toEqual([[1, 'first'], [2, 'second']])
+    await expect(union.orderBy('label' as never, 'desc').cursorPaginate(1)).rejects.toThrow(
+      'Cannot cursor paginate a union by "label": more than one of its selected columns may be named "label". Select it under a name no other column has.',
+    )
+
+    registerGeneratedTables({ [notes]: defineGeneratedTable(notes, { id: column.integer(), product_id: column.integer(), label: column.string() }) })
+    onTestFinished(() => clearGeneratedTables())
+    expect(await labels(`${products}.*`, `${products}.price as label`, `${notes}.*`)).toEqual([[1, 'first'], [2, 'second']])
+    expect(await labels(`${products}.*`, `${notes}.*`, `${products}.price as label`)).toEqual([[1, 10], [2, 20]])
+  })
+
+  it('keeps a column of a joined table without a definition that shares a hidden cursor alias name', async () => {
+    const { schema, products, Product } = await createFixture(driver)
+    const notes = uniqueName('notes')
+    onTestFinished(async () => {
+      await schema.dropTable(notes)
+    })
+    await schema.createTable(notes, (table) => {
+      table.integer('note_id')
+      table.integer('product_id')
+      table.integer('__holo_cursor_0')
+    })
+    await DB.table(notes).insert([{ note_id: 2, product_id: 1, __holo_cursor_0: 7 }, { note_id: 1, product_id: 2, __holo_cursor_0: 8 }])
+
+    const query = Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).orderBy(`${notes}.note_id` as never)
+    const first = await query.cursorPaginate(1)
+    const second = await query.cursorPaginate(1, first.nextCursor)
+    expect([first, second].map(page => page.data.map(entity => [Number(entity.toAttributes().id), Number((entity.toAttributes() as Record<string, unknown>).__holo_cursor_0)]))).toEqual([[[2, 8]], [[1, 7]]])
+    expect(second.nextCursor).toBeNull()
+  })
 })

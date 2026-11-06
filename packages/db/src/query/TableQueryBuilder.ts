@@ -100,6 +100,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { unionCursorColumns } from './unionCursorColumns'
 import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
 import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
@@ -2557,13 +2558,26 @@ export class TableQueryBuilder<
     const cursorOrders = orderedQuery.resolveCursorOrders()
     if (decodedCursor && decodedCursor.values.length !== cursorOrders.length) throw new SecurityError('Cursor does not match the query ordering.')
     const previous = decodedCursor?.previous === true
+    const cursorValue = (row: Record<string, unknown>, column: string): unknown =>
+      orderedQuery.plan.unions.length > 0 && Object.hasOwn(row, column) ? row[column] : orderedQuery.readCursorColumnValue(row, column)
+    const unionColumns = orderedQuery.plan.unions.length === 0
+      ? undefined
+      : unionCursorColumns(orderedQuery.plan, cursorOrders.map(order => order.column), this.connection.getConnectionName())
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     if (decodedCursor) {
       const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
-      if (plan.predicates.some(predicate => predicate.boolean === 'or')) {
-        plan = withPredicate(withoutPredicates(plan, () => true), { kind: 'group', predicates: plan.predicates })
+      const nullsLow = !this.connection.getDialect().name.includes('postgres')
+      const filter = (branch: SelectQueryPlan, columns: readonly string[]): SelectQueryPlan => {
+        const grouped = branch.predicates.some(predicate => predicate.boolean === 'or')
+          ? withPredicate(withoutPredicates(branch, () => true), { kind: 'group', predicates: branch.predicates })
+          : branch
+        return withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map((order, index) => ({ ...order, column: columns[index]! })), nullsLow))
       }
-      plan = withPredicate(plan, cursorPredicate(normalizedCursor, cursorOrders, !this.connection.getDialect().name.includes('postgres')))
+      const filterUnion = (branch: SelectQueryPlan, branchColumns: (branch: SelectQueryPlan) => readonly string[]): SelectQueryPlan => Object.freeze({
+        ...filter(branch, branchColumns(branch)),
+        unions: Object.freeze(branch.unions.map(union => Object.freeze({ ...union, query: filterUnion(union.query, branchColumns) }))),
+      })
+      plan = unionColumns ? filterUnion(plan, unionColumns) : filter(plan, cursorOrders.map(order => order.column))
     }
     if (previous) plan = replaceOrderBy(plan, cursorOrders.map(order => ({ kind: 'column', column: order.column, direction: order.direction === 'asc' ? 'desc' : 'asc' })))
     const pageQuery = orderedQuery.clone(plan)
@@ -2579,10 +2593,10 @@ export class TableQueryBuilder<
       perPage,
       cursorName,
       nextCursor: (previous ? cursor !== null : hasMorePages) && lastRow
-        ? encodeValueCursor(cursorOrders.map(order => orderedQuery.readCursorColumnValue(lastRow, order.column)))
+        ? encodeValueCursor(cursorOrders.map(order => cursorValue(lastRow, order.column)))
         : null,
       prevCursor: (previous ? hasMorePages : cursor !== null) && firstRow
-        ? encodeValueCursor(cursorOrders.map(order => orderedQuery.readCursorColumnValue(firstRow, order.column)), true)
+        ? encodeValueCursor(cursorOrders.map(order => cursorValue(firstRow, order.column)), true)
         : null,
     })
     if (cursor === null) {
@@ -3882,7 +3896,7 @@ export class TableQueryBuilder<
       const qualifiedKey = `${tableName}.${primaryKey}`
       return current.orderBy.some(order => order.kind === 'column' && (order.column === primaryKey || order.column === qualifiedKey))
         ? current
-        : withOrderBy(current, { kind: 'column', column: current.joins.length === 0 ? primaryKey : qualifiedKey, direction: 'asc' })
+        : withOrderBy(current, { kind: 'column', column: current.joins.length === 0 || current.unions.length > 0 ? primaryKey : qualifiedKey, direction: 'asc' })
     }, this.plan)
     return plan === this.plan ? this : this.clone(plan)
   }
@@ -4043,19 +4057,20 @@ export class TableQueryBuilder<
   }
 
   private normalizeComparisonValue(columnName: string, value: unknown, operator: unknown): Pick<QueryPredicate, 'value' | 'valueType'> {
+    const sourceColumn = this.resolveSourceColumnName(columnName) ?? columnName
     if (this.isDateColumn(columnName)) {
-      const normalized = normalizeDateColumnPredicateValue(this.source.table, this.connection.getDriver(), columnName, value, operator)
+      const normalized = normalizeDateColumnPredicateValue(this.source.table, this.connection.getDriver(), sourceColumn, value, operator)
       return normalized.comparesCalendarDates ? { value: normalized.value, valueType: 'date' } : { value: normalized.value }
     }
 
     return {
       value: this.normalizePredicateValueForColumn(columnName, value, operator),
-      ...(this.source.table?.columns[columnName]?.kind === 'json' ? { valueType: 'json' as const } : {}),
+      ...(this.source.table?.columns[sourceColumn]?.kind === 'json' ? { valueType: 'json' as const } : {}),
     }
   }
 
   private normalizePredicateValueForColumn(columnName: string, value: unknown, operator: unknown = '='): unknown {
-    return normalizeQueryPredicateValue(this.source.table, this.connection.getDriver(), columnName, value, operator)
+    return normalizeQueryPredicateValue(this.source.table, this.connection.getDriver(), this.resolveSourceColumnName(columnName) ?? columnName, value, operator)
   }
 }
 
