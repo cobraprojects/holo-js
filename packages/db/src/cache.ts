@@ -8,10 +8,9 @@ import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
 import { coerceBoolean, isStoredBoolean } from './schema/normalization'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
-import type { CaseInsensitiveColumns } from './schema/caseInsensitiveColumns'
+import type { CaseInsensitiveColumns, TextColumnCollations } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import type { TableDefinition } from './schema/types'
-import { NumericAdjustment } from './query/NumericAdjustment'
 import { canonicalTableName } from './schema/tableIdentityRegistry'
 
 export type QueryCacheTtlInput = number | Date
@@ -355,6 +354,8 @@ type DatabaseDependencyInvalidationPlan = {
 
 type LiteralExpansion = (column: string, value: unknown) => readonly unknown[]
 
+export type QueryTextMatching = boolean | TextColumnCollations
+
 type DatabaseDependencyPredicateEntry = {
   readonly dependency: string
   readonly metadata: DatabaseDependencyPredicateMetadata
@@ -375,6 +376,7 @@ const WHERE_EXACT_DEPENDENCY_PREFIX = 'where-exact:'
 const EMPTY_COLUMNS: ReadonlySet<string> = new Set<string>()
 const PREDICATE_WILDCARD_VALUE = '*'
 const IDENTITY_EXPANSION: LiteralExpansion = (_column, value) => [value]
+const SQLITE_ROWID_ALIASES: ReadonlySet<string> = new Set(['rowid', '_rowid_', 'oid'])
 const NUMERIC_TEXT_PATTERN = /^\s*[+-]?(?:(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:e[+-]?\d[\d_]*)?|0x[\da-f_]+|0o[0-7_]+|0b[01_]+|nan|inf(?:inity)?)\s*$/i
 
 const databaseDependencyCollector = new AsyncLocalStorage<DatabaseDependencyCollectorState>()
@@ -1159,13 +1161,13 @@ export function createTablePredicateCacheDependency(
   tableName: string,
   columnName: string,
   value: unknown,
-  textMatchesAnyNumber = false,
+  textMatching: QueryTextMatching = false,
 ): string | undefined {
   if (typeof value === 'undefined') {
     return undefined
   }
 
-  return mayEqualNumber(value, textMatchesAnyNumber)
+  return queryTextMayMatchOtherValues(getColumnName(columnName), value, textMatching)
     ? createTablePredicateWildcardCacheDependency(connectionName, tableName, columnName)
     : createPredicateDependencyEntry(connectionName, tableName, columnName, value)?.dependency
 }
@@ -1416,16 +1418,21 @@ function hasAutoIncrementKey(source: Pick<QuerySource, 'tableName' | 'table'>, c
   return Object.values(table?.columns ?? {}).some(column => column.name === primaryKey && column.idStrategy === 'autoIncrement')
 }
 
-function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionName: string, textMatchesAnyNumber: boolean): string | undefined {
+function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionName: string, textMatching: QueryTextMatching): string | undefined {
   const primaryKey = resolveRowDependencyKey(plan.source, connectionName)
   if (primaryKey === undefined) {
     return undefined
   }
 
   const value = findExactPrimaryKeyValue(plan.predicates, primaryKey)
-  return mayEqualNumber(value, textMatchesAnyNumber)
+  return queryTextMayMatchOtherValues(primaryKey, value, textMatching)
     ? undefined
     : createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, value)
+}
+
+function assignsPrimaryKey(column: string, primaryKey: string | undefined): boolean {
+  const name = getColumnName(column).toLowerCase()
+  return primaryKey === undefined || name === primaryKey.toLowerCase() || SQLITE_ROWID_ALIASES.has(name)
 }
 
 function isNumericText(value: unknown): boolean {
@@ -1440,6 +1447,23 @@ function createLiteralExpansion(caseInsensitiveColumns: CaseInsensitiveColumns):
   return (column, value) => readLiteralDependencyValues(column, value, caseInsensitiveColumns) ?? [value]
 }
 
+function comparesLoosely(column: string, value: unknown, caseInsensitiveColumns: CaseInsensitiveColumns): boolean {
+  if (caseInsensitiveColumns === 'all') {
+    return typeof value === 'string'
+  }
+
+  if (!('findTextColumn' in caseInsensitiveColumns)) {
+    return typeof value === 'string' && caseInsensitiveColumns.has(column)
+  }
+
+  const textColumn = caseInsensitiveColumns.findTextColumn(column)
+  if (typeof value === 'string') {
+    return textColumn === undefined || !textColumn.exact || (textColumn.padSpace && value.endsWith(' '))
+  }
+
+  return value !== null && textColumn !== undefined && caseInsensitiveColumns.numbersMatchText
+}
+
 function readLiteralDependencyValues(
   column: string,
   value: unknown,
@@ -1448,20 +1472,16 @@ function readLiteralDependencyValues(
   if (Array.isArray(value)) {
     return value.some(element => Array.isArray(element)
       ? typeof readLiteralDependencyValues(column, element, caseInsensitiveColumns) === 'undefined'
-      : typeof element === 'string' && (caseInsensitiveColumns === 'all' || caseInsensitiveColumns.has(column) || isNumericText(element)))
+      : comparesLoosely(column, element, caseInsensitiveColumns) || isNumericText(element))
       ? undefined
       : [value]
   }
 
-  if (typeof value !== 'string') {
-    return [value]
-  }
-
-  if (caseInsensitiveColumns === 'all' || caseInsensitiveColumns.has(column)) {
+  if (comparesLoosely(column, value, caseInsensitiveColumns)) {
     return undefined
   }
 
-  if (!isNumericText(value)) {
+  if (typeof value !== 'string' || !isNumericText(value)) {
     return [value]
   }
 
@@ -1526,20 +1546,24 @@ function collectMutationLooseColumns(
   return collectLooseColumns(predicates, records, (column, value) => mayEqualOtherLiteral(column, value, caseInsensitiveColumns))
 }
 
-function mayEqualNumber(value: unknown, textMatchesAnyNumber: boolean): boolean {
+function queryTextMayMatchOtherValues(column: string, value: unknown, textMatching: QueryTextMatching): boolean {
   if (Array.isArray(value)) {
-    return value.some(element => mayEqualNumber(element, textMatchesAnyNumber))
+    return value.some(element => queryTextMayMatchOtherValues(column, element, textMatching))
   }
 
-  return typeof value === 'string' && (textMatchesAnyNumber || isNumericText(value))
+  if (typeof textMatching === 'boolean') {
+    return typeof value === 'string' && (textMatching || isNumericText(value))
+  }
+
+  return comparesLoosely(column, value, textMatching) || (!textMatching.numbersMatchText && isNumericText(value))
 }
 
 function containsText(value: unknown): boolean {
   return typeof value === 'string' || (Array.isArray(value) && value.some(element => containsText(element)))
 }
 
-function collectNumberLikeColumns(predicates: readonly QueryPredicateNode[], textMatchesAnyNumber: boolean): ReadonlySet<string> {
-  return collectLooseColumns(predicates, [], (_column, value) => mayEqualNumber(value, textMatchesAnyNumber))
+function collectNumberLikeColumns(predicates: readonly QueryPredicateNode[], textMatching: QueryTextMatching): ReadonlySet<string> {
+  return collectLooseColumns(predicates, [], (column, value) => queryTextMayMatchOtherValues(column, value, textMatching))
 }
 
 export function writesTextLiterals(
@@ -1563,12 +1587,12 @@ function createMutationRowDependencies(
 
   const createRowDependency = (value: unknown) => createRowDependencies(connectionName, plan.source.tableName, primaryKey, value, caseInsensitiveColumns)
   const current = createRowDependency(findExactPrimaryKeyValue(plan.predicates, primaryKey))
-  const assignedKeys = Object.entries(values).filter(([column]) => getColumnName(column) === primaryKey)
+  const assignedKeys = Object.entries(values).filter(([column]) => assignsPrimaryKey(column, primaryKey))
   if (assignedKeys.length === 0) {
     return current ?? [wildcard]
   }
 
-  if (current === undefined || assignedKeys.some(([, value]) => value instanceof NumericAdjustment)) {
+  if (current === undefined || assignedKeys.some(([, value]) => typeof value === 'object' && value !== null)) {
     return [wildcard]
   }
 
@@ -2332,14 +2356,14 @@ export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): 
 export function inferAutomaticQueryCacheDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
-  textMatchesAnyNumber = false,
+  textMatching: QueryTextMatching = false,
 ): readonly string[] | undefined {
   if (!supportsAutomaticQueryCacheInvalidation(plan)) {
     return undefined
   }
 
   if (!hasDisjunctivePredicate(plan.predicates)) {
-    const primaryKeyDependency = createExactPrimaryKeyRowDependency(plan, connectionName, textMatchesAnyNumber)
+    const primaryKeyDependency = createExactPrimaryKeyRowDependency(plan, connectionName, textMatching)
     if (primaryKeyDependency) {
       return Object.freeze([
         primaryKeyDependency,
@@ -2349,7 +2373,7 @@ export function inferAutomaticQueryCacheDependencies(
   }
 
   if (!hasDisjunctivePredicate(plan.predicates)) {
-    const numberLikeColumns = collectNumberLikeColumns(plan.predicates, textMatchesAnyNumber)
+    const numberLikeColumns = collectNumberLikeColumns(plan.predicates, textMatching)
     const predicateDependencies = [
       ...collectExactPredicateDependencies(
         plan.predicates,
@@ -2490,9 +2514,14 @@ export function inferAutomaticInsertCacheInvalidationPlan(
   lastInsertId?: number | string,
   includeMetadata = false,
   caseInsensitiveColumns: CaseInsensitiveColumns = EMPTY_COLUMNS,
+  conflictColumns?: readonly string[] | 'any',
+  updatedColumns: readonly string[] = [],
 ): DatabaseDependencyInvalidationPlan {
   const { tableName } = source
   const primaryKey = resolveRowDependencyKey(source, connectionName)
+  const conflictsBeyondPrimaryKey = conflictColumns === 'any'
+    || (conflictColumns !== undefined && (primaryKey === undefined || conflictColumns.some(column => getColumnName(column) !== primaryKey)))
+    || updatedColumns.some(column => assignsPrimaryKey(column, primaryKey))
   const looseColumns = collectMutationLooseColumns([], rows, caseInsensitiveColumns)
   const literalExpansion = createLiteralExpansion(caseInsensitiveColumns)
   const createRowDependency = (value: unknown) => primaryKey === undefined
@@ -2551,7 +2580,7 @@ export function inferAutomaticInsertCacheInvalidationPlan(
     directDependencies.add(dependency)
   }
 
-  if (hasUnknownRowKey && !lastInsertDependencies) {
+  if ((hasUnknownRowKey && !lastInsertDependencies) || conflictsBeyondPrimaryKey) {
     const rowWildcardDependency = createTableRowWildcardCacheDependency(connectionName, tableName)
     dependencies.add(rowWildcardDependency)
     directDependencies.add(rowWildcardDependency)
@@ -2575,13 +2604,13 @@ export function resolveQueryCacheDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
   explicit?: readonly string[],
-  textMatchesAnyNumber = false,
+  textMatching: QueryTextMatching = false,
 ): readonly string[] | undefined {
   if (explicit && explicit.length > 0) {
     return normalizeQueryCacheDependencies(connectionName, explicit)
   }
 
-  return inferAutomaticQueryCacheDependencies(plan, connectionName, textMatchesAnyNumber)
+  return inferAutomaticQueryCacheDependencies(plan, connectionName, textMatching)
 }
 
 export async function invalidateQueryCacheDependencies(
