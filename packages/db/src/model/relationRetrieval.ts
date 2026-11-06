@@ -137,13 +137,26 @@ export function relationKeyOptions(parentKey: AnyColumnDefinition | undefined, r
   return { numeric: isNumericKeyColumn(parentKey) || isNumericKeyColumn(relatedKey) }
 }
 
+function selectsRelationColumn(plan: SelectQueryPlan, column: string): boolean {
+  if (plan.selections.length === 0) {
+    return true
+  }
+
+  if (plan.selections.some(selection => selection.kind !== 'column' || typeof selection.alias !== 'undefined')) {
+    return false
+  }
+
+  return plan.selections.some(selection => selection.kind === 'column'
+    && (selection.column === '*' || selection.column.endsWith('.*') || selection.column.split('.').at(-1) === column))
+}
+
 export async function retrieveRelation(
   keys: readonly unknown[],
   createQuery: () => ModelQueryBuilder,
   column: string,
   observe = false,
   definition?: AnyColumnDefinition,
-): Promise<{ entities: Entity[], plan?: SelectQueryPlan }> {
+): Promise<{ entities: Entity[], plan?: SelectQueryPlan, rowsPatchable?: boolean }> {
   if (keys.length === 0) return { entities: [] }
   const observationCount = observe && hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
   let plan: SelectQueryPlan | undefined
@@ -152,12 +165,13 @@ export async function retrieveRelation(
   const columnKeys = keysForColumn(keys, definition ?? columnDefinition(probe.getTableQueryBuilder(), column))
   const paginated = isPaginatedRelationQuery(probe)
   if (typeof observationCount === 'number') plan = probe.getTableQueryBuilder().getPlan()
+  const rowsPatchable = !paginated && selectsRelationColumn(probe.getTableQueryBuilder().getPlan(), column) && probe.canPatchLoadedRows()
   for (const [index, chunk] of chunkRelationKeys(columnKeys, paginated).entries()) {
     const query = index === 0 ? probe : createQuery()
     for (const entity of await query.where(column, 'in', chunk).get()) entities.push(entity)
   }
   if (typeof observationCount === 'number') truncateDatabaseQueryObservations(observationCount)
-  return { entities, plan }
+  return { entities, plan, rowsPatchable }
 }
 
 export function indexRelation(entities: readonly Entity[], column: string, options: StoredKeyOptions = {}): StoredKeyMap<Entity> {

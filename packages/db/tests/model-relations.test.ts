@@ -88,6 +88,29 @@ describe('relation helper keys', () => {
       parentKey: 'id',
       relatedKey: 'id' })
   })
+
+  it('resolves keys qualified with the full or bare name of a schema-qualified table to their column', () => {
+    const db = createDatabase({ connectionName: 'default', adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    onTestFinished(() => resetDB())
+    const Author = defineModelFromTable(defineTable('app.authors', { id: column.id() }), {})
+    const Post = defineModelFromTable(defineTable('app.posts', { id: column.id(), author_id: column.integer() }), {
+      relations: {
+        author: belongsTo(() => Author, 'app.posts.author_id', 'authors.id'),
+      },
+    })
+    const Comment = defineModelFromTable(defineTable('comments', { id: column.id(), post_id: column.integer() }), {
+      relations: {
+        post: belongsTo(() => Post, 'public.comments.post_id', 'app.posts.id'),
+        strayPost: belongsTo(() => Post, 'post_id', 'other.posts.id'),
+      },
+    })
+
+    expect(Post.getRepository().getRelationDefinition('author')).toMatchObject({ foreignKey: 'author_id', ownerKey: 'id' })
+    expect(Post.getRepository().getRelationDefinition('author')).toBe(Post.getRepository().getRelationDefinition('author'))
+    expect(Comment.getRepository().getRelationDefinition('post')).toMatchObject({ foreignKey: 'post_id', ownerKey: 'id' })
+    expect(() => Comment.getRepository().getRelationDefinition('strayPost')).toThrow(/ownerKey "other.posts.id".*"app.posts"/)
+  })
 })
 
 describe('model relation slice', () => {

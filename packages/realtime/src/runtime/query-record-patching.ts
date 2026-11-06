@@ -25,6 +25,7 @@ import type {
   QueryRowPatchContext,
   RowMutationApplier,
 } from './query-state'
+import { isSingleIdQuery } from './query-metadata'
 import type { BackfillCache } from './state'
 
 export async function tryPatchQueryRecord(
@@ -82,6 +83,13 @@ export async function tryPatchQueryRecord(
 
   if (!changed) {
     return UNCHANGED_QUERY_RESULT
+  }
+
+  if (value && patchedRows.length === 0 && !isSingleIdQuery(query)) {
+    const rows = await backfillCurrentQueryRows(query, backfills)
+    if (!rows || rows.length > 0) {
+      return UNPATCHED_RESULT
+    }
   }
 
   return Object.freeze({
