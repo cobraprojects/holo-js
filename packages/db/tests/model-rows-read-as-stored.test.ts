@@ -77,7 +77,29 @@ describe('model rows read as stored', () => {
 
     expect(repository.serializesBeyondRows()).toBe(true)
     expect(repository.serializesBeyondRows()).toBe(true)
-    expect(constructed).toBeLessThanOrEqual(1)
+    expect(constructed).toBe(0)
+  })
+
+  it('detects retrieved handlers an observer assigns when it is constructed', () => {
+    let enabled = false
+    class ConditionalObserver {
+      retrieved?: () => undefined
+
+      constructor() {
+        if (enabled) this.retrieved = () => undefined
+      }
+
+      get service(): never {
+        throw new Error('The service is only available during a request.')
+      }
+    }
+    const notes = defineGeneratedTable('stored_conditional_notes', { id: column.id(), body: column.string() })
+    const Note = defineModel(notes, { timestamps: false, observers: [ConditionalObserver] })
+    const repository = ModelRepository.from(Note)
+
+    expect(repository.serializesBeyondRows()).toBe(false)
+    enabled = true
+    expect(repository.serializesBeyondRows()).toBe(true)
   })
 
   it('normalizes untyped incrementing keys in realtime row reads', () => {

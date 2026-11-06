@@ -6,26 +6,22 @@ import { areModelEventsMuted } from './eventState'
 import { listModelObservers } from './modelObservers'
 import type { ModelDefinition, ModelLifecycleEventName } from './types'
 
-const observerClassHandlers = new WeakMap<object, ReadonlySet<string>>()
+function prototypeDefinesHandler(observer: object, eventName: string): boolean {
+  for (let target: object | null = (observer as { prototype?: object }).prototype ?? null; target && target !== Object.prototype; target = Object.getPrototypeOf(target)) {
+    const descriptor = Object.getOwnPropertyDescriptor(target, eventName)
+    if (descriptor) return typeof descriptor.value === 'function'
+  }
+  return false
+}
 
 function observerHandles(observer: unknown, eventName: string): boolean {
   if (typeof observer !== 'function') {
     return typeof (observer as Record<string, unknown> | null)?.[eventName] === 'function'
   }
 
-  let handlers = observerClassHandlers.get(observer)
-  if (!handlers) {
-    const instance = new (observer as new () => Record<string, unknown>)()
-    const names = new Set<string>()
-    for (let target: object | null = instance; target && target !== Object.prototype; target = Object.getPrototypeOf(target)) {
-      for (const name of Object.getOwnPropertyNames(target)) {
-        if (name !== 'constructor' && typeof instance[name] === 'function') names.add(name)
-      }
-    }
-    handlers = names
-    observerClassHandlers.set(observer, handlers)
-  }
-  return handlers.has(eventName)
+  if (prototypeDefinesHandler(observer, eventName)) return true
+  const instance = new (observer as new () => Record<string, unknown>)()
+  return typeof instance[eventName] === 'function'
 }
 
 export class ModelEventDispatcher<TTable extends TableDefinition> {
