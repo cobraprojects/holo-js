@@ -10,7 +10,7 @@ import {
   getBackfillDatabaseConnection,
   readBackfilledRows,
   readBackfilledValue,
-  readObservedRow,
+  readMergedRow,
 } from './query-backfill'
 import type {
   BackfillCache,
@@ -137,7 +137,7 @@ function readRelatedMutationRows(
     }
 
     for (const storedRow of mutation.rows) {
-      const row = readObservedRow(hydration.relatedTable, hydration.readRow, storedRow)
+      const row = readMergedRow(hydration.relatedTable, hydration.readRow, storedRow, mutation.values)
       const matches = row[hydration.foreignKey] === localKey && matchesPredicates(row, hydration.predicates) === true
       if (matches) {
         rows.push(row)

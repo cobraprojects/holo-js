@@ -121,6 +121,13 @@ function relatedRowsArePatchable(related: ModelRepository): boolean {
     && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
 }
 
+const storedRowReaders = new WeakMap<object, DatabaseQueryRowReader>()
+
+function relatedReadRow(related: ModelRepository): { readonly relatedReadRow?: DatabaseQueryRowReader } {
+  const reader = related.rowReader()
+  return reader ? { relatedReadRow: reader } : {}
+}
+
 function observationColumns(observation: DatabaseQueryObservation): readonly string[] {
   return [
     ...observation.predicates.map(predicate => predicate.column),
@@ -222,7 +229,6 @@ export class ModelRepository<
   private readonly eventDispatcher: ModelEventDispatcher<TTable>
   private readonly relationAggregateCalculator = new RelationAggregateCalculator()
   private readonly valueTransformer: ModelValueTransformer<TTable>
-  private storedRowReader: DatabaseQueryRowReader | undefined
 
   constructor(
     definition: ModelDefinition<TTable, TScopes>,
@@ -1159,7 +1165,7 @@ export class ModelRepository<
         kind: 'belongsToParentKey' as const,
         ownerKey: relation.ownerKey,
         predicates: ownerPredicates ?? Object.freeze([]),
-        ...related.rowReader() ? { relatedReadRow: related.rowReader() } : {},
+        ...relatedReadRow(related),
         relationKey: relationName,
         relatedConnectionName: related.getConnectionName(),
         relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
@@ -1333,7 +1339,7 @@ export class ModelRepository<
         relatedConnectionName: related.getConnectionName(),
         relatedKey: relation.relatedKey,
         relatedPivotKey: relation.relatedPivotKey,
-        ...related.rowReader() ? { relatedReadRow: related.rowReader() } : {},
+        ...relatedReadRow(related),
         relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
         relatedTable: related.definition.table,
       })
@@ -2641,8 +2647,11 @@ export class ModelRepository<
 
   rowReader(): DatabaseQueryRowReader | undefined {
     if (this.valueTransformer.readsRowsAsStored()) return undefined
-    this.storedRowReader ??= (row, written) => this.valueTransformer.readStoredRow(row, this.getConnection().getDriver() as SchemaDialectName, written)
-    return this.storedRowReader
+    const cached = storedRowReaders.get(this.definition)
+    if (cached) return cached
+    const reader: DatabaseQueryRowReader = (row, written) => this.valueTransformer.readStoredRow(row, this.getConnection().getDriver() as SchemaDialectName, written)
+    storedRowReaders.set(this.definition, reader)
+    return reader
   }
 
   relatedRowReader(related: () => ModelDefinitionLike): DatabaseQueryRowReader | undefined {

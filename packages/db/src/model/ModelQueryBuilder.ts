@@ -13,6 +13,7 @@ import {
   rebindDatabaseQueryObservationScalarList,
   type DatabaseQueryBelongsToHydrationObservation,
   type DatabaseQueryRelatedHydrationObservation,
+  type DatabaseQueryRowReader,
   type QueryCacheConfig,
   type QueryCacheTtlInput,
 } from '../cache'
@@ -47,7 +48,7 @@ import type {
 } from '../query/types'
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
-import type { EmptyScopeMap, ModelScopeMethods, ModelScopesDefinition } from './types'
+import type { EmptyScopeMap, ModelDefinitionLike, ModelScopeMethods, ModelScopesDefinition } from './types'
 import { canonicalTableName } from '../schema/tableIdentityRegistry'
 import type {
   AggregateRelationConstraintMap,
@@ -2641,6 +2642,11 @@ class ModelQueryBuilderBase<
     )
   }
 
+  private relatedReadRow(related: () => ModelDefinitionLike): { readonly readRow?: DatabaseQueryRowReader } {
+    const readRow = this.repository.relatedRowReader(related)
+    return readRow ? { readRow } : {}
+  }
+
   private rowsCompareWithStoredValues(): boolean {
     const observation = createDatabaseQueryObservation(this.getTableQueryBuilder().getPlan(), this.getConnectionName(), [])
     return observation !== undefined && this.repository.comparesObservationWithStoredValues(observation)
@@ -2692,7 +2698,7 @@ class ModelQueryBuilderBase<
           ownerKey: relation.ownerKey,
           predicates,
           primaryKey: resolveModelRowKey(relatedDefinition),
-          ...this.repository.relatedRowReader(relation.related) ? { readRow: this.repository.relatedRowReader(relation.related) } : {},
+          ...this.relatedReadRow(relation.related),
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
           relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
@@ -2716,7 +2722,7 @@ class ModelQueryBuilderBase<
           orderBy: hydrationQuery.orderBy,
           predicates: hydrationQuery.predicates,
           primaryKey: resolveModelRowKey(relatedDefinition),
-          ...this.repository.relatedRowReader(relation.related) ? { readRow: this.repository.relatedRowReader(relation.related) } : {},
+          ...this.relatedReadRow(relation.related),
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
           relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),

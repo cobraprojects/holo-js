@@ -100,7 +100,7 @@ function readRows(
   return read.every((row, index) => row === rows[index]) ? rows : Object.freeze(read)
 }
 
-function readMergedRow(
+export function readMergedRow(
   table: TableDefinition | undefined,
   readRow: DatabaseQueryRowReader | undefined,
   row: Readonly<Record<string, unknown>>,

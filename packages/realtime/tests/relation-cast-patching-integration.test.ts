@@ -167,6 +167,11 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await expectFresh()
     await mutate(() => db.model(Item).create({ owner_id: 1, ...rowValues(variant, 12) }))
     await expectFresh()
+    await mutate(async () => {
+      await db.table(owners).where('id', 1).update(rowValues(variant, 15))
+      await db.table(items).where('id', 2).update({ owner_id: 1 })
+    })
+    await expectFresh()
   })
 
   it('keeps eager-loaded hasOne and hasMany rows equal to a fresh read', async () => {

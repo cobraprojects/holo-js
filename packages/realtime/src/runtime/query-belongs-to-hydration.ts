@@ -8,7 +8,7 @@ import {
   getBackfillDatabaseConnection,
   readBackfilledRows,
   readBackfilledValue,
-  readObservedRow,
+  readMergedRow,
 } from './query-backfill'
 import { matchesPredicates, type DatabaseQueryPredicateObservation } from './predicate-matching'
 import { canBackfillRelatedHydrationPredicates } from './query-related-hydration'
@@ -141,7 +141,7 @@ function findBelongsToRelatedMutationValue(
     }
 
     for (const storedRow of rows) {
-      const row = readObservedRow(target.relatedTable, target.readRow ?? target.relatedReadRow, storedRow)
+      const row = readMergedRow(target.relatedTable, target.readRow ?? target.relatedReadRow, storedRow, mutation.values)
       if (row[target.ownerKey] !== foreignKey) {
         continue
       }
