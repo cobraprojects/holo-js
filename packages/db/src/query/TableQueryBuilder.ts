@@ -344,9 +344,14 @@ export class TableQueryBuilder<
   }
 
   private withNormalizedValue<TPredicate extends QueryPredicateNode>(predicate: TPredicate, normalize: () => Partial<TPredicate>): TPredicate {
-    return this.isAwaitingGeneratedTable()
-      ? deferPredicateNormalization(predicate, normalize)
-      : { ...predicate, ...normalize() }
+    if (!this.isAwaitingGeneratedTable()) return { ...predicate, ...normalize() }
+    let bound: Partial<TPredicate> | undefined
+    return deferPredicateNormalization(predicate, () => {
+      if (bound) return bound
+      const normalized = normalize()
+      if (!this.isAwaitingGeneratedTable()) bound = normalized
+      return normalized
+    })
   }
 
   private async prepareMutation(): Promise<void> {

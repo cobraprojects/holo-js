@@ -641,6 +641,24 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
       expect((await db.queryCompiled(statement)).rows.map(row => Number(row.id))).toEqual([1])
     })
 
+    it('normalizes a deferred where() value once its generated definition binds', async () => {
+      const { table } = await openDatabase(driver)
+      const { bare, qualified } = tableSpellings(driver, table.tableName)
+      const items = defineGeneratedTable(bare, itemColumns)
+      useGeneratedTables({ items })
+      let serializations = 0
+      const versioned = Object.defineProperty({}, 'toJSON', { value: () => ({ version: ++serializations }), enumerable: false })
+      const query = DB.table(qualified).where('settings', versioned).select('id')
+      await DB.table(qualified).where('id', 0).get()
+
+      const first = query.toSQL()
+      const second = query.toSQL()
+      await query.get()
+
+      expect(second.bindings).toEqual(first.bindings)
+      expect(serializations).toBe(1)
+    })
+
     it('keeps an untyped model on its declared primary key while the generated schema is suspended', async () => {
       const { table } = await openDatabase(driver)
       const { bare, qualified } = tableSpellings(driver, table.tableName)
