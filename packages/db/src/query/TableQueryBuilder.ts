@@ -101,6 +101,7 @@ import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schem
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, tableWildcard } from './modelRowProjection'
+import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
 import { UNKNOWN_TEXT_COLUMNS, resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
@@ -724,7 +725,7 @@ export class TableQueryBuilder<
 
     const qualifier = column.slice(0, separator)
     const join = this.plan.joins.find(({ alias, table, definition }) => definition && (alias === undefined
-      ? table === qualifier || table?.slice(table.lastIndexOf('.') + 1) === qualifier
+      ? table === qualifier || (table !== undefined && splitTablePath(table).table === qualifier)
       : alias === qualifier))
     return join?.definition?.columns[column.slice(separator + 1)]
   }

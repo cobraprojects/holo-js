@@ -3,7 +3,7 @@ import { getRootDatabaseContext } from '../core/contextOwnership'
 import { currentRootTransaction } from '../core/openTransactions'
 import { currentSchemaGeneration } from '../core/schemaGeneration'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection } from './connectionDialect'
-import { splitTablePath } from './identifiers'
+import { quoteTablePath, splitTablePath, tablePathSegments } from './identifiers'
 import { readSQLiteCreateTableSql, resolveSQLiteTablePath } from './introspection/sqlite'
 import { parseCreateTableSql } from './introspection/sqliteDefinitionGrammar'
 import { sameIdentifier } from './introspection/sqliteTokens'
@@ -71,8 +71,7 @@ const MAX_QUALIFIED_NAME_PARTS = 3
 const entriesByConnection = new WeakMap<DatabaseContext, Map<string, CaseInsensitiveColumnsEntry>>()
 
 function createPostgresReader(connection: DatabaseContext, tableName: string): ColumnReader | undefined {
-  const parts = tableName.split('.')
-  if (parts.length > MAX_QUALIFIED_NAME_PARTS) {
+  if (tablePathSegments(tableName).length > MAX_QUALIFIED_NAME_PARTS) {
     return undefined
   }
 
@@ -80,7 +79,7 @@ function createPostgresReader(connection: DatabaseContext, tableName: string): C
   return async (reader) => {
     const result = await reader.introspectCompiled<{ name: string }>({
       sql: CASE_INSENSITIVE_COLUMNS_SQL,
-      bindings: [parts.map(part => dialect.quoteIdentifier(part)).join('.')],
+      bindings: [quoteTablePath(dialect, tableName)],
       source: `schema:introspect:caseInsensitiveColumns:${tableName}`,
     })
     return new Set(result.rows.map(row => row.name))
@@ -126,9 +125,7 @@ function createMySQLReader(connection: DatabaseContext, tableName: string): Colu
   const { schema, table } = splitTablePath(tableName)
   const dialect = connection.getDialect()
   const configuredSchema = schema ?? connection.getSchemaName()
-  const qualifiedTable = configuredSchema === undefined
-    ? dialect.quoteIdentifier(table)
-    : `${dialect.quoteIdentifier(configuredSchema)}.${dialect.quoteIdentifier(table)}`
+  const qualifiedTable = quoteTablePath(dialect, configuredSchema === undefined ? table : `${configuredSchema}.${table}`)
   return async (reader) => {
     const created = await reader.introspectCompiled<MySQLCreateTableRow>({
       sql: `SHOW CREATE TABLE ${qualifiedTable}`,

@@ -815,6 +815,56 @@ try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ o
     expect(result.stack).toContain(`${abilityPath}:5:${throwLine.indexOf('new Error') + 1}`)
   }, 30_000)
 
+  it.each([
+    ['Node', process.execPath, []],
+    ['Node with explicit resolution parents', process.execPath, ['--experimental-import-meta-resolve']],
+    ['Bun', 'bun', []],
+  ])('resolves import.meta.resolve as the unbundled source module would under %s', async (_runtime, command, flags) => {
+    const projectRoot = await realpath(await createTempProject())
+    const entryPath = join(projectRoot, 'server/queued jobs/locate.mts')
+    const packageRoot = join(projectRoot, 'server/node_modules/nested-locator')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: 'nested-locator', exports: { import: './esm.mjs', require: './cjs.cjs' } }))
+    await writeFile(join(packageRoot, 'esm.mjs'), '')
+    await writeFile(join(packageRoot, 'cjs.cjs'), '')
+    await writeFile(entryPath, [
+      'const meta = import.meta',
+      'const globalThis = {}, process = {}, Bun = {}',
+      'export const shadows = [globalThis, process, Bun]',
+      'const attempt = (run) => { try { return run() } catch (error) { return `${error.code}: ${error.message}` } }',
+      'export const report = () => [',
+      "  meta.resolve('./helper.ts'),",
+      "  import.meta.resolve('nested-locator'),",
+      "  attempt(() => import.meta.resolve('./helper.ts', 'file:///elsewhere/entry.mjs')),",
+      "  attempt(() => meta.resolve('missing-locator')),",
+      "  attempt(() => import.meta.resolve('./helper.ts', undefined)),",
+      ']',
+      '',
+    ].join('\n'))
+    const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+    const bundledPath = join(projectRoot, 'bundled.mjs')
+    const unbundledPath = join(projectRoot, 'unbundled.mjs')
+    await writeFile(bundledPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+const loaded = await runtimeModule.importBundledRuntimeModule(${JSON.stringify(projectRoot)}, ${JSON.stringify(entryPath)})
+console.log(JSON.stringify(loaded.report()))
+`)
+    await writeFile(unbundledPath, `console.log(JSON.stringify((await import(${JSON.stringify(pathToFileURL(entryPath).href)})).report()))\n`)
+    const esbuildPackage = realpathSync(resolve(import.meta.dirname, '../node_modules/esbuild'))
+    const esbuildBinary = join(esbuildPackage, '..', '@esbuild', `${process.platform}-${process.arch}`, 'bin', 'esbuild')
+    const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', ESBUILD_BINARY_PATH: esbuildBinary }
+    const run = async (path: string) => {
+      const { stdout } = await promisify(execFile)(command, [...flags, path], { cwd: projectRoot, env })
+      return JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as string[]
+    }
+
+    const unbundled = await run(unbundledPath)
+    expect(unbundled[1]).toBe(pathToFileURL(join(packageRoot, 'esm.mjs')).href)
+    expect(unbundled[3]).toContain('missing-locator')
+    expect(await run(bundledPath)).toEqual(unbundled)
+  }, 30_000)
+
   it('rewrites import.meta.url without colliding with module bindings', async () => {
     const projectRoot = await realpath(await createTempProject())
     const entryPath = join(projectRoot, 'server/jobs/collide.ts')

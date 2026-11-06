@@ -1,5 +1,6 @@
 import { CompilerError } from '../core/errors'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { splitTablePath } from '../schema/identifiers'
 import type { QueryColumnSelection, QueryJoinClause, QuerySelection, QuerySource, SelectQueryPlan } from './ast'
 import type { TableDefinition } from '../schema/types'
 
@@ -29,7 +30,7 @@ export function knownJoinedColumns(join: QueryJoinClause, connectionName: string
 }
 
 export function qualifiesTable(qualifier: string, tableName: string | undefined, alias: string | undefined): boolean {
-  return qualifier === alias || (typeof tableName === 'string' && (qualifier === tableName || qualifier === tableName.slice(tableName.lastIndexOf('.') + 1)))
+  return qualifier === alias || (typeof tableName === 'string' && (qualifier === tableName || qualifier === splitTablePath(tableName).table))
 }
 
 export function resolveSourceColumnName(source: Pick<QuerySource, 'tableName' | 'alias'>, column: string): string | undefined {
@@ -49,7 +50,7 @@ export function selectionOutputName(selection: QuerySelection): string | undefin
 }
 
 export function tableWildcard(table: string, driver: string): string {
-  return `${driver === 'sqlite' ? table.slice(table.lastIndexOf('.') + 1) : table}.*`
+  return `${driver === 'sqlite' ? splitTablePath(table).table : table}.*`
 }
 
 function joinName(join: QueryJoinClause): string | undefined {

@@ -1,4 +1,5 @@
 import { RelationError } from '../core/errors'
+import { splitTablePath } from '../schema/identifiers'
 import type { TableDefinition } from '../schema/types'
 import type { AnyModelDefinition, ModelDefinitionLike, RelationDefinition } from './types'
 
@@ -55,7 +56,7 @@ function ownerTableName(owner: KeyOwner, parent: AnyModelDefinition, relation: R
 }
 
 function bareName(name: string): string {
-  return name.slice(name.lastIndexOf('.') + 1)
+  return splitTablePath(name).table
 }
 
 function qualifierMatches(qualifier: string, tableName: string): boolean {

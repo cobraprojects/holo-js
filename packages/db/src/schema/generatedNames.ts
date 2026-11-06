@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { SchemaError } from '../core/errors'
-import { assertValidIdentifierSegment, sanitizeIdentifierForGeneratedName } from './identifiers'
+import { assertValidIdentifierSegment, sanitizeIdentifierForGeneratedName, splitTablePath } from './identifiers'
 import type { TableIndexDefinition } from './types'
 
 export interface IndexNameLengthPolicy {
@@ -99,7 +99,7 @@ export function resolveGeneratedUniqueIndexName(tableName: string, columns: read
 }
 
 export function resolveGeneratedCheckName(tableName: string, columnName: string): string {
-  const unqualifiedTableName = tableName.split('.').at(-1)!
+  const unqualifiedTableName = splitTablePath(tableName).table
   return shortenGeneratedName(`${unqualifiedTableName}_${columnName}_check`, 'check')
 }
 
