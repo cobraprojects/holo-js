@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasOne } from '@holo-js/db'
+import { belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, hasOne } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -75,7 +75,7 @@ async function openFixture(driver: typeof drivers[number], statements: string[] 
     tags: belongsToMany(() => Tag, groupTags, 'group_id', 'tag_id').withPivot('position').orderByPivot('position'),
     topPost: hasOne(() => Post, 'group_id'),
   } })
-  return { db, groups, groupTags, posts, Group, Post }
+  return { db, schema, groups, groupTags, posts, Owner, Group, Post }
 }
 
 async function subscribeAll(queries: Record<string, () => Promise<unknown>>) {
@@ -219,6 +219,50 @@ describe.each(drivers)('realtime backfills over tables outside the generated reg
     await mutate(() => db.model(Post).create({ group_id: 1, score: 10, title: 'y' }))
     await expectFresh()
     await mutate(() => db.table(posts.tableName).insert({ id: 50, group_id: 2, score: 11, title: 'x' }))
+    await expectFresh()
+  })
+
+  it('hydrates belongsTo rows for several children whose text keys reference an integer key', async () => {
+    const { db, schema, Owner } = await openFixture(driver)
+    const name = `holo_fill_notes_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.string('group_key')
+    })
+    onTestFinished(() => schema.dropTable(name))
+    const notes = defineGeneratedTable(name, { id: column.id(), group_key: column.string() })
+    await db.table(notes).insert({ id: 1, group_key: '1' })
+    const Note = defineModel(notes, { timestamps: false, relations: { group: belongsTo(() => Owner, 'group_key') } })
+    const expectFresh = await subscribeAll({
+      eager: () => db.model(Note).query().with('group').orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(notes).insert([{ id: 2, group_key: '1' }, { id: 3, group_key: '2' }]))
+    await expectFresh()
+  })
+
+  it('hydrates hasMany and hasOne rows for several parents whose children hold text keys', async () => {
+    const { db, schema, groups } = await openFixture(driver)
+    const name = `holo_fill_notes_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.string('group_key')
+      table.bigInteger('score')
+    })
+    onTestFinished(() => schema.dropTable(name))
+    const notes = defineGeneratedTable(name, { id: column.id(), group_key: column.string(), score: column.bigInteger() })
+    await db.table(notes).insert([{ id: 1, group_key: '3', score: 1 }, { id: 2, group_key: '3', score: 5 }, { id: 3, group_key: '4', score: 2 }])
+    const Note = defineModel(notes, { timestamps: false })
+    const Parent = defineModel(groups, { timestamps: false, relations: {
+      notes: hasMany(() => Note, 'group_key'),
+      topNote: hasOne(() => Note, 'group_key'),
+    } })
+    const expectFresh = await subscribeAll({
+      many: () => db.model(Parent).query().with('notes').orderBy('id').getJson(),
+      top: () => db.model(Parent).query().with('topNote', query => query.orderBy('score', 'desc')).orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(groups).insert([{ id: 3, rank: 30, name: 'third' }, { id: 4, rank: 40, name: 'fourth' }]))
     await expectFresh()
   })
 })
