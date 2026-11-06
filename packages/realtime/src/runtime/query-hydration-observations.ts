@@ -81,29 +81,59 @@ function isRelatedHydrationChild(
   return owner.relatedHydrations?.some(hydration => hydration.relationKey === path[base.length + 1]) === true
 }
 
+function foreignKeyPredicateIndex(query: DatabaseQueryObservation, hydration: DatabaseQueryRelatedHydrationObservation): number {
+  return query.predicates.findIndex(predicate => predicate.column === hydration.foreignKey && predicate.operator === '=')
+}
+
+function foreignKeyDependency(hydration: DatabaseQueryRelatedHydrationObservation, value: unknown, textMatchesAnyNumber: boolean): string | undefined {
+  return queryCacheInternals.createTablePredicateCacheDependency(hydration.relatedConnectionName, hydration.relatedTableName, hydration.foreignKey, value, textMatchesAnyNumber)
+}
+
 function createRelatedHydrationObservation(
   hydration: DatabaseQueryRelatedHydrationObservation,
+  template: DatabaseQueryObservation | undefined,
   localKey: unknown,
   related: unknown,
   resultPath: readonly RealtimePatchPathSegment[],
 ): DatabaseQueryObservation {
-  const dependency = queryCacheInternals.createTablePredicateCacheDependency(hydration.relatedConnectionName, hydration.relatedTableName, hydration.foreignKey, localKey, true)
+  const dependency = foreignKeyDependency(hydration, localKey, true)
   const tableDependency = queryCacheInternals.createTableCacheDependency(hydration.relatedConnectionName, hydration.relatedTableName)
-  return Object.freeze({
-    connectionName: hydration.relatedConnectionName,
-    dependencies: Object.freeze(dependency ? [tableDependency, dependency] : [tableDependency]),
-    orderBy: hydration.orderBy,
-    patchable: hydration.primaryKey !== undefined,
-    predicates: Object.freeze([...hydration.predicates, Object.freeze({ column: hydration.foreignKey, operator: '=' as const, value: localKey })]),
-    primaryKey: hydration.primaryKey,
+  const predicateIndex = template ? foreignKeyPredicateIndex(template, hydration) : -1
+  if (!template || predicateIndex < 0) {
+    return Object.freeze({
+      connectionName: hydration.relatedConnectionName,
+      dependencies: Object.freeze(dependency ? [tableDependency, dependency] : [tableDependency]),
+      orderBy: hydration.orderBy,
+      patchable: false,
+      predicates: Object.freeze([...hydration.predicates, Object.freeze({ column: hydration.foreignKey, operator: '=' as const, value: localKey })]),
+      primaryKey: hydration.primaryKey,
+      result: related,
+      resultBound: true,
+      resultPath,
+      selections: [],
+      table: hydration.relatedTable,
+      tableName: hydration.relatedTableName,
+    })
+  }
+  const templateValue = template.predicates[predicateIndex]!.value
+  const staleDependencies = new Set([foreignKeyDependency(hydration, templateValue, true), foreignKeyDependency(hydration, templateValue, false)])
+  const observation: DatabaseQueryObservation = {
+    ...template,
+    dependencies: Object.freeze([...new Set([...template.dependencies.filter(entry => !staleDependencies.has(entry)), ...dependency ? [dependency] : []])]),
+    exactId: undefined,
+    patchPlan: undefined,
+    predicates: Object.freeze(template.predicates.map((predicate, index) => index === predicateIndex ? Object.freeze({ ...predicate, value: localKey }) : predicate)),
     result: related,
-    resultBound: true,
     resultPath,
-    selections: [],
-    table: hydration.relatedTable,
-    tableName: hydration.relatedTableName,
-    ...hydration.kind === 'hasOne' ? { emptyRecordValue: null, limit: 1, rowWindowMode: 'single' as const } : {},
-  })
+    resultPathKey: undefined,
+    rowBackfillKeyPrefix: undefined,
+    rowIdentityIndex: undefined,
+  }
+  return createPatchedQueryObservation(observation, related, readPatchPathKey(observation))
+}
+
+function relatedHydrationTemplateKey(base: readonly unknown[], relationKey: unknown): string {
+  return JSON.stringify([base, relationKey])
 }
 
 export function rebindRelatedHydrationObservations(
@@ -117,9 +147,15 @@ export function rebindRelatedHydrationObservations(
   })
   if (owners.length === 0) return queries
   const children = new Map<string, DatabaseQueryObservation>()
+  const templates = new Map<string, DatabaseQueryObservation>()
   const next = queries.filter((query) => {
-    if (!owners.some(owner => isRelatedHydrationChild(query, owner))) return true
-    children.set(JSON.stringify(query.resultPath), query)
+    const owner = owners.find(candidate => isRelatedHydrationChild(query, candidate))
+    if (!owner) return true
+    const path = query.resultPath ?? EMPTY_RESULT_PATH
+    const hydration = owner.relatedHydrations?.find(candidate => candidate.relationKey === path.at(-1))
+    const templateKey = relatedHydrationTemplateKey(path.slice(0, -2), path.at(-1))
+    if (hydration && !templates.has(templateKey) && foreignKeyPredicateIndex(query, hydration) >= 0) templates.set(templateKey, query)
+    children.set(JSON.stringify(path), query)
     return false
   })
   let changed = false
@@ -140,7 +176,10 @@ export function rebindRelatedHydrationObservations(
           continue
         }
         changed = true
-        next.push(createRelatedHydrationObservation(hydration, localKey, related, resultPath))
+        const template = existing && foreignKeyPredicateIndex(existing, hydration) >= 0
+          ? existing
+          : templates.get(relatedHydrationTemplateKey(base, hydration.relationKey))
+        next.push(createRelatedHydrationObservation(hydration, template, localKey, related, resultPath))
       }
     }
   }

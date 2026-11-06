@@ -204,6 +204,29 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await expectFresh(false)
   })
 
+  it('keeps cast and projected eager-loaded hasMany rows equal to a fresh read after a rebind', async () => {
+    const { db, items, Parent } = await openFixture(variant)
+    const expectFresh = await subscribeAll(variant, {
+      casted: () => db.model(Parent).query()
+        .with('items', query => query.orderBy('id'))
+        .with('firstItem', query => query.orderBy('id').withCasts({ secret: { get: value => `cast:${String(value)}` } }))
+        .orderBy('id')
+        .getJson(),
+      projected: () => db.model(Parent).query()
+        .with('items', query => query.select('id', 'owner_id', 'big').orderBy('id'))
+        .with('firstItem', query => query.orderBy('id'))
+        .orderBy('id')
+        .getJson(),
+    })
+
+    await mutate(() => db.table(items).where('id', 2).update({ big: 41 }))
+    await expectFresh(false)
+    await mutate(() => db.table(items).where('id', 1).update({ secret: 'changed' }))
+    await expectFresh(false)
+    await mutate(() => db.table(items).where('id', 3).update({ big: 51, secret: 'other' }))
+    await expectFresh(false)
+  })
+
   it('keeps eager-loaded belongsToMany rows equal to a fresh read', async () => {
     const { db, owners, tags, ownerTags, Parent } = await openFixture(variant)
     const expectFresh = await subscribeAll(variant, {
