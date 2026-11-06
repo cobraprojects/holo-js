@@ -28,7 +28,7 @@ describe('model rows read as stored', () => {
 
   it('treats untyped models with timestamps as converted', () => {
     expect(readsRowsAsStored(defineModel('stored_untyped_notes', { connectionName: 'stored_untyped' }))).toBe(false)
-    expect(readsRowsAsStored(defineModel('stored_untyped_plain_notes', { connectionName: 'stored_untyped', timestamps: false }))).toBe(true)
+    expect(readsRowsAsStored(defineModel('stored_untyped_plain_notes', { connectionName: 'stored_untyped', timestamps: false, primaryKey: 'uuid' }))).toBe(true)
     expect(readsRowsAsStored(defineModel('stored_untyped_cast_notes', { connectionName: 'stored_untyped', timestamps: false, casts: { secret: { get: value => `masked:${String(value)}` } } }))).toBe(false)
   })
 
@@ -58,5 +58,33 @@ describe('model rows read as stored', () => {
 
     expect(await db.model(Note).query().orderBy('id').pluck('body')).toEqual(['cast:a', 'cast:b'])
     expect(reads).toBe(2)
+  })
+
+  it('constructs an observer class at most once to look for a retrieved handler', () => {
+    let constructed = 0
+    class CountingObserver {
+      constructor() {
+        constructed += 1
+      }
+
+      retrieved() {
+        return undefined
+      }
+    }
+    const notes = defineGeneratedTable('stored_observed_notes', { id: column.id(), body: column.string() })
+    const Note = defineModel(notes, { timestamps: false, observers: [CountingObserver] })
+    const repository = ModelRepository.from(Note)
+
+    expect(repository.serializesBeyondRows()).toBe(true)
+    expect(repository.serializesBeyondRows()).toBe(true)
+    expect(constructed).toBeLessThanOrEqual(1)
+  })
+
+  it('normalizes untyped incrementing keys in realtime row reads', () => {
+    const Note = defineModel('stored_untyped_keyed_notes', { connectionName: 'stored_untyped', timestamps: false })
+    const repository = ModelRepository.from(Note)
+
+    expect(repository.readsRowsAsStored()).toBe(false)
+    expect(repository.rowReader()?.({ id: '1', body: 'a' })).toEqual({ id: 1, body: 'a' })
   })
 })

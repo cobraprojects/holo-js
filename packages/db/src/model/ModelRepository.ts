@@ -2704,9 +2704,9 @@ export class ModelRepository<
 
   readsKeysAsStored(keys: Iterable<string>): boolean {
     for (const key of keys) {
-      if (!this.valueTransformer.readsColumnAsStored(key)) return false
+      if (!this.valueTransformer.readsKeyAsStored(key)) return false
     }
-    return this.valueTransformer.readsColumnAsStored(this.definition.primaryKey)
+    return this.valueTransformer.readsKeyAsStored(this.definition.primaryKey)
   }
 
   comparesObservationWithStoredValues(observation: DatabaseQueryObservation): boolean {
@@ -3967,6 +3967,9 @@ export class ModelRepository<
   ): Entity {
     const relatedRepository = entity.getRepository() as ModelRepository
     const cloned = new Entity(relatedRepository, { ...entity.toAttributes() }, true)
+    for (const [name, value] of Object.entries(entity.getLoadedRelations())) {
+      cloned.setRelation(name, value)
+    }
     cloned.setRelation(relation.pivotAccessor, this.extractPivotAttributes(row, relation))
     return cloned
   }

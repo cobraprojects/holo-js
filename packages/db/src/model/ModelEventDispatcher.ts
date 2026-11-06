@@ -6,6 +6,28 @@ import { areModelEventsMuted } from './eventState'
 import { listModelObservers } from './modelObservers'
 import type { ModelDefinition, ModelLifecycleEventName } from './types'
 
+const observerClassHandlers = new WeakMap<object, ReadonlySet<string>>()
+
+function observerHandles(observer: unknown, eventName: string): boolean {
+  if (typeof observer !== 'function') {
+    return typeof (observer as Record<string, unknown> | null)?.[eventName] === 'function'
+  }
+
+  let handlers = observerClassHandlers.get(observer)
+  if (!handlers) {
+    const instance = new (observer as new () => Record<string, unknown>)()
+    const names = new Set<string>()
+    for (let target: object | null = instance; target && target !== Object.prototype; target = Object.getPrototypeOf(target)) {
+      for (const name of Object.getOwnPropertyNames(target)) {
+        if (name !== 'constructor' && typeof instance[name] === 'function') names.add(name)
+      }
+    }
+    handlers = names
+    observerClassHandlers.set(observer, handlers)
+  }
+  return handlers.has(eventName)
+}
+
 export class ModelEventDispatcher<TTable extends TableDefinition> {
   constructor(
     private readonly definition: ModelDefinition<TTable>,
@@ -53,7 +75,9 @@ export class ModelEventDispatcher<TTable extends TableDefinition> {
   }
 
   hasHandlers(eventName: ModelLifecycleEventName): boolean {
-    return this.resolveHandlers(eventName).length > 0
+    const handlers = this.definition.events[eventName]
+    if (handlers && handlers.length > 0) return true
+    return listModelObservers(this.definition).some(observer => observerHandles(observer, eventName))
   }
 
   private resolveHandlers(eventName: ModelLifecycleEventName): readonly ((...args: unknown[]) => unknown)[] {

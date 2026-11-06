@@ -244,7 +244,7 @@ async function deliverPatchedQueryEntry(
       )
     }
     rebindSiblingObservations(entry, data, key => key === pathKey)
-    syncAncestorTargets(entry, data, [firstPatchIndex], [path])
+    syncAncestorTargets(entry, data, [path])
     await deliverPatchedQueryData(
       entry,
       data,
@@ -306,7 +306,7 @@ async function deliverPatchedQueryEntry(
       )
     }
     rebindSiblingObservations(entry, data, key => key === firstPathKey || key === secondPathKey)
-    syncAncestorTargets(entry, data, [firstPatchIndex, secondPatch.index], [firstPath, secondPath])
+    syncAncestorTargets(entry, data, [firstPath, secondPath])
     await deliverPatchedQueryData(
       entry,
       data,
@@ -407,7 +407,6 @@ async function deliverPatchedQueryEntry(
   syncAncestorTargets(
     entry,
     data,
-    [firstPatchIndex, ...additionalPatches.map(patch => patch.index)],
     [firstPatch, ...additionalPatches].map(patch => (patch.nextQuery ?? patch.query).resultPath ?? EMPTY_RESULT_PATH),
   )
 
@@ -600,13 +599,12 @@ function isStrictAncestorPath(ancestor: readonly unknown[], path: readonly unkno
 function syncAncestorTargets(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   data: unknown,
-  patchedIndexes: readonly number[],
   patchedPaths: readonly (readonly unknown[])[],
 ): void {
   for (let index = 0; index < entry.patchTargets.length; index += 1) {
     const query = entry.queries[index]
     const target = entry.patchTargets[index]
-    if (!query || !target || patchedIndexes.includes(index)) continue
+    if (!query || !target) continue
     const path = query.resultPath ?? EMPTY_RESULT_PATH
     if (!patchedPaths.some(patchedPath => isStrictAncestorPath(path, patchedPath))) continue
     if (query.resultBound !== true) {

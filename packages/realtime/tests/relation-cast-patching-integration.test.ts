@@ -322,6 +322,22 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await expectFresh(false)
   })
 
+  it('patches children of the first parent added to an empty result', async () => {
+    const { db, owners, items, ownerTags, Parent } = await openFixture(variant)
+    await db.table(ownerTags).delete()
+    await db.table(items).delete()
+    await db.table(owners).delete()
+    const expectFresh = await subscribeAll(variant, {
+      many: () => db.model(Parent).query().with('items', query => query.orderBy('id')).orderBy('id').getJson(),
+      one: () => db.model(Parent).query().with('firstItem', query => query.orderBy('id')).orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(owners).insert({ id: 4, ...rowValues(variant, 23) }))
+    await expectFresh()
+    await mutate(() => db.table(items).insert({ id: 10, owner_id: 4, ...rowValues(variant, 24) }))
+    await expectFresh()
+  })
+
   it('keeps eager-loaded belongsToMany rows equal to a fresh read', async () => {
     const { db, owners, tags, ownerTags, Parent } = await openFixture(variant)
     const expectFresh = await subscribeAll(variant, {
@@ -550,6 +566,29 @@ describe.each(drivers)('realtime patches through models with different casts on 
     })
 
     await mutate(() => db.table(items).where('id', 'in', [1, 3]).delete())
+    await expectFresh(false)
+  })
+
+  it('keeps a belongsTo through a decimal foreign key equal to a fresh read', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, schema, owners } = await openFixture(variant)
+    const name = `holo_cast_refs_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.decimal('owner_ref')
+    })
+    onTestFinished(() => schema.dropTable(name))
+    const refs = defineGeneratedTable(name, { id: column.id(), owner_ref: column.decimal() })
+    await db.table(refs).insert({ id: 1, owner_ref: '1.00' })
+    const Owner = defineModel(owners, { timestamps: false })
+    const Ref = defineModel(refs, { timestamps: false, relations: { owner: belongsTo(() => Owner, 'owner_ref') } })
+    const Plain = defineModel(refs, { timestamps: false })
+    const expectFresh = await subscribeAll(variant, {
+      refs: () => db.model(Ref).query().with('owner').orderBy('id').getJson(),
+      plain: () => db.model(Plain).query().orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(refs).where('id', 1).update({ owner_ref: '2.00' }))
     await expectFresh(false)
   })
 

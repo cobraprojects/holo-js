@@ -107,7 +107,7 @@ function createRelatedHydrationObservation(
       connectionName: hydration.relatedConnectionName,
       dependencies: Object.freeze(dependency ? [tableDependency, dependency] : [tableDependency]),
       orderBy: hydration.orderBy,
-      patchable: false,
+      patchable: !template && hydration.primaryKey !== undefined,
       predicates: Object.freeze([...hydration.predicates, Object.freeze({ column: hydration.foreignKey, operator: '=' as const, value: localKey })]),
       primaryKey: hydration.primaryKey,
       ...hydration.readRow ? { readRow: hydration.readRow } : {},
@@ -117,6 +117,7 @@ function createRelatedHydrationObservation(
       selections: [],
       table: hydration.relatedTable,
       tableName: hydration.relatedTableName,
+      ...hydration.kind === 'hasOne' ? { emptyRecordValue: null, limit: 1, rowWindowMode: 'single' as const } : {},
     })
   }
   const templateValue = template.predicates[predicateIndex]!.value
@@ -206,7 +207,7 @@ function reusesRelatedHydrationChild(
 function isBelongsToManyRelatedSide(query: DatabaseQueryObservation): boolean {
   return query.relation?.kind === 'belongsToMany'
     && query.connectionName === query.relation.relatedConnectionName
-    && query.tableName === query.relation.relatedTableName
+    && queryCacheInternals.canonicalTableName(query.connectionName, query.tableName) === queryCacheInternals.canonicalTableName(query.connectionName, query.relation.relatedTableName)
 }
 
 function sameValues(left: readonly unknown[], right: readonly unknown[]): boolean {

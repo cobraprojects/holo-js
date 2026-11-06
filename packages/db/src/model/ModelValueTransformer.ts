@@ -191,6 +191,10 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return this.resolveCast(key) === undefined && !(column && isConvertedByModelReads(column))
   }
 
+  readsKeyAsStored(key: string): boolean {
+    return this.readsColumnAsStored(key) && ownEntry(this.definition.table.columns, key)?.kind !== 'decimal'
+  }
+
   comparesWithStoredValues(key: string): boolean {
     const cast = this.resolveCast(key)
     const column = ownEntry(this.definition.table.columns, key)
@@ -209,6 +213,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   readsRowsAsStored(): boolean {
+    if (this.isUntypedIncrementingKey(this.definition.primaryKey)) return false
     const { casts, createdAtColumn, updatedAtColumn, deletedAtColumn, table } = this.definition
     const keys = new Set([...Object.keys(table.columns), ...Object.keys(casts), ...[createdAtColumn, updatedAtColumn, deletedAtColumn].filter(key => key !== undefined)])
     return [...keys].every((key) => {
