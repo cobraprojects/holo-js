@@ -2958,7 +2958,7 @@ export class TableQueryBuilder<
     }
 
     await this.invalidateInsertQueries('insert', result.rows?.rows ?? rows, result.lastInsertId, {
-      canReadRows,
+      canReadRows: canReadRows && (captureReturningRows || result.affectedRows === rows.length),
       rowsAreWritten: !captureReturningRows,
     })
     return insertResult
@@ -3418,16 +3418,19 @@ export class TableQueryBuilder<
   ): Promise<readonly Readonly<Record<string, unknown>>[] | undefined> {
     const keys = this.resolveRowKeyColumns()
     if (keys.length === 0 || rows.some(row => keys.some(key => row[key] == null))) return undefined
-    const query = keys.reduce(
-      (current, key) => current.whereIn(key, [...new Set(rows.map(row => row[key]))]),
-      new TableQueryBuilder<string, Record<string, unknown>>(this.source.tableName, this.connection),
-    )
-    const result = await this.connection.queryCompiled(this.getCompiler().compile(query.getPlan())).catch(() => undefined)
-    if (!result) return undefined
     const keyOf = (row: Readonly<Record<string, unknown>>) => {
       const readRow = readIntegerColumns(this.resolveSourceTable(), row)
       return JSON.stringify(keys.map(key => readRow[key] instanceof Uint8Array ? `bytes:${Buffer.from(readRow[key]).toString('hex')}` : `text:${String(readRow[key])}`))
     }
+    const source = new TableQueryBuilder<string, Record<string, unknown>>(this.source.tableName, this.connection)
+    const query = keys.length === 1
+      ? source.whereIn(keys[0]!, [...new Set(rows.map(row => row[keys[0]!]))])
+      : source.where(group => [...new Map(rows.map(row => [keyOf(row), row])).values()].reduce(
+          (current, row) => current.orWhere(match => keys.reduce((pair, key) => pair.where(key, row[key]), match)),
+          group,
+        ))
+    const result = await this.connection.queryCompiled(this.getCompiler().compile(query.getPlan())).catch(() => undefined)
+    if (!result) return undefined
     const rowsByKey = new Map(result.rows.map(row => [keyOf(row), row]))
     const readRows = rows.map(row => rowsByKey.get(keyOf(row)))
     return readRows.every(row => row !== undefined) ? Object.freeze(readRows.map(row => Object.freeze({ ...row }))) : undefined
@@ -3591,10 +3594,8 @@ export class TableQueryBuilder<
           [primaryKey]: lastInsertId,
         })])
       : rows
-    const hasWrittenDecimals = hasInvalidationListeners
-      && options.rowsAreWritten === true
-      && this.writesDecimalColumn(rows.flatMap(row => Object.keys(row)))
-    const databaseRows = !hasWrittenDecimals
+    const needsStoredRows = hasInvalidationListeners && options.rowsAreWritten === true
+    const databaseRows = !needsStoredRows
       ? keyedRows
       : options.canReadRows ? await this.readWrittenRows(keyedRows) : undefined
     const dependencyRows = databaseRows ?? keyedRows.map(row => this.withoutDecimalColumns(row))
