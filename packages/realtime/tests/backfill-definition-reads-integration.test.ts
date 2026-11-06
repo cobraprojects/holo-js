@@ -145,6 +145,7 @@ describe.each(drivers)('realtime backfills over tables outside the generated reg
     const expectFresh = await subscribeAll({
       first: () => db.model(Post).query().where('group_id', 1).orderBy('score').offset(1).limit(1).getJson(),
       second: () => db.model(Post).query().where('group_id', 2).orderBy('score').offset(1).limit(1).getJson(),
+      firstByText: () => db.model(Post).query().where('group_id', '1').orderBy('score').offset(1).limit(1).getJson(),
     })
 
     statements.length = 0

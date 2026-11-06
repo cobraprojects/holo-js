@@ -7,6 +7,7 @@ import {
 import {
   getBackfillDatabaseConnection,
   readBackfilledRows,
+  readBackfilledValue,
 } from './query-backfill'
 import type {
   BackfillCache,
@@ -170,7 +171,7 @@ async function fetchGroupedBelongsToRelatedValue(
     return undefined
   }
 
-  return rowsByForeignKey.get(foreignKey)?.[0] ?? null
+  return rowsByForeignKey.get(readBackfilledValue(target.relatedTable, target.ownerKey, foreignKey))?.[0] ?? null
 }
 
 function collectBelongsToForeignKeys(
@@ -222,11 +223,12 @@ async function fetchGroupedBelongsToRelatedRows(
     .where(target.ownerKey, 'in', values)
     .get())
 
-  const requestedValues = new Set(values)
+  const readKey = (value: unknown) => readBackfilledValue(target.relatedTable, target.ownerKey, value)
+  const requestedKeys = new Set(values.map(readKey))
   const rowsByForeignKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
     const ownerKey = row[target.ownerKey]
-    if (typeof ownerKey === 'undefined' || !requestedValues.has(ownerKey)) {
+    if (typeof ownerKey === 'undefined' || !requestedKeys.has(ownerKey)) {
       return undefined
     }
 
@@ -237,7 +239,7 @@ async function fetchGroupedBelongsToRelatedRows(
 
   const result = new Map<unknown, readonly Readonly<Record<string, unknown>>[]>()
   for (const value of values) {
-    result.set(value, Object.freeze(rowsByForeignKey.get(value) ?? []))
+    result.set(readKey(value), Object.freeze(rowsByForeignKey.get(readKey(value)) ?? []))
   }
 
   return result
