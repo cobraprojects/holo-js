@@ -2676,7 +2676,9 @@ export class ModelRepository<
   }
 
   serializesBeyondRows(): boolean {
-    return modelSerializesBeyondRows(this.definition) || this.eventDispatcher.hasHandlers('retrieved')
+    return modelSerializesBeyondRows(this.definition)
+      || this.definition.collection !== undefined
+      || this.eventDispatcher.hasHandlers('retrieved')
   }
 
   rowReader(): DatabaseQueryRowReader | undefined {

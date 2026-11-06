@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, hasOne, serializeModels, type ModelCastDefinition } from '@holo-js/db'
+import { belongsTo, belongsToMany, column, createModelCollection, defineGeneratedTable, defineModel, hasMany, hasOne, serializeModels, type ModelCastDefinition } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -465,6 +465,21 @@ describe.each(drivers)('realtime patches through models with different casts on 
     })
 
     await mutate(() => db.table(items).where('id', 2).update({ secret: 'new private' }))
+    await expectFresh(false)
+  })
+
+  it('keeps rows shaped by a custom collection equal to a fresh read', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, items } = await openFixture(variant)
+    const Redacted = defineModel(items, { timestamps: false, casts: { secret: 'string' }, collection: (entities) => {
+      const collection = createModelCollection(entities)
+      return Object.assign(collection, { toJSON: () => entities.map(entity => ({ ...entity.toJSON(), secret: 'redacted' })) })
+    } })
+    const expectFresh = await subscribeAll(variant, {
+      redacted: () => db.model(Redacted).query().orderBy('id').get(),
+    })
+
+    await mutate(() => db.table(items).insert({ id: 9, owner_id: 1, ...rowValues(variant, 22) }))
     await expectFresh(false)
   })
 
