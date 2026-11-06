@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { CompilerError, DB, clearGeneratedTables, column, defineModel, defineGeneratedTable, registerGeneratedTables, resetDB } from '../src'
-import { integrationDrivers, openDatabase } from './support/database'
+import { integrationDrivers, mysqlTestConnection, openDatabase } from './support/database'
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'])
 
@@ -381,6 +381,24 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const rawPage = await raw.cursorPaginate(1)
     const rawNext = await raw.cursorPaginate(1, rawPage.nextCursor)
     expect([rawPage, rawNext].map(result => result.data.map(row => Number(row.product_key)))).toEqual([[1], [2]])
+  })
+
+  it('reads a cursor from a joined column selected under another qualifier of the same table', async () => {
+    const { products, orders } = await createFixture(driver)
+    const schemaName = driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : mysqlTestConnection().database
+
+    const query = DB.table(products).join(`${schemaName}.${orders}`, `${orders}.product_id`, '=', `${products}.id`).select(`${products}.id`, `${orders}.price`).orderBy(`${schemaName}.${orders}.price`)
+    const first = await query.cursorPaginate(1)
+    const second = await query.cursorPaginate(1, first.nextCursor)
+    expect([first, second].map(page => page.data.map(row => Number(row.price)))).toEqual([[100], [200]])
+  })
+
+  it('unions joined model queries that select the same model columns in different notation', async () => {
+    const { products, orders, joined } = await createFixture(driver)
+
+    const union = joined().select(`${products}.*`).where(`${orders}.id`, 101)
+      .union(joined().select(`${products}.id`, `${products}.price`, `${products}.parent_id`, `${products}.factor`).where(`${orders}.id`, 102))
+    expect((await union.get()).map(entity => Number(entity.toAttributes().id)).sort()).toEqual([1, 2])
   })
 
   it('shows the projected SQL that a joined model query runs', async () => {

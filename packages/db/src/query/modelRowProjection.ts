@@ -40,6 +40,25 @@ export function resolveSourceColumnName(source: Pick<QuerySource, 'tableName' | 
   return qualifiesTable(column.slice(0, separator), source.tableName, source.alias) ? column.slice(separator + 1) : undefined
 }
 
+function splitColumn(column: string): { readonly qualifier: string, readonly name: string } {
+  const separator = column.lastIndexOf('.')
+  return { qualifier: column.slice(0, separator), name: column.slice(separator + 1) }
+}
+
+export function selectsJoinedColumn(plan: SelectQueryPlan, column: string): boolean {
+  if (plan.selections.length === 0) return true
+  const target = splitColumn(column)
+  const join = plan.joins.find(candidate => qualifiesTable(target.qualifier, candidate.table, candidate.alias))
+  return plan.selections.some((selection) => {
+    if (selection.kind !== 'column' || selection.alias) return false
+    if (selection.column === '*' || selection.column === column) return true
+    const selected = splitColumn(selection.column)
+    return join !== undefined
+      && [target.name, '*'].includes(selected.name)
+      && plan.joins.find(candidate => qualifiesTable(selected.qualifier, candidate.table, candidate.alias)) === join
+  })
+}
+
 function columnOutputName(selection: QueryColumnSelection): string {
   return selection.alias ?? selection.column.slice(selection.column.lastIndexOf('.') + 1)
 }
@@ -190,7 +209,13 @@ export function projectModelRowPlan(plan: SelectQueryPlan, driver: string, joine
     return Object.freeze({ ...plan, orderBy: qualifyModelOrders(plan, modelColumns, driver), selections: protectModelColumns(plan, expandSelections(plan, driver), modelColumns, joinedColumns, driver) })
   }
 
-  const roles = branches.map(branch => protectModelColumns(branch, expandSelections(branch, driver), modelColumns, joinedColumns, driver).map(selection => selectionRole(branch.source, selection)).join())
+  const projectedRoles = (branch: SelectQueryPlan) => protectModelColumns(branch, expandSelections(branch, driver), modelColumns, joinedColumns, driver).flatMap((selection) => {
+    const role = selectionRole(branch.source, selection)
+    if (selection.kind !== 'column' || !selection.column.endsWith('.*')) return [role]
+    const columns = role === 'own' ? (modelColumns.length > 0 ? modelColumns : undefined) : wildcardColumns(branch, selection.column, joinedColumns)
+    return columns ? columns.map(() => role) : [`${role}*`]
+  })
+  const roles = branches.map(branch => projectedRoles(branch).join())
   if (roles.some(role => role !== roles[0])) {
     throw new CompilerError(`Cannot combine a joined "${plan.source.tableName}" model query with a union whose selections don't line up with its own. Select the same tables' columns in the same order in each query.`)
   }

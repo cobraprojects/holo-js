@@ -100,7 +100,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, tableWildcard } from './modelRowProjection'
+import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
 import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
@@ -3836,9 +3836,7 @@ export class TableQueryBuilder<
     if (column in row) {
       return row[column]
     }
-    const qualifier = column.slice(0, column.lastIndexOf('.'))
-    const selectsJoinedColumn = selections.length === 0 || selections.some(selection => selection.kind === 'column' && !selection.alias && [column, `${qualifier}.*`].includes(selection.column))
-    if (typeof sourceColumn === 'undefined' && !selectsJoinedColumn) return undefined
+    if (typeof sourceColumn === 'undefined' && !selectsJoinedColumn(this.plan, column)) return undefined
 
     return row[column.split('.').at(-1)!]
   }

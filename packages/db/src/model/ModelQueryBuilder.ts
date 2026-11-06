@@ -27,7 +27,7 @@ import {
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
 import { projectModelRows, resolveAggregateSource, TableQueryBuilder } from '../query/TableQueryBuilder'
-import { knownJoinedColumns, resolveSourceColumnName, selectionOutputName } from '../query/modelRowProjection'
+import { knownJoinedColumns, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn } from '../query/modelRowProjection'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
@@ -211,12 +211,9 @@ class ModelQueryBuilderBase<
   } {
     const plan = this.tableQuery.getPlan()
     const aliasedColumns = new Set(plan.selections.flatMap(selection => selection.kind === 'column' && selection.alias ? [selection.column] : []))
-    const selectsTableOf = (column: string) => plan.selections.length === 0
-      || plan.selections.some(selection => selection.kind === 'column' && !selection.alias
-        && [column, '*', `${column.slice(0, column.lastIndexOf('.'))}.*`].includes(selection.column))
     const joinedOrders = plan.joins.length === 0
       ? []
-      : plan.orderBy.flatMap(order => order.kind === 'column' && typeof resolveSourceColumnName(plan.source, order.column) === 'undefined' && !aliasedColumns.has(order.column) && selectsTableOf(order.column) ? [order.column] : [])
+      : plan.orderBy.flatMap(order => order.kind === 'column' && typeof resolveSourceColumnName(plan.source, order.column) === 'undefined' && !aliasedColumns.has(order.column) && selectsJoinedColumn(plan, order.column) ? [order.column] : [])
     if (joinedOrders.length === 0) return { query: this, cursorColumns: [] }
     if (plan.distinct || plan.groupBy.length > 0) {
       throw new CompilerError(`Cannot cursor paginate a distinct or grouped joined "${plan.source.tableName}" model query by "${joinedOrders[0]}". Select it under an alias and order by that alias.`)
