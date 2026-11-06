@@ -2780,14 +2780,14 @@ export class ModelRepository<
     const existenceQuery = (repository: ModelRepository, alias = aliasFor(repository)) => {
       const query = this.applyRelationConstraint(relation, repository, constraint, alias).getTableQueryBuilder()
       if (alias === undefined) return query
-      if (query.getPlan().source.alias !== undefined) return requalifyTableSource(query)
+      if (query.getPlan().source.alias !== undefined) return requalifyTableSource(query, this.definition.table.tableName)
       const bound = boundTableNames(query.getPlan())
       let unused = alias
       for (let reserved = 2; bound.has(unused); reserved += 2) unused = this.selfRelationAlias(parentAlias, reserved)
-      return requalifyTableSource(aliasTableSource(query, unused))
+      return requalifyTableSource(aliasTableSource(query, unused), this.definition.table.tableName)
     }
     const pivotQuery = <TQuery extends TableQueryBuilder<string | TableDefinition>>(query: TQuery) => sameTable(query.getTableName(), this.definition.table.tableName)
-      ? requalifyTableSource(aliasTableSource(query, this.selfRelationAlias(parentAlias, 1)))
+      ? requalifyTableSource(aliasTableSource(query, this.selfRelationAlias(parentAlias, 1)), this.definition.table.tableName)
       : query
 
     switch (relation.kind) {

@@ -472,4 +472,14 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(expected).toEqual([1])
     expect(filtered.map(id)).toEqual(expected)
   })
+
+  it('reads short and schema-qualified spellings of the related table from the related row when both models spell it alike', async () => {
+    const { Category, QualifiedTree, table, schemaName } = await openSelfFixtures(driver)
+
+    const shortOnQualified = await QualifiedTree.whereHas('children', query => query.where(`${table}.name` as never, 'branch')).orderBy('id').get() as unknown as Category[]
+    const qualifiedOnShort = await Category.whereHas('children', query => query.where(`${schemaName}.${table}.name`, 'branch')).orderBy('id').get() as unknown as Category[]
+
+    expect(shortOnQualified.map(id)).toEqual([1])
+    expect(qualifiedOnShort.map(id)).toEqual([1])
+  })
 })
