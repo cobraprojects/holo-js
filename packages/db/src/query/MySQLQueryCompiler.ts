@@ -2,6 +2,7 @@ import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { SQLQueryCompiler } from './SQLQueryCompiler'
 import { splitTablePath } from '../schema/identifiers'
 import type { CompiledStatement } from '../core/types'
+import type { TableNameFolding } from '../schema/tableIdentityRegistry'
 import { formatWallClockSeconds } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type { DeleteQueryPlan, InsertStatementOptions, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
@@ -9,11 +10,21 @@ import type { DeleteQueryPlan, InsertStatementOptions, QueryFullTextPredicate, Q
 export class MySQLQueryCompiler extends SQLQueryCompiler {
   override compileTableIdentityLookup(tableName: string): CompiledStatement {
     const { schema, table } = splitTablePath(tableName)
+    const schemaLiteral = schema === undefined ? 'NULL' : compileMySQLStringLiteral(schema)
+    const tableLiteral = compileMySQLStringLiteral(table)
     return {
-      sql: 'SELECT COALESCE(`tables`.`TABLE_SCHEMA`, ?, DATABASE()) AS `schema`, COALESCE(`tables`.`TABLE_NAME`, ?) AS `name`, DATABASE() AS `bare_schema` FROM (SELECT 1) AS `probe` LEFT JOIN information_schema.`TABLES` AS `tables` ON `tables`.`TABLE_SCHEMA` = COALESCE(?, DATABASE()) AND `tables`.`TABLE_NAME` = ?',
-      bindings: [schema ?? null, table, schema ?? null, table],
+      sql: `SELECT COALESCE(\`tables\`.\`TABLE_SCHEMA\`, ${schemaLiteral}, DATABASE()) AS \`schema\`, COALESCE(\`tables\`.\`TABLE_NAME\`, ${tableLiteral}) AS \`name\`, DATABASE() AS \`bare_schema\` FROM (SELECT 1) AS \`probe\` LEFT JOIN information_schema.\`TABLES\` AS \`tables\` ON \`tables\`.\`TABLE_SCHEMA\` = COALESCE(${schemaLiteral}, DATABASE()) AND \`tables\`.\`TABLE_NAME\` = ${tableLiteral}`,
+      bindings: [],
       source: `schema:introspect:tableIdentity:${tableName}`,
     }
+  }
+
+  override compileTableNameFoldingLookup(): CompiledStatement {
+    return { sql: 'SELECT @@lower_case_table_names AS `folding`', bindings: [], source: 'schema:introspect:tableNameFolding' }
+  }
+
+  override tableNameFolding(lookup?: Readonly<Record<string, unknown>>): TableNameFolding {
+    return Number(lookup?.folding ?? 0) === 0 ? 'none' : 'lower'
   }
 
   protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {

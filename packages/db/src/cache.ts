@@ -1422,6 +1422,24 @@ function createDatabaseDependencyInvalidationEvent(
   return Object.freeze(event)
 }
 
+function replacedTableIdentityDependencies(connection: DatabaseContext, identity: string): readonly string[] {
+  const tableKey = `${DATABASE_DEPENDENCY_PREFIX}${connection.getConnectionName()}:${identity}`
+  return [tableKey, `${tableKey}:row:*`]
+}
+
+export async function evictReplacedTableIdentity(
+  connection: DatabaseContext,
+  identity: string,
+): Promise<void> {
+  const bridge = getDatabaseQueryCacheBridge()
+  if (!bridge) return
+  try {
+    await runQueryCacheOperation(() => bridge.invalidateDependencies(replacedTableIdentityDependencies(connection, identity)))
+  } catch (error) {
+    reportError(error, { capability: 'db', operation: 'cache.invalidateDependencies' })
+  }
+}
+
 export async function invalidateReplacedTableIdentity(
   connection: DatabaseContext,
   identity: string,
@@ -1430,8 +1448,7 @@ export async function invalidateReplacedTableIdentity(
     return
   }
 
-  const tableKey = `${DATABASE_DEPENDENCY_PREFIX}${connection.getConnectionName()}:${identity}`
-  await invalidateQueryCacheDependencies(connection, [tableKey, `${tableKey}:row:*`])
+  await invalidateQueryCacheDependencies(connection, replacedTableIdentityDependencies(connection, identity))
 }
 
 export function normalizeQueryCacheDependencies(

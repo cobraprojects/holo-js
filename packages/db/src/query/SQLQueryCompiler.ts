@@ -7,6 +7,7 @@ import type { SchemaDialectName } from '../schema/typeMapping'
 import { isTrustedRawPredicate } from './trustedRawPredicate'
 import { quoteTablePath, splitTablePath } from '../schema/identifiers'
 import type { CompiledStatement, CompiledStatementMetadata } from '../core/types'
+import type { TableNameFolding } from '../schema/tableIdentityRegistry'
 import type {
   DeleteQueryPlan,
   QueryDatePredicate,
@@ -298,6 +299,14 @@ export class SQLQueryCompiler {
 
   compileTableIdentityLookup(_tableName: string): CompiledStatement | undefined {
     return undefined
+  }
+
+  compileTableNameFoldingLookup(): CompiledStatement | undefined {
+    return undefined
+  }
+
+  tableNameFolding(_lookup?: Readonly<Record<string, unknown>>): TableNameFolding {
+    return 'none'
   }
 
   truncateCommitsOpenTransaction(): boolean {

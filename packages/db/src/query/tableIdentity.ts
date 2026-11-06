@@ -3,10 +3,10 @@ import { currentRootTransaction } from '../core/openTransactions'
 import { currentSchemaGeneration } from '../core/schemaGeneration'
 import type { TransactionFrame } from '../core/openTransactions'
 import { createQueryCompiler } from './queryCompilerFactory'
-import { invalidateReplacedTableIdentity } from '../cache'
+import { evictReplacedTableIdentity, invalidateReplacedTableIdentity } from '../cache'
 import { splitTablePath, tablePathSegments } from '../schema/identifiers'
 import { listGeneratedTableSpellings } from '../schema/generated'
-import { rememberCanonicalTableName } from '../schema/tableIdentityRegistry'
+import { foldTableName, rememberCanonicalTableName, rememberTableNameFolding, type TableNameFolding } from '../schema/tableIdentityRegistry'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { SelectQueryPlan, QueryPredicateNode } from './ast'
 
@@ -16,12 +16,39 @@ type TableIdentityRow = {
   readonly bare_schema: string | null
 }
 
+type TableIdentityRefresh = {
+  readonly identity: string
+  readonly expired: readonly string[]
+}
+
 type TableIdentityEntry = {
   readonly generation: number
-  readonly identity: Promise<string>
+  readonly refresh: Promise<TableIdentityRefresh>
 }
 
 const resolvedIdentities = new WeakMap<object, Map<string, TableIdentityEntry>>()
+const tableNameFoldings = new WeakMap<object, Promise<TableNameFolding>>()
+
+async function readTableNameFolding(connection: DatabaseContext): Promise<TableNameFolding> {
+  const compiler = createQueryCompiler(connection)
+  const statement = compiler.compileTableNameFoldingLookup()
+  if (!statement) return compiler.tableNameFolding()
+  const { rows } = await connection.queryCompiled(statement)
+  return compiler.tableNameFolding(rows[0])
+}
+
+async function resolveTableNameFolding(connection: DatabaseContext): Promise<void> {
+  const owner = getRootDatabaseContext(connection)
+  const cached = tableNameFoldings.get(owner)
+  const folding = cached ?? readTableNameFolding(connection)
+  if (!cached) {
+    tableNameFoldings.set(owner, folding)
+    folding.catch(() => {
+      if (tableNameFoldings.get(owner) === folding) tableNameFoldings.delete(owner)
+    })
+  }
+  rememberTableNameFolding(connection.getConnectionName(), await folding)
+}
 
 function schemaChangingTransaction(connection: DatabaseContext): TransactionFrame | undefined {
   const frame = currentRootTransaction(connection)
@@ -43,42 +70,55 @@ function toCanonicalName(tableName: string, row: TableIdentityRow | undefined): 
 }
 
 async function lookupTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
+  if (splitTablePath(tableName).schema === undefined) return tableName
   const statement = createQueryCompiler(connection).compileTableIdentityLookup(tableName)
   if (!statement) return tableName
   const { rows } = await connection.queryCompiled<TableIdentityRow>(statement)
   return toCanonicalName(tableName, rows[0])
 }
 
+async function refreshTableIdentity(connection: DatabaseContext, tableName: string, replaced: readonly TableIdentityEntry[]): Promise<TableIdentityRefresh> {
+  const fold = (name: string) => foldTableName(connection.getConnectionName(), name)
+  const identity = fold(await lookupTableIdentity(connection, tableName))
+  if (replaced.length === 0) return { identity, expired: [] }
+  const replacedIdentities = await Promise.all(replaced.map(previous => previous.refresh.then(resolved => resolved.identity, () => identity)))
+  for (const expiredIdentity of new Set([...replacedIdentities, identity])) {
+    await evictReplacedTableIdentity(connection, expiredIdentity)
+  }
+  return { identity, expired: [...new Set(replacedIdentities.filter(replacedIdentity => replacedIdentity !== identity))] }
+}
+
 export async function resolveTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
-  if (splitTablePath(tableName).schema === undefined || tablePathSegments(tableName).length > 2) return tableName
+  if (tablePathSegments(tableName).length > 2) return tableName
+  await resolveTableNameFolding(connection)
   const transaction = schemaChangingTransaction(connection)
   const rootIdentities = ownerIdentities(getRootDatabaseContext(connection))
   const identities = transaction ? ownerIdentities(transaction) : rootIdentities
   const cached = identities.get(tableName)
-  const entry = cached?.generation === currentSchemaGeneration()
+  const generation = currentSchemaGeneration()
+  const replaced = [...new Set([cached, rootIdentities.get(tableName)])].filter((previous): previous is TableIdentityEntry => previous !== undefined)
+  const entry = cached?.generation === generation
     ? cached
-    : { generation: currentSchemaGeneration(), identity: lookupTableIdentity(connection, tableName) }
+    : { generation, refresh: refreshTableIdentity(connection, tableName, replaced) }
   if (entry !== cached) {
     identities.set(tableName, entry)
-    entry.identity.catch(() => {
-      if (identities.get(tableName) === entry) identities.delete(tableName)
+    entry.refresh.catch(() => {
+      if (identities.get(tableName) !== entry) return
+      if (cached) identities.set(tableName, cached)
+      else identities.delete(tableName)
     })
   }
-  const identity = await entry.identity
+  const { identity, expired } = await entry.refresh
   rememberCanonicalTableName(connection.getConnectionName(), tableName, identity, transaction)
-  const previousEntries = new Set([cached, rootIdentities.get(tableName)].filter((previous): previous is TableIdentityEntry => previous !== undefined && previous !== entry))
-  const replacedIdentities = new Set<string>()
-  for (const previous of previousEntries) {
-    const replaced = await previous.identity.catch(() => identity)
-    if (replaced !== identity) replacedIdentities.add(replaced)
-  }
-  for (const replaced of replacedIdentities) {
-    await invalidateReplacedTableIdentity(connection, replaced)
+  if (entry !== cached) {
+    for (const expiredIdentity of expired) {
+      await invalidateReplacedTableIdentity(connection, expiredIdentity)
+    }
   }
   return identity
 }
 
-async function resolveGeneratedTableIdentity(connection: DatabaseContext, tableName: string): Promise<void> {
+export async function resolveGeneratedTableIdentity(connection: DatabaseContext, tableName: string): Promise<void> {
   const spellings = listGeneratedTableSpellings(tableName)
   if (spellings.length === 0 || spellings.includes(tableName)) return
   await resolveTableIdentity(connection, tableName)

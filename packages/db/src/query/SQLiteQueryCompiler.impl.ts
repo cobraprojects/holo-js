@@ -2,6 +2,7 @@ import { SQLQueryCompiler } from './SQLQueryCompiler'
 import { compileSQLiteWallClock, formatSQLiteDateTime } from '../sqliteDateTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type { CompiledStatement } from '../core/types'
+import type { TableNameFolding } from '../schema/tableIdentityRegistry'
 import { CompilerError } from '../core/errors'
 import { splitTablePath } from '../schema/identifiers'
 import { sameIdentifier } from '../schema/introspection/sqliteTokens'
@@ -86,6 +87,10 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
       bindings: schema === undefined ? [table, table] : [table, table, schema],
       source: `schema:introspect:tableIdentity:${tableName}`,
     }
+  }
+
+  override tableNameFolding(): TableNameFolding {
+    return 'ascii'
   }
 
   private sqliteMetadataTable(tableName: string, metadataTable: string): { readonly schemaName: string, readonly metadataTable: string, readonly table: string } {

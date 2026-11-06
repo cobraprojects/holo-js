@@ -2,7 +2,7 @@ import { singularize } from 'inflection'
 import { SchemaError } from '../core/errors'
 import { TableDefinitionBuilder } from '../schema/TableDefinitionBuilder'
 import { splitTablePath } from '../schema/identifiers'
-import { getConnectionGeneratedTableDefinition, getGeneratedTableDefinition, isGeneratedSchemaConnection, isGeneratedSchemaSuspended } from '../schema/generated'
+import { isAwaitingGeneratedTableIdentity, findGeneratedModelTableDefinition, isGeneratedSchemaConnection, isGeneratedSchemaSuspended } from '../schema/generated'
 import type { ColumnInput } from '../schema/columns'
 import type { BoundTableDefinition } from '../schema/defineTable'
 import type { TableDefinition } from '../schema/types'
@@ -77,10 +77,8 @@ export function resolveGeneratedModelTable(tableName: string, connectionName: st
     return undefined
   }
 
-  const table = connectionName === undefined
-    ? getGeneratedTableDefinition(tableName)
-    : getConnectionGeneratedTableDefinition(tableName, connectionName)
-  if (table || (connectionName !== undefined && !isGeneratedSchemaConnection(connectionName))) {
+  const table = findGeneratedModelTableDefinition(tableName, connectionName)
+  if (table || (connectionName !== undefined && !isGeneratedSchemaConnection(connectionName)) || isAwaitingGeneratedTableIdentity(tableName, connectionName)) {
     return table
   }
 
