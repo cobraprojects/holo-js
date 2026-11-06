@@ -108,6 +108,7 @@ type BelongsToManyRelatedObservationMetadata = {
   readonly values: readonly unknown[]
 }
 type PivotRelationDefinition = Extract<RelationDefinition, { kind: 'belongsToMany' | 'morphToMany' | 'morphedByMany' }>
+type ThroughRelationDefinition = Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>
 type PivotMutationRelationDefinition = PivotRelationDefinition
 
 function readsSQLiteDecimals(connection: DatabaseContext, table: string | TableDefinition | undefined): boolean {
@@ -3277,7 +3278,7 @@ export class ModelRepository<
 
   private async getMatchingThroughParentKeys(
     entities: readonly Entity<TTable>[],
-    relation: Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>,
+    relation: ThroughRelationDefinition,
     constraint?: RelationConstraint,
   ): Promise<StoredKeySet> {
     const grouped = await this.getThroughEntitiesByParentKey(entities, relation, constraint)
@@ -3295,7 +3296,7 @@ export class ModelRepository<
 
   private async getThroughMatchCounts(
     entities: readonly Entity<TTable>[],
-    relation: Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>,
+    relation: ThroughRelationDefinition,
     constraint?: RelationConstraint,
   ): Promise<StoredKeyMap<number>> {
     const grouped = await this.getThroughEntitiesByParentKey(entities, relation, constraint)
@@ -3556,7 +3557,15 @@ export class ModelRepository<
 
   private async getThroughEntitiesByParentKey(
     entities: readonly Entity<TTable>[],
-    relation: Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>,
+    relation: ThroughRelationDefinition,
+    constraint?: RelationConstraint,
+  ): Promise<StoredKeyMap<Entity[]>> {
+    return await runRequiringDatabaseQueryRefresh(() => this.queryThroughEntitiesByParentKey(entities, relation, constraint))
+  }
+
+  private async queryThroughEntitiesByParentKey(
+    entities: readonly Entity<TTable>[],
+    relation: ThroughRelationDefinition,
     constraint?: RelationConstraint,
   ): Promise<StoredKeyMap<Entity[]>> {
     const parentKeys = collectRelationKeys(entities, relation.localKey)
