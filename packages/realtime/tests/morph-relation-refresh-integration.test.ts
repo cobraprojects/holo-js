@@ -79,7 +79,7 @@ async function openBlog(driver: typeof drivers[number]) {
 describe.each(drivers)('realtime morph relations on %s', (driver) => {
   it('keeps every morph relation subscription equal to a fresh read', async () => {
     const { db, names, posts, comments, tags, postType, Post, Comment, Tag } = await openBlog(driver)
-    const reads = {
+    const reads: Record<string, () => Promise<unknown>> = {
       commentable: () => db.model(Comment).query().with('commentable').orderBy('id').getJson(),
       comments: () => db.model(Post).query().with('comments', 'firstComment', 'latestComment').orderBy('id').getJson(),
       mixedComments: () => db.model(Post).query().with('comments', 'plainComments').orderBy('id').getJson(),
@@ -137,7 +137,7 @@ describe.each(drivers)('realtime morph relations on %s', (driver) => {
 
   it('keeps a subscription that morph-loads a relation equal to a fresh read', async () => {
     const { db, posts, comments, postType, Comment } = await openBlog(driver)
-    const reads = {
+    const reads: Record<string, () => Promise<unknown>> = {
       loadMorph: async () => {
         const comment = await db.model(Comment).query().orderBy('id').first()
         return (await comment!.loadMorph('commentable', {})).toJSON()
