@@ -47,6 +47,7 @@ import { applyGeneratedUniqueIds, applyPendingModelAttributes } from './uniqueId
 import type { TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { DatabaseContext } from '../core/DatabaseContext'
+import { canonicalTableName } from '../schema/tableIdentityRegistry'
 import type {
   AnyModelDefinition,
   ModelDefinitionLike,
@@ -1107,7 +1108,7 @@ export class ModelRepository<
         ownerKey: relation.ownerKey,
         relationKey: relationName,
         relatedConnectionName: related.getConnectionName(),
-        relatedTableName: related.definition.table.tableName,
+        relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
       }),
       resultPath,
       selections: Object.freeze([Object.freeze({
@@ -1257,7 +1258,7 @@ export class ModelRepository<
         relatedConnectionName: related.getConnectionName(),
         relatedKey: relation.relatedKey,
         relatedPivotKey: relation.relatedPivotKey,
-        relatedTableName: related.definition.table.tableName,
+        relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
       })
 
       recordDatabaseQueryObservation(Object.freeze({
