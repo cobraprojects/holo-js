@@ -3809,6 +3809,10 @@ export class TableQueryBuilder<
 
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
     const sourceColumn = this.resolveSourceColumnName(column)
+    const selectsSourceColumn = typeof sourceColumn !== 'undefined' && this.plan.selections.some(selection => selection.kind === 'column'
+      && !selection.alias
+      && [sourceColumn, '*'].includes(this.resolveSourceColumnName(selection.column) ?? ''))
+    if (selectsSourceColumn && sourceColumn in row) return row[sourceColumn]
     const outputs = this.plan.selections.map(selection => selectionOutputName(selection))
     const selection = this.plan.selections.find((selection, index) => selection.kind === 'column'
       && typeof selection.alias === 'string'
