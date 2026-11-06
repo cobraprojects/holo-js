@@ -47,6 +47,7 @@ import type {
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
 import type { EmptyScopeMap, ModelScopeMethods, ModelScopesDefinition } from './types'
+import { canonicalTableName } from '../schema/tableIdentityRegistry'
 import type {
   AggregateRelationConstraintMap,
   AggregateRelatedColumnNameOfKeys,
@@ -2640,6 +2641,10 @@ class ModelQueryBuilderBase<
       && this.aggregateLoads.length === 0
   }
 
+  canPatchLoadedRows(): boolean {
+    return this.canBindRowsToSerializedResult()
+  }
+
   private canBindRowsToSerializedResult(): boolean {
     return this.canBindRowsToSerializedResultBase()
       && this.eagerLoads.length === 0
@@ -2678,7 +2683,8 @@ class ModelQueryBuilderBase<
           primaryKey: resolveModelRowKey(relatedDefinition),
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
-          relatedTableName: relatedDefinition.table.tableName,
+          relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
+          relatedTable: relatedDefinition.table,
         }))
         continue
       }
@@ -2703,7 +2709,8 @@ class ModelQueryBuilderBase<
           predicates: hydrationQuery.predicates,
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
-          relatedTableName: relatedDefinition.table.tableName,
+          relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
+          relatedTable: relatedDefinition.table,
         }))
         continue
       }

@@ -26,6 +26,7 @@ import type {
   QueryPredicateNode,
   QueryPredicate,
   QueryColumnPredicate,
+  QueryKeyCast,
   QueryUpdateValue,
   QueryVectorPredicate,
   SelectQueryPlan,
@@ -205,7 +206,7 @@ export class SQLQueryCompiler {
             return this.compileAllColumnsOf(allColumnsOf, plan)
           }
 
-          const column = this.compileColumnReference(selection.column)
+          const column = this.compileKeyOperand(selection.column, selection.keyCast)
           return selection.alias
             ? `${column} AS ${this.quoteIdentifier(selection.alias)}`
             : column
@@ -280,6 +281,10 @@ export class SQLQueryCompiler {
   }
 
   compileTableSchemaLookup(_tableName: string): CompiledStatement | undefined {
+    return undefined
+  }
+
+  compileTableIdentityLookup(_tableName: string): CompiledStatement | undefined {
     return undefined
   }
 
@@ -553,7 +558,7 @@ export class SQLQueryCompiler {
         return ` ${join.type.toUpperCase()} JOIN ${source} ON TRUE`
       }
 
-      return ` ${join.type.toUpperCase()} JOIN ${source} ON ${this.compileColumnReference(join.leftColumn!)} ${join.operator!.toUpperCase()} ${this.compileColumnReference(join.rightColumn!)}`
+      return ` ${join.type.toUpperCase()} JOIN ${source} ON ${this.compileKeyOperand(join.leftColumn!, join.keyCasts?.left)} ${join.operator!.toUpperCase()} ${this.compileKeyOperand(join.rightColumn!, join.keyCasts?.right)}`
     }).join('')
   }
 
@@ -687,7 +692,22 @@ export class SQLQueryCompiler {
   }
 
   protected compileColumnComparison(predicate: QueryColumnPredicate): string {
-    return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.compileColumnReference(predicate.compareTo)}`
+    return `${this.compileKeyOperand(predicate.column, predicate.keyCasts?.left)} ${predicate.operator.toUpperCase()} ${this.compileKeyOperand(predicate.compareTo, predicate.keyCasts?.right)}`
+  }
+
+  private compileKeyOperand(column: string, cast?: QueryKeyCast): string {
+    const reference = this.compileColumnReference(column)
+    if (cast === 'text') return this.compileTextKey(reference)
+    if (cast === 'integer') return this.compileIntegerKey(reference)
+    return reference
+  }
+
+  protected compileTextKey(expression: string): string {
+    return `CAST(${expression} AS TEXT)`
+  }
+
+  protected compileIntegerKey(_expression: string): string {
+    throw new CompilerError('Integer key comparisons require a dialect-specific compiler.')
   }
 
   protected compileComparisonSubject(predicate: QueryPredicate): string {
