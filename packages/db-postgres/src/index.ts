@@ -261,7 +261,7 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
   getMutationReturningPermissionQuery(tableName: string): CompiledStatement {
     return {
       sql: "SELECT has_table_privilege(current_user, $1, 'SELECT') AND NOT row_security_active($1) AS allowed",
-      bindings: [quoteDatabaseIdentifier(tableName)],
+      bindings: [tableName.split('.').map(quoteDatabaseIdentifier).join('.')],
       source: 'schema',
     }
   }

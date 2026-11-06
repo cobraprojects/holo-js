@@ -46,6 +46,7 @@ import type {
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
 import type { EmptyScopeMap, ModelScopeMethods, ModelScopesDefinition } from './types'
+import { canonicalTableName } from '../schema/tableIdentityRegistry'
 import type {
   AggregateRelationConstraintMap,
   AggregateRelatedColumnNameOfKeys,
@@ -2631,7 +2632,7 @@ class ModelQueryBuilderBase<
           primaryKey: resolveModelRowKey(relatedDefinition),
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
-          relatedTableName: relatedDefinition.table.tableName,
+          relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
           relatedTable: relatedDefinition.table,
         }))
         continue
@@ -2657,7 +2658,7 @@ class ModelQueryBuilderBase<
           predicates: hydrationQuery.predicates,
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
-          relatedTableName: relatedDefinition.table.tableName,
+          relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
           relatedTable: relatedDefinition.table,
         }))
         continue

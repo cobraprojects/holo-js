@@ -129,6 +129,7 @@ import {
   normalizeQueryWriteValue,
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
+import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolveTableIdentity } from './tableIdentity'
 import { assertQueryTablePath, validateQueryPlan } from './validator'
 
 import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
@@ -256,7 +257,8 @@ export class TableQueryBuilder<
   TSelectedRow extends Record<string, unknown> = SelectRow<TTableOrName>,
   TAvailableColumns extends Record<string, unknown> = AvailableTableColumns<TTableOrName>,
 > {
-  private readonly source: ReturnType<typeof createTableSource>
+  private readonly ownSource: ReturnType<typeof createTableSource>
+  private boundSource?: ReturnType<typeof createTableSource>
   private readonly plan: SelectQueryPlan
 
   constructor(
@@ -267,7 +269,7 @@ export class TableQueryBuilder<
     handoff?: symbol,
   ) {
     const source = plan?.source ?? createTableSource(table)
-    this.source = source.table ? source : { ...source, table: getConnectionGeneratedTableDefinition(source.tableName, connection.getConnectionName()) }
+    this.ownSource = source
     const ownPlan = plan && handoff !== internalPlanHandoff
       ? { ...plan, predicates: copyTopLevelPredicates(plan.predicates) }
       : plan
@@ -278,6 +280,26 @@ export class TableQueryBuilder<
       sql,
       bindings: Object.freeze([...bindings]),
     }))))
+  }
+
+  private get source(): ReturnType<typeof createTableSource> {
+    if (this.boundSource) return this.boundSource
+    if (this.ownSource.table) return this.ownSource
+    const table = getConnectionGeneratedTableDefinition(this.ownSource.tableName, this.connection.getConnectionName())
+    const source = { ...this.ownSource, table }
+    if (table) this.boundSource = source
+    return source
+  }
+
+  private async bindGeneratedTable(): Promise<void> {
+    await resolvePlanGeneratedTableIdentities(this.connection, this.plan)
+  }
+
+  private async prepareMutation(): Promise<void> {
+    await this.bindGeneratedTable()
+    if (getDatabaseQueryCacheBridge() || hasDatabaseDependencyInvalidationListeners() || hasDatabaseDependencyInvalidationPublisher()) {
+      await resolveTableIdentity(this.connection, this.ownSource.tableName)
+    }
   }
 
   getTableName(): string {
@@ -1989,8 +2011,15 @@ export class TableQueryBuilder<
     scopeCacheKey = false,
     convertColumns = true,
   ): Promise<TRow[]> {
+    await this.bindGeneratedTable()
     const cacheConfig = this.queryCacheConfig
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
+    if (activeDependencyCollector || (cacheConfig && !this.plan.lockMode)) {
+      await resolvePlanTableIdentities(this.connection, this.plan)
+      for (const dependency of cacheConfig?.invalidate ?? []) {
+        if (!dependency.startsWith('db:')) await resolveTableIdentity(this.connection, dependency)
+      }
+    }
     const dependencies = this.plan.lockMode
       || (!cacheConfig && !activeDependencyCollector)
       ? undefined
@@ -2860,6 +2889,7 @@ export class TableQueryBuilder<
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
     generatedKeyColumn?: string,
   ): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
@@ -2886,6 +2916,7 @@ export class TableQueryBuilder<
   async insertOrIgnore(
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
   ): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
@@ -2929,6 +2960,7 @@ export class TableQueryBuilder<
     uniqueBy: readonly string[],
     requestedUpdateColumns: readonly string[] = [],
   ): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const updateColumns = Object.keys(this.resolveSourceColumnKeys(requestedUpdateColumns.map(column => [column, column] as const), 'upsert'))
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
@@ -3034,6 +3066,7 @@ export class TableQueryBuilder<
       throw new SecurityError(`insertUsing() needs a source query on the same database connection as "${this.connection.getConnectionName()}".`)
     }
 
+    await this.prepareMutation()
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertUsingQueryPlan(this.source, columns, query.getPlan(), { ignoreConflicts }),
     ))
@@ -3050,6 +3083,7 @@ export class TableQueryBuilder<
     }
 
     validateQueryPlan(createTruncateQueryPlan(this.source))
+    await this.prepareMutation()
     const tableName = await this.resolveTruncateTarget()
     await this.assertNotReferencedByOtherTables(tableName)
     await this.connection.executeCompiled(this.getCompiler().compile(createTruncateQueryPlan({ ...this.source, tableName })))
@@ -3059,6 +3093,7 @@ export class TableQueryBuilder<
 
   async update(values: Readonly<Record<string, unknown>>): Promise<DriverExecutionResult> {
     assertQueryTablePath(this.source.tableName)
+    await this.prepareMutation()
     const normalizedValues = this.normalizeUpdateValues(values)
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
@@ -3104,6 +3139,7 @@ export class TableQueryBuilder<
   }
 
   async delete(): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
     const mutationRows = hasInvalidationListeners && !useReturningRows
@@ -3575,6 +3611,7 @@ export class TableQueryBuilder<
     requestedAmounts: Readonly<Record<string, number>>,
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const amounts = this.resolveSourceColumnKeys(requestedAmounts, 'increment/decrement')
     const columns = Object.keys(amounts)
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
