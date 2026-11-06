@@ -2558,6 +2558,8 @@ export class TableQueryBuilder<
     const cursorOrders = orderedQuery.resolveCursorOrders()
     if (decodedCursor && decodedCursor.values.length !== cursorOrders.length) throw new SecurityError('Cursor does not match the query ordering.')
     const previous = decodedCursor?.previous === true
+    const cursorValue = (row: Record<string, unknown>, column: string): unknown =>
+      orderedQuery.plan.unions.length > 0 && Object.hasOwn(row, column) ? row[column] : orderedQuery.readCursorColumnValue(row, column)
     const unionColumns = orderedQuery.plan.unions.length === 0
       ? undefined
       : unionCursorColumns(orderedQuery.plan, cursorOrders.map(order => order.column), this.connection.getConnectionName())
@@ -2591,10 +2593,10 @@ export class TableQueryBuilder<
       perPage,
       cursorName,
       nextCursor: (previous ? cursor !== null : hasMorePages) && lastRow
-        ? encodeValueCursor(cursorOrders.map(order => orderedQuery.readCursorColumnValue(lastRow, order.column)))
+        ? encodeValueCursor(cursorOrders.map(order => cursorValue(lastRow, order.column)))
         : null,
       prevCursor: (previous ? hasMorePages : cursor !== null) && firstRow
-        ? encodeValueCursor(cursorOrders.map(order => orderedQuery.readCursorColumnValue(firstRow, order.column)), true)
+        ? encodeValueCursor(cursorOrders.map(order => cursorValue(firstRow, order.column)), true)
         : null,
     })
     if (cursor === null) {

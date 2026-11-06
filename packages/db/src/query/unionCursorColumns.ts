@@ -36,7 +36,8 @@ function branchOutputs(branch: SelectQueryPlan, connectionName: string): readonl
 
 function outputPosition(plan: SelectQueryPlan, column: string, connectionName: string): number | undefined {
   const outputs = branchOutputs(plan, connectionName)
-  const position = outputs.findIndex(output => output?.name === column || output?.column === column)
+  const named = outputs.findIndex(output => output?.name === column)
+  const position = named === -1 ? outputs.findIndex(output => output?.column === column) : named
   if (position === -1) return undefined
   if (outputs.slice(position + 1).some(output => !output || output.name === column)) {
     throw new CompilerError(`Cannot cursor paginate a union by "${column}": more than one of its selected columns may be named "${column}". Select it under a name no other column has.`)

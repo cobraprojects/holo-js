@@ -515,6 +515,12 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const secondValues = await positional.cursorPaginate(1, firstValues.nextCursor)
     expect([firstValues, secondValues].map(page => page.data.map(row => Number(row.price)))).toEqual([[4], [10]])
     expect(secondValues.nextCursor).toBeNull()
+
+    const renamed = () => DB.table(products).select('price as value', 'factor as price')
+    const swapped = renamed().where('id', 2).union(renamed().where('id', 1)).orderBy('price')
+    const firstSwapped = await swapped.cursorPaginate(1)
+    const secondSwapped = await swapped.cursorPaginate(1, firstSwapped.nextCursor)
+    expect([firstSwapped, secondSwapped].map(page => page.data.map(row => [Number(row.value), Number(row.price)]))).toEqual([[[10, 2]], [[20, 4]]])
   })
 
   it('keeps the selection order between outputs that are not model columns', async () => {
