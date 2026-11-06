@@ -234,28 +234,28 @@ export function rebindBelongsToManyRelatedObservations(
   queries: readonly DatabaseQueryObservation[],
   data: unknown,
 ): readonly DatabaseQueryObservation[] {
-  let next: DatabaseQueryObservation[] | undefined
+  const relatedSides = new Map<string, DatabaseQueryObservation>()
+  for (const query of queries) {
+    if (isBelongsToManyRelatedSide(query)) relatedSides.set(readPatchPathKey(query), query)
+  }
+  const replacements = new Map<DatabaseQueryObservation, DatabaseQueryObservation | undefined>()
+  const added: DatabaseQueryObservation[] = []
   for (const pivotSide of queries) {
     const relation = pivotSide.relation
     if (relation?.kind !== 'belongsToMany' || isBelongsToManyRelatedSide(pivotSide)) continue
-    const path = pivotSide.resultPath ?? EMPTY_RESULT_PATH
-    const rows = getValueAtPath(data, path)
+    const rows = getValueAtPath(data, pivotSide.resultPath ?? EMPTY_RESULT_PATH)
     if (!isRecordArray(rows) || !rows.every(row => Object.hasOwn(row, relation.relatedKey))) continue
     const values = rows.map(row => row[relation.relatedKey])
-    const pathKey = readPatchPathKey(pivotSide)
-    const current = next ?? queries
-    const index = current.findIndex(query => isBelongsToManyRelatedSide(query) && readPatchPathKey(query) === pathKey)
-    const existing = index >= 0 ? current[index] : undefined
+    const existing = relatedSides.get(readPatchPathKey(pivotSide))
     const existingValues = existing?.predicates[0]?.value
     if (existing ? Array.isArray(existingValues) && sameValues(existingValues, values) : values.length === 0) continue
-    next ??= [...queries]
-    if (values.length === 0) {
-      next.splice(index, 1)
-      continue
-    }
-    const observation = createBelongsToManyRelatedSideObservation(pivotSide, relation, values, existing)
-    if (index >= 0) next[index] = observation
-    else next.push(observation)
+    const observation = values.length === 0 ? undefined : createBelongsToManyRelatedSideObservation(pivotSide, relation, values, existing)
+    if (existing) replacements.set(existing, observation)
+    else if (observation) added.push(observation)
   }
-  return next ?? queries
+  if (replacements.size === 0 && added.length === 0) return queries
+  return [
+    ...queries.flatMap(query => replacements.has(query) ? replacements.get(query) ?? [] : [query]),
+    ...added,
+  ]
 }
