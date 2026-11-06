@@ -430,7 +430,7 @@ class ModelQueryBuilderBase<
   }
 
   whereKey(value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    if (value !== null && this.isAwaitingTableIdentity()) {
+    if (this.isAwaitingTableIdentity()) {
       return this.clone(this.tableQuery[whereResolvedColumn](() => this.qualifiedKeyName(), Array.isArray(value) ? 'in' : '=', value))
     }
     const key = this.qualifiedKeyName()
@@ -438,7 +438,7 @@ class ModelQueryBuilderBase<
   }
 
   whereKeyNot(value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    if (value !== null && this.isAwaitingTableIdentity()) {
+    if (this.isAwaitingTableIdentity()) {
       return this.clone(this.tableQuery[whereResolvedColumn](() => this.qualifiedKeyName(), Array.isArray(value) ? 'not in' : '!=', value))
     }
     const key = this.qualifiedKeyName()

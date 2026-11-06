@@ -116,6 +116,7 @@ import type {
   QueryJoinClause,
   QueryBetweenColumnsPredicate,
   QueryDatePredicate,
+  QueryNullPredicate,
   QueryColumnPredicate,
   QueryKeyCast,
   QueryKeyCasts,
@@ -345,6 +346,14 @@ export class TableQueryBuilder<
   }
 
   [whereResolvedColumn](resolveColumn: () => string, operator: 'in' | 'not in' | '=' | '!=', value: unknown): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    if (value === null) {
+      return this.clone(withPredicate(this.plan, this.withNormalizedValue<QueryNullPredicate>({
+        kind: 'null',
+        boolean: 'and',
+        column: resolveColumn(),
+        negated: operator === '!=' || operator === 'not in',
+      }, () => ({ column: resolveColumn() }))))
+    }
     const snapshot = this.retainedPredicateValue(value)
     return this.clone(withPredicate(this.plan, this.withNormalizedValue<QueryPredicate>({
       kind: 'comparison',

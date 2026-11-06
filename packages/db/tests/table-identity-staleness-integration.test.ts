@@ -345,25 +345,26 @@ describe.each(integrationDrivers(['postgres'] as const))('%s model after a temp 
 type NamedRow = { get: (key: string) => unknown }
 
 async function openDisagreeingRecords() {
+  const records = uniqueName('records')
   const { db } = await openDatabase('sqlite')
   await db.getAdapter().execute(`ATTACH DATABASE ':memory:' AS "aux"`)
-  await db.getAdapter().execute('CREATE TABLE "main"."records" ("code" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)')
-  await db.getAdapter().execute('CREATE TABLE "aux"."records" ("other_key" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)')
-  await db.getAdapter().execute('INSERT INTO "main"."records" ("code", "name") VALUES (7, \'main\')')
+  await db.getAdapter().execute(`CREATE TABLE "main"."${records}" ("code" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`)
+  await db.getAdapter().execute(`CREATE TABLE "aux"."${records}" ("other_key" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`)
+  await db.getAdapter().execute(`INSERT INTO "main"."${records}" ("code", "name") VALUES (7, 'main')`)
   useGeneratedTables({
-    mainRecords: defineGeneratedTable('main.records', { code: column.integer().primaryKey(), name: column.string() }),
-    auxRecords: defineGeneratedTable('aux.records', { other_key: column.integer().primaryKey(), name: column.string() }),
+    mainRecords: defineGeneratedTable(`main.${records}`, { code: column.integer().primaryKey(), name: column.string() }),
+    auxRecords: defineGeneratedTable(`aux.${records}`, { other_key: column.integer().primaryKey(), name: column.string() }),
   })
-  return db
+  return { db, records }
 }
 
 describe('sqlite model keyed by a generated table whose spellings disagree on the primary key', () => {
   it('force-deletes a model defined by the bare name by the key of the table SQLite resolves it to before any other query', async () => {
-    const db = await openDisagreeingRecords()
+    const { db, records } = await openDisagreeingRecords()
 
-    await defineModel('records', { timestamps: false, name: uniqueName('DeletedRecord') }).forceDelete(7)
+    await defineModel(records, { timestamps: false, name: uniqueName('DeletedRecord') }).forceDelete(7)
 
-    expect((await db.getAdapter().query('SELECT "code" FROM "main"."records"')).rows).toEqual([])
+    expect((await db.getAdapter().query(`SELECT "code" FROM "main"."${records}"`)).rows).toEqual([])
   })
 
   it('traverses a model defined by the bare name by the key of the table SQLite resolves it to before any other query', async () => {
@@ -378,8 +379,8 @@ describe('sqlite model keyed by a generated table whose spellings disagree on th
       cursorPaginate: async query => (await query.cursorPaginate(10)).data.map((row: NamedRow) => row.get('name')),
     }
     for (const [name, traverse] of Object.entries(traversals)) {
-      await openDisagreeingRecords()
-      expect([name, await traverse(defineModel('records', { timestamps: false, name: uniqueName(`Traversed${name}`) }).query())]).toEqual([name, ['main']])
+      const { records } = await openDisagreeingRecords()
+      expect([name, await traverse(defineModel(records, { timestamps: false, name: uniqueName(`Traversed${name}`) }).query())]).toEqual([name, ['main']])
       clearGeneratedTables()
     }
   })
@@ -390,20 +391,25 @@ describe('sqlite model keyed by a generated table whose spellings disagree on th
       whereKeyList: async model => (await model.query().whereKey([7]).first())?.get('name'),
       whereKeyNot: async model => (await model.query().whereKeyNot(8).first())?.get('name'),
       whereKeyNotList: async model => (await model.query().whereKeyNot([8]).first())?.get('name'),
+      whereKeyNotNull: async model => (await model.query().whereKeyNot(null).first())?.get('name'),
+      whereKeyNull: async model => (await model.query().whereKey(null).first())?.get('name') ?? 'main',
     }
-    for (const [name, filter] of Object.entries(filters)) {
-      await openDisagreeingRecords()
-      expect([name, await filter(defineModel('records', { timestamps: false, name: uniqueName(`Filtered${name}`) }))]).toEqual([name, 'main'])
-      clearGeneratedTables()
+    for (const qualify of [(records: string) => records, (records: string) => `MAIN.${records}`]) {
+      for (const [name, filter] of Object.entries(filters)) {
+        const { records } = await openDisagreeingRecords()
+        const spelling = qualify(records)
+        expect([spelling, name, await filter(defineModel(spelling, { timestamps: false, name: uniqueName(`Filtered${name}`) }))]).toEqual([spelling, name, 'main'])
+        clearGeneratedTables()
+      }
     }
   })
 
   it('finds a model defined by the bare name by the key of the table SQLite resolves it to before any other query', async () => {
-    await openDisagreeingRecords()
+    const { records } = await openDisagreeingRecords()
 
-    expect((await defineModel('records', { timestamps: false }).find(7))?.get('name')).toBe('main')
-    expect((await defineModel('records', { timestamps: false, name: 'QueriedRecord' }).query().find(7))?.get('name')).toBe('main')
-    expect((await defineModel('records', { timestamps: false, name: 'ManyRecord' }).findMany([7])).map(record => record.get('name'))).toEqual(['main'])
+    expect((await defineModel(records, { timestamps: false }).find(7))?.get('name')).toBe('main')
+    expect((await defineModel(records, { timestamps: false, name: uniqueName('QueriedRecord') }).query().find(7))?.get('name')).toBe('main')
+    expect((await defineModel(records, { timestamps: false, name: uniqueName('ManyRecord') }).findMany([7])).map(record => record.get('name'))).toEqual(['main'])
   })
 })
 
