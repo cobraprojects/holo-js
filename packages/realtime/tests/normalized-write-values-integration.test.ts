@@ -165,8 +165,13 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     await db.executeCompiled({ sql: `CREATE TABLE \`${name}\` (\`code\` VARBINARY(16) PRIMARY KEY, \`group_id\` BIGINT NOT NULL, \`rate\` DECIMAL(10, 2) NOT NULL)`, source: 'schema' })
     onTestFinished(() => db.executeCompiled({ sql: `DROP TABLE IF EXISTS \`${name}\``, source: 'schema' }).then(() => undefined))
     const codes = defineGeneratedTable(name, { code: column.blob().primaryKey(), group_id: column.bigInteger(), rate: column.decimal() })
+    await db.table(codes).insert({ code: Uint8Array.from([0xfd]), group_id: 0, rate: '0.5' })
     configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
-    const handler = () => db.table(codes).orderBy('group_id').get()
+    let reads = 0
+    const handler = () => {
+      reads += 1
+      return db.table(codes).orderBy('group_id').get()
+    }
     const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
 
     await mutate(() => db.table(codes).insert([
@@ -174,7 +179,8 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
       { code: Uint8Array.from([0xfe]), group_id: 2, rate: '2.5' },
     ]))
 
-    expect(subscription.current.data).toEqual(await handler())
+    expect(reads).toBe(1)
+    expect(JSON.parse(JSON.stringify(subscription.current.data))).toEqual(JSON.parse(JSON.stringify(await handler())))
     expect(JSON.stringify(subscription.current.data)).toContain('"rate":"2.50"')
   })
 
