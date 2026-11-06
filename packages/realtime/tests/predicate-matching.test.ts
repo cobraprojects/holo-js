@@ -60,6 +60,15 @@ describe('@holo-js/realtime predicate matching', () => {
     expect(compareValues(1, '1')).toBeUndefined()
   })
 
+  it('matches a number read from an integer column against an equal bigint predicate', () => {
+    expect(matchesPredicateValue(0, createPredicate('n', '=', 0n))).toBe(true)
+    expect(matchesPredicateValue(0n, createPredicate('n', '=', 0))).toBe(true)
+    expect(matchesPredicateValue(1, createPredicate('n', '=', 0n))).toBe(false)
+    expect(matchesPredicateValue(0, createPredicate('n', '!=', 0n))).toBe(false)
+    expect(matchesPredicateValue(5, createPredicate('n', 'in', [0n, 5n]))).toBe(true)
+    expect(matchesPredicateValue(0.5, createPredicate('n', '=', 0n))).toBe(false)
+  })
+
   it('matches range, set, and unknown predicate operators safely', () => {
     const between = createPredicate('score', 'between', [10, 20])
     const notBetween = createPredicate('score', 'not between', [10, 20])
