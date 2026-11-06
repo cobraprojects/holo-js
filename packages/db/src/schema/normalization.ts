@@ -348,6 +348,7 @@ export function readsAsInteger(column: AnyColumnDefinition): boolean {
 const DECIMAL_NUMBER_TEXT = /^-?\d+(?:\.\d+)?$/
 
 export function readNumericValue(value: unknown): number | undefined {
+  if (typeof value === 'boolean') return Number(value)
   if (typeof value === 'number') return Number.isNaN(value) ? undefined : value
   if (typeof value !== 'string' || !DECIMAL_NUMBER_TEXT.test(value)) return undefined
   const number = Number(value)
@@ -383,6 +384,14 @@ export function readFractionalDecimalKey(value: unknown): string | undefined {
 
 export function readsAsSQLiteDecimal(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
   return dialect === 'sqlite' && column.kind === 'decimal'
+}
+
+export function isStoredBoolean(value: unknown): boolean {
+  return value === 0 || value === 1 || value === 0n || value === 1n || value === '0' || value === '1'
+}
+
+export function readsAsCoercedBoolean(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
+  return dialect !== 'postgres' && column.kind === 'boolean'
 }
 
 export function normalizeDialectReadValue(

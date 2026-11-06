@@ -65,6 +65,7 @@ export type RuntimeCommandKind = 'migrate' | 'fresh' | 'rollback' | 'seed' | 'pr
 export type BundledRuntimeEntry = {
   readonly sourcePath: string
   readonly path: string
+  readonly importers: Readonly<Record<string, string>>
 }
 
 export type RuntimeEnvironment = {

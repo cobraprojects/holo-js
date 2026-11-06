@@ -38,7 +38,7 @@ export function createAggregateColumnsByScope(
   const columns = new Map<string, string[]>()
   for (const entry of entries) {
     for (const query of entry.queries) {
-      if (!query.aggregate?.column || query.aggregate.kind === 'avg') {
+      if (!query.patchable || !query.aggregate?.column || query.aggregate.kind === 'avg') {
         continue
       }
 
@@ -130,7 +130,7 @@ export function collectGroupedAggregateQueries(
         candidate.aggregate
         && candidateGroupPredicate
         && aggregateQueriesShareGroupScope(query, candidate)
-        && (candidate === query || queryHasAggregateBackfillMutation(candidate, candidateGroupPredicate, backfills))
+        && (candidate === query || (candidate.patchable && queryHasAggregateBackfillMutation(candidate, candidateGroupPredicate, backfills)))
       ) {
         queries.push(candidate)
         addGroupedAggregateValue(values, candidateGroupPredicate.value)
