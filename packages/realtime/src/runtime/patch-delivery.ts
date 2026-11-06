@@ -184,28 +184,31 @@ function hasNestedTargetsOnSameTable(
     return false
   }
 
+  const paths = new Set<string>()
   for (const { target } of relevantTargets) {
-    for (const { target: candidate } of relevantTargets) {
-      if (
-        candidate !== target
-        && candidate.mutationIndexKey === target.mutationIndexKey
-        && candidate.query.relation?.kind !== 'belongsToParentKey'
-        && isStrictAncestorPath(target.resultPath, candidate.resultPath)
-      ) {
+    let identity = JSON.stringify(target.mutationIndexKey)
+    for (const segment of target.resultPath) {
+      identity += `,${JSON.stringify(segment)}`
+    }
+    paths.add(identity)
+  }
+
+  for (const { target } of relevantTargets) {
+    if (target.query.relation?.kind === 'belongsToParentKey') {
+      continue
+    }
+
+    let identity = JSON.stringify(target.mutationIndexKey)
+    for (const segment of target.resultPath) {
+      if (paths.has(identity)) {
         return true
       }
+
+      identity += `,${JSON.stringify(segment)}`
     }
   }
 
   return false
-}
-
-function isStrictAncestorPath(
-  ancestor: readonly unknown[],
-  path: readonly unknown[],
-): boolean {
-  return path.length > ancestor.length
-    && ancestor.every((segment, index) => path[index] === segment)
 }
 
 function canSkipPatchedBelongsToHydrationTarget(
