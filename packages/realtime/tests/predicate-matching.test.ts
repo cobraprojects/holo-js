@@ -35,6 +35,15 @@ describe('@holo-js/realtime predicate matching', () => {
     expect(compareValues(1, '1')).toBeUndefined()
   })
 
+  it('matches a number read from an integer column against an equal bigint predicate', () => {
+    expect(matchesPredicateValue(0, createPredicate('n', '=', 0n))).toBe(true)
+    expect(matchesPredicateValue(0n, createPredicate('n', '=', 0))).toBe(true)
+    expect(matchesPredicateValue(1, createPredicate('n', '=', 0n))).toBe(false)
+    expect(matchesPredicateValue(0, createPredicate('n', '!=', 0n))).toBe(false)
+    expect(matchesPredicateValue(5, createPredicate('n', 'in', [0n, 5n]))).toBe(true)
+    expect(matchesPredicateValue(0.5, createPredicate('n', '=', 0n))).toBe(false)
+  })
+
   it('matches range, set, and unknown predicate operators safely', () => {
     const between = createPredicate('score', 'between', [10, 20])
     const notBetween = createPredicate('score', 'not between', [10, 20])
@@ -64,8 +73,25 @@ describe('@holo-js/realtime predicate matching', () => {
     expect(matchesPredicateValue('12.30', createPredicate('amount', '!=', 12.3))).toBeUndefined()
     expect(matchesPredicateValue('12.30', createPredicate('amount', 'in', [12.3]))).toBeUndefined()
     expect(matchesPredicateValue('12.30', createPredicate('amount', 'not in', [12.3]))).toBeUndefined()
-    expect(matchesPredicateValue('12.30', createPredicate('amount', '=', true))).toBe(false)
+    expect(matchesPredicateValue('12.30', createPredicate('amount', '=', true))).toBeUndefined()
+    expect(matchesPredicateValue(true, createPredicate('enabled', '=', '1'))).toBeUndefined()
+    expect(matchesPredicateValue(false, createPredicate('enabled', 'in', ['0']))).toBeUndefined()
     expect(matchesPredicateValue(1, createPredicate('amount', '=', 2))).toBe(false)
+  })
+
+  it('compares a boolean with the one or zero a database binds for it', () => {
+    expect(matchesPredicateValue(true, createPredicate('enabled', '=', 1))).toBe(true)
+    expect(matchesPredicateValue(false, createPredicate('enabled', '=', 0))).toBe(true)
+    expect(matchesPredicateValue(true, createPredicate('enabled', '=', 0))).toBe(false)
+    expect(matchesPredicateValue(false, createPredicate('enabled', '!=', 1))).toBe(true)
+    expect(matchesPredicateValue(true, createPredicate('enabled', 'in', [1]))).toBe(true)
+    expect(matchesPredicateValue(1, createPredicate('enabled', '=', true))).toBe(true)
+    expect(matchesPredicateValue(true, createPredicate('enabled', '=', 1n))).toBe(true)
+    expect(matchesPredicateValue(0n, createPredicate('enabled', '=', true))).toBe(false)
+    expect(compareValues(false, 1n)).toBe(-1)
+    expect(compareValues(false, true)).toBe(-1)
+    expect(compareValues(true, 0)).toBe(1)
+    expect(compareValues(true, true)).toBe(0)
   })
 
   it('matches row predicates and patched values without hiding missing columns', () => {

@@ -2,6 +2,7 @@ import { rawSqlPlaceholders } from './rawSql'
 import { SecurityError } from '../core/errors'
 import { isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
 import { storesJson } from '../schema/normalization'
+import { tablePathSegments } from '../schema/identifiers'
 import type { TableColumnsShape } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type {
@@ -111,7 +112,7 @@ function assertRawPlaceholderBindings(sql: string, bindings: readonly unknown[],
 }
 
 function assertQualifiedIdentifier(value: string, kind: string): void {
-  const parts = value.split('.')
+  const parts = tablePathSegments(value)
   if (parts.length === 0 || parts.some(part => !IDENTIFIER_PATTERN.test(part))) {
     throw new SecurityError(`${kind} "${value}" is not a valid identifier.`)
   }
@@ -119,7 +120,7 @@ function assertQualifiedIdentifier(value: string, kind: string): void {
 
 function assertTablePath(value: string, kind: string, message = `${kind} "${value}" must be a table name or a schema-qualified table name.`): void {
   assertQualifiedIdentifier(value, kind)
-  if (value.split('.').length > 2) {
+  if (tablePathSegments(value).length > 2) {
     throw new SecurityError(message)
   }
 }

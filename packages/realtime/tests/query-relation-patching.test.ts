@@ -79,7 +79,7 @@ describe('@holo-js/realtime relation query patching', () => {
     })
   })
 
-  it('keeps duplicate ordered belongs-to-many inserts unchanged', async () => {
+  it('falls back for ordered belongs-to-many inserts of a pair the relation already holds', async () => {
     const query = createBelongsToManyQuery()
     const rows = Object.freeze([
       createRelatedRow(1, 'First', 10),
@@ -98,7 +98,7 @@ describe('@holo-js/realtime relation query patching', () => {
           { id: 2, name: 'Second' },
         ]),
       ]),
-    )).resolves.toBe(UNCHANGED_QUERY_RESULT)
+    )).resolves.toBe(UNPATCHED_RESULT)
   })
 
   it('falls back for unordered belongs-to-many inserts and missing returned rows', async () => {
@@ -235,6 +235,44 @@ describe('@holo-js/realtime relation query patching', () => {
     })
   })
 
+  it('patches the one duplicate belongs-to-many pivot row whose unchanged pivot columns match', async () => {
+    const query = createBelongsToManyQuery({ pivotColumns: Object.freeze(['role', 'position']) })
+    const owner = createRelatedRowWithPivot(1, 'First', { post_id: 1, tag_id: 1, role: 'owner', position: 10 })
+    const viewer = createRelatedRowWithPivot(1, 'First', { post_id: 1, tag_id: 1, role: 'viewer', position: 20 })
+    const result = await tryPatchQueryRelation(
+      query,
+      Object.freeze([owner, viewer]),
+      [{ ...createPivotMutation('update', [{ post_id: 1, tag_id: 1, role: 'viewer', position: 5 }]), values: Object.freeze({ position: 5 }) }],
+      createBackfills(),
+    )
+
+    expect(result).toEqual({
+      patched: true,
+      query,
+      value: [
+        createRelatedRowWithPivot(1, 'First', { post_id: 1, tag_id: 1, role: 'viewer', position: 5 }),
+        owner,
+      ],
+    })
+  })
+
+  it('falls back for duplicate belongs-to-many pivot rows it cannot tell apart', async () => {
+    const query = createBelongsToManyQuery()
+    const rows = Object.freeze([
+      createRelatedRow(1, 'First', 10),
+      createRelatedRow(1, 'First', 20),
+    ])
+    const patch = (mutation: DatabaseMutationEvent, value: readonly Readonly<Record<string, unknown>>[] = rows) => tryPatchQueryRelation(query, value, [mutation], createBackfills())
+
+    await expect(patch(createPivotMutation('update', [{ post_id: 1, tag_id: 1, position: 5 }]))).resolves.toBe(UNPATCHED_RESULT)
+    await expect(patch({ ...createPivotMutation('update', [{ post_id: 1, tag_id: 1, position: 5 }]), values: Object.freeze({ position: 5 }) })).resolves.toBe(UNPATCHED_RESULT)
+    await expect(patch(createPivotMutation('delete', [{ post_id: 1, tag_id: 1, position: 30 }]))).resolves.toBe(UNPATCHED_RESULT)
+    await expect(patch(
+      createPivotMutation('delete', [{ post_id: 1, tag_id: 1, position: 10 }]),
+      Object.freeze([Object.freeze({ id: 1, name: 'First' }), createRelatedRow(1, 'First', 10)]),
+    )).resolves.toEqual({ patched: true, query, value: [{ id: 1, name: 'First' }] })
+  })
+
   it('keeps belongs-to-many pivot updates unchanged when the related row is outside the current relation', async () => {
     const query = createBelongsToManyQuery()
     const rows = Object.freeze([
@@ -249,6 +287,47 @@ describe('@holo-js/realtime relation query patching', () => {
       ])],
       createBackfills(),
     )).resolves.toBe(UNCHANGED_QUERY_RESULT)
+  })
+
+  it('falls back for belongs-to-many pivot updates that change a pivot key', async () => {
+    const query = createBelongsToManyQuery()
+    const rows = Object.freeze([
+      createRelatedRow(1, 'First', 10),
+      createRelatedRow(2, 'Second', 20),
+    ])
+
+    for (const values of [{ post_id: 2 }, { tag_id: 3 }]) {
+      await expect(tryPatchQueryRelation(
+        query,
+        rows,
+        [{
+          ...createPivotMutation('update', [{ post_id: 2, tag_id: 2, position: 20 }, { post_id: 1, tag_id: 3, position: 10 }]),
+          values: Object.freeze(values),
+        }],
+        createBackfills(),
+      ), JSON.stringify(values)).resolves.toBe(UNPATCHED_RESULT)
+    }
+  })
+
+  it('falls back for belongs-to-many pivot updates with unknown changed columns and for pivot upserts', async () => {
+    const query = createBelongsToManyQuery()
+    const rows = Object.freeze([
+      createRelatedRow(1, 'First', 10),
+      createRelatedRow(2, 'Second', 20),
+    ])
+
+    await expect(tryPatchQueryRelation(
+      query,
+      rows,
+      [{ ...createPivotMutation('update', [{ post_id: 3, tag_id: 2, position: 20 }]), values: undefined }],
+      createBackfills(),
+    )).resolves.toBe(UNPATCHED_RESULT)
+    await expect(tryPatchQueryRelation(
+      query,
+      rows,
+      [createPivotMutation('upsert', [{ post_id: 3, tag_id: 2, position: 20 }])],
+      createBackfills(),
+    )).resolves.toBe(UNPATCHED_RESULT)
   })
 
   it('updates unordered belongs-to-many pivot rows without reordering', async () => {
@@ -679,6 +758,47 @@ describe('@holo-js/realtime relation query patching', () => {
     })
   })
 
+  it('patches a constrained belongs-to parent-key relation from an owner row that passes its constraint', async () => {
+    const query = createBelongsToParentKeyQuery({ predicates: [{ column: 'active', operator: '=', value: true }] })
+    const value = createPostValue(1, Object.freeze({ active: true, id: 1, name: 'Old author' }))
+
+    await expect(tryPatchQueryRelation(
+      query,
+      value,
+      [createPostMutation('update', [{ id: 1, author_id: 2 }])],
+      createBackfills([createAuthorMutation('insert', [{ active: true, id: 2, name: 'New author' }])]),
+    )).resolves.toEqual({
+      patched: true,
+      query,
+      value: createPostValue(2, { active: true, id: 2, name: 'New author' }),
+    })
+  })
+
+  it.each([
+    ['lacks the column of', { id: 2, name: 'New author' }],
+    ['fails', { active: false, id: 2, name: 'New author' }],
+  ])('leaves a constrained belongs-to parent-key relation to a refresh when the owner row %s its constraint and cannot be read', async (_name, row) => {
+    const query = createBelongsToParentKeyQuery({ predicates: [{ column: 'active', operator: '=', value: true }] })
+
+    await expect(tryPatchQueryRelation(
+      query,
+      createPostValue(1, Object.freeze({ active: true, id: 1, name: 'Old author' })),
+      [createPostMutation('update', [{ id: 1, author_id: 2 }])],
+      createBackfills([createAuthorMutation('insert', [row])]),
+    )).resolves.toBe(UNPATCHED_RESULT)
+  })
+
+  it('leaves a belongs-to parent-key relation to a refresh when its owner constraint cannot be checked', async () => {
+    const query = createBelongsToParentKeyQuery({ predicates: [{ column: 'name', operator: 'in', value: [] }] })
+
+    await expect(tryPatchQueryRelation(
+      query,
+      createPostValue(1, Object.freeze({ id: 1, name: 'Old author' })),
+      [createPostMutation('update', [{ id: 1, author_id: 2 }])],
+      createBackfills([createAuthorMutation('insert', [{ id: 2, name: 'New author' }])]),
+    )).resolves.toBe(UNPATCHED_RESULT)
+  })
+
   it('patches belongs-to parent-key relation value changes without changing the foreign key', async () => {
     const query = createBelongsToParentKeyQuery()
     const value = createPostValue(1, Object.freeze({ id: 1, name: 'Old author' }))
@@ -918,11 +1038,7 @@ describe('@holo-js/realtime relation query patching', () => {
         { id: 1, author_id: 2 },
       ])],
       createBackfills(),
-    )).resolves.toEqual({
-      patched: true,
-      query,
-      value: createPostValue(2, null),
-    })
+    )).resolves.toBe(UNPATCHED_RESULT)
   })
 })
 
@@ -970,6 +1086,7 @@ function createBelongsToParentKeyQuery(
       foreignKey: 'author_id',
       kind: 'belongsToParentKey',
       ownerKey: 'id',
+      predicates: [],
       relationKey: 'author',
       relatedConnectionName: 'main',
       relatedTableName: 'authors',
@@ -1028,6 +1145,7 @@ function createPivotMutation(
     predicates: Object.freeze([]),
     rows: Object.freeze(rows),
     tableName: 'post_tags',
+    ...(kind === 'update' ? { values: Object.freeze({ position: 0 }) } : {}),
   }
 }
 

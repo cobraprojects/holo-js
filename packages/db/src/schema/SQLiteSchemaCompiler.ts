@@ -99,7 +99,7 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     const source = `schema:sqliteRebuild:sequence:${tableName}`
     const { schema, table } = splitTablePath(tableName)
     const temporaryTable = splitTablePath(temporaryTableName).table
-    const sequenceTable = schema === undefined ? 'sqlite_sequence' : `${this.compileIdentifierPath(schema)}.sqlite_sequence`
+    const sequenceTable = this.compileIdentifierPath(schema === undefined ? 'sqlite_sequence' : `${schema}.sqlite_sequence`)
     return [
       { sql: `DELETE FROM ${sequenceTable} WHERE name = ?`, bindings: [temporaryTable], source },
       { sql: `UPDATE ${sequenceTable} SET name = ? WHERE name = ?`, bindings: [temporaryTable, table], source },

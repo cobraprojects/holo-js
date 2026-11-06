@@ -1,6 +1,7 @@
 import { singularize } from 'inflection'
 import { SchemaError } from '../core/errors'
 import { TableDefinitionBuilder } from '../schema/TableDefinitionBuilder'
+import { splitTablePath } from '../schema/identifiers'
 import { isAwaitingGeneratedTableIdentity, findGeneratedModelTableDefinition, isGeneratedSchemaConnection, isGeneratedSchemaSuspended } from '../schema/generated'
 import type { ColumnInput } from '../schema/columns'
 import type { BoundTableDefinition } from '../schema/defineTable'
@@ -33,7 +34,7 @@ export function buildModelTable<
 }
 
 export function inferModelName(tableName: string): string {
-  const unqualifiedName = tableName.split('.').at(-1)!
+  const unqualifiedName = splitTablePath(tableName).table
   const singular = singularize(unqualifiedName)
   return singular
     .split(/[_-]/g)

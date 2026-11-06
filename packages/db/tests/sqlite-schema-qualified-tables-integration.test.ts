@@ -621,3 +621,21 @@ describe('SQLite schema operations on schema-qualified tables', () => {
       .get()).toEqual([{ id: 9, product_id: 1, body: 'note', name: 'current' }])
   })
 })
+
+describe('SQLite attached databases with dotted names', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('truncates and resets the sequence of a table in an attached database named with a dot', async () => {
+    const { db } = await openProducts()
+    await db.executeCompiled({ sql: `ATTACH DATABASE ':memory:' AS "my.db"`, source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TABLE "my.db"."ledger" ("id" INTEGER PRIMARY KEY AUTOINCREMENT, "note" TEXT)', source: 'schema' })
+    await db.executeCompiled({ sql: `INSERT INTO "my.db"."ledger" ("note") VALUES ('first'), ('second')`, source: 'schema' })
+
+    await DB.table('ledger').truncate()
+    await db.executeCompiled({ sql: `INSERT INTO "my.db"."ledger" ("note") VALUES ('fresh')`, source: 'schema' })
+
+    expect((await db.queryCompiled({ sql: 'SELECT "id", "note" FROM "my.db"."ledger"', source: 'schema' })).rows).toEqual([{ id: 1, note: 'fresh' }])
+  })
+})

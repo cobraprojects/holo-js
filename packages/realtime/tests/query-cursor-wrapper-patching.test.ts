@@ -208,6 +208,7 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
         {
           foreignKey: 'author_id',
           ownerKey: 'id',
+          predicates: [],
           relatedConnectionName: 'main',
           relatedTableName: 'authors',
           relationKey: 'author',

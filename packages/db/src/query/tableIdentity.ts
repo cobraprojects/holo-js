@@ -4,7 +4,7 @@ import { currentSchemaGeneration } from '../core/schemaGeneration'
 import type { TransactionFrame } from '../core/openTransactions'
 import { createQueryCompiler } from './queryCompilerFactory'
 import { evictReplacedTableIdentity, invalidateReplacedTableIdentity } from '../cache'
-import { splitTablePath } from '../schema/identifiers'
+import { splitTablePath, tablePathSegments } from '../schema/identifiers'
 import { listGeneratedTableSpellings } from '../schema/generated'
 import { foldTableName, rememberCanonicalTableName, rememberTableNameFolding, type TableNameFolding } from '../schema/tableIdentityRegistry'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -90,7 +90,7 @@ async function refreshTableIdentity(connection: DatabaseContext, tableName: stri
 }
 
 export async function resolveTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
-  if (tableName.split('.').length > 2) return tableName
+  if (tablePathSegments(tableName).length > 2) return tableName
   await resolveTableNameFolding(connection)
   const transaction = schemaChangingTransaction(connection)
   const rootIdentities = ownerIdentities(getRootDatabaseContext(connection))
