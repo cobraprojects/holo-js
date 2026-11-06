@@ -342,6 +342,8 @@ describe.each(integrationDrivers(['postgres'] as const))('%s model after a temp 
   })
 })
 
+type NamedRow = { get: (key: string) => unknown }
+
 async function openDisagreeingRecords() {
   const { db } = await openDatabase('sqlite')
   await db.getAdapter().execute(`ATTACH DATABASE ':memory:' AS "aux"`)
@@ -362,6 +364,24 @@ describe('sqlite model keyed by a generated table whose spellings disagree on th
     await defineModel('records', { timestamps: false, name: uniqueName('DeletedRecord') }).forceDelete(7)
 
     expect((await db.getAdapter().query('SELECT "code" FROM "main"."records"')).rows).toEqual([])
+  })
+
+  it('traverses a model defined by the bare name by the key of the table SQLite resolves it to before any other query', async () => {
+    const traversals: Record<string, (query: ReturnType<ReturnType<typeof defineModel>['query']>) => Promise<unknown[]>> = {
+      chunk: async (query) => { const names: unknown[] = []; await query.chunk(10, (rows: readonly NamedRow[]) => { names.push(...rows.map(row => row.get('name'))) }); return names },
+      chunkById: async (query) => { const names: unknown[] = []; await query.chunkById(10, (rows: readonly NamedRow[]) => { names.push(...rows.map(row => row.get('name'))) }); return names },
+      chunkByIdDesc: async (query) => { const names: unknown[] = []; await query.chunkByIdDesc(10, (rows: readonly NamedRow[]) => { names.push(...rows.map(row => row.get('name'))) }); return names },
+      eachById: async (query) => { const names: unknown[] = []; await query.eachById((row: NamedRow) => { names.push(row.get('name')) }); return names },
+      lazy: async (query) => { const names: unknown[] = []; for await (const row of query.lazy()) names.push(row.get('name')); return names },
+      lazyById: async (query) => { const names: unknown[] = []; for await (const row of query.lazyById()) names.push(row.get('name')); return names },
+      lazyByIdDesc: async (query) => { const names: unknown[] = []; for await (const row of query.lazyByIdDesc()) names.push(row.get('name')); return names },
+      cursorPaginate: async query => (await query.cursorPaginate(10)).data.map((row: NamedRow) => row.get('name')),
+    }
+    for (const [name, traverse] of Object.entries(traversals)) {
+      await openDisagreeingRecords()
+      expect([name, await traverse(defineModel('records', { timestamps: false, name: uniqueName(`Traversed${name}`) }).query())]).toEqual([name, ['main']])
+      clearGeneratedTables()
+    }
   })
 
   it('finds a model defined by the bare name by the key of the table SQLite resolves it to before any other query', async () => {
