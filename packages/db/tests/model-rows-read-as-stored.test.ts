@@ -35,8 +35,8 @@ describe('model rows read as stored', () => {
   it('reads rows with the dialect of the connection a model is used on', () => {
     const notes = defineGeneratedTable('stored_json_notes', { id: column.id(), settings: column.json() })
     const Note = defineModel(notes, { timestamps: false })
-    const sqlite = createDatabase({ connectionName: 'stored_sqlite', adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('sqlite') })
-    const postgres = createDatabase({ connectionName: 'stored_postgres', adapter: createPostgresAdapter({ config: { host: '127.0.0.1', database: 'stored_unused' } }), dialect: createDialect('postgres') })
+    const sqlite = createDatabase({ connectionName: 'default', adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('sqlite') })
+    const postgres = createDatabase({ connectionName: 'default', adapter: createPostgresAdapter({ config: { host: '127.0.0.1', database: 'stored_unused' } }), dialect: createDialect('postgres') })
 
     expect(sqlite.model(Note).rowReader()?.({ settings: '{"x":1}' })).toEqual({ settings: { x: 1 } })
     expect(postgres.model(Note).rowReader()?.({ settings: '{"x":1}' })).toEqual({ settings: '{"x":1}' })

@@ -121,21 +121,21 @@ function relatedRowsArePatchable(related: ModelRepository): boolean {
     && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
 }
 
-const storedRowReaders = new WeakMap<object, Map<string, DatabaseQueryRowReader>>()
-const storedAttributeReaders = new WeakMap<object, Map<string, DatabaseQueryRowReader>>()
+const storedRowReaders = new WeakMap<object, WeakMap<object, DatabaseQueryRowReader>>()
+const storedAttributeReaders = new WeakMap<object, WeakMap<object, DatabaseQueryRowReader>>()
 
 function cachedReader(
-  cache: WeakMap<object, Map<string, DatabaseQueryRowReader>>,
+  cache: WeakMap<object, WeakMap<object, DatabaseQueryRowReader>>,
   definition: object,
-  connectionName: string,
+  connection: object,
   create: () => DatabaseQueryRowReader,
 ): DatabaseQueryRowReader {
-  const readers = cache.get(definition) ?? new Map<string, DatabaseQueryRowReader>()
+  const readers = cache.get(definition) ?? new WeakMap<object, DatabaseQueryRowReader>()
   cache.set(definition, readers)
-  const cached = readers.get(connectionName)
+  const cached = readers.get(connection)
   if (cached) return cached
   const reader = create()
-  readers.set(connectionName, reader)
+  readers.set(connection, reader)
   return reader
 }
 
@@ -148,7 +148,6 @@ function observationColumns(observation: DatabaseQueryObservation): readonly str
   return [
     ...observation.predicates.map(predicate => predicate.column),
     ...observation.orderBy.map(order => order.column),
-    ...observation.selections.map(selection => selection.column),
   ]
 }
 
@@ -2663,12 +2662,12 @@ export class ModelRepository<
 
   rowReader(): DatabaseQueryRowReader | undefined {
     if (this.valueTransformer.readsRowsAsStored()) return undefined
-    return cachedReader(storedRowReaders, this.definition, this.getConnectionName(), () => (row, written) => this.valueTransformer.readStoredRow(row, this.getConnection().getDriver() as SchemaDialectName, written))
+    return cachedReader(storedRowReaders, this.definition, this.getConnection(), () => (row, written) => this.valueTransformer.readStoredRow(row, this.getConnection().getDriver() as SchemaDialectName, written))
   }
 
   attributeReader(): DatabaseQueryRowReader | undefined {
     if (this.valueTransformer.readsRowsAsStored()) return undefined
-    return cachedReader(storedAttributeReaders, this.definition, this.getConnectionName(), () => (row, written) => this.valueTransformer.readStoredAttributes(row, this.getConnection().getDriver() as SchemaDialectName, written))
+    return cachedReader(storedAttributeReaders, this.definition, this.getConnection(), () => (row, written) => this.valueTransformer.readStoredAttributes(row, this.getConnection().getDriver() as SchemaDialectName, written))
   }
 
   relatedRowReader(related: () => ModelDefinitionLike): DatabaseQueryRowReader | undefined {

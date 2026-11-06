@@ -379,6 +379,18 @@ describe.each(drivers)('realtime patches through models with different casts on 
     await expectFresh(false)
   })
 
+  it('patches a projection of a cast column', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, items } = await openFixture(variant)
+    const Masked = defineModel(items, { timestamps: false, casts: { secret: { get: (value: unknown) => `masked:${String(value)}`, set: (value: unknown) => value } } })
+    const expectFresh = await subscribeAll(variant, {
+      projected: () => db.model(Masked).query().select('id', 'secret').orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(items).where('id', 2).update({ secret: 'updated' }))
+    await expectFresh(true)
+  })
+
   it('keeps scalar reads of a cast column equal to a fresh read', async () => {
     const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
     const { db, items } = await openFixture(variant)
