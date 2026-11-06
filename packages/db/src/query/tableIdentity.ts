@@ -1,5 +1,7 @@
 import { getRootDatabaseContext } from '../core/contextOwnership'
+import { currentRootTransaction } from '../core/openTransactions'
 import { currentSchemaGeneration } from '../core/schemaGeneration'
+import type { TransactionFrame } from '../core/openTransactions'
 import { createQueryCompiler } from './queryCompilerFactory'
 import { evictReplacedTableIdentity, invalidateReplacedTableIdentity } from '../cache'
 import { splitTablePath } from '../schema/identifiers'
@@ -48,8 +50,12 @@ async function resolveTableNameFolding(connection: DatabaseContext): Promise<voi
   rememberTableNameFolding(connection.getConnectionName(), await folding)
 }
 
-function ownerIdentities(connection: DatabaseContext): Map<string, TableIdentityEntry> {
-  const owner = getRootDatabaseContext(connection)
+function schemaChangingTransaction(connection: DatabaseContext): TransactionFrame | undefined {
+  const frame = currentRootTransaction(connection)
+  return frame?.schemaChanged ? frame : undefined
+}
+
+function ownerIdentities(owner: object): Map<string, TableIdentityEntry> {
   const existing = resolvedIdentities.get(owner)
   if (existing) return existing
   const created = new Map<string, TableIdentityEntry>()
@@ -71,12 +77,12 @@ async function lookupTableIdentity(connection: DatabaseContext, tableName: strin
   return toCanonicalName(tableName, rows[0])
 }
 
-async function refreshTableIdentity(connection: DatabaseContext, tableName: string, replaced: TableIdentityEntry | undefined): Promise<TableIdentityRefresh> {
+async function refreshTableIdentity(connection: DatabaseContext, tableName: string, replaced: readonly TableIdentityEntry[]): Promise<TableIdentityRefresh> {
   const fold = (name: string) => foldTableName(connection.getConnectionName(), name)
   const identity = fold(await lookupTableIdentity(connection, tableName))
-  if (!replaced) return { identity, expired: [] }
-  const replacedIdentity = await replaced.refresh.then(previous => previous.identity, () => identity)
-  const expired = [...new Set([replacedIdentity, identity])]
+  if (replaced.length === 0) return { identity, expired: [] }
+  const replacedIdentities = await Promise.all(replaced.map(previous => previous.refresh.then(resolved => resolved.identity, () => identity)))
+  const expired = [...new Set([...replacedIdentities, identity])]
   for (const expiredIdentity of expired) {
     await evictReplacedTableIdentity(connection, expiredIdentity)
   }
@@ -84,13 +90,17 @@ async function refreshTableIdentity(connection: DatabaseContext, tableName: stri
 }
 
 export async function resolveTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
+  if (tableName.split('.').length > 2) return tableName
   await resolveTableNameFolding(connection)
-  const identities = ownerIdentities(connection)
+  const transaction = schemaChangingTransaction(connection)
+  const rootIdentities = ownerIdentities(getRootDatabaseContext(connection))
+  const identities = transaction ? ownerIdentities(transaction) : rootIdentities
   const cached = identities.get(tableName)
   const generation = currentSchemaGeneration()
+  const replaced = [...new Set([cached, rootIdentities.get(tableName)])].filter((previous): previous is TableIdentityEntry => previous !== undefined)
   const entry = cached?.generation === generation
     ? cached
-    : { generation, refresh: refreshTableIdentity(connection, tableName, cached) }
+    : { generation, refresh: refreshTableIdentity(connection, tableName, replaced) }
   if (entry !== cached) {
     identities.set(tableName, entry)
     entry.refresh.catch(() => {
@@ -100,7 +110,7 @@ export async function resolveTableIdentity(connection: DatabaseContext, tableNam
     })
   }
   const { identity, expired } = await entry.refresh
-  rememberCanonicalTableName(connection.getConnectionName(), tableName, identity)
+  rememberCanonicalTableName(connection.getConnectionName(), tableName, identity, transaction)
   if (entry !== cached) {
     for (const expiredIdentity of expired) {
       await invalidateReplacedTableIdentity(connection, expiredIdentity)

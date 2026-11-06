@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { DB, queryCacheInternals } from '../src'
+import { resolveTableIdentity } from '../src/query/tableIdentity'
 import { integrationDrivers, openDatabase, tableSpellings } from './support/database'
 import type { TestDriver as Driver } from '../../../tests/support/real-database'
 
@@ -89,6 +90,43 @@ describe('sqlite query cache table identity across temp and attached schemas', (
     expect(await cachedNames(qualified)).toEqual(['first', 'second'])
   })
 
+  it('refreshes cached unqualified reads after a transaction starts shadowing the table with a temp table', async () => {
+    const { db, bare, qualified } = await openCachedTable('sqlite')
+    expect(await cachedNames(bare)).toEqual(['first'])
+    expect(await cachedNames(qualified)).toEqual(['first'])
+
+    await db.transaction(async (trx) => {
+      await trx.executeSchemaStatement({ sql: `CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`, source: 'schema' })
+      await trx.table(qualified).insert({ id: 2, name: 'second', active: false })
+    })
+
+    expect(await cachedNames(bare)).toEqual([])
+    expect(await cachedNames(qualified)).toEqual(['first', 'second'])
+  })
+
+  it('refreshes cached unqualified reads when a rolled-back savepoint resolved the shadowed identity first', async () => {
+    const { db, bare, qualified } = await openCachedTable('sqlite')
+    expect(await cachedNames(bare)).toEqual(['first'])
+    expect(await cachedNames(qualified)).toEqual(['first'])
+    const createShadow = { sql: `CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`, source: 'schema' }
+    const rollback = new Error('rollback')
+
+    await db.transaction(async (trx) => {
+      await trx.transaction(async (savepoint) => {
+        await savepoint.executeSchemaStatement(createShadow)
+        await savepoint.table(qualified).insert({ id: 3, name: 'discarded', active: false })
+        throw rollback
+      }).catch((error: unknown) => {
+        if (error !== rollback) throw error
+      })
+      await trx.executeSchemaStatement(createShadow)
+      await trx.table(qualified).insert({ id: 2, name: 'second', active: false })
+    })
+
+    expect(await cachedNames(bare)).toEqual([])
+    expect(await cachedNames(qualified)).toEqual(['first', 'second'])
+  })
+
   it('keeps a temp table that shadows a main table separate from the main table', async () => {
     const { db, bare, qualified } = await openCachedTable('sqlite')
     await db.getAdapter().execute(`CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`)
@@ -122,6 +160,40 @@ describe.each(integrationDrivers(['postgres'] as const))('%s query cache table i
     } finally {
       await schema.dropTable(`${schemaName}.${name}`)
       await schema.dropTable(`public.${name}`)
+    }
+  })
+
+  it('keeps the identity a transaction sees after its own uncommitted DDL out of other connections', async () => {
+    const schemaName = 'holo_t575_app'
+    const { db, schema } = await openDatabase(driver, { schemaName })
+    const name = `holo_identity_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const qualified = `${schemaName}.${name}`
+    await schema.createTable(name, (table) => { table.integer('id').primaryKey() })
+    try {
+      expect(await resolveTableIdentity(db, qualified)).toBe(name)
+      let markDropped!: () => void
+      let release!: () => void
+      const dropped = new Promise<void>((resolve) => { markDropped = resolve })
+      const released = new Promise<void>((resolve) => { release = resolve })
+      const outside = dropped.then(() => resolveTableIdentity(db, qualified))
+      const rollback = new Error('rollback')
+      const transaction = db.transaction(async (trx) => {
+        await trx.executeSchemaStatement({ sql: `DROP TABLE "${schemaName}"."${name}"`, source: 'schema' })
+        expect(await resolveTableIdentity(trx, qualified)).toBe(qualified)
+        markDropped()
+        await released
+        throw rollback
+      }).catch((error: unknown) => {
+        if (error !== rollback) throw error
+      })
+      try {
+        expect(await outside).toBe(name)
+      } finally {
+        release()
+        await transaction
+      }
+    } finally {
+      await schema.dropTable(qualified)
     }
   })
 })
