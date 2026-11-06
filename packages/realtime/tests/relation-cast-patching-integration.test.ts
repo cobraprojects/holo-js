@@ -391,6 +391,39 @@ describe.each(drivers)('realtime patches through models with different casts on 
     await expectFresh(true)
   })
 
+  it('keeps rows changed by a retrieved hook equal to a fresh read', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, items } = await openFixture(variant)
+    const Redacted = defineModel(items, { timestamps: false, casts: { secret: 'string' }, events: { retrieved: [(entity) => {
+      entity.forceFill({ secret: 'redacted' })
+    }] } })
+    const expectFresh = await subscribeAll(variant, {
+      redacted: () => db.model(Redacted).query().orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(items).where('id', 2).update({ secret: 'more private' }))
+    await expectFresh(false)
+  })
+
+  it('serializes cast values the way a fresh read does', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, items } = await openFixture(variant)
+    class Wrapped {
+      constructor(readonly raw: unknown) {}
+      toJSON() {
+        return `value:${String(this.raw)}`
+      }
+    }
+    const Valued = defineModel(items, { timestamps: false, casts: { secret: { get: (value: unknown) => new Wrapped(value), set: (value: unknown) => value } } })
+    const expectFresh = await subscribeAll(variant, {
+      rows: () => db.model(Valued).query().orderBy('id').getJson(),
+      values: () => db.model(Valued).query().where('owner_id', 1).orderBy('id').pluck('secret'),
+    })
+
+    await mutate(() => db.table(items).where('id', 2).update({ secret: 'two' }))
+    await expectFresh(false)
+  })
+
   it('keeps scalar reads of a cast column equal to a fresh read', async () => {
     const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
     const { db, items } = await openFixture(variant)

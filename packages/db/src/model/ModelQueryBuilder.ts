@@ -33,7 +33,6 @@ import { knownJoinedColumns, resolveSourceColumnName, selectionOutputName, selec
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
-import { modelSerializesBeyondRows } from './serialize'
 import type { ModelCollection } from './collection'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { DriverExecutionResult } from '../core/types'
@@ -1785,7 +1784,7 @@ class ModelQueryBuilderBase<
       : this
     const { collection, rows } = await query.getRowsAndEntities()
     const result = collection.map(entity => entity.get(column)) as Array<ModelRecord<TTable>[TColumn]>
-    if (query.rowsCompareWithStoredValues()) {
+    if (!this.repository.serializesBeyondRows() && query.rowsCompareWithStoredValues()) {
       rebindDatabaseQueryObservationScalarList(rows, result, column, this.repository.attributeReader())
     } else {
       disableDatabaseQueryObservationPatching(rows, { serialized: true })
@@ -2657,7 +2656,7 @@ class ModelQueryBuilderBase<
   }
 
   private canBindRowsToSerializedResultBase(): boolean {
-    return !modelSerializesBeyondRows(this.repository.definition)
+    return !this.repository.serializesBeyondRows()
       && this.rowsCompareWithStoredValues()
       && Object.keys(this.queryCasts).length === 0
       && this.relationFilters.length === 0
@@ -2794,7 +2793,7 @@ class ModelQueryBuilderBase<
   }
 
   private rowsNeedSerialization(): boolean {
-    return modelSerializesBeyondRows(this.repository.definition)
+    return this.repository.serializesBeyondRows()
       || !this.rowsCompareWithStoredValues()
       || Object.keys(this.queryCasts).length > 0
   }

@@ -5,6 +5,7 @@ import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
 import { ownEntry } from './entityRuntime'
 import { getModelRuntimeSettings } from './runtimeSettings'
+import { serializeModels } from './serialize'
 import type { BuiltInCastName, ModelCastDefinition, ModelDefinition, ModelRecord } from './types'
 
 type WriteMode = 'create' | 'update'
@@ -176,12 +177,13 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   readStoredAttributes(row: Readonly<Record<string, unknown>>, dialect: SchemaDialectName, written = false): Readonly<Record<string, unknown>> {
-    return Object.freeze(this.normalizeFromStorage(row as Partial<ModelRecord<TTable>>, {}, written ? 'serialized' : 'database', dialect))
+    const normalized = this.normalizeFromStorage(row as Partial<ModelRecord<TTable>>, {}, written ? 'serialized' : 'database', dialect)
+    return Object.freeze(Object.fromEntries(Object.entries(normalized).map(([key, value]) => [key, serializeModels(value)])))
   }
 
   readStoredRow(row: Readonly<Record<string, unknown>>, dialect: SchemaDialectName, written = false): Readonly<Record<string, unknown>> {
     const normalized = this.normalizeFromStorage(row as Partial<ModelRecord<TTable>>, {}, written ? 'serialized' : 'database', dialect)
-    return Object.freeze(Object.fromEntries(Object.entries(normalized).map(([key, value]) => [key, this.serializeAttributeValue(key, value)])))
+    return Object.freeze(Object.fromEntries(Object.entries(normalized).map(([key, value]) => [key, serializeModels(this.serializeAttributeValue(key, value))])))
   }
 
   comparesWithStoredValues(key: string): boolean {

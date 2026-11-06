@@ -117,7 +117,7 @@ function readsSQLiteDecimals(connection: DatabaseContext, table: string | TableD
 }
 
 function relatedRowsArePatchable(related: ModelRepository): boolean {
-  return !modelSerializesBeyondRows(related.definition)
+  return !related.serializesBeyondRows()
     && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
 }
 
@@ -2658,6 +2658,10 @@ export class ModelRepository<
 
   readsRowsAsStored(): boolean {
     return this.valueTransformer.readsRowsAsStored()
+  }
+
+  serializesBeyondRows(): boolean {
+    return modelSerializesBeyondRows(this.definition) || this.eventDispatcher.hasHandlers('retrieved')
   }
 
   rowReader(): DatabaseQueryRowReader | undefined {

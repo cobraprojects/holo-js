@@ -52,6 +52,15 @@ export class ModelEventDispatcher<TTable extends TableDefinition> {
     for (const handler of this.resolveHandlers(eventName)) handler(entity, this.repository)
   }
 
+  hasHandlers(eventName: ModelLifecycleEventName): boolean {
+    const handlers = this.definition.events[eventName]
+    if (handlers && handlers.length > 0) return true
+    return listModelObservers(this.definition).some((observer) => {
+      const target = typeof observer === 'function' ? (observer as { prototype?: unknown }).prototype : observer
+      return typeof (target as Record<string, unknown> | undefined)?.[eventName] === 'function'
+    })
+  }
+
   private resolveHandlers(eventName: ModelLifecycleEventName): readonly ((...args: unknown[]) => unknown)[] {
     const observers = listModelObservers(this.definition).map((observer) => {
       return typeof observer === 'function' ? new (observer as new () => unknown)() : observer
