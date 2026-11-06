@@ -181,6 +181,35 @@ export function hasUnstoredBoolean(rows: readonly Record<string, unknown>[], col
   }))
 }
 
+const CANONICAL_INTEGER_TEXT = /^(?:0|-?[1-9]\d*)$/
+
+function holdsIntegerValue(value: unknown): value is bigint | number | string {
+  return typeof value === 'bigint' || typeof value === 'number' || typeof value === 'string'
+}
+
+function readsCanonicalInteger(value: unknown): boolean {
+  return (typeof value === 'bigint' && Number.isSafeInteger(Number(value)))
+    || (typeof value === 'number' && Number.isSafeInteger(value))
+    || (typeof value === 'string' && CANONICAL_INTEGER_TEXT.test(value) && Number.isSafeInteger(Number(value)))
+}
+
+export function holdsUnreadableInteger(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
+  return columnsOf(table).some(([key, definition]) => readsAsInteger(definition!)
+    && Object.hasOwn(row, key)
+    && holdsIntegerValue(row[key])
+    && !readsCanonicalInteger(row[key]))
+}
+
+export function readCanonicalInteger(value: unknown): unknown {
+  return readsCanonicalInteger(value) && typeof value !== 'number' ? Number(value) : value
+}
+
+export function readIntegerColumns(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const columns = columnsOf(table).flatMap(([key, definition]) => readsAsInteger(definition!) && Object.hasOwn(row, key) && readCanonicalInteger(row[key]) !== row[key] ? [key] : [])
+  if (columns.length === 0) return row
+  return Object.freeze({ ...row, ...Object.fromEntries(columns.map(key => [key, readCanonicalInteger(row[key])])) })
+}
+
 export function readInsertedKey(
   table: TableDefinition | undefined,
   column: string,

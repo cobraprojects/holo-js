@@ -224,21 +224,35 @@ async function fetchGroupedPaginationCountBackfill(
     .groupBy(groupColumn)
     .get<Record<string, unknown>>()
   const counts = new Map<unknown, number>()
+  const requestedIntegers = new Map<string, unknown[]>()
+  const requestedValues = new Map<unknown, unknown[]>()
   for (const value of values) {
     counts.set(value, 0)
+    const requested = holdsIntegerKey(value) ? requestedIntegers : requestedValues
+    const key = holdsIntegerKey(value) ? String(value) : value
+    requested.set(key, [...requested.get(key) ?? [], value])
   }
 
   for (const row of rows) {
-    const value = row[groupColumn]
+    const groupValue = row[groupColumn]
+    const matches = holdsIntegerKey(groupValue) ? requestedIntegers.get(String(groupValue)) : requestedValues.get(groupValue)
     const count = normalizePaginationCount(row.__holo_count)
-    if (typeof count === 'undefined') {
+    if (!matches || typeof count === 'undefined') {
       return undefined
     }
 
-    counts.set(value, count)
+    for (const value of matches) {
+      counts.set(value, count)
+    }
   }
 
   return counts
+}
+
+const CANONICAL_INTEGER_TEXT = /^(?:0|-?[1-9]\d*)$/
+
+function holdsIntegerKey(value: unknown): value is bigint | number | string {
+  return (typeof value === 'number' && Number.isInteger(value)) || typeof value === 'bigint' || (typeof value === 'string' && CANONICAL_INTEGER_TEXT.test(value))
 }
 
 function normalizePaginationCount(value: unknown): number | undefined {

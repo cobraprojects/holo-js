@@ -49,7 +49,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { hasUnstoredBoolean, readConvertedResultColumns, readInsertedKey, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
+import { hasUnstoredBoolean, holdsUnreadableInteger, readConvertedResultColumns, readInsertedKey, readIntegerColumns, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -2915,7 +2915,8 @@ export class TableQueryBuilder<
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
-    const captureReturningRows = await this.shouldCaptureInsertReturningRows()
+    const canReadRows = await this.canReadInsertedRows()
+    const captureReturningRows = canReadRows && this.connection.getCapabilities().returning
     const useReturningRows = captureReturningRows || (this.connection.getCapabilities().returning && generatedKeyColumn !== undefined)
     const result: MutationExecutionResult = useReturningRows
       ? await this.queryReturningMutationRows(
@@ -2928,7 +2929,10 @@ export class TableQueryBuilder<
       : await this.connection.executeCompiled(this.getCompiler().compile(
           createInsertQueryPlan(this.source, rows),
         ))
-    await this.invalidateInsertQueries('insert', captureReturningRows ? result.rows?.rows ?? rows : rows, result.lastInsertId)
+    await this.invalidateInsertQueries('insert', captureReturningRows ? result.rows?.rows ?? rows : rows, result.lastInsertId, {
+      canReadRows,
+      rowsAreWritten: !captureReturningRows,
+    })
     return {
       affectedRows: result.affectedRows,
       lastInsertId: result.lastInsertId,
@@ -2942,7 +2946,8 @@ export class TableQueryBuilder<
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
-    const captureReturningRows = await this.shouldCaptureInsertReturningRows()
+    const canReadRows = await this.canReadInsertedRows()
+    const captureReturningRows = canReadRows && this.connection.getCapabilities().returning
     const result: MutationExecutionResult = captureReturningRows
       ? await this.queryReturningMutationRows(
           createInsertQueryPlan(this.source, rows, { ignoreConflicts: true, returning: true }),
@@ -2959,7 +2964,10 @@ export class TableQueryBuilder<
       return insertResult
     }
 
-    await this.invalidateInsertQueries('insert', result.rows?.rows ?? rows, result.lastInsertId)
+    await this.invalidateInsertQueries('insert', result.rows?.rows ?? rows, result.lastInsertId, {
+      canReadRows,
+      rowsAreWritten: !captureReturningRows,
+    })
     return insertResult
   }
 
@@ -3018,7 +3026,13 @@ export class TableQueryBuilder<
       return upsertResult
     }
 
-    await this.invalidateInsertQueries('upsert', result.rows?.rows ?? rows, result.lastInsertId, previousRows, result.rows ? undefined : isMySQLConnection(this.connection) ? 'any' : uniqueBy, updateColumns)
+    await this.invalidateInsertQueries('upsert', result.rows?.rows ?? rows, result.lastInsertId, {
+      canReadRows: hasInvalidationListeners,
+      conflictColumns: result.rows ? undefined : isMySQLConnection(this.connection) ? 'any' : uniqueBy,
+      previousRows,
+      rowsAreWritten: !useReturningRows,
+      updatedColumns: updateColumns,
+    })
     return upsertResult
   }
 
@@ -3156,7 +3170,12 @@ export class TableQueryBuilder<
       ))
     const capturedRows = result.rows ? { ...result.rows, previousRows: mutationRows?.previousRows } : mutationRows
     if (result.affectedRows !== 0) {
-      await this.invalidateMutationQueries(normalizedValues, capturedRows)
+      const rows = await this.readUpdatedDecimalRows(normalizedValues, capturedRows?.rows, useReturningRows)
+      await this.invalidateMutationQueries(
+        rows ? this.withReadDecimalValues(normalizedValues, rows) : normalizedValues,
+        rows ? { ...capturedRows, rows } : capturedRows,
+        rows === null,
+      )
     }
     return {
       affectedRows: result.affectedRows,
@@ -3370,12 +3389,74 @@ export class TableQueryBuilder<
     return uniqueBy.every(column => left[column] === right[column])
   }
 
+  private holdsUnreadableInteger(rows: readonly Readonly<Record<string, unknown>>[]): boolean {
+    const table = this.resolveSourceTable()
+    return rows.some(row => holdsUnreadableInteger(table, row))
+  }
+
+  private resolveSourceTable(): TableDefinition | undefined {
+    return this.source.table ?? getConnectionGeneratedTableDefinition(this.source.tableName, this.connection.getConnectionName())
+  }
+
+  private writesDecimalColumn(columns: readonly string[]): boolean {
+    const columnDefinitions = this.resolveSourceTable()?.columns ?? {}
+    return columns.some((column) => {
+      const name = column.split('->')[0]!
+      return Object.hasOwn(columnDefinitions, name) && columnDefinitions[name]!.kind === 'decimal'
+    })
+  }
+
+  private async readUpdatedDecimalRows(
+    values: Readonly<Record<string, unknown>>,
+    rows: readonly Readonly<Record<string, unknown>>[] | undefined,
+    rowsWereReturned: boolean,
+  ): Promise<readonly Readonly<Record<string, unknown>>[] | null | undefined> {
+    if (!rows || !this.writesDecimalColumn(Object.keys(values))) return undefined
+    if (rowsWereReturned) return rows
+    return await this.readWrittenRows(rows) ?? null
+  }
+
+  private withoutDecimalColumns(row: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+    return Object.freeze(Object.fromEntries(Object.entries(row).filter(([column]) => !this.writesDecimalColumn([column]))))
+  }
+
+  private async readWrittenRows(
+    rows: readonly Readonly<Record<string, unknown>>[],
+  ): Promise<readonly Readonly<Record<string, unknown>>[] | undefined> {
+    const keys = this.resolveRowKeyColumns()
+    if (keys.length === 0 || rows.some(row => keys.some(key => row[key] == null))) return undefined
+    const query = keys.reduce(
+      (current, key) => current.whereIn(key, [...new Set(rows.map(row => row[key]))]),
+      new TableQueryBuilder<string, Record<string, unknown>>(this.source.tableName, this.connection),
+    )
+    const result = await this.connection.queryCompiled(this.getCompiler().compile(query.getPlan())).catch(() => undefined)
+    if (!result) return undefined
+    const keyOf = (row: Readonly<Record<string, unknown>>) => {
+      const readRow = readIntegerColumns(this.resolveSourceTable(), row)
+      return JSON.stringify(keys.map(key => readRow[key] instanceof Uint8Array ? `bytes:${Buffer.from(readRow[key]).toString('hex')}` : `text:${String(readRow[key])}`))
+    }
+    const rowsByKey = new Map(result.rows.map(row => [keyOf(row), row]))
+    const readRows = rows.map(row => rowsByKey.get(keyOf(row)))
+    return readRows.every(row => row !== undefined) ? Object.freeze(readRows.map(row => Object.freeze({ ...row }))) : undefined
+  }
+
+  private withReadDecimalValues(
+    values: Readonly<Record<string, unknown>>,
+    rows: readonly Readonly<Record<string, unknown>>[],
+  ): Readonly<Record<string, unknown>> {
+    const read = Object.keys(values).filter(column => this.writesDecimalColumn([column])
+      && rows.length > 0
+      && Object.hasOwn(rows[0]!, column)
+      && rows.every(row => row[column] === rows[0]![column]))
+    return read.length === 0 ? values : { ...values, ...Object.fromEntries(read.map(column => [column, rows[0]![column]])) }
+  }
+
   private shouldUseReturningMutationRows(hasInvalidationListeners: boolean): boolean {
     return hasInvalidationListeners && this.connection.getCapabilities().returning
   }
 
-  private async shouldCaptureInsertReturningRows(): Promise<boolean> {
-    if (!this.shouldUseReturningMutationRows(hasDatabaseDependencyInvalidationListeners())) return false
+  private async canReadInsertedRows(): Promise<boolean> {
+    if (!hasDatabaseDependencyInvalidationListeners()) return false
     assertQueryTablePath(this.source.tableName)
     await this.connection.initialize()
     const statement = this.connection.getAdapter().getMutationReturningPermissionQuery?.(this.source.tableName)
@@ -3494,9 +3575,13 @@ export class TableQueryBuilder<
     kind: 'insert' | 'upsert',
     rows: readonly Readonly<Record<string, unknown>>[],
     lastInsertId?: number | string,
-    previousRows?: readonly Readonly<Record<string, unknown>>[],
-    conflictColumns?: readonly string[] | 'any',
-    updatedColumns?: readonly string[],
+    options: {
+      readonly canReadRows?: boolean
+      readonly conflictColumns?: readonly string[] | 'any'
+      readonly previousRows?: readonly Readonly<Record<string, unknown>>[]
+      readonly rowsAreWritten?: boolean
+      readonly updatedColumns?: readonly string[]
+    } = {},
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
@@ -3504,36 +3589,36 @@ export class TableQueryBuilder<
     }
 
     const primaryKey = resolveInsertIdKey(this.source, this.connection.getConnectionName())
-    const mutations = hasInvalidationListeners
-      ? [
-          createDatabaseMutationEvent(
-            kind,
-            this.connection.getConnectionName(),
-            this.source,
-            [],
-            undefined,
-            rows.length === 1
-              && typeof lastInsertId !== 'undefined'
-              && typeof primaryKey !== 'undefined'
-              && !Object.prototype.hasOwnProperty.call(rows[0], primaryKey)
-              ? Object.freeze([Object.freeze({
-                  ...rows[0],
-                  [primaryKey]: lastInsertId,
-                })])
-              : rows,
-            previousRows,
-          ),
-        ]
-      : []
+    const keyedRows = rows.length === 1
+      && typeof lastInsertId !== 'undefined'
+      && typeof primaryKey !== 'undefined'
+      && !Object.prototype.hasOwnProperty.call(rows[0], primaryKey)
+      ? Object.freeze([Object.freeze({
+          ...rows[0],
+          [primaryKey]: lastInsertId,
+        })])
+      : rows
+    const hasWrittenDecimals = hasInvalidationListeners
+      && options.rowsAreWritten === true
+      && this.writesDecimalColumn(rows.flatMap(row => Object.keys(row)))
+    const databaseRows = !hasWrittenDecimals
+      ? keyedRows
+      : options.canReadRows ? await this.readWrittenRows(keyedRows) : undefined
+    const dependencyRows = databaseRows ?? keyedRows.map(row => this.withoutDecimalColumns(row))
+    const mutations = !hasInvalidationListeners
+      ? []
+      : this.holdsUnreadableInteger([...databaseRows ?? [], ...options.previousRows ?? []])
+        ? [createDatabaseMutationEvent(kind, this.connection.getConnectionName(), this.source)]
+        : [createDatabaseMutationEvent(kind, this.connection.getConnectionName(), this.source, [], undefined, databaseRows, options.previousRows)]
     const invalidation = inferAutomaticInsertCacheInvalidationPlan(
       this.connection.getConnectionName(),
       this.source,
-      rows,
+      dependencyRows,
       lastInsertId,
       hasInvalidationListeners,
       await this.resolveCaseInsensitiveColumns(rows),
-      conflictColumns,
-      updatedColumns,
+      options.conflictColumns,
+      options.updatedColumns,
     )
 
     await invalidateQueryCacheDependencies(
@@ -3574,6 +3659,7 @@ export class TableQueryBuilder<
   private async invalidateMutationQueries(
     values: Readonly<Record<string, unknown>> = {},
     capturedRows?: CapturedMutationRows,
+    hasUnreadDecimals = false,
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
@@ -3584,14 +3670,17 @@ export class TableQueryBuilder<
     const invalidation = inferAutomaticQueryCacheInvalidationPlan(
       this.plan,
       this.connection.getConnectionName(),
-      values,
+      hasUnreadDecimals ? this.withoutDecimalColumns(values) : values,
       hasInvalidationListeners,
       await this.resolveCaseInsensitiveColumns([values], this.plan.predicates),
     )
     const numericColumns = hasInvalidationListeners
       ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)
       : []
-    const mutations = !hasInvalidationListeners ? [] : numericColumns.length > 0 && capturedRows?.rows
+    const holdsUnreadableInteger = this.holdsUnreadableInteger([values, ...capturedRows?.rows ?? [], ...capturedRows?.previousRows ?? []])
+    const mutations = !hasInvalidationListeners ? [] : holdsUnreadableInteger || hasUnreadDecimals
+      ? [createDatabaseMutationEvent(hasValues ? 'update' : 'delete', this.connection.getConnectionName(), this.source, this.plan.predicates)]
+      : numericColumns.length > 0 && capturedRows?.rows
       ? this.createNumericUpdateMutationEvents(values, numericColumns, capturedRows.rows, capturedRows.previousRows ?? [])
       : [createDatabaseMutationEvent(
           hasValues ? 'update' : 'delete',

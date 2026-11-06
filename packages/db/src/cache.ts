@@ -6,7 +6,8 @@ import { ConfigurationError } from './core/errors'
 import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
-import { coerceBoolean, isStoredBoolean } from './schema/normalization'
+import { coerceBoolean, isStoredBoolean, readsAsInteger } from './schema/normalization'
+import { readCanonicalInteger } from './query/resultColumns'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { CaseInsensitiveColumns, TextColumnCollations } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
@@ -2260,7 +2261,7 @@ export function createDatabaseMutationEvent(
     previousRows: previousRows ? readMutationRows(table, previousRows) : undefined,
     primaryKey: resolveObservedRowKey(source, connectionName),
     rows: rows ? readMutationRows(table, rows) : undefined,
-    values: values ? readMutationRow(table, values) : values,
+    values: values ? readStoredBooleans(table, values) : values,
     ...convertedColumns.length > 0 ? { convertedColumns } : {},
   })
 }
@@ -2315,11 +2316,34 @@ function readBooleanColumns(
   return Object.freeze({ ...row, ...Object.fromEntries(booleanKeys.map(key => [key, coerceBoolean(row[key])])) })
 }
 
-function readMutationRow(
+function readIntegerColumns(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[],
+): Readonly<Record<string, unknown>> {
+  if (!table) return row
+  const integerKeys = Object.keys(row).filter((key) => {
+    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
+    const column = selection ? selection.column : key
+    const definition = Object.hasOwn(table.columns, column) ? table.columns[column] : undefined
+    return definition !== undefined && readsAsInteger(definition) && readCanonicalInteger(row[key]) !== row[key]
+  })
+  if (integerKeys.length === 0) return row
+  return Object.freeze({ ...row, ...Object.fromEntries(integerKeys.map(key => [key, readCanonicalInteger(row[key])])) })
+}
+
+function readStoredBooleans(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
   return readBooleanColumns(table, row, [], isStoredBoolean)
+}
+
+function readMutationRow(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return readIntegerColumns(table, readStoredBooleans(table, row), [])
 }
 
 function readFetchedRow(
@@ -2327,14 +2351,14 @@ function readFetchedRow(
   row: Readonly<Record<string, unknown>>,
   selections: readonly DatabaseQuerySelectionObservation[] = [],
 ): Readonly<Record<string, unknown>> {
-  return readBooleanColumns(table, row, selections, isDriverScalar)
+  return readIntegerColumns(table, readBooleanColumns(table, row, selections, isDriverScalar), selections)
 }
 
 function readMutationRows(
   table: TableDefinition | undefined,
   rows: readonly Readonly<Record<string, unknown>>[],
 ): readonly Readonly<Record<string, unknown>>[] {
-  return Object.freeze(rows.map(row => readMutationRow(table, row)))
+  return Object.freeze(rows.map(row => readStoredBooleans(table, row)))
 }
 
 export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): boolean {
