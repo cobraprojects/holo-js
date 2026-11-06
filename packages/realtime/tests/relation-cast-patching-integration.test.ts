@@ -130,7 +130,7 @@ async function openFixture(variant: Variant) {
     firstItem: hasOne(() => Item, 'owner_id'),
     tags: belongsToMany(() => Tag, ownerTags, 'owner_id', 'tag_id').withPivot('pinned').orderByPivot('tag_id'),
   } })
-  return { db, owners, items, tags, ownerTags, Item, Parent }
+  return { db, schema, owners, items, tags, ownerTags, Item, Parent }
 }
 
 async function subscribeAll(variant: Variant, queries: Record<string, () => Promise<unknown>>) {
@@ -243,6 +243,34 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await mutate(() => db.table(ownerTags).where('id', 1).update({ pinned: false }))
     await expectFresh()
     await mutate(() => db.table(owners).where('id', 2).update(rowValues(variant, 10)))
+    await expectFresh(false)
+  })
+
+  it('keeps eager-loaded rows of timestamped models equal to a fresh read', async () => {
+    const { db, schema, owners } = await openFixture(variant)
+    const name = `holo_cast_notes_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.bigInteger('owner_id')
+      table.string('body')
+      table.timestamp('created_at').nullable()
+      table.timestamp('updated_at').nullable()
+    })
+    onTestFinished(() => schema.dropTable(name))
+    const notes = defineGeneratedTable(name, { id: column.id(), owner_id: column.bigInteger(), body: column.string(), created_at: column.timestamp().nullable(), updated_at: column.timestamp().nullable() })
+    await db.table(notes).insert([{ id: 1, owner_id: 1, body: 'a', created_at: '2024-01-02 03:04:05', updated_at: '2024-01-02 03:04:05' }])
+    const Note = defineModel(notes)
+    const Owner = defineModel(owners, { timestamps: false, relations: {
+      notes: hasMany(() => Note, 'owner_id'),
+    } })
+    const expectFresh = await subscribeAll(variant, {
+      json: () => db.model(Owner).query().with('notes', query => query.orderBy('id')).orderBy('id').getJson(),
+      models: () => db.model(Owner).query().with('notes', query => query.orderBy('id')).orderBy('id').get(),
+    })
+
+    await mutate(() => db.table(notes).where('id', 1).update({ body: 'b', updated_at: '2024-02-03 04:05:06' }))
+    await expectFresh(false)
+    await mutate(() => db.table(notes).insert({ id: 2, owner_id: 1, body: 'c', created_at: '2024-03-04 05:06:07', updated_at: '2024-03-04 05:06:07' }))
     await expectFresh(false)
   })
 })

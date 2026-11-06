@@ -23,7 +23,7 @@ import { TableQueryBuilder, insertGetIdByKey, joinOnKeyColumns, selectKeyColumn,
 import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
-import { normalizeDialectReadValue, readsDifferentlyInModels, storesJson, storesText } from '../schema/normalization'
+import { normalizeDialectReadValue, isConvertedByModelReads, storesJson, storesText } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type QueryPredicateNode, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
@@ -121,7 +121,7 @@ function relatedRowsArePatchable(related: ModelRepository): boolean {
 }
 
 function pivotTableReadsAsStored(table: string | TableDefinition | undefined): boolean {
-  return typeof table !== 'object' || !Object.values(table.columns).some(readsDifferentlyInModels)
+  return typeof table !== 'object' || !Object.values(table.columns).some(isConvertedByModelReads)
 }
 
 function hasTypedComparison(predicates: readonly QueryPredicateNode[]): boolean {

@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { booleanStorageValue, calendarMidnightWriteValue, coerceBoolean, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, readsDifferentlyInModels, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
+import { booleanStorageValue, calendarMidnightWriteValue, coerceBoolean, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, isConvertedByModelReads, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -176,8 +176,12 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   readsRowsAsStored(): boolean {
-    return Object.entries(this.definition.table.columns)
-      .every(([key, column]) => !readsDifferentlyInModels(column) && this.resolveCast(key) === undefined)
+    const { createdAtColumn, updatedAtColumn, deletedAtColumn, table } = this.definition
+    const keys = new Set([...Object.keys(table.columns), ...[createdAtColumn, updatedAtColumn, deletedAtColumn].filter(key => key !== undefined)])
+    return [...keys].every((key) => {
+      const column = ownEntry(table.columns, key)
+      return !(column && isConvertedByModelReads(column)) && this.resolveCast(key) === undefined
+    })
   }
 
   resolveCast(key: string): ModelCastDefinition | undefined {
