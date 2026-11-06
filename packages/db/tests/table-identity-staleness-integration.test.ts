@@ -538,6 +538,18 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
       expect((await defineModel(bare, { timestamps: false }).firstOrFail()).get('settings')).toEqual({ theme: 'dark' })
     })
 
+    it('compares a JSON value through its toJSON() whether or not the where() is deferred', async () => {
+      const { table } = await openDatabase(driver)
+      const { bare, qualified } = tableSpellings(driver, table.tableName)
+      const items = defineGeneratedTable(bare, itemColumns)
+      useGeneratedTables({ items })
+      const serialized = Object.defineProperty({ theme: 'dark' }, 'toJSON', { value: () => ({ theme: 'light' }), enumerable: false })
+      await DB.table(items).insert({ id: 1, name: 'first', active: true, settings: serialized })
+
+      expect(await DB.table(qualified).where('settings', serialized).value('id')).toBe(1)
+      expect(await DB.table(items).where('settings', serialized).value('id')).toBe(1)
+    })
+
     it('keeps the values a deferred whereIn() and whereBetween() were built with', async () => {
       const { table } = await openDatabase(driver)
       const { bare, qualified } = tableSpellings(driver, table.tableName)
