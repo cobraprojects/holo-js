@@ -12,7 +12,7 @@ type ColumnReader = (value: unknown) => unknown
 
 type SelectedColumn = readonly [key: string, definition: AnyColumnDefinition | undefined]
 
-function readsIntegerText(value: unknown): value is bigint | string {
+export function readsIntegerText(value: unknown): value is bigint | string {
   return typeof value === 'bigint' || (typeof value === 'string' && INTEGER_TEXT.test(value))
 }
 

@@ -90,9 +90,9 @@ function readMutation(table: TableDefinition, mutation: DatabaseMutationEvent): 
   return Object.freeze({ ...mutation, rows, previousRows, values })
 }
 
-function hasUnreadMutationBoolean(table: TableDefinition | undefined, mutation: DatabaseMutationEvent): boolean {
+function hasUnreadMutationValue(table: TableDefinition | undefined, mutation: DatabaseMutationEvent): boolean {
   return [...mutation.rows ?? [], ...mutation.previousRows ?? [], ...mutation.values ? [mutation.values] : []]
-    .some(row => queryCacheInternals.hasUnreadBoolean(table, row))
+    .some(row => queryCacheInternals.hasUnreadBoolean(table, row) || queryCacheInternals.hasUnreadInteger(table, row))
 }
 
 export function readMutationsForQuery(
@@ -102,7 +102,7 @@ export function readMutationsForQuery(
 ): readonly DatabaseMutationEvent[] | undefined {
   const tables = observedTables(query)
   if (tables.size === 0) return mutations
-  if (mutations.some(mutation => hasUnreadMutationBoolean(tables.get(connectionTableKey(mutation.connectionName, mutation.tableName)), mutation))) return undefined
+  if (mutations.some(mutation => hasUnreadMutationValue(tables.get(connectionTableKey(mutation.connectionName, mutation.tableName)), mutation))) return undefined
   let changed = false
   const read = mutations.map((mutation) => {
     const table = tables.get(connectionTableKey(mutation.connectionName, mutation.tableName))

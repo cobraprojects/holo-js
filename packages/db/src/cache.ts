@@ -12,7 +12,7 @@ import type { CaseInsensitiveColumns } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import type { TableDefinition } from './schema/types'
 import { NumericAdjustment } from './query/NumericAdjustment'
-import { readColumnResult, readIntegerResult } from './query/resultColumns'
+import { readColumnResult, readIntegerResult, readsIntegerText } from './query/resultColumns'
 import type { SchemaDialectName } from './schema/typeMapping'
 
 export type QueryCacheTtlInput = number | Date
@@ -2222,6 +2222,13 @@ function hasUnreadBoolean(table: TableDefinition | undefined, row: Readonly<Reco
   return table !== undefined && Object.keys(row).some(key => isBooleanColumn(table, key) && isDriverScalar(row[key]) && !isStoredBoolean(row[key]))
 }
 
+function hasUnreadInteger(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
+  return table !== undefined && Object.keys(row).some(key => Object.hasOwn(table.columns, key)
+    && readsAsInteger(table.columns[key]!)
+    && typeof row[key] === 'string'
+    && !readsIntegerText(row[key]))
+}
+
 function readMutationRow(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
@@ -2589,6 +2596,7 @@ export async function invalidateQueryCacheDependencies(
 export const queryCacheInternals = {
   getRootDatabaseContext,
   hasUnreadBoolean,
+  hasUnreadInteger,
   readFetchedRow,
   readTypedMutationRow,
   setMutationPreviousRowsRequirement,
