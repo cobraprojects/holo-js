@@ -1,4 +1,4 @@
-import type { DatabaseDependencyInvalidationEvent } from '@holo-js/db'
+import { queryCacheInternals, type DatabaseDependencyInvalidationEvent } from '@holo-js/db'
 import {
   type NO_EXACT_ID_PREDICATE,
   readMutationExactIdPredicateValue,
@@ -78,7 +78,7 @@ const WHERE_DEPENDENCY_PREFIX = 'where:'
 const WHERE_EXACT_DEPENDENCY_PREFIX = 'where-exact:'
 
 export function createMutationIndexKey(connectionName: string, tableName: string): string {
-  return `${connectionName}:${tableName}`
+  return `${connectionName}:${queryCacheInternals.canonicalTableName(connectionName, tableName)}`
 }
 
 export function createMutationIndex(events: readonly ParsedInvalidationEvent[]): MutationIndex {

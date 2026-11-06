@@ -32,6 +32,7 @@ import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isFractio
 import { assertEntitiesBelongTo, createModelCollection, setModelCollectionOwner, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
+import { normalizeQualifiedRelationKeys } from './qualifiedRelationKeys'
 import { areModelGuardsDisabled, withoutModelEvents } from './eventState'
 import { ModelQueryBuilder, loadRelationsOn, whereIntegerKeysIn, withoutRelationLoads } from './ModelQueryBuilder'
 import { ModelEventDispatcher } from './ModelEventDispatcher'
@@ -47,6 +48,7 @@ import { applyGeneratedUniqueIds, applyPendingModelAttributes } from './uniqueId
 import type { TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { DatabaseContext } from '../core/DatabaseContext'
+import { canonicalTableName } from '../schema/tableIdentityRegistry'
 import type {
   AnyModelDefinition,
   ModelDefinitionLike,
@@ -242,7 +244,7 @@ export class ModelRepository<
       throw new SecurityError(`Relation "${name}" is not defined on model "${this.definition.name}".`)
     }
 
-    return relation
+    return normalizeQualifiedRelationKeys(this.definition, name, relation)
   }
 
   createCollection<TItem extends Entity<TTable>>(items: readonly TItem[]): ModelCollection<TTable, RelationMap, TItem, TScopes> {
@@ -1107,7 +1109,7 @@ export class ModelRepository<
         ownerKey: relation.ownerKey,
         relationKey: relationName,
         relatedConnectionName: related.getConnectionName(),
-        relatedTableName: related.definition.table.tableName,
+        relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
       }),
       resultPath,
       selections: Object.freeze([Object.freeze({
@@ -1257,7 +1259,7 @@ export class ModelRepository<
         relatedConnectionName: related.getConnectionName(),
         relatedKey: relation.relatedKey,
         relatedPivotKey: relation.relatedPivotKey,
-        relatedTableName: related.definition.table.tableName,
+        relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
       })
 
       recordDatabaseQueryObservation(Object.freeze({
