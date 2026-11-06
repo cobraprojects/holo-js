@@ -103,6 +103,19 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     }
   }, 30_000)
 
+  it('checks insert returning permission on a schema-qualified table path', async () => {
+    const adapter = createPostgresAdapter({ config: postgresTestConnection() })
+    const name = `holo_returning_${randomUUID().replaceAll('-', '')}`
+    try {
+      await adapter.execute(`CREATE TABLE public.${name} (id integer PRIMARY KEY)`)
+      const statement = adapter.getMutationReturningPermissionQuery(`public.${name}`)
+      expect((await adapter.query(statement.sql, statement.bindings)).rows).toEqual([{ allowed: true }])
+    } finally {
+      await adapter.execute(`DROP TABLE IF EXISTS public.${name}`)
+      await adapter.disconnect()
+    }
+  }, 30_000)
+
   it.each(['config', 'url'] as const)('creates and reopens a quoted database name through %s configuration', async mode => {
     const database = `holo_quoted_${randomUUID().replaceAll('-', '')}"tenant`
     const admin = createPostgresAdapter({ config: postgresTestConnection() })

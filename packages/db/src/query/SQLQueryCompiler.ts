@@ -1,10 +1,11 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { NumericAdjustment } from './NumericAdjustment'
-import { CompilerError } from '../core/errors'
+import { CompilerError, SecurityError } from '../core/errors'
 import { isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
 import { validateQueryPlan } from './validator'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import { isTrustedRawPredicate } from './trustedRawPredicate'
+import { quoteTablePath, splitTablePath } from '../schema/identifiers'
 import type { CompiledStatement, CompiledStatementMetadata } from '../core/types'
 import type {
   DeleteQueryPlan,
@@ -26,6 +27,7 @@ import type {
   QueryPredicateNode,
   QueryPredicate,
   QueryColumnPredicate,
+  QueryKeyCast,
   QueryUpdateValue,
   QueryVectorPredicate,
   SelectQueryPlan,
@@ -205,7 +207,7 @@ export class SQLQueryCompiler {
             return this.compileAllColumnsOf(allColumnsOf, plan)
           }
 
-          const column = this.compileColumnReference(selection.column)
+          const column = this.compileKeyOperand(selection.column, selection.keyCast)
           return selection.alias
             ? `${column} AS ${this.quoteIdentifier(selection.alias)}`
             : column
@@ -221,7 +223,7 @@ export class SQLQueryCompiler {
       ? ''
       : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', ')}`
     const lockOf = plan.joins.some(join => join.subquery !== undefined && isOneOfManyAggregatePlan(join.subquery))
-      ? this.quoteIdentifier(plan.source.alias ?? plan.source.tableName.slice(plan.source.tableName.lastIndexOf('.') + 1))
+      ? this.quoteIdentifier(plan.source.alias ?? splitTablePath(plan.source.tableName).table)
       : undefined
     const compiledLockClause = plan.lockMode ? this.compileLockClause(plan.lockMode, lockOf) : ''
     const lockClause = compiledLockClause ? ` ${compiledLockClause}` : ''
@@ -267,6 +269,17 @@ export class SQLQueryCompiler {
     })
   }
 
+  compileResolvedTruncate(plan: TruncateQueryPlan, tableName: string): CompiledStatement {
+    validateQueryPlan(plan, this.dialect)
+    const requested = plan.source.tableName
+    const resolved = splitTablePath(tableName)
+    const resolvesUnqualifiedRequest = splitTablePath(requested).schema === undefined && Boolean(resolved.schema) && resolved.table === requested
+    if (tableName !== requested && !resolvesUnqualifiedRequest) {
+      throw new SecurityError(`Resolved table "${tableName}" does not name the requested table "${requested}".`)
+    }
+    return this.compileTruncate({ ...plan, source: { ...plan.source, tableName } })
+  }
+
   protected compileTruncate(plan: TruncateQueryPlan): CompiledStatement {
     return this.withMetadata({
       sql: this.compileTruncateSql(this.compileTableReference(plan.source.tableName)),
@@ -280,6 +293,10 @@ export class SQLQueryCompiler {
   }
 
   compileTableSchemaLookup(_tableName: string): CompiledStatement | undefined {
+    return undefined
+  }
+
+  compileTableIdentityLookup(_tableName: string): CompiledStatement | undefined {
     return undefined
   }
 
@@ -553,7 +570,7 @@ export class SQLQueryCompiler {
         return ` ${join.type.toUpperCase()} JOIN ${source} ON TRUE`
       }
 
-      return ` ${join.type.toUpperCase()} JOIN ${source} ON ${this.compileColumnReference(join.leftColumn!)} ${join.operator!.toUpperCase()} ${this.compileColumnReference(join.rightColumn!)}`
+      return ` ${join.type.toUpperCase()} JOIN ${source} ON ${this.compileKeyOperand(join.leftColumn!, join.keyCasts?.left)} ${join.operator!.toUpperCase()} ${this.compileKeyOperand(join.rightColumn!, join.keyCasts?.right)}`
     }).join('')
   }
 
@@ -687,7 +704,22 @@ export class SQLQueryCompiler {
   }
 
   protected compileColumnComparison(predicate: QueryColumnPredicate): string {
-    return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.compileColumnReference(predicate.compareTo)}`
+    return `${this.compileKeyOperand(predicate.column, predicate.keyCasts?.left)} ${predicate.operator.toUpperCase()} ${this.compileKeyOperand(predicate.compareTo, predicate.keyCasts?.right)}`
+  }
+
+  private compileKeyOperand(column: string, cast?: QueryKeyCast): string {
+    const reference = this.compileColumnReference(column)
+    if (cast === 'text') return this.compileTextKey(reference)
+    if (cast === 'integer') return this.compileIntegerKey(reference)
+    return reference
+  }
+
+  protected compileTextKey(expression: string): string {
+    return `CAST(${expression} AS TEXT)`
+  }
+
+  protected compileIntegerKey(_expression: string): string {
+    throw new CompilerError('Integer key comparisons require a dialect-specific compiler.')
   }
 
   protected compileComparisonSubject(predicate: QueryPredicate): string {
@@ -840,14 +872,10 @@ export class SQLQueryCompiler {
   }
 
   protected compileColumnReference(reference: string): string {
-    if (!reference.includes('.')) {
-      return this.quoteIdentifier(reference)
-    }
-
-    return reference
-      .split('.')
-      .map(part => this.quoteIdentifier(part))
-      .join('.')
+    const { schema: table, table: column } = splitTablePath(reference)
+    return table === undefined
+      ? this.quoteIdentifier(column)
+      : `${this.compileTableReference(table)}.${this.quoteIdentifier(column)}`
   }
 
   protected compileAllColumnsOf(tableReference: string, _plan: SelectQueryPlan): string {
@@ -855,7 +883,7 @@ export class SQLQueryCompiler {
   }
 
   protected compileTableReference(reference: string): string {
-    return this.compileColumnReference(reference)
+    return quoteTablePath({ quoteIdentifier: segment => this.quoteIdentifier(segment) }, reference)
   }
 
   protected compileSource(source: SelectQueryPlan['source']): string {

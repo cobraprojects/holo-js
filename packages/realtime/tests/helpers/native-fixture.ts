@@ -32,6 +32,7 @@ export async function createNativeRelationalAdapter(
   const executions: Array<{ sql: string, bindings: readonly unknown[] }> = []
   const query = adapter.query.bind(adapter)
   const execute = adapter.execute.bind(adapter)
+  adapter.introspect = async <TRow extends Record<string, unknown>>(sql: string, bindings: readonly unknown[] = []): Promise<DriverQueryResult<TRow>> => query<TRow>(sql, bindings)
   adapter.query = async <TRow extends Record<string, unknown>>(sql: string, bindings: readonly unknown[] = []): Promise<DriverQueryResult<TRow>> => {
     queries.push({ sql, bindings })
     return query<TRow>(sql, bindings)

@@ -1,5 +1,6 @@
-import type {
-  DatabaseMutationEvent,
+import {
+  createMutationIndexKey,
+  type DatabaseMutationEvent,
 } from './dependencies'
 import {
   hasRecordKey,
@@ -52,17 +53,26 @@ import type {
   PatchableQueryPatchTarget,
 } from './query-state'
 import type { BackfillCache } from './state'
+import { readMutationsForQuery } from './query-backfill'
 
 export async function tryPatchObservedQuery(
   target: PatchableQueryPatchTarget,
-  mutations: readonly DatabaseMutationEvent[],
+  observedMutations: readonly DatabaseMutationEvent[],
   backfills: BackfillCache,
 ): Promise<PatchQueryResult> {
-  if (mutations.length === 0) {
+  if (observedMutations.length === 0) {
     return UNPATCHED_RESULT
   }
 
   const { aggregatePatchMode, currentValue, query } = target
+  const mutations = readMutationsForQuery(query, observedMutations, backfills)
+  if (!mutations) {
+    return UNPATCHED_RESULT
+  }
+
+  if (readsConvertedColumnsAsDriverValues(query, mutations)) {
+    return UNPATCHED_RESULT
+  }
 
   if (query.relation) {
     return await tryPatchQueryRelation(query, currentValue, mutations, backfills)
@@ -149,6 +159,23 @@ export async function tryPatchObservedQuery(
   return UNPATCHED_RESULT
 }
 
+function hasReadColumn(query: DatabaseQueryObservation, columns: readonly string[]): boolean {
+  const selections = query.selections ?? []
+  return selections.length === 0
+    || selections.some(selection => columns.includes(selection.column))
+    || [query.scalarColumn, query.scalarListColumn, query.aggregate?.column, query.groupedAggregate?.groupColumn, query.groupedAggregate?.aggregateColumn]
+      .some(column => column !== undefined && columns.includes(column))
+}
+
+function readsConvertedColumnsAsDriverValues(
+  query: DatabaseQueryObservation,
+  mutations: readonly DatabaseMutationEvent[],
+): boolean {
+  return query.table === undefined && mutations.some(mutation => createMutationIndexKey(mutation.connectionName, mutation.tableName) === createMutationIndexKey(query.connectionName, query.tableName)
+    && mutation.convertedColumns !== undefined
+    && hasReadColumn(query, mutation.convertedColumns))
+}
+
 function insertsRowsWithUnknownPrimaryKey(
   query: DatabaseQueryObservation,
   mutations: readonly DatabaseMutationEvent[],
@@ -156,7 +183,7 @@ function insertsRowsWithUnknownPrimaryKey(
   const primaryKey = readPrimaryKey(query)
   return mutations.some(mutation => (mutation.kind === 'insert' || mutation.kind === 'upsert')
     && mutation.connectionName === query.connectionName
-    && mutation.tableName === query.tableName
+    && createMutationIndexKey(mutation.connectionName, mutation.tableName) === createMutationIndexKey(query.connectionName, query.tableName)
     && (
       mutation.rows?.some(row => !hasRecordKey(row, primaryKey))
       || upsertChangesPrimaryKey(mutation, primaryKey)
