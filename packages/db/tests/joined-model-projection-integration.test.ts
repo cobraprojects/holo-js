@@ -295,6 +295,11 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
 
     const rows = await Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).select(`${products}.price as label` as never, `${products}.*`, `${notes}.*`).get()
     expect(rows.map(entity => [Number(entity.toAttributes().id), (entity.toAttributes() as Record<string, unknown>).label]).sort((left, right) => Number(left[0]) - Number(right[0]))).toEqual([[1, 'first'], [2, 'second']])
+
+    registerGeneratedTables({ [notes]: defineGeneratedTable(notes, { product_id: column.integer(), label: column.string() }) })
+    onTestFinished(() => clearGeneratedTables())
+    const known = await Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).select(`${products}.*`, `${products}.price as label` as never, `${notes}.*`).get()
+    expect(known.map(entity => [Number(entity.toAttributes().id), (entity.toAttributes() as Record<string, unknown>).label]).sort((left, right) => Number(left[0]) - Number(right[0]))).toEqual([[1, 'first'], [2, 'second']])
   })
 
   it('applies model casts to the model columns of a joined query', async () => {
@@ -342,6 +347,10 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
 
     const page = await Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).orderBy(`${notes}.note_id` as never).cursorPaginate(2)
     expect(page.data.map(entity => [Number(entity.toAttributes().id), Number((entity.toAttributes() as Record<string, unknown>).__holo_cursor_0)])).toEqual([[2, 8], [1, 7]])
+
+    const sub = DB.table(notes).select('note_id', 'product_id', '__holo_cursor_0')
+    const subPage = await Product.query().joinSub(sub as never, 'n', 'n.product_id' as never, '=', `${products}.id`).orderBy('n.note_id' as never).cursorPaginate(2)
+    expect(subPage.data.map(entity => [Number(entity.toAttributes().id), Number((entity.toAttributes() as Record<string, unknown>).__holo_cursor_0)])).toEqual([[2, 8], [1, 7]])
   })
 
   it('accepts a joined column aliased to a name that is not a model column', async () => {
