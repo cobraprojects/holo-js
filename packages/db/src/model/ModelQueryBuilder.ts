@@ -1,8 +1,8 @@
-import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
+import { createHash } from 'node:crypto'
+import { CompilerError, ConfigurationError, HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
 import { readNumericValue } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
 import {
-  createDatabaseQueryObservation,
   disableDatabaseQueryObservationPatching,
   hasActiveDatabaseDependencyCollector,
   rebindDatabaseQueryObservationHydratedResult,
@@ -26,7 +26,8 @@ import {
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
-import { resolveAggregateSource, resolveSourceColumnName, TableQueryBuilder } from '../query/TableQueryBuilder'
+import { projectModelRows, resolveAggregateSource, TableQueryBuilder } from '../query/TableQueryBuilder'
+import { knownJoinedColumns, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn } from '../query/modelRowProjection'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
@@ -46,6 +47,7 @@ import type {
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
 import type { EmptyScopeMap, ModelScopeMethods, ModelScopesDefinition } from './types'
+import { canonicalTableName } from '../schema/tableIdentityRegistry'
 import type {
   AggregateRelationConstraintMap,
   AggregateRelatedColumnNameOfKeys,
@@ -60,7 +62,6 @@ import type {
   ModelColumnName,
   ModelColumnReference,
   ModelJsonColumnPath,
-  ModelDefinitionLike,
   ModelInsertPayload,
   ModelRecord,
   ModelRelationName,
@@ -85,9 +86,6 @@ type BuilderCallback<TBuilder> = (query: TBuilder) => unknown
 type ValueBuilderCallback<TBuilder, TValue> = (query: TBuilder, value: TValue) => unknown
 type RelationConstraint = (query: ModelQueryBuilder<TableDefinition>) => unknown
 type MorphRelationConstraint = (query: ModelQueryBuilder<TableDefinition>, morphType: string) => unknown
-type QueryableModelReference = ModelDefinitionLike<TableDefinition> & {
-  query(): ModelQueryBuilder<TableDefinition>
-}
 type SubqueryBuilder<TSubTable extends TableDefinition = TableDefinition>
   = TableQueryBuilder<TSubTable, Record<string, unknown>> | ModelQueryBuilder<TSubTable>
 type RelationFilter = {
@@ -201,6 +199,60 @@ class ModelQueryBuilderBase<
       query = this.softDeleteMode === 'only' ? query.whereNotNull(column as never) : query.whereNull(column as never)
     }
     return query
+  }
+
+  private selectJoinedCursorColumns(): {
+    readonly query: ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
+    readonly cursorColumns: readonly string[]
+  } {
+    const plan = this.tableQuery.getPlan()
+    const aliasedColumns = new Set(plan.selections.flatMap(selection => selection.kind === 'column' && selection.alias ? [selection.column] : []))
+    const joinedOrders = plan.joins.length === 0
+      ? []
+      : plan.orderBy.flatMap(order => order.kind === 'column' && typeof resolveSourceColumnName(plan.source, order.column) === 'undefined' && !aliasedColumns.has(order.column) && selectsJoinedColumn(plan, order.column) ? [order.column] : [])
+    if (joinedOrders.length === 0) return { query: this, cursorColumns: [] }
+    if (plan.distinct || plan.groupBy.length > 0) {
+      throw new CompilerError(`Cannot cursor paginate a distinct or grouped joined "${plan.source.tableName}" model query by "${joinedOrders[0]}". Select it under an alias and order by that alias.`)
+    }
+    if (plan.unions.length > 0) {
+      throw new CompilerError(`Cannot cursor paginate a union of joined "${plan.source.tableName}" model queries by "${joinedOrders[0]}". Select it under an alias in each query and order by that alias.`)
+    }
+    const connectionName = this.getConnectionName()
+    const reservedNames = new Set([
+      ...Object.keys(plan.source.table?.columns ?? {}),
+      ...plan.joins.flatMap(join => knownJoinedColumns(join, connectionName) ?? []),
+      ...plan.selections.flatMap(selection => selectionOutputName(selection) ?? []),
+    ])
+    const suffix = createHash('sha256').update(JSON.stringify([
+      plan.source.alias ?? plan.source.tableName,
+      plan.joins.map(join => join.alias ?? join.table),
+      plan.selections.map(selection => selection.kind === 'column' ? [selection.column, selection.alias] : selectionOutputName(selection)),
+      joinedOrders,
+    ])).digest('hex').slice(0, 12)
+    const freeAlias = (index: number): string => reservedNames.has(`__holo_cursor_${suffix}_${index}`) ? freeAlias(index + 1) : `__holo_cursor_${suffix}_${index}`
+    const cursorColumns = joinedOrders.map(() => {
+      const alias = freeAlias(0)
+      reservedNames.add(alias)
+      return alias
+    })
+    const selected = plan.selections.length === 0 ? this.select('*' as never) : this
+    return {
+      query: selected.addSelect(...joinedOrders.map((column, index) => `${column} as ${cursorColumns[index]}`) as never[]) as ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables>,
+      cursorColumns,
+    }
+  }
+
+  private qualifiedKeyName(): ModelColumnName<TTable> {
+    const { source } = this.tableQuery.getPlan()
+    return `${source.alias ?? source.tableName}.${this.repository.definition.primaryKey}` as ModelColumnName<TTable>
+  }
+
+  private getModelRowsQuery(): TableQueryBuilder<TTable, Record<string, unknown>> {
+    return this.getTableQueryBuilder()[projectModelRows]().query
+  }
+
+  private assertModelRowSelections(): void {
+    this.getTableQueryBuilder()[projectModelRows]()
   }
 
   applyGlobalScope(scope: (query: ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>) => ModelQueryBuilder<TTable, TRelations, TLoaded>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
@@ -372,12 +424,12 @@ class ModelQueryBuilderBase<
   }
 
   whereKey(value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    const key = this.repository.definition.primaryKey as ModelColumnName<TTable>
+    const key = this.qualifiedKeyName()
     return Array.isArray(value) ? this.whereIn(key, value) : this.where(key, value)
   }
 
   whereKeyNot(value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    const key = this.repository.definition.primaryKey as ModelColumnName<TTable>
+    const key = this.qualifiedKeyName()
     return Array.isArray(value) ? this.whereNotIn(key, value) : this.where(key, '!=', value)
   }
 
@@ -585,7 +637,7 @@ class ModelQueryBuilderBase<
   [whereIntegerKeysIn](values: readonly (number | bigint)[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
     return this.clone(this.tableQuery.withPredicates([
       ...this.tableQuery.getPlan().predicates,
-      { kind: 'integer-in', boolean: 'and', column: this.repository.definition.primaryKey, values },
+      { kind: 'integer-in', boolean: 'and', column: this.qualifiedKeyName(), values },
     ]))
   }
 
@@ -1344,19 +1396,19 @@ class ModelQueryBuilderBase<
   }
 
   toSQL() {
-    return this.getTableQueryBuilder().toSQL()
+    return this.getModelRowsQuery().toSQL()
   }
 
   toRawSql(): string {
-    return this.getTableQueryBuilder().toRawSql()
+    return this.getModelRowsQuery().toRawSql()
   }
 
   debug() {
-    return this.getTableQueryBuilder().debug()
+    return this.getModelRowsQuery().debug()
   }
 
   dump(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    this.getTableQueryBuilder().dump()
+    this.getModelRowsQuery().dump()
     return this.asScopedBuilder()
   }
 
@@ -1369,7 +1421,7 @@ class ModelQueryBuilderBase<
   async get(): Promise<
     ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>, TScopes>
   > {
-    const rows = await this.getTableQueryBuilder().get<ModelRecord<TTable>>()
+    const rows = await this.getModelRowsQuery().get<ModelRecord<TTable>>()
     const collection = await this.hydrateRows(rows)
     this.recordCollectionRelationObservations(collection)
     this.recordCollectionRelationAggregateObservations(collection)
@@ -1396,7 +1448,7 @@ class ModelQueryBuilderBase<
   }
 
   async getJson(): Promise<SerializedEntityWithLoaded<TTable, TLoaded>[]> {
-    const rows = await this.getTableQueryBuilder().get<ModelRecord<TTable>>()
+    const rows = await this.getModelRowsQuery().get<ModelRecord<TTable>>()
     const collection = await this.hydrateRows(rows)
     this.recordCollectionRelationObservations(collection)
     this.recordCollectionRelationAggregateObservations(collection)
@@ -1491,7 +1543,7 @@ class ModelQueryBuilderBase<
   }
 
   private async paginatedPage(perPage: number, pageNumber: number, options: PaginationOptions) {
-    const page = await this.getTableQueryBuilder().paginate<ModelRecord<TTable>>(perPage, pageNumber, options)
+    const page = await this.getModelRowsQuery().paginate<ModelRecord<TTable>>(perPage, pageNumber, options)
     const collection = await this.hydrateRows(page.data)
     this.recordPaginatedRelationObservations(collection)
     this.recordPaginatedRelationAggregateObservations(collection)
@@ -1530,7 +1582,7 @@ class ModelQueryBuilderBase<
   }
 
   private async simplePaginatedPage(perPage: number, pageNumber: number, options: PaginationOptions) {
-    const page = await this.getTableQueryBuilder().simplePaginate<ModelRecord<TTable>>(perPage, pageNumber, options)
+    const page = await this.getModelRowsQuery().simplePaginate<ModelRecord<TTable>>(perPage, pageNumber, options)
     const collection = await this.hydrateRows(page.data)
     this.recordPaginatedRelationObservations(collection)
     this.recordPaginatedRelationAggregateObservations(collection)
@@ -1570,13 +1622,15 @@ class ModelQueryBuilderBase<
     assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
     normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
     decodeValueCursor(cursor, message => new HydrationError(message))
-    const query = this.tableQuery.getPlan().orderBy.length === 0
-      ? this.getTableQueryBuilder().orderBy(this.repository.definition.primaryKey)
-      : this.getTableQueryBuilder()
-    const page = await query.cursorPaginate<ModelRecord<TTable>>(perPage, cursor, options)
-    const rows = hiddenColumns.length === 0 ? page.data : page.data.map(row => {
+    const ordered = this.tableQuery.getPlan().orderBy.length === 0
+      ? this.orderBy(this.repository.definition.primaryKey as never)
+      : this
+    const { query, cursorColumns } = ordered.selectJoinedCursorColumns()
+    const page = await query.getModelRowsQuery().cursorPaginate<ModelRecord<TTable>>(perPage, cursor, options)
+    const strippedColumns = [...hiddenColumns, ...cursorColumns]
+    const rows = strippedColumns.length === 0 ? page.data : page.data.map(row => {
       const attributes = { ...row }
-      for (const column of hiddenColumns) delete attributes[column]
+      for (const column of strippedColumns) delete attributes[column]
       return attributes
     })
     const collection = await this.hydrateRows(rows)
@@ -1592,7 +1646,7 @@ class ModelQueryBuilderBase<
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
     let page = 1
-    for await (const rows of queryBatches(this.getTableQueryBuilder(), size, {
+    for await (const rows of queryBatches(this.getModelRowsQuery(), size, {
       primaryKey: this.repository.definition.primaryKey,
     }, (rows: readonly ModelRecord<TTable>[]) => this.hydrateTraversalRows(rows))) {
       if (await callback(rows, page) === false) return
@@ -1633,7 +1687,7 @@ class ModelQueryBuilderBase<
   }
 
   private idBatches(size: number, column: ModelAttributeKey<TTable>, direction: 'asc' | 'desc') {
-    return queryBatches(this.getTableQueryBuilder(), size, {
+    return queryBatches(this.getModelRowsQuery(), size, {
       column,
       direction,
       fallbackOrder: direction === 'asc' ? 'database' : 'rows',
@@ -1687,7 +1741,7 @@ class ModelQueryBuilderBase<
   async* lazy(size = 1000): AsyncGenerator<EntityWithLoaded<TTable, TRelations, TLoaded>, void, unknown> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
-    for await (const rows of queryBatches(this.getTableQueryBuilder(), size, {
+    for await (const rows of queryBatches(this.getModelRowsQuery(), size, {
       primaryKey: this.repository.definition.primaryKey,
     }, (rows: readonly ModelRecord<TTable>[]) => this.hydrateTraversalRows(rows))) {
       yield* rows
@@ -1878,8 +1932,7 @@ class ModelQueryBuilderBase<
   }
 
   async find(value: unknown, column?: string): Promise<EntityWithLoaded<TTable, TRelations, TLoaded> | undefined> {
-    const key = (column ?? this.repository.definition.primaryKey) as ModelColumnName<TTable>
-    return this.where(key, value).first()
+    return this.where(column as ModelColumnName<TTable> ?? this.qualifiedKeyName(), value).first()
   }
 
   async findOrFail(value: unknown, column?: string): Promise<EntityWithLoaded<TTable, TRelations, TLoaded>> {
@@ -2486,6 +2539,7 @@ class ModelQueryBuilderBase<
     const { key, joined, selections, cache } = this.tableQuery[resolveAggregateSource](column, true)
     if (this.tableQuery.getPlan().joins.length === 0) return { query: this, column: key }
     if (joined) return { query: this.getTableQueryBuilder(), column }
+    this.assertModelRowSelections()
     const projected = this.tableQuery.addSelect(...selections as never[]) as TableQueryBuilder<TTable, Record<string, unknown>>
     return { query: this.clone(cache ? projected.cache(cache) : projected), column: key }
   }
@@ -2511,7 +2565,7 @@ class ModelQueryBuilderBase<
     readonly collection: ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>, TScopes>
     readonly rows: readonly ModelRecord<TTable>[]
   }> {
-    const rows = await this.getTableQueryBuilder().get<ModelRecord<TTable>>()
+    const rows = await this.getModelRowsQuery().get<ModelRecord<TTable>>()
     return {
       collection: await this.hydrateRows(rows),
       rows,
@@ -2593,6 +2647,10 @@ class ModelQueryBuilderBase<
       && this.aggregateLoads.length === 0
   }
 
+  canPatchLoadedRows(): boolean {
+    return this.canBindRowsToSerializedResult()
+  }
+
   private canBindRowsToSerializedResult(): boolean {
     return this.canBindRowsToSerializedResultBase()
       && this.eagerLoads.length === 0
@@ -2615,23 +2673,22 @@ class ModelQueryBuilderBase<
 
       const relation = this.repository.getRelationDefinition(load.relation)
       if (relation.kind === 'belongsTo') {
-        if (relation.constraint || load.constraint) {
+        const predicates = this.repository.resolveBelongsToOwnerPredicates(relation, load.constraint)
+        if (!predicates) {
           return undefined
         }
 
         const related = relation.related()
         const relatedDefinition = 'definition' in related ? related.definition : related
-        if (!this.repository.relatedRowsArePatchable(relation.related)) {
-          return undefined
-        }
-
         belongsToHydrations.push(Object.freeze({
           foreignKey: relation.foreignKey,
           ownerKey: relation.ownerKey,
+          predicates,
           primaryKey: resolveModelRowKey(relatedDefinition),
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
-          relatedTableName: relatedDefinition.table.tableName,
+          relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
+          relatedTable: relatedDefinition.table,
         }))
         continue
       }
@@ -2644,10 +2701,6 @@ class ModelQueryBuilderBase<
 
         const related = relation.related()
         const relatedDefinition = 'definition' in related ? related.definition : related
-        if (!this.repository.relatedRowsArePatchable(relation.related)) {
-          return undefined
-        }
-
         relatedHydrations.push(Object.freeze({
           foreignKey: relation.foreignKey,
           kind: relation.kind,
@@ -2656,7 +2709,8 @@ class ModelQueryBuilderBase<
           predicates: hydrationQuery.predicates,
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
-          relatedTableName: relatedDefinition.table.tableName,
+          relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
+          relatedTable: relatedDefinition.table,
         }))
         continue
       }
@@ -2678,48 +2732,15 @@ class ModelQueryBuilderBase<
     relation: Extract<RelationDefinition, { kind: 'hasMany' | 'hasOne' }>,
     constraint?: RelationConstraint,
   ): Pick<DatabaseQueryRelatedHydrationObservation, 'orderBy' | 'predicates'> | undefined {
-    if (!relation.constraint && !constraint) {
-      return Object.freeze({
-        orderBy: Object.freeze([]),
-        predicates: Object.freeze([]),
-      })
-    }
-
-    const related = relation.related()
-    if (!this.isQueryableModelReference(related)) {
-      return undefined
-    }
-
-    let query = related.query()
-    const relationResult = relation.constraint?.(query)
-    query = relationResult instanceof ModelQueryBuilderBase ? relationResult as typeof query : query
-
-    if (constraint) {
-      const result = constraint(query)
-      query = result instanceof ModelQueryBuilderBase ? result as typeof query : query
-    }
-
-    const plan = query.getTableQueryBuilder().getPlan()
-    const relatedDefinition = 'definition' in related ? related.definition : related
-    const observation = createDatabaseQueryObservation(
-      plan,
-      relatedDefinition.connectionName ?? this.getConnectionName(),
-      Object.freeze([]),
-    )
-    if (!observation?.patchable || typeof observation.limit !== 'undefined' || typeof observation.offset !== 'undefined') {
+    const resolved = this.repository.resolveRelationHydrationQuery(relation, constraint)
+    if (!resolved?.rowsPatchable) {
       return undefined
     }
 
     return Object.freeze({
-      orderBy: observation.orderBy,
-      predicates: observation.predicates,
+      orderBy: resolved.observation.orderBy,
+      predicates: resolved.observation.predicates,
     })
-  }
-
-  private isQueryableModelReference(
-    value: ModelDefinitionLike<TableDefinition>,
-  ): value is QueryableModelReference {
-    return 'query' in value && typeof value.query === 'function'
   }
 
   private rebindRowsToSerializedResult(

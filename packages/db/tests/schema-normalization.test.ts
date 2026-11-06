@@ -7,7 +7,7 @@ import {
   normalizeDialectReadValue,
   normalizeDialectWriteValue,
 } from '../src'
-import { readNumericValue } from '../src/schema/normalization'
+import { readNumericValue, readsAsCoercedBoolean } from '../src/schema/normalization'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from '../src/query/chunkOrdering'
 
 describe('schema normalization rules', () => {
@@ -91,6 +91,21 @@ describe('schema normalization rules', () => {
     expect(readNumericValue('9'.repeat(400))).toBeUndefined()
     expect(readNumericValue(Number.NaN)).toBeUndefined()
     expect(readNumericValue('1e3')).toBeUndefined()
+  })
+
+  it('reads booleans as ones and zeros for aggregates', () => {
+    expect(readNumericValue(true)).toBe(1)
+    expect(readNumericValue(false)).toBe(0)
+  })
+
+  it('coerces boolean result columns on the dialects that store booleans as numbers', () => {
+    const booleanColumn = column.boolean().toDefinition({ name: 'active' })
+    const integerColumn = column.integer().toDefinition({ name: 'count' })
+
+    expect(readsAsCoercedBoolean('sqlite', booleanColumn)).toBe(true)
+    expect(readsAsCoercedBoolean('mysql', booleanColumn)).toBe(true)
+    expect(readsAsCoercedBoolean('postgres', booleanColumn)).toBe(false)
+    expect(readsAsCoercedBoolean('sqlite', integerColumn)).toBe(false)
   })
 
   it('orders decimal text beyond number precision in chunk traversal', () => {

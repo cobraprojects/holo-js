@@ -94,4 +94,16 @@ describe('@holo-js/realtime predicate dependency matching', () => {
       'missing',
     )).toBeUndefined()
   })
+
+  it('matches BigInt predicates against exact dependency values by integer value', () => {
+    const query = (value: bigint) => createQuery({ predicates: [{ column: 'n', operator: '=', value }] })
+
+    expect(isQueryObservationContradictedByExactPredicates(query(1n), createExactPredicates('n', ['1']))).toBe(false)
+    expect(isQueryObservationContradictedByExactPredicates(query(2n), createExactPredicates('n', ['1']))).toBe(true)
+    expect(isQueryObservationContradictedByExactPredicates(query(9007199254740993n), createExactPredicates('n', ['9007199254740993']))).toBe(false)
+    expect(isQueryObservationContradictedByExactPredicates(query(9007199254740992n), createExactPredicates('n', ['9007199254740993']))).toBe(false)
+    expect(readExactPredicateValues(createExactPredicates('n', ['9007199254740993']), 'main', 'posts', 'n')).toBeUndefined()
+    expect(readExactPredicateValues(createExactPredicates('n', [encodeURIComponent('[1,9007199254740993]')]), 'main', 'posts', 'n')).toBeUndefined()
+    expect(readExactPredicateValues(createExactPredicates('n', [encodeURIComponent('{"n":[9007199254740993]}')]), 'main', 'posts', 'n')).toBeUndefined()
+  })
 })

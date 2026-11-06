@@ -54,9 +54,41 @@ export function rowValuesChanged(
   return false
 }
 
+function isNumberLike(value: unknown): boolean {
+  return typeof value === 'number' || typeof value === 'bigint'
+}
+
+function isUnsafeInteger(value: unknown): boolean {
+  return (typeof value === 'bigint' || (typeof value === 'number' && Number.isInteger(value))) && !Number.isSafeInteger(Number(value))
+}
+
+function comparesBooleanWithNumber(left: unknown, right: unknown): boolean {
+  return (typeof left === 'boolean' && (typeof right === 'boolean' || isNumberLike(right)))
+    || (typeof right === 'boolean' && isNumberLike(left))
+}
+
+export function holdsUnsafeIntegerPredicate(predicates: readonly DatabaseQueryPredicateObservation[]): boolean {
+  return predicates.some(predicate => Array.isArray(predicate.value) ? predicate.value.some(isUnsafeInteger) : isUnsafeInteger(predicate.value))
+}
+
 export function compareValues(left: unknown, right: unknown): number | undefined {
+  if (comparesBooleanWithNumber(left, right)) {
+    return compareValues(Number(left), Number(right))
+  }
+
+  if (isNumberLike(left) && isNumberLike(right) && (isUnsafeInteger(left) || isUnsafeInteger(right))) {
+    return undefined
+  }
+
   if (typeof left === 'number' && typeof right === 'number') {
     return left === right ? 0 : left < right ? -1 : 1
+  }
+
+  if (isNumberLike(left) && isNumberLike(right)) {
+    if (Number.isNaN(left) || Number.isNaN(right)) return undefined
+    const leftNumber = left as number | bigint
+    const rightNumber = right as number | bigint
+    return leftNumber < rightNumber ? -1 : leftNumber > rightNumber ? 1 : 0
   }
 
   if (left instanceof Date && right instanceof Date) {
@@ -73,13 +105,19 @@ export function compareValues(left: unknown, right: unknown): number | undefined
 }
 
 function comparesAsText(value: unknown): boolean {
-  return typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint'
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint' || typeof value === 'boolean'
 }
 
 export function equalValues(left: unknown, right: unknown): boolean | undefined {
   if (left === null || right === null) return false
   if (left === right) return true
   if (Array.isArray(left) || Array.isArray(right)) return undefined
+  if (comparesBooleanWithNumber(left, right)) return Number(left) === Number(right)
+  if (isNumberLike(left) && isNumberLike(right)) {
+    if (Number.isNaN(left) || Number.isNaN(right)) return false
+    const comparison = compareValues(left, right)
+    return comparison === undefined ? undefined : comparison === 0
+  }
   const textComparison = (typeof left === 'string' && comparesAsText(right)) || (typeof right === 'string' && comparesAsText(left))
   return textComparison ? undefined : false
 }

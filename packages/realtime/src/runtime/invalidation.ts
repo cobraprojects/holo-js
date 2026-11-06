@@ -52,7 +52,7 @@ function requiresMutationPreviousRows(connectionName: string, tableName: string,
   }
   for (const key of entries) {
     for (const query of state.queryEntries.get(key)?.queries ?? []) {
-      if (query.connectionName !== connectionName || query.tableName !== tableName || (!query.aggregate && !query.groupedAggregate)) continue
+      if (query.connectionName !== connectionName || queryCacheInternals.canonicalTableName(connectionName, query.tableName) !== tableName || (!query.aggregate && !query.groupedAggregate)) continue
       const aggregateColumn = query.aggregate?.column ?? query.groupedAggregate?.aggregateColumn
       if (columns.some(column => column === aggregateColumn || column === query.groupedAggregate?.groupColumn || query.predicates.some(predicate => predicate.column === column))) return true
     }
@@ -134,8 +134,10 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
       result,
       resultHash: createResultHash(result.data),
     } satisfies RefreshDelivery<typeof entry.definition>
+    entry.refreshFailed = false
     await deliverRefreshData(entry, delivery)
   } catch (error) {
+    entry.refreshFailed = true
     await deliverRefreshError(entry, error)
   }
 }

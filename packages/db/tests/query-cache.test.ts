@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
@@ -455,5 +455,42 @@ describe('native database and cache integration', () => {
     expect(() => DB.table(users).cache({ ttl: 60, invalidate: [''] })).toThrow()
     resetCacheRuntime()
     await expect(DB.table(users).cache(60).get()).rejects.toThrow('Query caching requires @holo-js/cache')
+  })
+})
+
+describe('query cache BigInt values', () => {
+  it('encodes BigInt dependency values as the integers they hold and keeps BigInt cache keys apart from numbers', () => {
+    const { createDeterministicQueryCacheKey, createTablePredicateCacheDependency, createTableRowCacheDependency } = queryCacheInternals
+
+    expect(createTablePredicateCacheDependency('main', 'users', 'score', 0n)).toBe(createTablePredicateCacheDependency('main', 'users', 'score', 0))
+    expect(createTablePredicateCacheDependency('main', 'users', 'score', [1n, 2])).toBe(createTablePredicateCacheDependency('main', 'users', 'score', [1, 2]))
+    expect(createTablePredicateCacheDependency('main', 'users', 'score', 9007199254740993n)).toBe('db:main:users:where:score:*')
+    expect(createTablePredicateCacheDependency('main', 'users', 'score', 9007199254740992)).toBe('db:main:users:where:score:*')
+    expect(createTablePredicateCacheDependency('main', 'users', 'score', [1n, 9007199254740993n])).toBe('db:main:users:where:score:*')
+    expect(createTableRowCacheDependency('main', 'users', 'id', 1000000000000000128n)).toBe(createTableRowCacheDependency('main', 'users', 'id', 1000000000000000100))
+    expect(createTableRowCacheDependency('main', 'users', 'id', 1000000000000000128n)).toBe('db:main:users:row:id:1000000000000000128')
+    expect(createTableRowCacheDependency('main', 'users', 'id', 1000000000000000100n)).not.toBe(createTableRowCacheDependency('main', 'users', 'id', 1000000000000000100))
+    expect(createDeterministicQueryCacheKey({ sql: 'select ?', bindings: [1000000000000000100n] }, 'main'))
+      .not.toBe(createDeterministicQueryCacheKey({ sql: 'select ?', bindings: [1000000000000000100] }, 'main'))
+    expect(createDeterministicQueryCacheKey({ sql: 'select ?', bindings: [1000000000000000100n] }, 'main'))
+      .not.toBe(createDeterministicQueryCacheKey({ sql: 'select ?', bindings: ['1000000000000000100n'] }, 'main'))
+    expect(createTableRowCacheDependency('main', 'users', 'id', 5n)).toBe(createTableRowCacheDependency('main', 'users', 'id', 5))
+    expect(createTablePredicateCacheDependency('main', 'users', 'status', { at: new Date('2026-01-01T00:00:00.000Z'), n: 1n, skip: undefined }))
+      .toBe(createTablePredicateCacheDependency('main', 'users', 'status', { at: '2026-01-01T00:00:00.000Z', n: 1 }))
+    expect(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1n] }, 'main'))
+      .not.toBe(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1] }, 'main'))
+    expect(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1n] }, 'main'))
+      .toBe(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1n] }, 'main'))
+    expect(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1n] }, 'main'))
+      .not.toBe(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: ['1'] }, 'main'))
+    expect(createDeterministicQueryCacheKey({ sql: 'select cardinality(?)', bindings: [Array(1)] }, 'main'))
+      .not.toBe(createDeterministicQueryCacheKey({ sql: 'select cardinality(?)', bindings: [[]] }, 'main'))
+    const selfSerializing = { n: 1, toJSON() { return this } }
+    expect(createTablePredicateCacheDependency('main', 'users', 'status', selfSerializing)).toBe(`db:main:users:where:status:${encodeURIComponent(JSON.stringify(selfSerializing))}`)
+    const keyed = { toJSON: (key: string) => key }
+    expect(createDeterministicQueryCacheKey({ sql: 'select ?', bindings: [keyed] }, 'main'))
+      .toBe(`db:query:${createHash('sha256').update(JSON.stringify({ connectionName: 'main', sql: 'select ?', bindings: [keyed] })).digest('hex')}`)
+    expect(createDeterministicQueryCacheKey({ sql: 'select ?', bindings: ['plain'] }, 'main'))
+      .toBe(`db:query:${createHash('sha256').update(JSON.stringify({ connectionName: 'main', sql: 'select ?', bindings: ['plain'] })).digest('hex')}`)
   })
 })
