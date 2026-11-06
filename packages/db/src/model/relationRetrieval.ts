@@ -1,11 +1,12 @@
 import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
 import { isInlineIntegerValue } from '../query/ast'
 import { hasQueryCache } from '../query/TableQueryBuilder'
-import { canonicalStoredKey } from './entityRuntime'
-import { StoredKeyMap } from './storedKeyCollections'
+import { isCanonicalIntegerText, isDecimalKeyText, readFractionalDecimalKey, readIntegralDecimalKey, readsAsInteger } from '../schema/normalization'
+import { canonicalStoredKey, ownEntry } from './entityRuntime'
+import { StoredKeyMap, StoredKeySet, type StoredKeyOptions } from './storedKeyCollections'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
-import type { ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
-import type { QueryPredicateNode, SelectQueryPlan } from '../query/ast'
+import type { AnyColumnDefinition, ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
+import type { QueryKeyCast, QueryPredicateNode, SelectQueryPlan } from '../query/ast'
 import type { Entity } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
 
@@ -113,33 +114,104 @@ export async function loadRelationKeyChunks<TRow>(
   return rows
 }
 
+export function isFractionalKeyFor(definition: AnyColumnDefinition | undefined, value: unknown): boolean {
+  return definition !== undefined && readsAsInteger(definition) && readFractionalDecimalKey(value) !== undefined
+}
+
+export function keysForColumn(keys: readonly unknown[], definition: AnyColumnDefinition | undefined, driver: string): unknown[] {
+  if (isTextKeyColumn(definition)) return distinctStoredKeys(keys.map(key => typeof key === 'number' || typeof key === 'bigint' ? String(key) : key))
+  if (!definition || !isNumericKeyColumn(definition)) return [...keys]
+  const columnKeys = readsAsInteger(definition)
+    ? keys.filter(key => !isFractionalKeyFor(definition, key)).map(readIntegralDecimalKey).filter(key => fitsIntegerColumn(definition, driver, key))
+    : keys.filter(isDecimalKey)
+  return [...new StoredKeySet(columnKeys, { numeric: true })]
+}
+
+const INTEGER_COLUMN_RANGE = { min: -(2n ** 31n), max: 2n ** 31n - 1n }
+const BIG_INTEGER_COLUMN_RANGE = { min: -(2n ** 63n), max: 2n ** 63n - 1n }
+
+function readBigIntKey(key: unknown): bigint | undefined {
+  if (typeof key === 'bigint') return key
+  if (typeof key === 'number') return Number.isSafeInteger(key) ? BigInt(key) : undefined
+  return isCanonicalIntegerText(key) ? BigInt(key) : undefined
+}
+
+function fitsIntegerColumn(definition: AnyColumnDefinition, driver: string, key: unknown): boolean {
+  const integer = readBigIntKey(key)
+  const range = definition.kind === 'integer' && driver !== 'sqlite' ? INTEGER_COLUMN_RANGE : BIG_INTEGER_COLUMN_RANGE
+  return integer !== undefined && integer >= range.min && integer <= range.max
+}
+
+function isDecimalKey(key: unknown): boolean {
+  return (typeof key === 'number' && Number.isFinite(key)) || typeof key === 'bigint' || isDecimalKeyText(key)
+}
+
+function columnDefinition(query: TableQueryBuilder<string | TableDefinition>, column: string): AnyColumnDefinition | undefined {
+  const table = query.getPlan().source.table
+  return table ? ownEntry(table.columns, column) : undefined
+}
+
+function isNumericKeyColumn(definition: AnyColumnDefinition | undefined): boolean {
+  return definition !== undefined && (definition.kind === 'decimal' || readsAsInteger(definition))
+}
+
+export function relationKeyOptions(parentKey: AnyColumnDefinition | undefined, relatedKey: AnyColumnDefinition | undefined): StoredKeyOptions {
+  return { numeric: isNumericKeyColumn(parentKey) || isNumericKeyColumn(relatedKey) }
+}
+
+export function sourceKeyCast(source: AnyColumnDefinition | undefined, lookedUp: AnyColumnDefinition | undefined): QueryKeyCast | undefined {
+  if (source && readsAsInteger(source) && isTextKeyColumn(lookedUp)) return 'text'
+  if (isTextKeyColumn(source) && lookedUp && readsAsInteger(lookedUp)) return 'integer'
+  return undefined
+}
+
+function isTextKeyColumn(definition: AnyColumnDefinition | undefined): boolean {
+  return definition?.kind === 'string' || definition?.kind === 'text'
+}
+
+function selectsRelationColumn(plan: SelectQueryPlan, column: string): boolean {
+  if (plan.selections.length === 0) {
+    return true
+  }
+
+  if (plan.selections.some(selection => selection.kind !== 'column' || typeof selection.alias !== 'undefined')) {
+    return false
+  }
+
+  return plan.selections.some(selection => selection.kind === 'column'
+    && (selection.column === '*' || selection.column.endsWith('.*') || selection.column.split('.').at(-1) === column))
+}
+
 export async function retrieveRelation(
   keys: readonly unknown[],
   createQuery: () => ModelQueryBuilder,
   column: string,
   observe = false,
-): Promise<{ entities: Entity[], plan?: SelectQueryPlan }> {
+  definition?: AnyColumnDefinition,
+): Promise<{ entities: Entity[], plan?: SelectQueryPlan, rowsPatchable?: boolean }> {
   if (keys.length === 0) return { entities: [] }
   const observationCount = observe && hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
   let plan: SelectQueryPlan | undefined
   const entities: Entity[] = []
   const probe = createQuery()
+  const columnKeys = keysForColumn(keys, definition ?? columnDefinition(probe.getTableQueryBuilder(), column), probe.getTableQueryBuilder().getConnection().getDriver())
   const paginated = isPaginatedRelationQuery(probe)
   if (typeof observationCount === 'number') plan = probe.getTableQueryBuilder().getPlan()
-  for (const [index, chunk] of chunkRelationKeys(keys, paginated).entries()) {
+  const rowsPatchable = !paginated && selectsRelationColumn(probe.getTableQueryBuilder().getPlan(), column) && probe.canPatchLoadedRows()
+  for (const [index, chunk] of chunkRelationKeys(columnKeys, paginated).entries()) {
     const query = index === 0 ? probe : createQuery()
     for (const entity of await query.where(column, 'in', chunk).get()) entities.push(entity)
   }
   if (typeof observationCount === 'number') truncateDatabaseQueryObservations(observationCount)
-  return { entities, plan }
+  return { entities, plan, rowsPatchable }
 }
 
-export function indexRelation(entities: readonly Entity[], column: string): StoredKeyMap<Entity> {
-  return new StoredKeyMap(entities.map(entity => [entity.get(column as never), entity]))
+export function indexRelation(entities: readonly Entity[], column: string, options: StoredKeyOptions = {}): StoredKeyMap<Entity> {
+  return new StoredKeyMap(entities.map(entity => [entity.get(column as never), entity]), options)
 }
 
-export function groupRelation(entities: readonly Entity[], column: string): StoredKeyMap<Entity[]> {
-  const grouped = new StoredKeyMap<Entity[]>()
+export function groupRelation(entities: readonly Entity[], column: string, options: StoredKeyOptions = {}): StoredKeyMap<Entity[]> {
+  const grouped = new StoredKeyMap<Entity[]>([], options)
   for (const entity of entities) {
     const key = entity.get(column as never)
     const bucket = grouped.get(key)
@@ -158,13 +230,17 @@ export async function retrievePivotRelation(
   relatedKey: string,
   pivotSelection: readonly string[],
   readPivotRows: (rows: readonly Record<string, unknown>[]) => Record<string, unknown>[],
+  keyDefinitions: { readonly parentKey?: AnyColumnDefinition, readonly relatedKey?: AnyColumnDefinition } = {},
 ): Promise<{ rows: Record<string, unknown>[], related: StoredKeyMap<Entity> }> {
   if (parentKeys.length === 0) return { rows: [], related: new StoredKeyMap() }
-  const rows = await loadRelationKeyChunks(parentKeys, false, async chunk => readPivotRows(await createPivotQuery()
+  const pivotQuery = createPivotQuery()
+  const pivotParentKey = columnDefinition(pivotQuery, parentColumn)
+  const pivotKeys = keysForColumn(parentKeys, pivotParentKey ?? keyDefinitions.parentKey, pivotQuery.getConnection().getDriver())
+  const rows = await loadRelationKeyChunks(pivotKeys, false, async chunk => readPivotRows(await createPivotQuery()
     .select(...pivotSelection)
     .where(parentColumn, 'in', chunk)
     .get<Record<string, unknown>>()))
   const keys = distinctStoredKeys(rows.map(row => row[relatedColumn]).filter(value => value != null))
-  const { entities } = await retrieveRelation(keys, createRelatedQuery, relatedKey)
-  return { rows, related: indexRelation(entities, relatedKey) }
+  const { entities } = await retrieveRelation(keys, createRelatedQuery, relatedKey, false, keyDefinitions.relatedKey)
+  return { rows, related: indexRelation(entities, relatedKey, relationKeyOptions(keyDefinitions.relatedKey, columnDefinition(pivotQuery, relatedColumn))) }
 }

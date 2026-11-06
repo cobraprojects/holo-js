@@ -1,4 +1,4 @@
-import { TableQueryBuilder, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
+import { TableQueryBuilder, holoRuntimeInternals, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
 import type {
   DatabaseMutationEvent,
   MutationIndex,
@@ -8,6 +8,7 @@ import {
 } from './dependencies'
 import {
   getBackfillDatabaseConnection,
+  readBackfilledRows,
 } from './query-backfill'
 import type {
   BackfillCache,
@@ -293,7 +294,7 @@ async function fetchGroupedRelatedHydrationRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  const rows = await builder.get()
+  const rows = readBackfilledRows(hydration.relatedTable, await builder.get())
   const rowsByLocalKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
     const localKey = row[hydration.foreignKey]
@@ -321,7 +322,7 @@ async function fetchGroupedRelatedTopOneRows(
 ): Promise<ReadonlyMap<unknown, BackfillRows> | undefined> {
   const statement = compileGroupedRelatedTopOneStatement(connection, hydration, values)
   const rows = await connection.queryCompiled<Record<string, unknown>>(statement)
-  return groupRelatedTopOneRows(rows.rows, values)
+  return groupRelatedTopOneRows(readBackfilledRows(hydration.relatedTable, rows.rows), values)
 }
 
 function groupRelatedTopOneRows(
@@ -374,7 +375,7 @@ function compileGroupedRelatedTopOneStatement(
   const upperBoundPlaceholder = placeholder(1)
   const derivedAlias = quote('__holo_grouped_related_rows')
   const rowNumberColumn = quote(GROUPED_RELATED_ROW_NUMBER_ALIAS)
-  const sql = `SELECT * FROM (SELECT *, ${quote(hydration.foreignKey)} AS ${quote(GROUPED_RELATED_ROW_ID_ALIAS)}, ${rowNumber} FROM ${quote(hydration.relatedTableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_RELATED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
+  const sql = `SELECT * FROM (SELECT *, ${quote(hydration.foreignKey)} AS ${quote(GROUPED_RELATED_ROW_ID_ALIAS)}, ${rowNumber} FROM ${holoRuntimeInternals.quoteTablePath(dialect, hydration.relatedTableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_RELATED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
 
   return {
     bindings,
@@ -473,9 +474,9 @@ async function fetchRelatedHydrationRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  const rows = await builder
+  const rows = readBackfilledRows(hydration.relatedTable, await builder
     .limit(hydration.kind === 'hasOne' ? 1 : undefined)
-    .get()
+    .get())
   return validateRelatedHydrationRows(rows, hydration)
 }
 

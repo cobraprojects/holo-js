@@ -1,6 +1,7 @@
+import { fileURLToPath } from 'node:url'
 import { writeSync } from 'node:fs'
 import { writeTextFile } from './project/atomic-file'
-import { initializeHolo } from '@holo-js/core'
+import { bundleSourceInternals, initializeHolo } from '@holo-js/core'
 import {
   configureDB,
   createMigrationService,
@@ -17,6 +18,7 @@ import {
 } from '@holo-js/db'
 import { loadProjectDatabaseDrivers } from './database-drivers'
 import { errorMessage } from './error-message'
+import { dropAllTablesForFresh } from './fresh-drop'
 import { runWithMigrationLock } from './migration-lock'
 import { isSchemaChangingKind } from './runtime-kinds'
 import { RUNTIME_FAILURE_FD } from './runtime-failure'
@@ -30,6 +32,7 @@ type RuntimeConfigPayload = Parameters<typeof resolveRuntimeConnectionManagerOpt
 type RuntimeModuleEntry = {
   readonly sourcePath: string
   readonly url: string
+  readonly importers: Readonly<Record<string, string>>
 }
 
 type RuntimePayload = {
@@ -68,22 +71,6 @@ type RuntimeModel = {
   prune(): Promise<number> | number
 }
 
-type FreshDropConnection = {
-  getDialect(): {
-    name: string
-    quoteIdentifier(identifier: string): string
-  }
-  queryCompiled<TRow extends Record<string, unknown>>(statement: { sql: string, source: string }): Promise<{ rows: TRow[] }>
-  executeCompiled(statement: { sql: string, source: string }): Promise<unknown>
-}
-
-type FreshDropSchema = {
-  getTables(): Promise<string[]>
-  dropTable(tableName: string): Promise<void>
-  withoutForeignKeyConstraints<TResult>(callback: () => TResult | Promise<TResult>): Promise<TResult>
-}
-
-
 async function readRuntimePayload(): Promise<RuntimePayload> {
   const chunks: Buffer[] = []
   for await (const chunk of process.stdin) {
@@ -111,6 +98,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function loadModule(path: string): Promise<unknown> {
   return import(`${path}?t=${Date.now()}`)
+}
+
+async function loadBundledModule(entry: RuntimeModuleEntry): Promise<unknown> {
+  return bundleSourceInternals.importBundle(
+    { path: fileURLToPath(entry.url), sourcePath: entry.sourcePath, importers: entry.importers },
+    url => import(url),
+  )
 }
 
 function resolveExport<TValue>(
@@ -159,32 +153,6 @@ function inferRuntimeMigrationName(sourcePath: string): string {
   return fileName
 }
 
-async function dropAllTablesForFresh(
-  connection: FreshDropConnection,
-  schema: FreshDropSchema,
-): Promise<void> {
-  const tables = await schema.getTables()
-  if (connection.getDialect().name === 'postgres') {
-    const { quoteIdentifier } = connection.getDialect()
-    const current = await connection.queryCompiled<{ schema: string }>({ sql: 'SELECT current_schema() AS schema', source: 'schema:currentSchema' })
-    const schemaName = current.rows[0]?.schema
-    if (!schemaName) return
-
-    for (const tableName of tables) {
-      await connection.executeCompiled({
-        sql: `DROP TABLE IF EXISTS ${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)} CASCADE`,
-        source: `schema:dropTableFresh:${schemaName}.${tableName}`,
-      })
-    }
-    return
-  }
-
-  await schema.withoutForeignKeyConstraints(async () => {
-    for (const tableName of tables) {
-      await schema.dropTable(tableName)
-    }
-  })
-}
 
 async function isDatabaseMissing(connection: DatabaseContext): Promise<boolean> {
   const adapter = connection.getAdapter()
@@ -223,7 +191,7 @@ async function loadRuntimeItem<TValue>(
   matcher: (value: unknown) => value is TValue,
   label: string,
 ): Promise<TValue> {
-  const item = resolveExport(await loadModule(entry.url), matcher)
+  const item = resolveExport(await loadBundledModule(entry), matcher)
   if (!item) {
     throw new Error(`Registered ${label} "${entry.sourcePath}" does not export a Holo ${label}.`)
   }

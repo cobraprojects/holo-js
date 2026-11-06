@@ -8,7 +8,8 @@ import type { DatabaseEnumCheckStructure, DialectSchemaReader, TableLocation } f
 
 type TableNameRow = { name: string }
 type TableRow = { schema: string }
-type TableLocationRow = { schema: string, table: string }
+type TableLocationRow = { schema: string, table: string, oid: string }
+type RelationRow = { present: boolean }
 type ColumnRow = { name: string, data_type: string, full_type: string, not_null: boolean, default_value: string | null, is_identity: boolean, generated_kind: string, primary_key_position: number | null }
 type IndexRow = { name: string, is_unique: boolean, is_primary: boolean, is_constraint: boolean, representable: boolean, columns: string[] }
 type ForeignKeyRow = { name: string, owner_schema: string, table_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
@@ -23,6 +24,8 @@ const TABLE_RELATION = `FROM pg_catalog.pg_class t
 
 const TABLE_RELATION_FILTER = `${TABLE_FILTER} AND t.relkind IN ('r', 'p')`
 
+const RELATION_ID_FILTER = 't.oid = $1::oid'
+
 const COLUMNS_SQL = `SELECT a.attname AS name,
   COALESCE(ic.data_type, pg_catalog.format_type(a.atttypid, a.atttypmod)) AS data_type,
   pg_catalog.format_type(a.atttypid, a.atttypmod) AS full_type,
@@ -35,7 +38,7 @@ const COLUMNS_SQL = `SELECT a.attname AS name,
   JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped
   LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
   LEFT JOIN information_schema.columns ic ON ic.table_schema = n.nspname AND ic.table_name = t.relname AND ic.column_name = a.attname
-  WHERE ${TABLE_RELATION_FILTER}
+  WHERE ${RELATION_ID_FILTER}
   ORDER BY a.attnum`
 
 const INDEXES_SQL = `SELECT ic.relname AS name,
@@ -47,8 +50,7 @@ const INDEXES_SQL = `SELECT ic.relname AS name,
   FROM pg_catalog.pg_index i
   JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
   JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
-  JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
-  WHERE ${TABLE_FILTER}
+  WHERE ${RELATION_ID_FILTER}
   ORDER BY ic.relname`
 
 const FOREIGN_KEYS_SQL = `SELECT con.conname AS name,
@@ -67,18 +69,21 @@ const FOREIGN_KEYS_SQL = `SELECT con.conname AS name,
   CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(from_attnum, to_attnum, position)
   JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.from_attnum
   JOIN pg_catalog.pg_attribute fa ON fa.attrelid = con.confrelid AND fa.attnum = k.to_attnum
-  WHERE con.contype = 'f' AND ${TABLE_FILTER}
+  WHERE con.contype = 'f' AND ${RELATION_ID_FILTER}
   ORDER BY con.conname, k.position`
 
 const CHECKS_SQL = `SELECT con.conname AS name,
   a.attname AS column_name,
-  pg_catalog.pg_get_constraintdef(con.oid) AS definition
+  'CHECK (' || pg_catalog.pg_get_expr(con.conbin, con.conrelid) || ')'
+    || CASE WHEN con.connoinherit THEN ' NO INHERIT' ELSE '' END
+    || CASE WHEN con.convalidated THEN '' ELSE ' NOT VALID' END AS definition
   FROM pg_catalog.pg_constraint con
   JOIN pg_catalog.pg_class t ON t.oid = con.conrelid
-  JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
   JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
-  WHERE con.contype = 'c' AND cardinality(con.conkey) = 1 AND ${TABLE_FILTER}
+  WHERE con.contype = 'c' AND cardinality(con.conkey) = 1 AND ${RELATION_ID_FILTER}
   ORDER BY con.conname`
+
+const CURRENT_RELATION_SQL = `SELECT pg_catalog.has_table_privilege($1::oid, 'SELECT') IS NOT NULL AS present`
 
 const REFERENTIAL_ACTIONS: Readonly<Record<string, string>> = {
   a: 'NO ACTION',
@@ -111,10 +116,14 @@ function readEnumCheck(row: CheckRow): DatabaseEnumCheckStructure | undefined {
 export function createPostgresSchemaReader(connection: DatabaseContext): DialectSchemaReader {
   const introspect = createIntrospect(connection)
 
-  async function locateTable(tableName: string): Promise<TableLocation | undefined> {
+  async function locateRelation(tableName: string): Promise<TableLocationRow | undefined> {
     const { schema, table } = splitTablePath(tableName)
-    const exists = await introspect<TableLocationRow>(`SELECT n.nspname AS schema, t.relname AS table ${TABLE_RELATION} WHERE ${TABLE_RELATION_FILTER}`, [schema ?? null, table], `schema:introspect:table:${tableName}`)
-    const row = exists.rows[0]
+    const exists = await introspect<TableLocationRow>(`SELECT n.nspname AS schema, t.relname AS table, t.oid::text AS oid ${TABLE_RELATION} WHERE ${TABLE_RELATION_FILTER}`, [schema ?? null, table], `schema:introspect:table:${tableName}`)
+    return exists.rows[0]
+  }
+
+  async function locateTable(tableName: string): Promise<TableLocation | undefined> {
+    const row = await locateRelation(tableName)
     return row && { schema: row.schema, table: row.table }
   }
 
@@ -134,20 +143,21 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
     },
 
     async readTableStructure(tableName) {
-      const { schema, table } = splitTablePath(tableName)
-      const bindings = [schema ?? null, table]
-      const resolvedSchema = (await locateTable(tableName))?.schema
-      if (resolvedSchema === undefined) return undefined
+      const relation = await locateRelation(tableName)
+      if (relation === undefined) return undefined
+      const bindings = [relation.oid]
 
       const columns = await introspect<ColumnRow>(COLUMNS_SQL, bindings, `schema:introspect:columns:${tableName}`)
       const indexes = await introspect<IndexRow>(INDEXES_SQL, bindings, `schema:introspect:indexes:${tableName}`)
       const foreignKeys = await introspect<ForeignKeyRow>(FOREIGN_KEYS_SQL, bindings, `schema:introspect:foreignKeys:${tableName}`)
       const checks = await introspect<CheckRow>(CHECKS_SQL, bindings, `schema:introspect:checks:${tableName}`)
+      const relationAfterRead = await introspect<RelationRow>(CURRENT_RELATION_SQL, bindings, `schema:introspect:exists:${tableName}`)
+      if (relationAfterRead.rows[0]?.present !== true) return undefined
 
       return {
         dialect: 'postgres',
         tableName,
-        schema: resolvedSchema,
+        schema: relation.schema,
         columns: columns.rows.map((row) => {
           const autoIncrement = row.is_identity || (row.default_value?.startsWith('nextval(') ?? false)
           const computed = readComputedColumn(row)

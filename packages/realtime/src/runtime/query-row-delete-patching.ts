@@ -20,6 +20,7 @@ import {
 } from './query-row-identity'
 import {
   exactIdsDiffer,
+  rowIdentityIndexMayHold,
 } from './query-row-matching'
 import {
   canBackfillShrinkingRows,
@@ -92,7 +93,7 @@ function tryApplyExactDeleteMutationToRows(
 
   const rowIndex = rowIdentityIndex.get(context.exactMutationId)
   if (typeof rowIndex === 'undefined') {
-    return UNCHANGED_ROWS_RESULT
+    return rowIdentityIndexMayHold(rowIdentityIndex, context.exactMutationId) ? undefined : UNCHANGED_ROWS_RESULT
   }
 
   return createShrinkingRowsPatchResult(rows, query, removeRowByIndex(rows, rowIndex))

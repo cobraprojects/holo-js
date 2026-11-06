@@ -2,6 +2,7 @@ import { rawSqlPlaceholders } from './rawSql'
 import { SecurityError } from '../core/errors'
 import { isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
 import { storesJson } from '../schema/normalization'
+import { tablePathSegments } from '../schema/identifiers'
 import type { TableColumnsShape } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type {
@@ -111,10 +112,21 @@ function assertRawPlaceholderBindings(sql: string, bindings: readonly unknown[],
 }
 
 function assertQualifiedIdentifier(value: string, kind: string): void {
-  const parts = value.split('.')
+  const parts = tablePathSegments(value)
   if (parts.length === 0 || parts.some(part => !IDENTIFIER_PATTERN.test(part))) {
     throw new SecurityError(`${kind} "${value}" is not a valid identifier.`)
   }
+}
+
+function assertTablePath(value: string, kind: string, message = `${kind} "${value}" must be a table name or a schema-qualified table name.`): void {
+  assertQualifiedIdentifier(value, kind)
+  if (tablePathSegments(value).length > 2) {
+    throw new SecurityError(message)
+  }
+}
+
+export function assertQueryTablePath(tableName: string): void {
+  assertTablePath(tableName, 'Table')
 }
 
 function assertHavingClause(clause: QueryHavingClause): void {
@@ -198,7 +210,7 @@ function assertColumnSelection(
 ): void {
   const allColumnsOf = readAllColumnsSelectionTable(selection.column)
   if (allColumnsOf !== undefined && !selection.alias) {
-    assertQualifiedIdentifier(allColumnsOf, 'Column reference')
+    assertTablePath(allColumnsOf, 'Column reference', `Column reference "${selection.column}" must select every column of a table name or a schema-qualified table name.`)
     return
   }
 
@@ -217,7 +229,7 @@ function assertJoinClause(join: QueryJoinClause): void {
   }
 
   if (hasTable) {
-    assertQualifiedIdentifier(join.table!, 'Join table')
+    assertTablePath(join.table!, 'Join table')
     if (typeof join.alias !== 'undefined') {
       assertIdentifier(join.alias, 'Join alias')
     }
@@ -579,7 +591,7 @@ function assertNonNegativeInteger(value: number | undefined, kind: string): void
 }
 
 export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName): void {
-  assertQualifiedIdentifier(plan.source.tableName, 'Table')
+  assertTablePath(plan.source.tableName, 'Table')
   if (plan.source.alias) {
     assertIdentifier(plan.source.alias, 'Table alias')
   }

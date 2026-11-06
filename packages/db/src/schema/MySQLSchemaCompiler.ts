@@ -12,7 +12,7 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
     for (const column of columns) {
       if (column.references) {
         const constraintName = this.resolveForeignKeyName(table.tableName, column.name, column.references.constraintName)
-        definitions.push(this.compileForeignKeyConstraint(column.name, column.references, constraintName))
+        definitions.push(this.compileForeignKeyConstraint(table.tableName, column.name, column.references, constraintName))
       }
     }
 
@@ -28,7 +28,7 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
     const constraintName = this.resolveForeignKeyName(tableName, column.name, column.references.constraintName)
     return {
       ...statement,
-      sql: `${statement.sql}, ADD ${this.compileForeignKeyConstraint(column.name, column.references, constraintName)}`,
+      sql: `${statement.sql}, ADD ${this.compileForeignKeyConstraint(tableName, column.name, column.references, constraintName)}`,
     }
   }
 

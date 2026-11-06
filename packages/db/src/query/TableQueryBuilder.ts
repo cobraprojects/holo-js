@@ -35,6 +35,8 @@ import {
   recordDatabaseQueryObservation,
   recordDatabaseQueryContext,
   resolveQueryCacheDependencies,
+  writesTextLiterals,
+  type QueryTextMatching,
   resolveQueryCacheKey,
   type DatabaseQueryGroupedAggregateStateObservation,
   type DatabaseQueryGroupedAggregateValueCountObservation,
@@ -47,7 +49,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { holdsUnsafeInteger, readConvertedResultColumns, readInsertedKey, readIntegerColumns, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
+import { hasUnstoredBoolean, holdsUnreadableInteger, readConvertedResultColumns, readInsertedKey, readIntegerColumns, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -98,7 +100,11 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
+import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
+import { isMySQLConnection, isPostgresConnection, isSQLiteConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
+import { UNKNOWN_TEXT_COLUMNS, resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -109,12 +115,14 @@ import type {
   QueryJoinClause,
   QueryBetweenColumnsPredicate,
   QueryColumnPredicate,
+  QueryKeyCast,
+  QueryKeyCasts,
   QueryDatePart,
   QueryOperator,
   QueryPredicateNode,
   QueryPredicate,
+  QueryColumnSelection,
   QuerySelection,
-  QuerySource,
   SelectQueryPlan,
 } from './ast'
 import {
@@ -126,6 +134,8 @@ import {
   normalizeQueryWriteValue,
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
+import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolveTableIdentity } from './tableIdentity'
+import { assertQueryTablePath, validateQueryPlan } from './validator'
 
 import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
 
@@ -170,6 +180,8 @@ type JsonColumnPath<
 type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TValue>
 
 export const hasQueryCache = Symbol('hasQueryCache')
+export const resolveAggregateSource = Symbol('resolveAggregateSource')
+export const projectModelRows = Symbol('projectModelRows')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -177,16 +189,23 @@ type KeyedInsert = (
 ) => Promise<number | string | undefined>
 
 let keyedInsert: KeyedInsert
+type AnyTableQuery = TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>
+let keyColumnComparison: (query: AnyTableQuery, column: string, compareTo: string, casts: QueryKeyCasts) => AnyTableQuery
+let keyColumnSelection: (query: AnyTableQuery, column: string, cast: QueryKeyCast | undefined) => AnyTableQuery
+let keyColumnJoin: (query: AnyTableQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts) => AnyTableQuery
 
-export function resolveSourceColumnName(source: Pick<QuerySource, 'tableName' | 'alias'>, column: string): string | undefined {
-  const separator = column.lastIndexOf('.')
-  if (separator === -1) return column
-
-  const qualifier = column.slice(0, separator)
-  const { tableName } = source
-  const ownQualifiers = [tableName, tableName.slice(tableName.lastIndexOf('.') + 1), source.alias]
-  return ownQualifiers.includes(qualifier) ? column.slice(separator + 1) : undefined
+export function whereKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, compareTo: string, casts: QueryKeyCasts): TQuery {
+  return keyColumnComparison(query as unknown as AnyTableQuery, column, compareTo, casts) as unknown as TQuery
 }
+
+export function selectKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, cast: QueryKeyCast | undefined): TQuery {
+  return keyColumnSelection(query as unknown as AnyTableQuery, column, cast) as unknown as TQuery
+}
+
+export function joinOnKeyColumns<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts): TQuery {
+  return keyColumnJoin(query as unknown as AnyTableQuery, table, leftColumn, rightColumn, casts) as unknown as TQuery
+}
+
 
 export function insertGetIdByKey(
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
@@ -198,6 +217,8 @@ export function insertGetIdByKey(
 
 const trustedRawWhereAppenders = new WeakMap<object, (sql: string, bindings: readonly unknown[]) => unknown>()
 const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
+
+const aggregateValueKey = 'holo_aggregate_value'
 
 function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
   return Object.freeze(predicates.map(predicate => Object.freeze({ ...predicate }) as QueryPredicateNode))
@@ -215,6 +236,8 @@ function resolveJoinTarget(table: TableReference): Pick<QueryJoinClause, 'table'
 const GROUPED_AVERAGE_COUNT_KEY = '__holo_grouped_average_count'
 const GROUPED_AVERAGE_ROW_COUNT_KEY = '__holo_grouped_average_row_count'
 const GROUPED_AVERAGE_SUM_KEY = '__holo_grouped_average_sum'
+const rowsReadFromUnstoredBooleans = new WeakSet<readonly Record<string, unknown>[]>()
+
 const GROUPED_AVERAGE_GROUP_KEY = '__holo_grouped_average_group'
 const GROUPED_AGGREGATE_VALUE_KEY = '__holo_grouped_aggregate_state_value'
 const GROUPED_AGGREGATE_ROW_COUNT_KEY = '__holo_grouped_aggregate_state_row_count'
@@ -241,7 +264,8 @@ export class TableQueryBuilder<
   TSelectedRow extends Record<string, unknown> = SelectRow<TTableOrName>,
   TAvailableColumns extends Record<string, unknown> = AvailableTableColumns<TTableOrName>,
 > {
-  private readonly source: ReturnType<typeof createTableSource>
+  private readonly ownSource: ReturnType<typeof createTableSource>
+  private boundSource?: ReturnType<typeof createTableSource>
   private readonly plan: SelectQueryPlan
 
   constructor(
@@ -252,7 +276,7 @@ export class TableQueryBuilder<
     handoff?: symbol,
   ) {
     const source = plan?.source ?? createTableSource(table)
-    this.source = source.table ? source : { ...source, table: getConnectionGeneratedTableDefinition(source.tableName, connection.getConnectionName()) }
+    this.ownSource = source
     const ownPlan = plan && handoff !== internalPlanHandoff
       ? { ...plan, predicates: copyTopLevelPredicates(plan.predicates) }
       : plan
@@ -263,6 +287,26 @@ export class TableQueryBuilder<
       sql,
       bindings: Object.freeze([...bindings]),
     }))))
+  }
+
+  private get source(): ReturnType<typeof createTableSource> {
+    if (this.boundSource) return this.boundSource
+    if (this.ownSource.table) return this.ownSource
+    const table = getConnectionGeneratedTableDefinition(this.ownSource.tableName, this.connection.getConnectionName())
+    const source = { ...this.ownSource, table }
+    if (table) this.boundSource = source
+    return source
+  }
+
+  private async bindGeneratedTable(): Promise<void> {
+    await resolvePlanGeneratedTableIdentities(this.connection, this.plan)
+  }
+
+  private async prepareMutation(): Promise<void> {
+    await this.bindGeneratedTable()
+    if (getDatabaseQueryCacheBridge() || hasDatabaseDependencyInvalidationListeners() || hasDatabaseDependencyInvalidationPublisher()) {
+      await resolveTableIdentity(this.connection, this.ownSource.tableName)
+    }
   }
 
   getTableName(): string {
@@ -681,7 +725,7 @@ export class TableQueryBuilder<
 
     const qualifier = column.slice(0, separator)
     const join = this.plan.joins.find(({ alias, table, definition }) => definition && (alias === undefined
-      ? table === qualifier || table?.slice(table.lastIndexOf('.') + 1) === qualifier
+      ? table === qualifier || (table !== undefined && splitTablePath(table).table === qualifier)
       : alias === qualifier))
     return join?.definition?.columns[column.slice(separator + 1)]
   }
@@ -870,6 +914,7 @@ export class TableQueryBuilder<
     column: string,
     operatorOrCompareTo: string,
     compareTo?: string,
+    casts?: QueryKeyCasts,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const comparedColumn = compareTo ?? operatorOrCompareTo
     const dateOperands = { column: this.isDateColumn(column), compareTo: this.isDateColumn(comparedColumn) }
@@ -880,6 +925,7 @@ export class TableQueryBuilder<
       operator: (typeof compareTo === 'undefined' ? '=' : operatorOrCompareTo) as QueryColumnPredicate['operator'],
       compareTo: comparedColumn,
       ...(dateOperands.column || dateOperands.compareTo ? { dateOperands } : {}),
+      ...(casts?.left || casts?.right ? { keyCasts: casts } : {}),
     }))
   }
 
@@ -1924,6 +1970,40 @@ export class TableQueryBuilder<
     return this.queryCacheConfig !== undefined
   }
 
+  [resolveAggregateSource](column: string, modelRow = false): {
+    readonly key: string
+    readonly joined: boolean
+    readonly selections: readonly string[]
+    readonly cache?: NormalizedQueryCacheConfig
+  } {
+    const root = column.split('->', 1)[0]!
+    const qualifier = root.slice(0, root.lastIndexOf('.'))
+    const join = typeof this.resolveSourceColumnName(root) === 'undefined'
+      ? this.plan.joins.find(join => qualifiesTable(qualifier, join.table, join.alias))
+      : undefined
+    if (this.plan.joins.length > 0 && this.plan.unions.length > 0) {
+      throw new CompilerError(`Cannot aggregate column "${column}" on a joined query with a union.`)
+    }
+    const key = join ? column.slice(qualifier.length + 1) : Object.keys(this.resolveSourceColumnKeys([[column, column]], 'aggregate'))[0]!
+    const source = join ? join.alias ?? join.table! : this.source.alias ?? this.source.tableName
+    const wildcard = (table: string) => tableWildcard(table, this.connection.getDriver())
+    const implicitSelections = this.plan.selections.length > 0
+      ? []
+      : [this.source.alias ?? this.source.tableName, ...this.plan.joins.map(join => join.alias ?? join.table!)].map(wildcard)
+    const selections = !modelRow || join
+      ? [...implicitSelections, `${source}.${key} as ${aggregateValueKey}`]
+      : implicitSelections.length > 0
+        ? [...implicitSelections, wildcard(source)]
+        : this.modelAggregateSelections(column, source, key, wildcard(source))
+    return { key, joined: !!join, selections, cache: this.plan.joins.length > 0 ? this.projectAggregate(selections).queryCacheConfig : undefined }
+  }
+
+  [projectModelRows](): { readonly query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> } {
+    const connectionName = this.connection.getConnectionName()
+    const plan = projectModelRowPlan(this.plan, this.connection.getDriver(), join => knownJoinedColumns(join, connectionName))
+    return { query: plan === this.plan ? this : this.clone(plan) }
+  }
+
   cache(
     config: QueryCacheTtlInput | QueryCacheConfig,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
@@ -1946,8 +2026,15 @@ export class TableQueryBuilder<
     scopeCacheKey = false,
     convertColumns = true,
   ): Promise<TRow[]> {
+    await this.bindGeneratedTable()
     const cacheConfig = this.queryCacheConfig
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
+    if (activeDependencyCollector || (cacheConfig && !this.plan.lockMode)) {
+      await resolvePlanTableIdentities(this.connection, this.plan)
+      for (const dependency of cacheConfig?.invalidate ?? []) {
+        if (!dependency.startsWith('db:')) await resolveTableIdentity(this.connection, dependency)
+      }
+    }
     const dependencies = this.plan.lockMode
       || (!cacheConfig && !activeDependencyCollector)
       ? undefined
@@ -1955,6 +2042,7 @@ export class TableQueryBuilder<
           this.plan,
           this.connection.getConnectionName(),
           cacheConfig?.invalidate,
+          cacheConfig?.invalidate?.length ? false : await this.resolveQueryTextMatching(),
     )
     const observationDependencies = activeDependencyCollector && !this.plan.lockMode
       ? dependencies ?? inferDatabaseQueryObservationDependencies(this.plan, this.connection.getConnectionName())
@@ -2031,7 +2119,10 @@ export class TableQueryBuilder<
     if (!convertColumns) return rows
     const plan = this.plan.source.table ? withResolvedDefinitions(this.plan, this.connection.getConnectionName()) : this.plan
     const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan)
-    return convertedColumns.size === 0 ? rows : rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
+    if (convertedColumns.size === 0) return rows
+    const converted = rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
+    if (hasUnstoredBoolean(rows, convertedColumns)) rowsReadFromUnstoredBooleans.add(converted)
+    return converted
   }
 
   private async queryRows<TRow extends Record<string, unknown>>(statement: CompiledStatement): Promise<TRow[]> {
@@ -2089,7 +2180,7 @@ export class TableQueryBuilder<
       observationDependencies,
       rows,
     )
-    if (observation?.patchable && this.observesSQLiteDecimalColumn()) {
+    if (observation?.patchable && (rowsReadFromUnstoredBooleans.has(rows) || this.observesSQLiteDecimalColumn())) {
       recordDatabaseQueryObservation(Object.freeze({ ...observation, patchable: false }))
       return
     }
@@ -2103,7 +2194,7 @@ export class TableQueryBuilder<
       return
     }
 
-    const averageStates = groupedAggregate.kind === 'avg' && groupedAggregate.aggregateColumn
+    const averageStates = groupedAggregate.kind === 'avg' && groupedAggregate.aggregateColumn && this.connection.getDriver() !== 'mysql'
       ? await this.readGroupedAverageStates(groupedAggregate)
       : undefined
     const aggregateStates = (
@@ -2128,6 +2219,12 @@ export class TableQueryBuilder<
       : observation)
   }
 
+  private async queryMetadataRows(plan: SelectQueryPlan, groupKey: string): Promise<readonly Record<string, unknown>[]> {
+    const { rows } = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(plan))
+    const read = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan).get(groupKey)
+    return read ? rows.map(row => Object.hasOwn(row, groupKey) ? { ...row, [groupKey]: read(row[groupKey]) } : row) : rows
+  }
+
   private async readGroupedAverageStates(
     groupedAggregate: DatabaseQueryGroupedAggregateObservation,
   ): Promise<readonly DatabaseQueryGroupedAverageStateObservation[] | undefined> {
@@ -2148,9 +2245,9 @@ export class TableQueryBuilder<
       having: Object.freeze([]),
       selections: Object.freeze(selections),
     }) satisfies SelectQueryPlan
-    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
+    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AVERAGE_GROUP_KEY)
     const states: DatabaseQueryGroupedAverageStateObservation[] = []
-    for (const row of result.rows) {
+    for (const row of result) {
       const count = this.normalizeNumericResult(row[GROUPED_AVERAGE_COUNT_KEY])
       const rowCount = this.normalizeNumericResult(row[GROUPED_AVERAGE_ROW_COUNT_KEY])
       const sum = this.normalizeNumericResult(row[GROUPED_AVERAGE_SUM_KEY] ?? 0)
@@ -2195,9 +2292,9 @@ export class TableQueryBuilder<
       having: Object.freeze([]),
       selections: Object.freeze(selections),
     }) satisfies SelectQueryPlan
-    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
+    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AGGREGATE_GROUP_KEY)
     const states: DatabaseQueryGroupedAggregateStateObservation[] = []
-    for (const row of result.rows) {
+    for (const row of result) {
       const aggregateValue = this.normalizeGroupedAggregateStateValue(
         groupedAggregate,
         row[GROUPED_AGGREGATE_VALUE_KEY],
@@ -2252,9 +2349,9 @@ export class TableQueryBuilder<
         this.createAggregateSelection('count', GROUPED_AGGREGATE_VALUE_COUNT_KEY, '*'),
       ]),
     }) satisfies SelectQueryPlan
-    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
+    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AGGREGATE_GROUP_KEY)
     const groups: DatabaseQueryGroupedAggregateValueCountGroupObservation[] = []
-    for (const row of result.rows) {
+    for (const row of result) {
       const groupValue = row[GROUPED_AGGREGATE_GROUP_KEY]
       const value = this.normalizeGroupedAggregateStateValue(
         groupedAggregate,
@@ -2333,6 +2430,10 @@ export class TableQueryBuilder<
   private normalizeNumericResult(value: unknown): number | undefined {
     if (value === null) {
       return 0
+    }
+
+    if (typeof value === 'boolean') {
+      return Number(value)
     }
 
     if (typeof value === 'number') {
@@ -2721,8 +2822,9 @@ export class TableQueryBuilder<
     return this.avg(column)
   }
 
-  async avg(column: string): Promise<number | null> {
-    const rows = await this.get<Record<string, unknown>>()
+  async avg(requestedColumn: string): Promise<number | null> {
+    const { query, key, column } = this.resolveAggregateColumn(requestedColumn)
+    const rows = await query.get<Record<string, unknown>>()
     if (rows.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
         rebindDatabaseQueryObservationAggregate(rows, null, Object.freeze({ column, count: 0, kind: 'avg', sum: 0 }))
@@ -2730,7 +2832,7 @@ export class TableQueryBuilder<
       return null
     }
 
-    const values = this.extractNumericValues(rows, column, 'avg')
+    const values = this.extractNumericValues(rows, key, 'avg', requestedColumn)
     const sum = values.reduce((total, value) => total + value, 0)
     const result = values.length > 0 ? sum / values.length : null
     if (hasActiveDatabaseDependencyCollector()) {
@@ -2739,8 +2841,9 @@ export class TableQueryBuilder<
     return result
   }
 
-  async min(column: string): Promise<number | null> {
-    const rows = await this.get<Record<string, unknown>>()
+  async min(requestedColumn: string): Promise<number | null> {
+    const { query, key, column } = this.resolveAggregateColumn(requestedColumn)
+    const rows = await query.get<Record<string, unknown>>()
     if (rows.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
         rebindDatabaseQueryObservationAggregate(rows, null, Object.freeze({ column, kind: 'min' }))
@@ -2748,7 +2851,7 @@ export class TableQueryBuilder<
       return null
     }
 
-    const values = this.extractNumericValues(rows, column, 'min')
+    const values = this.extractNumericValues(rows, key, 'min', requestedColumn)
     const result = values.length > 0 ? Math.min(...values) : null
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(rows, result, Object.freeze({
@@ -2761,8 +2864,9 @@ export class TableQueryBuilder<
     return result
   }
 
-  async max(column: string): Promise<number | null> {
-    const rows = await this.get<Record<string, unknown>>()
+  async max(requestedColumn: string): Promise<number | null> {
+    const { query, key, column } = this.resolveAggregateColumn(requestedColumn)
+    const rows = await query.get<Record<string, unknown>>()
     if (rows.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
         rebindDatabaseQueryObservationAggregate(rows, null, Object.freeze({ column, kind: 'max' }))
@@ -2770,7 +2874,7 @@ export class TableQueryBuilder<
       return null
     }
 
-    const values = this.extractNumericValues(rows, column, 'max')
+    const values = this.extractNumericValues(rows, key, 'max', requestedColumn)
     const result = values.length > 0 ? Math.max(...values) : null
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(rows, result, Object.freeze({
@@ -2800,6 +2904,7 @@ export class TableQueryBuilder<
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
     generatedKeyColumn?: string,
   ): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
@@ -2830,6 +2935,7 @@ export class TableQueryBuilder<
   async insertOrIgnore(
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
   ): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
@@ -2860,6 +2966,16 @@ export class TableQueryBuilder<
 
   static {
     keyedInsert = (query, values, keyColumn) => query.insertGetKey(values, keyColumn)
+    keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)
+    keyColumnSelection = (query, column, cast) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(cast ? { keyCast: cast } : {}) })]) })
+    keyColumnJoin = (query, table, leftColumn, rightColumn, casts) => query.clone(withJoin(query.plan, {
+      type: 'inner',
+      ...resolveJoinTarget(table),
+      leftColumn,
+      operator: '=',
+      rightColumn,
+      ...(casts.left || casts.right ? { keyCasts: casts } : {}),
+    }))
   }
 
   async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
@@ -2877,6 +2993,7 @@ export class TableQueryBuilder<
     uniqueBy: readonly string[],
     requestedUpdateColumns: readonly string[] = [],
   ): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const updateColumns = Object.keys(this.resolveSourceColumnKeys(requestedUpdateColumns.map(column => [column, column] as const), 'upsert'))
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
@@ -2904,8 +3021,10 @@ export class TableQueryBuilder<
 
     await this.invalidateInsertQueries('upsert', result.rows?.rows ?? rows, result.lastInsertId, {
       canReadRows: hasInvalidationListeners,
+      conflictColumns: result.rows ? undefined : isMySQLConnection(this.connection) ? 'any' : uniqueBy,
       previousRows,
       rowsAreWritten: !useReturningRows,
+      updatedColumns: updateColumns,
     })
     return upsertResult
   }
@@ -2986,6 +3105,7 @@ export class TableQueryBuilder<
       throw new SecurityError(`insertUsing() needs a source query on the same database connection as "${this.connection.getConnectionName()}".`)
     }
 
+    await this.prepareMutation()
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertUsingQueryPlan(this.source, columns, query.getPlan(), { ignoreConflicts }),
     ))
@@ -3001,14 +3121,19 @@ export class TableQueryBuilder<
       throw new TransactionError(`truncate() cannot run inside a transaction on "${this.connection.getDriver()}" because the database commits the transaction; use delete() instead.`)
     }
 
+    const plan = createTruncateQueryPlan(this.source)
+    validateQueryPlan(plan)
+    await this.prepareMutation()
     const tableName = await this.resolveTruncateTarget()
     await this.assertNotReferencedByOtherTables(tableName)
-    await this.connection.executeCompiled(this.getCompiler().compile(createTruncateQueryPlan({ ...this.source, tableName })))
+    await this.connection.executeCompiled(this.getCompiler().compileResolvedTruncate(plan, tableName))
     await this.resetSequence(tableName)
     await this.invalidateTableQueries('delete')
   }
 
   async update(values: Readonly<Record<string, unknown>>): Promise<DriverExecutionResult> {
+    assertQueryTablePath(this.source.tableName)
+    await this.prepareMutation()
     const normalizedValues = this.normalizeUpdateValues(values)
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
@@ -3059,6 +3184,7 @@ export class TableQueryBuilder<
   }
 
   async delete(): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
     const mutationRows = hasInvalidationListeners && !useReturningRows
@@ -3256,17 +3382,9 @@ export class TableQueryBuilder<
     return uniqueBy.every(column => left[column] === right[column])
   }
 
-  private readIntegerValues(rows: readonly Readonly<Record<string, unknown>>[]): readonly Readonly<Record<string, unknown>>[] {
-    return Object.freeze(rows.map(row => this.readIntegerValue(row)))
-  }
-
-  private readIntegerValue(row: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-    return readIntegerColumns(this.resolveSourceTable(), row)
-  }
-
-  private holdsUnsafeInteger(rows: readonly Readonly<Record<string, unknown>>[]): boolean {
+  private holdsUnreadableInteger(rows: readonly Readonly<Record<string, unknown>>[]): boolean {
     const table = this.resolveSourceTable()
-    return rows.some(row => holdsUnsafeInteger(table, row))
+    return rows.some(row => holdsUnreadableInteger(table, row))
   }
 
   private resolveSourceTable(): TableDefinition | undefined {
@@ -3304,9 +3422,10 @@ export class TableQueryBuilder<
       (current, key) => current.whereIn(key, [...new Set(rows.map(row => row[key]))]),
       new TableQueryBuilder<string, Record<string, unknown>>(this.source.tableName, this.connection),
     )
-    const result = await this.connection.queryCompiled(this.getCompiler().compile(query.getPlan()))
+    const result = await this.connection.queryCompiled(this.getCompiler().compile(query.getPlan())).catch(() => undefined)
+    if (!result) return undefined
     const keyOf = (row: Readonly<Record<string, unknown>>) => {
-      const readRow = this.readIntegerValue(row)
+      const readRow = readIntegerColumns(this.resolveSourceTable(), row)
       return JSON.stringify(keys.map(key => readRow[key] instanceof Uint8Array ? `bytes:${Buffer.from(readRow[key]).toString('hex')}` : `text:${String(readRow[key])}`))
     }
     const rowsByKey = new Map(result.rows.map(row => [keyOf(row), row]))
@@ -3331,6 +3450,7 @@ export class TableQueryBuilder<
 
   private async canReadInsertedRows(): Promise<boolean> {
     if (!hasDatabaseDependencyInvalidationListeners()) return false
+    assertQueryTablePath(this.source.tableName)
     await this.connection.initialize()
     const statement = this.connection.getAdapter().getMutationReturningPermissionQuery?.(this.source.tableName)
     if (!statement) return true
@@ -3450,8 +3570,10 @@ export class TableQueryBuilder<
     lastInsertId?: number | string,
     options: {
       readonly canReadRows?: boolean
+      readonly conflictColumns?: readonly string[] | 'any'
       readonly previousRows?: readonly Readonly<Record<string, unknown>>[]
       readonly rowsAreWritten?: boolean
+      readonly updatedColumns?: readonly string[]
     } = {},
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
@@ -3475,20 +3597,21 @@ export class TableQueryBuilder<
     const databaseRows = !hasWrittenDecimals
       ? keyedRows
       : options.canReadRows ? await this.readWrittenRows(keyedRows) : undefined
-    const eventRows = databaseRows && this.readIntegerValues(databaseRows)
-    const dependencyRows = eventRows ?? this.readIntegerValues(keyedRows.map(row => this.withoutDecimalColumns(row)))
-    const previousRows = options.previousRows && this.readIntegerValues(options.previousRows)
+    const dependencyRows = databaseRows ?? keyedRows.map(row => this.withoutDecimalColumns(row))
     const mutations = !hasInvalidationListeners
       ? []
-      : this.holdsUnsafeInteger([...eventRows ?? [], ...previousRows ?? []])
+      : this.holdsUnreadableInteger([...databaseRows ?? [], ...options.previousRows ?? []])
         ? [createDatabaseMutationEvent(kind, this.connection.getConnectionName(), this.source)]
-        : [createDatabaseMutationEvent(kind, this.connection.getConnectionName(), this.source, [], undefined, eventRows, previousRows)]
+        : [createDatabaseMutationEvent(kind, this.connection.getConnectionName(), this.source, [], undefined, databaseRows, options.previousRows)]
     const invalidation = inferAutomaticInsertCacheInvalidationPlan(
       this.connection.getConnectionName(),
       this.source,
       dependencyRows,
       lastInsertId,
       hasInvalidationListeners,
+      await this.resolveCaseInsensitiveColumns(rows),
+      options.conflictColumns,
+      options.updatedColumns,
     )
 
     await invalidateQueryCacheDependencies(
@@ -3499,20 +3622,41 @@ export class TableQueryBuilder<
     )
   }
 
+  private async resolveCaseInsensitiveColumns(
+    records: readonly Readonly<Record<string, unknown>>[],
+    predicates: readonly QueryPredicateNode[] = [],
+  ): Promise<CaseInsensitiveColumns> {
+    if (isMySQLConnection(this.connection)) {
+      const columns = await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+      return typeof columns === 'object' && 'findTextColumn' in columns ? columns : UNKNOWN_TEXT_COLUMNS
+    }
+
+    if (!isPostgresConnection(this.connection) && !isSQLiteConnection(this.connection)) {
+      return 'all'
+    }
+
+    return writesTextLiterals(predicates, records)
+      ? await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+      : new Set<string>()
+  }
+
+  private async resolveQueryTextMatching(): Promise<QueryTextMatching> {
+    if (!isMySQLConnection(this.connection)) {
+      return textMatchesAnyNumber(this.connection)
+    }
+
+    const columns = await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+    return typeof columns === 'object' && 'findTextColumn' in columns ? columns : UNKNOWN_TEXT_COLUMNS
+  }
+
   private async invalidateMutationQueries(
-    writtenValues: Readonly<Record<string, unknown>> = {},
-    writtenRows?: CapturedMutationRows,
+    values: Readonly<Record<string, unknown>> = {},
+    capturedRows?: CapturedMutationRows,
     hasUnreadDecimals = false,
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
       return
-    }
-
-    const values = this.readIntegerValue(writtenValues)
-    const capturedRows = writtenRows && {
-      previousRows: writtenRows.previousRows && this.readIntegerValues(writtenRows.previousRows),
-      rows: writtenRows.rows && this.readIntegerValues(writtenRows.rows),
     }
 
     const hasValues = Object.keys(values).length > 0
@@ -3521,12 +3665,13 @@ export class TableQueryBuilder<
       this.connection.getConnectionName(),
       hasUnreadDecimals ? this.withoutDecimalColumns(values) : values,
       hasInvalidationListeners,
+      await this.resolveCaseInsensitiveColumns([values], this.plan.predicates),
     )
     const numericColumns = hasInvalidationListeners
       ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)
       : []
-    const holdsUnsafeInteger = this.holdsUnsafeInteger([values, ...capturedRows?.rows ?? [], ...capturedRows?.previousRows ?? []])
-    const mutations = !hasInvalidationListeners ? [] : holdsUnsafeInteger || hasUnreadDecimals
+    const holdsUnreadableInteger = this.holdsUnreadableInteger([values, ...capturedRows?.rows ?? [], ...capturedRows?.previousRows ?? []])
+    const mutations = !hasInvalidationListeners ? [] : holdsUnreadableInteger || hasUnreadDecimals
       ? [createDatabaseMutationEvent(hasValues ? 'update' : 'delete', this.connection.getConnectionName(), this.source, this.plan.predicates)]
       : numericColumns.length > 0 && capturedRows?.rows
       ? this.createNumericUpdateMutationEvents(values, numericColumns, capturedRows.rows, capturedRows.previousRows ?? [])
@@ -3599,6 +3744,7 @@ export class TableQueryBuilder<
     requestedAmounts: Readonly<Record<string, number>>,
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const amounts = this.resolveSourceColumnKeys(requestedAmounts, 'increment/decrement')
     const columns = Object.keys(amounts)
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
@@ -3634,7 +3780,7 @@ export class TableQueryBuilder<
 
   private resolveSourceColumnKeys<TValue>(
     values: Readonly<Record<string, TValue>> | readonly (readonly [string, TValue])[],
-    operation: 'update' | 'upsert' | 'increment/decrement',
+    operation: 'update' | 'upsert' | 'increment/decrement' | 'aggregate',
   ): Readonly<Record<string, TValue>> {
     const resolved: Record<string, TValue> = {}
     for (const [column, value] of Array.isArray(values) ? values : Object.entries(values)) {
@@ -3754,33 +3900,118 @@ export class TableQueryBuilder<
   }
 
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
-    const selection = this.plan.selections.find(selection => selection.kind === 'column' && selection.column === column)
-    if (selection?.kind === 'column' && selection.alias) return row[selection.alias]
+    const sourceColumn = this.resolveSourceColumnName(column)
+    const selections = this.plan.selections
+    const ownColumns = Object.keys(this.source.table?.columns ?? {})
+    const connectionName = this.connection.getConnectionName()
+    const outputsName = (selection: QuerySelection, name: string, unknownOverwrites: boolean): boolean => {
+      if (selection.kind === 'raw') return unknownOverwrites
+      if (selection.kind !== 'column' || (!selection.column.endsWith('.*') && selection.column !== '*')) return selectionOutputName(selection) === name
+      if (this.resolveSourceColumnName(selection.column) === '*') return name === sourceColumn || ownColumns.includes(name)
+      const qualifier = selection.column.slice(0, -2)
+      const join = this.plan.joins.find(candidate => qualifiesTable(qualifier, candidate.table, candidate.alias))
+      const columns = join ? knownJoinedColumns(join, connectionName) : undefined
+      return columns ? columns.includes(name) : unknownOverwrites
+    }
+    const survives = (index: number, name: string, unknownOverwrites = false) => !selections.slice(index + 1).some(selection => outputsName(selection, name, unknownOverwrites))
+    const selectsColumn = (selection: QuerySelection): selection is QueryColumnSelection => selection.kind === 'column'
+      && (selection.column === column || (typeof sourceColumn !== 'undefined' && this.resolveSourceColumnName(selection.column) === sourceColumn))
+    const ownOutput = typeof sourceColumn === 'undefined'
+      ? -1
+      : selections.findIndex((selection, index) => selection.kind === 'column' && !selection.alias
+        && [sourceColumn, '*'].includes(this.resolveSourceColumnName(selection.column) ?? '') && survives(index, sourceColumn, true))
+    if (typeof sourceColumn !== 'undefined' && ownOutput !== -1 && sourceColumn in row) return row[sourceColumn]
+    const aliased = selections.find((selection, index) => selectsColumn(selection) && typeof selection.alias === 'string' && survives(index, selection.alias))
+    if (aliased?.kind === 'column' && aliased.alias) return row[aliased.alias]
     if (column in row) {
       return row[column]
     }
+    if (typeof sourceColumn === 'undefined' && !selectsJoinedColumn(this.plan, column)) return undefined
 
     return row[column.split('.').at(-1)!]
   }
 
-  private async aggregateNumeric(column: string, kind: 'sum'): Promise<number> {
-    const rows = await this.get<Record<string, unknown>>()
+  private async aggregateNumeric(requestedColumn: string, kind: 'sum'): Promise<number> {
+    const { query, key, column } = this.resolveAggregateColumn(requestedColumn)
+    const rows = await query.get<Record<string, unknown>>()
     const result = rows.length === 0
       ? 0
-      : this.extractNumericValues(rows, column, kind).reduce((sum, value) => sum + value, 0)
+      : this.extractNumericValues(rows, key, kind, requestedColumn).reduce((sum, value) => sum + value, 0)
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(rows, result, Object.freeze({ column, kind }))
     }
     return result
   }
 
+  private projectAggregate(selections: readonly string[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const projected = this.clone(appendSelections(this.plan, selections))
+    const cacheConfig = this.queryCacheConfig
+    if (!cacheConfig?.key) return projected
+
+    const key = `${cacheConfig.key}:${resolveQueryCacheKey(projected.toSQL(), this.connection.getConnectionName(), { ...cacheConfig, key: undefined })}`
+    return new TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>(
+      (this.source.table ?? this.source.tableName) as TTableOrName,
+      this.connection,
+      projected.getPlan(),
+      { ...cacheConfig, key },
+      internalPlanHandoff,
+    )
+  }
+
+  private modelAggregateSelections(column: string, source: string, key: string, sourceWildcard: string): readonly string[] {
+    const orderedNames = new Set(this.plan.orderBy.flatMap(order => order.kind === 'column' && !order.column.includes('.') ? [order.column] : []))
+    const keyOutput = [...this.plan.selections].reverse().find(selection => [key, '*'].includes(selectionOutputName(selection) ?? ''))
+    const keyIsSelectedSourceColumn = keyOutput?.kind === 'column' && [key, '*'].includes(this.resolveSourceColumnName(keyOutput.column) ?? '')
+    if (orderedNames.has(key) && keyOutput && !keyIsSelectedSourceColumn) {
+      throw new CompilerError(`Cannot aggregate column "${column}" while ordering by "${key}", which names another selected column. Qualify the order by column.`)
+    }
+
+    const definitionColumns = Object.keys(this.source.table?.columns ?? {})
+    const sourceColumns: readonly { readonly name: string, readonly alias?: string }[] = !this.plan.distinct && this.plan.groupBy.length === 0
+      ? [{ name: '*' }]
+      : this.selectedSourceColumns()
+    const columns = orderedNames.size === 0
+      ? sourceColumns
+      : sourceColumns
+          .flatMap((entry): readonly { readonly name: string, readonly alias?: string }[] => entry.name === '*' && definitionColumns.length > 0 ? definitionColumns.map(name => ({ name })) : [entry])
+          .filter(entry => !orderedNames.has(entry.alias ?? entry.name))
+    const selections = columns.map(({ name, alias }) => name === '*' ? sourceWildcard : `${source}.${name}${alias ? ` as ${alias}` : ''}`)
+    return orderedNames.has(key) && keyIsSelectedSourceColumn ? selections : [...selections, `${source}.${key}`]
+  }
+
+  private selectedSourceColumns(): readonly { readonly name: string, readonly alias?: string }[] {
+    return this.plan.selections.flatMap((selection) => {
+      if (selection.kind !== 'column' || !selection.column.includes('.')) return []
+      const name = this.resolveSourceColumnName(selection.column)
+      return typeof name === 'undefined' ? [] : [{ name, alias: selection.alias }]
+    })
+  }
+
+  private resolveAggregateColumn(column: string): {
+    readonly query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+    readonly key: string
+    readonly column: string
+  } {
+    if (!column.split('->', 1)[0]!.includes('.')) return { query: this, key: column, column }
+
+    const { key, joined, selections } = this[resolveAggregateSource](column)
+    if (this.plan.joins.length === 0) return { query: this, key, column: key }
+
+    return {
+      query: this.projectAggregate(selections),
+      key: aggregateValueKey,
+      column: joined ? column : key,
+    }
+  }
+
   private extractNumericValues(
     rows: readonly Record<string, unknown>[],
-    column: string,
+    key: string,
     kind: 'sum' | 'avg' | 'min' | 'max',
+    column: string,
   ): number[] {
     return rows.flatMap((row) => {
-      const value = row[column]
+      const value = row[key]
       if (value === null) return []
       const numericValue = this.normalizeNumericResult(value)
       if (numericValue === undefined) {

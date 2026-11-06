@@ -7,7 +7,8 @@ import { driverErrorCodes, isDatabaseDeadlockError } from './core/driverErrors'
 import { driverConnection, driverConnectionKey, transactionScopeKey } from './core/transactionScope'
 import { whereColumnNotExpiredByDatabaseClock } from './query'
 import { getQueryBounds } from './query/queryBounds'
-import { createSchemaReader } from './schema/introspection'
+import { createSchemaReader, listedTablePath } from './schema/introspection'
+import { quoteTablePath } from './schema/identifiers'
 import { useGeneratedSchemaConnection } from './schema/generated'
 import { resolveRuntimeDefaultConnectionName } from './runtime'
 
@@ -403,6 +404,8 @@ export type {
 
 export const holoRuntimeInternals = Object.freeze({
   createSchemaReader,
+  listedTablePath,
+  quoteTablePath,
   resolveRuntimeDefaultConnectionName,
   useGeneratedSchemaConnection,
   getQueryBounds,

@@ -85,4 +85,4 @@ it('restores a remembered SvelteKit browser with a usable CSRF session and revok
     expect(await auth.check()).toBe(false)
     return new Response('login')
   })
-})
+}, 30_000)

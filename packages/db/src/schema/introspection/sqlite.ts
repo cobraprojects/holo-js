@@ -52,6 +52,11 @@ function splitTableName(tableName: string): { schema: string, table: string } {
   return { schema, table }
 }
 
+export function qualifyWithMainSchema(tableName: string): string {
+  const { schema, table } = splitTableName(tableName)
+  return `${schema}.${table}`
+}
+
 async function readSQLiteStoredTable(connection: DatabaseContext, tableName: string): Promise<TableSqlRow | undefined> {
   const { schema, table } = splitTableName(tableName)
   const result = await connection.introspectCompiled<TableSqlRow>({
@@ -70,6 +75,41 @@ export async function readSQLiteStoredTableName(connection: DatabaseContext, tab
   const storedName = (await readSQLiteStoredTable(connection, tableName))?.name
   const { schema } = splitTablePath(tableName)
   return storedName === undefined || schema === undefined ? storedName : `${schema}.${storedName}`
+}
+
+type ResolvedTableRow = { schema: string, name: string, type: string }
+
+async function findSQLiteTable(connection: DatabaseContext, tableName: string): Promise<ResolvedTableRow | undefined> {
+  const { schema, table } = splitTablePath(tableName)
+  const schemaFilter = schema === undefined ? '' : 'AND t.schema = ? COLLATE NOCASE '
+  const result = await connection.introspectCompiled<ResolvedTableRow>({
+    sql: `SELECT t.schema, t.name, t.type FROM pragma_table_list t JOIN pragma_database_list d ON d.name = t.schema WHERE t.name = ? COLLATE NOCASE ${schemaFilter}ORDER BY CASE WHEN t.schema = '${TEMP_SCHEMA}' THEN 0 ELSE 1 END, d.seq LIMIT 1`,
+    bindings: schema === undefined ? [table] : [table, schema],
+    source: `schema:introspect:resolveTable:${tableName}`,
+  })
+  return result.rows[0]
+}
+
+function isSQLiteTableType(type: string): boolean {
+  return type === 'table' || type === 'virtual'
+}
+
+export async function resolveSQLiteTablePath(connection: DatabaseContext, tableName: string): Promise<string | undefined> {
+  const row = await findSQLiteTable(connection, tableName)
+  if (row !== undefined && !isSQLiteTableType(row.type)) {
+    const kind = row.type === 'shadow' ? 'shadow table' : row.type
+    throw new SchemaError(`SQLite cannot change table "${tableName}" because SQLite resolves it to ${kind} "${row.schema}.${row.name}".`)
+  }
+  return row && `${splitTablePath(tableName).schema ?? row.schema}.${row.name}`
+}
+
+async function findSQLiteBaseTable(connection: DatabaseContext, tableName: string): Promise<ResolvedTableRow | undefined> {
+  const row = await findSQLiteTable(connection, tableName)
+  return row && isSQLiteTableType(row.type) ? row : undefined
+}
+
+async function resolveSQLiteTableSchema(connection: DatabaseContext, tableName: string): Promise<string | undefined> {
+  return splitTablePath(tableName).schema ?? (await findSQLiteBaseTable(connection, tableName))?.schema
 }
 
 export async function readSQLiteTableObjects(connection: DatabaseContext, tableName: string): Promise<SQLiteTableObject[]> {
@@ -256,11 +296,8 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
     },
 
     async locateTable(tableName) {
-      const { schema, table } = splitTableName(tableName)
-      const attachedSchema = await readAttachedSchema(schema)
-      if (attachedSchema === undefined) return undefined
-      const stored = await readSQLiteStoredTable(connection, `${attachedSchema}.${table}`)
-      return stored && { schema: attachedSchema, table: stored.name }
+      const row = await findSQLiteBaseTable(connection, tableName)
+      return row && { schema: row.schema, table: row.name }
     },
 
     async resolveReferencedTableSchema(tableName, ownerSchema) {
@@ -269,36 +306,45 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
     },
 
     async readTableStructure(tableName) {
-      const { schema, table } = splitTableName(tableName)
-      const createTableSql = await readSQLiteCreateTableSql(connection, tableName)
-      if (createTableSql === undefined) return undefined
-
-      const storedTable = parseCreateTableSql(createTableSql ?? '')
-      const columns = await introspect<ColumnRow>('SELECT name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?, ?) ORDER BY cid', [table, schema], `schema:introspect:columns:${tableName}`)
-      const indexes = await readIndexes(schema, table)
-      const rowIdAlias = readRowIdAlias(columns.rows, indexes)
-      const structure: DatabaseTableStructure = {
-        dialect: 'sqlite',
-        tableName,
-        schema,
-        columns: columns.rows.filter(row => row.hidden !== 1).map(row => ({
-          name: row.name,
-          dataType: row.type,
-          fullType: row.type,
-          length: readStringLength(row.type),
-          notNull: row.notnull === 1,
-          defaultExpression: row.dflt_value,
-          default: readColumnDefault(row.dflt_value),
-          primaryKey: row.pk > 0,
-          autoIncrement: row.name === rowIdAlias,
-          computed: readComputedColumn(tableName, row, storedTable),
-        })),
-        primaryKeyColumns: columns.rows.filter(row => row.pk > 0).sort((left, right) => left.pk - right.pk).map(row => row.name),
-        indexes,
-        foreignKeys: await readForeignKeyStructures(schema, table, storedTable ? readForeignKeys(storedTable) : []),
-        enumChecks: storedTable ? readEnumChecks(storedTable) : [],
-      }
-      return structure
+      const schema = await resolveSQLiteTableSchema(connection, tableName)
+      return schema === undefined ? undefined : readStructure(tableName, schema)
     },
+
+    readListedTableStructure(tableName) {
+      return readStructure(tableName, MAIN_SCHEMA)
+    },
+  }
+
+  async function readStructure(tableName: string, schema: string): Promise<DatabaseTableStructure | undefined> {
+    const { table } = splitTablePath(tableName)
+    const createTableSql = await readSQLiteCreateTableSql(connection, `${schema}.${table}`)
+    if (createTableSql === undefined) return undefined
+
+    const storedTable = parseCreateTableSql(createTableSql ?? '')
+    const columns = await introspect<ColumnRow>('SELECT name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?, ?) ORDER BY cid', [table, schema], `schema:introspect:columns:${tableName}`)
+    const indexes = await readIndexes(schema, table)
+    const rowIdAlias = readRowIdAlias(columns.rows, indexes)
+    const structure: DatabaseTableStructure = {
+      dialect: 'sqlite',
+      tableName,
+      schema,
+      columns: columns.rows.filter(row => row.hidden !== 1).map(row => ({
+        name: row.name,
+        dataType: row.type,
+        fullType: row.type,
+        length: readStringLength(row.type),
+        notNull: row.notnull === 1,
+        defaultExpression: row.dflt_value,
+        default: readColumnDefault(row.dflt_value),
+        primaryKey: row.pk > 0,
+        autoIncrement: row.name === rowIdAlias,
+        computed: readComputedColumn(tableName, row, storedTable),
+      })),
+      primaryKeyColumns: columns.rows.filter(row => row.pk > 0).sort((left, right) => left.pk - right.pk).map(row => row.name),
+      indexes,
+      foreignKeys: await readForeignKeyStructures(schema, table, storedTable ? readForeignKeys(storedTable) : []),
+      enumChecks: storedTable ? readEnumChecks(storedTable) : [],
+    }
+    return structure
   }
 }

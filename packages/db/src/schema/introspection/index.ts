@@ -1,8 +1,8 @@
-import { assertValidIdentifierPath } from '../identifiers'
+import { assertValidTablePath } from '../identifiers'
 import { toTableDefinition } from './definitions'
 import { createMySQLSchemaReader } from './mysql'
 import { createPostgresSchemaReader } from './postgres'
-import { createSQLiteSchemaReader } from './sqlite'
+import { createSQLiteSchemaReader, qualifyWithMainSchema } from './sqlite'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { TableDefinition } from '../types'
 import type { DatabaseTableStructure, DialectSchemaReader, TableLocation } from './types'
@@ -35,6 +35,11 @@ export function createSchemaReader(connection: DatabaseContext): SchemaReader {
     return structure ? toTableDefinition(structure) : undefined
   }
 
+  async function readListedTable(tableName: string): Promise<TableDefinition | undefined> {
+    const structure = await (reader.readListedTableStructure ?? reader.readTableStructure)(tableName)
+    return structure ? toTableDefinition(structure) : undefined
+  }
+
   return {
     listTables: () => reader.listTables(),
     locateTable: tableName => reader.locateTable(tableName),
@@ -45,7 +50,7 @@ export function createSchemaReader(connection: DatabaseContext): SchemaReader {
       const tables: TableDefinition[] = []
       for (const tableName of await reader.listTables()) {
         if (HOLO_OWNED_TABLE_PATTERN.test(tableName)) continue
-        const table = await readTable(tableName)
+        const table = await readListedTable(tableName)
         if (table) tables.push(table)
       }
       return tables
@@ -54,16 +59,20 @@ export function createSchemaReader(connection: DatabaseContext): SchemaReader {
 }
 
 export function readTableStructure(connection: DatabaseContext, tableName: string): Promise<DatabaseTableStructure | undefined> {
-  assertValidIdentifierPath(tableName, 'Table name')
+  assertValidTablePath(tableName, 'Table name')
   return createSchemaReader(connection).readTableStructure(tableName)
 }
 
 export function locateTable(connection: DatabaseContext, tableName: string): Promise<TableLocation | undefined> {
-  assertValidIdentifierPath(tableName, 'Table name')
+  assertValidTablePath(tableName, 'Table name')
   return createSchemaReader(connection).locateTable(tableName)
 }
 
 export function resolveReferencedTableSchema(connection: DatabaseContext, tableName: string, ownerSchema: string): Promise<string | undefined> {
-  assertValidIdentifierPath(tableName, 'Table name')
+  assertValidTablePath(tableName, 'Table name')
   return createSchemaReader(connection).resolveReferencedTableSchema(tableName, ownerSchema)
+}
+
+export function listedTablePath(connection: DatabaseContext, tableName: string): string {
+  return connection.getDialect().name === 'sqlite' ? qualifyWithMainSchema(tableName) : tableName
 }

@@ -348,14 +348,50 @@ export function readsAsInteger(column: AnyColumnDefinition): boolean {
 const DECIMAL_NUMBER_TEXT = /^-?\d+(?:\.\d+)?$/
 
 export function readNumericValue(value: unknown): number | undefined {
+  if (typeof value === 'boolean') return Number(value)
   if (typeof value === 'number') return Number.isNaN(value) ? undefined : value
   if (typeof value !== 'string' || !DECIMAL_NUMBER_TEXT.test(value)) return undefined
   const number = Number(value)
   return Number.isFinite(number) ? number : undefined
 }
 
+const DECIMAL_KEY_TEXT = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?$/
+
+function readDecimalKeyText(value: unknown): { readonly integer: string, readonly fraction: string } | undefined {
+  const match = typeof value === 'string' ? DECIMAL_KEY_TEXT.exec(value) : null
+  if (!match) {
+    return undefined
+  }
+
+  const [, sign = '', integer = '', decimals = ''] = match
+  const fraction = decimals.replace(/0+$/, '')
+  return { integer: integer === '0' && fraction === '' ? integer : `${sign}${integer}`, fraction }
+}
+
+export function isDecimalKeyText(value: unknown): boolean {
+  return readDecimalKeyText(value) !== undefined
+}
+
+export function readIntegralDecimalKey(value: unknown): unknown {
+  const text = readDecimalKeyText(value)
+  return text === undefined || text.fraction !== '' ? value : readIntegerKey(text.integer)
+}
+
+export function readFractionalDecimalKey(value: unknown): string | undefined {
+  const text = readDecimalKeyText(typeof value === 'number' && Number.isFinite(value) ? plainNumberText(value) : value)
+  return text === undefined || text.fraction === '' ? undefined : `${text.integer}.${text.fraction}`
+}
+
 export function readsAsSQLiteDecimal(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
   return dialect === 'sqlite' && column.kind === 'decimal'
+}
+
+export function isStoredBoolean(value: unknown): boolean {
+  return value === 0 || value === 1 || value === 0n || value === 1n || value === '0' || value === '1'
+}
+
+export function readsAsCoercedBoolean(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
+  return dialect !== 'postgres' && column.kind === 'boolean'
 }
 
 export function normalizeDialectReadValue(

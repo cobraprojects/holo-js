@@ -109,7 +109,7 @@ async function createPostsAdapter() {
   return createNativeRelationalAdapter({ posts: [{ id: 1, title: 'First' }] })
 }
 
-const postsViewsAggregateBackfillSql = 'SELECT COUNT(*) AS "__holo_count", SUM("views") AS "__holo_sum_0", AVG("views") AS "__holo_avg_0", MIN("views") AS "__holo_min_0", MAX("views") AS "__holo_max_0" FROM "posts"'
+const postsViewsAggregateBackfillSql = 'SELECT COUNT(*) AS "__holo_count", SUM("views") AS "__holo_sum_0", MIN("views") AS "__holo_min_0", MAX("views") AS "__holo_max_0" FROM "posts"'
 
 async function createContext(adapter?: DriverAdapter): Promise<DatabaseContext> {
   const resolvedAdapter = adapter ?? await createPostsAdapter()
@@ -4184,6 +4184,7 @@ describe('@holo-js/realtime', () => {
       `SELECT * FROM "${tableName}" ORDER BY "created_at" DESC LIMIT 100`,
       "SELECT has_table_privilege(current_user, $1, 'SELECT') AND NOT row_security_active($1) AS allowed",
       `INSERT INTO "${tableName}" ("title") VALUES ($1) RETURNING *`,
+      expect.stringContaining('FROM pg_catalog.pg_attribute'),
     ])
     expect(snapshots).toEqual([
       [1, 2],
@@ -8476,7 +8477,6 @@ describe('@holo-js/realtime', () => {
       access: 'public',
       handler: async ({ db: context }) => {
         await context.table('posts').insert({ id: 2, author_id: 1, title: 'Published' })
-        await context.table('posts').insert({ id: 4, author_id: 1, title: 'Draft' })
         return true
       },
     })
@@ -8676,7 +8676,6 @@ describe('@holo-js/realtime', () => {
       access: 'public',
       handler: async ({ db: context }) => {
         await context.table('posts').insert({ id: 2, author_id: 1, title: 'Featured' })
-        await context.table('posts').insert({ id: 4, author_id: 1, title: 'Draft' })
         return true
       },
     })

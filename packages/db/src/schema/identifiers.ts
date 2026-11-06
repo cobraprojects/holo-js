@@ -8,18 +8,25 @@ export function assertValidIdentifierSegment(identifier: string, context: string
   }
 }
 
-export function assertValidIdentifierPath(identifier: string, context: string): void {
+function assertValidIdentifierPath(identifier: string, context: string): void {
   if (!identifier.trim()) {
     throw new SchemaError(`${context} must not be empty.`)
   }
 
-  const segments = identifier.split('.')
+  const segments = tablePathSegments(identifier)
   if (segments.some(segment => !segment.trim())) {
     throw new SchemaError(`${context} must not contain empty identifier segments.`)
   }
 
   for (const segment of segments) {
     assertValidIdentifierSegment(segment, context)
+  }
+}
+
+export function assertValidTablePath(identifier: string, context: string): void {
+  assertValidIdentifierPath(identifier, context)
+  if (tablePathSegments(identifier).length > 2) {
+    throw new SchemaError(`${context} "${identifier}" must be a table name or a schema-qualified table name.`)
   }
 }
 
@@ -33,6 +40,24 @@ export function splitTablePath(tableName: string): TablePath {
   return separator === -1
     ? { table: tableName }
     : { schema: tableName.slice(0, separator), table: tableName.slice(separator + 1) }
+}
+
+export interface IdentifierQuoting {
+  quoteIdentifier(identifier: string): string
+}
+
+export function tablePathSegments(tableName: string): string[] {
+  return tableName.split('.')
+}
+
+export function quoteTablePath(dialect: IdentifierQuoting, tableName: string): string {
+  const { schema, table } = splitTablePath(tableName)
+  const quotedTable = dialect.quoteIdentifier(table)
+  return schema === undefined ? quotedTable : `${dialect.quoteIdentifier(schema)}.${quotedTable}`
+}
+
+export function quoteIdentifierSegment(segment: string, quote: string): string {
+  return `${quote}${segment.replaceAll(quote, `${quote}${quote}`)}${quote}`
 }
 
 export function sanitizeIdentifierForGeneratedName(identifier: string): string {

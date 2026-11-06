@@ -1,6 +1,7 @@
-import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
-import { basename, extname, resolve } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { basename, extname, join, resolve } from 'node:path'
+import { build } from 'esbuild'
 import {
   normalizeHoloProjectConfig,
   type NormalizedHoloProjectConfig,
@@ -358,6 +359,7 @@ async function discoverProjectRegistry(
     : undefined
   for (const filePath of jobFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
+    const sourceHash = await hashSourceFile(filePath)
     const moduleValue = await modules.import(filePath)
     const exportedJob = resolveNamedExportEntry(
       moduleValue,
@@ -376,6 +378,7 @@ async function discoverProjectRegistry(
         loadedConfig.queue,
       ),
       exportName: exportedJob.exportName,
+      ...(sourceHash ? { sourceHash } : {}),
     })
   }
   assertUniqueEntries('job', jobs)
@@ -388,6 +391,7 @@ async function discoverProjectRegistry(
   const discoveredEventNamesBySourcePath = new Map<string, string>()
   for (const filePath of eventFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
+    const sourceHash = await hashSourceFile(filePath)
     const exportedEvent = resolveNamedExportEntry(
       await modules.import(filePath),
       (value): value is object => hasEventDefinitionMarker(value),
@@ -404,6 +408,7 @@ async function discoverProjectRegistry(
       sourcePath: relativePath,
       name,
       exportName: exportedEvent.exportName,
+      ...(sourceHash ? { sourceHash } : {}),
     })
   }
   assertUniqueEntries('event', events)
@@ -412,6 +417,7 @@ async function discoverProjectRegistry(
   const listeners: GeneratedListenerRegistryEntry[] = []
   for (const filePath of listenerFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
+    const sourceHash = await hashSourceFile(filePath)
     const exportedListener = resolveNamedExportEntry(
       await modules.import(filePath),
       (value): value is object => hasListenerDefinitionMarker(value),
@@ -450,6 +456,7 @@ async function discoverProjectRegistry(
       id: listenerId,
       eventNames,
       exportName: exportedListener.exportName,
+      ...(sourceHash ? { sourceHash } : {}),
     })
   }
   assertUniqueEntries('listener', listeners.map(entry => ({
@@ -676,19 +683,16 @@ function withoutShadowedFailedCommands(
   })
 }
 
-async function isCommandRegistryCurrent(
+async function areSourceFilesCurrent(
   projectRoot: string,
-  config: NormalizedHoloProjectConfig,
-  registry: GeneratedProjectRegistry,
+  sourceRoot: string,
+  entries: readonly { readonly sourcePath: string, readonly sourceHash?: string }[],
 ): Promise<boolean> {
-  if (registry.commands.some(entry => entry.loadFailed)) return false
-  if (registry.paths.commands !== config.paths.commands) return false
+  const sourceFiles = await collectFiles(resolve(projectRoot, sourceRoot))
+  const registeredHashes = new Map(entries.map(entry => [entry.sourcePath, entry.sourceHash]))
+  if (sourceFiles.length !== registeredHashes.size) return false
 
-  const commandFiles = await collectFiles(resolve(projectRoot, config.paths.commands))
-  const registeredHashes = new Map(registry.commands.map(entry => [entry.sourcePath, entry.sourceHash]))
-  if (commandFiles.length !== registeredHashes.size) return false
-
-  for (const filePath of commandFiles) {
+  for (const filePath of sourceFiles) {
     const registeredHash = registeredHashes.get(makeProjectRelativePath(projectRoot, filePath))
     if (registeredHash === undefined || registeredHash !== await hashSourceFile(filePath)) return false
   }
@@ -696,19 +700,116 @@ async function isCommandRegistryCurrent(
   return true
 }
 
+async function areCommandsCurrent(
+  projectRoot: string,
+  config: NormalizedHoloProjectConfig,
+  registry: GeneratedProjectRegistry,
+): Promise<boolean> {
+  if (registry.commands.some(entry => entry.loadFailed)) return false
+  if (registry.paths.commands !== config.paths.commands) return false
+  return areSourceFilesCurrent(projectRoot, config.paths.commands, registry.commands)
+}
+
+async function areCommandDefinitionsCurrent(
+  projectRoot: string,
+  config: NormalizedHoloProjectConfig,
+  registry: GeneratedProjectRegistry,
+): Promise<boolean> {
+  if (registry.paths.jobs !== config.paths.jobs) return false
+  if (registry.paths.events !== config.paths.events) return false
+  if (registry.paths.listeners !== config.paths.listeners) return false
+
+  return await areSourceFilesCurrent(projectRoot, config.paths.jobs, registry.jobs)
+    && await areSourceFilesCurrent(projectRoot, config.paths.events, registry.events)
+    && await areSourceFilesCurrent(projectRoot, config.paths.listeners, registry.listeners)
+}
+
+async function loadCommandDiscoveryRegistry(
+  projectRoot: string,
+  config: NormalizedHoloProjectConfig,
+): Promise<GeneratedProjectRegistry> {
+  const cachedRegistry = await loadGeneratedProjectRegistry(projectRoot)
+  if (!cachedRegistry || !await areCommandsCurrent(projectRoot, config, cachedRegistry)) {
+    return prepareProjectDiscovery(projectRoot, config)
+  }
+  if (await areCommandDefinitionsCurrent(projectRoot, config, cachedRegistry)) return cachedRegistry
+  return prepareProjectDiscovery(projectRoot, config).catch(async () => await loadGeneratedProjectRegistry(projectRoot) ?? cachedRegistry)
+}
+
 async function hashSourceFile(filePath: string): Promise<string | undefined> {
   const contents = await readFile(filePath).catch(() => undefined)
   return contents === undefined ? undefined : createHash('sha256').update(contents).digest('hex')
+}
+
+type DefinitionsLoadedMarkers = Set<string>
+
+function definitionsLoadedMarkers(): DefinitionsLoadedMarkers {
+  const host = globalThis as typeof globalThis & { __holoAppCommandDefinitionsLoaded__?: DefinitionsLoadedMarkers }
+  host.__holoAppCommandDefinitionsLoaded__ ??= new Set<string>()
+  return host.__holoAppCommandDefinitionsLoaded__
+}
+
+async function definitionsImportCommand(
+  projectRoot: string,
+  definitionPaths: readonly string[],
+  commandPath: string,
+): Promise<boolean> {
+  const { packageSubpathResolutionInternals, projectTsconfigInternals } = await import('@holo-js/core')
+  const result = await projectTsconfigInternals.withLoaderTsconfig(projectRoot, tsconfigPath => build({
+    absWorkingDir: projectRoot,
+    bundle: true,
+    entryPoints: [...definitionPaths],
+    outdir: join(projectRoot, '.holo-js', 'runtime', 'command-graph'),
+    write: false,
+    metafile: true,
+    format: 'esm',
+    logLevel: 'silent',
+    packages: 'external',
+    platform: 'node',
+    target: 'node22',
+    tsconfig: tsconfigPath,
+    plugins: [packageSubpathResolutionInternals.createPackageSubpathResolutionPlugin()],
+  })).catch(() => undefined)
+  return Object.keys(result?.metafile.inputs ?? {}).some(input => resolve(projectRoot, input) === commandPath)
+}
+
+async function importAppCommandAndInstallDefinitionImporter(
+  projectRoot: string,
+  registry: GeneratedProjectRegistry,
+  commandPath: string,
+): Promise<unknown> {
+  const definitionPaths = [...registry.jobs, ...registry.events, ...registry.listeners]
+    .map(entry => resolve(projectRoot, entry.sourcePath))
+  if (definitionPaths.length === 0) return importProjectModule(projectRoot, commandPath)
+  const { holoRuntimeInternals: coreRuntimeInternals } = await import('@holo-js/core')
+  const runtimeRoot = join(projectRoot, '.holo-js', 'runtime')
+  await mkdir(runtimeRoot, { recursive: true })
+  const markerDirectory = await mkdtemp(join(runtimeRoot, 'command-'))
+  const marker = randomUUID()
+  const markerPath = join(markerDirectory, 'definitions-loaded.mjs')
+  let importDefinition: Awaited<ReturnType<typeof coreRuntimeInternals.loadProjectDefinitionRuntimeModules>>
+  try {
+    await writeFile(markerPath, `globalThis.__holoAppCommandDefinitionsLoaded__?.add(${JSON.stringify(marker)})\n`, 'utf8')
+    definitionsLoadedMarkers()
+    try {
+      importDefinition = await coreRuntimeInternals.loadProjectDefinitionRuntimeModules(projectRoot, [...definitionPaths, markerPath, commandPath])
+    } catch (error) {
+      if (definitionsLoadedMarkers().has(marker) || await definitionsImportCommand(projectRoot, definitionPaths, commandPath)) throw error
+      return importProjectModule(projectRoot, commandPath)
+    }
+  } finally {
+    definitionsLoadedMarkers().delete(marker)
+    await rm(markerDirectory, { recursive: true, force: true })
+  }
+  coreRuntimeInternals.setProjectDefinitionImporter(projectRoot, importDefinition)
+  return importDefinition(commandPath)
 }
 
 export async function discoverAppCommands(
   projectRoot: string,
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
 ): Promise<DiscoveredAppCommand[]> {
-  const cachedRegistry = await loadGeneratedProjectRegistry(projectRoot)
-  const registry = cachedRegistry && await isCommandRegistryCurrent(projectRoot, config, cachedRegistry)
-    ? cachedRegistry
-    : await prepareProjectDiscovery(projectRoot, config)
+  const registry = await loadCommandDiscoveryRegistry(projectRoot, config)
 
   return withoutShadowedFailedCommands(registry.commands)
     .map(entry => ({
@@ -719,7 +820,7 @@ export async function discoverAppCommands(
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.loadFailed ? { loadFailed: entry.loadFailed } : {}),
       async load() {
-        const moduleValue = await importProjectModule(projectRoot, resolve(projectRoot, entry.sourcePath))
+        const moduleValue = await importAppCommandAndInstallDefinitionImporter(projectRoot, registry, resolve(projectRoot, entry.sourcePath))
         const command = resolveCommandExport(moduleValue)
         if (!command) {
           throw new Error(`Discovered command "${entry.sourcePath}" does not export a Holo command.`)

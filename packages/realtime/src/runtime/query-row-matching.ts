@@ -33,7 +33,39 @@ export function exactIdsDiffer(
   left: unknown | typeof NO_EXACT_ID_PREDICATE,
   right: unknown | typeof NO_EXACT_ID_PREDICATE,
 ): boolean {
-  return left !== NO_EXACT_ID_PREDICATE && right !== NO_EXACT_ID_PREDICATE && left !== right
+  return left !== NO_EXACT_ID_PREDICATE && right !== NO_EXACT_ID_PREDICATE && !rowIdentitiesMayMatch(left, right)
+}
+
+function isNumericIdentity(value: unknown): boolean {
+  return typeof value === 'number' || typeof value === 'bigint'
+}
+
+function isStoredScalarIdentity(value: unknown): boolean {
+  return typeof value === 'string' || isNumericIdentity(value)
+}
+
+function rowIdentitiesMayMatch(left: unknown, right: unknown): boolean {
+  return left === right
+    || Array.isArray(left)
+    || Array.isArray(right)
+    || (typeof left === 'string' && isNumericIdentity(right))
+    || (typeof right === 'string' && isNumericIdentity(left))
+    || (typeof left === 'boolean' && isStoredScalarIdentity(right))
+    || (typeof right === 'boolean' && isStoredScalarIdentity(left))
+}
+
+export function rowIdentityIndexMayHold(index: ReadonlyMap<unknown, number>, identity: unknown): boolean {
+  if (index.has(identity)) {
+    return true
+  }
+
+  for (const candidate of index.keys()) {
+    if (rowIdentitiesMayMatch(candidate, identity)) {
+      return true
+    }
+  }
+
+  return false
 }
 
 export function mutationCannotReachExactId(
