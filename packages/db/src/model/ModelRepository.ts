@@ -1175,7 +1175,7 @@ export class ModelRepository<
       connectionName: this.getConnectionName(),
       dependencies,
       orderBy: [],
-      patchable: typeof ownerPredicates !== 'undefined' && this.comparesWithStoredValues([relation.foreignKey]),
+      patchable: typeof ownerPredicates !== 'undefined' && this.readsKeysAsStored([relation.foreignKey]),
       ...serializedFlag(!relatedRowsArePatchable(related)),
       predicates: Object.freeze([Object.freeze({
         column: this.definition.primaryKey,
@@ -1365,7 +1365,7 @@ export class ModelRepository<
         relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
         relatedTable: related.definition.table,
       })
-      const relatedComparable = related.comparesWithStoredValues([relation.relatedKey])
+      const relatedComparable = related.readsKeysAsStored([relation.relatedKey])
 
       recordDatabaseQueryObservation(Object.freeze({
         connectionName: this.getConnectionName(),
@@ -2653,7 +2653,7 @@ export class ModelRepository<
       rowsPatchable: relatedRowsArePatchable(related)
         && query.canPatchLoadedRows()
         && observation.selections.length === 0
-        && related.comparesWithStoredValues([relation.kind === 'belongsTo' ? relation.ownerKey : relation.foreignKey]),
+        && related.readsKeysAsStored([relation.kind === 'belongsTo' ? relation.ownerKey : relation.foreignKey]),
     })
   }
 
@@ -2695,7 +2695,14 @@ export class ModelRepository<
     for (const column of columns) {
       if (!this.valueTransformer.comparesWithStoredValues(column)) return false
     }
-    return this.valueTransformer.comparesWithStoredValues(this.definition.primaryKey)
+    return this.readsKeysAsStored([])
+  }
+
+  readsKeysAsStored(keys: Iterable<string>): boolean {
+    for (const key of keys) {
+      if (!this.valueTransformer.readsColumnAsStored(key)) return false
+    }
+    return this.valueTransformer.readsColumnAsStored(this.definition.primaryKey)
   }
 
   comparesObservationWithStoredValues(observation: DatabaseQueryObservation): boolean {
@@ -2705,7 +2712,7 @@ export class ModelRepository<
 
   private withRelatedRowReader(related: ModelRepository, observation: DatabaseQueryObservation, keys: readonly string[] = []): DatabaseQueryObservation {
     const readRow = related.rowReader()
-    const comparable = related.comparesObservationWithStoredValues(observation) && related.comparesWithStoredValues(keys)
+    const comparable = related.comparesObservationWithStoredValues(observation) && related.readsKeysAsStored(keys)
     if (!readRow && comparable) return observation
     return Object.freeze({
       ...observation,

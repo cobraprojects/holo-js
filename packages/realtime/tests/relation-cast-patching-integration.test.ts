@@ -467,6 +467,26 @@ describe.each(drivers)('realtime patches through models with different casts on 
     await expectFresh(false)
   })
 
+  it('keeps rows keyed by a converted primary key equal to a fresh read', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, schema } = await openFixture(variant)
+    const name = `holo_cast_days_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, (table) => {
+      table.date('day').primaryKey()
+      table.string('label')
+    })
+    onTestFinished(() => schema.dropTable(name))
+    const days = defineGeneratedTable(name, { day: column.date().primaryKey(), label: column.string() })
+    await db.table(days).insert({ day: '2024-01-01', label: 'before' })
+    const Day = defineModel(days, { timestamps: false })
+    const expectFresh = await subscribeAll(variant, {
+      days: () => db.model(Day).query().orderBy('day').getJson(),
+    })
+
+    await mutate(() => db.table(days).where('day', '2024-01-01').update({ label: 'after' }))
+    await expectFresh(false)
+  })
+
   it('keeps scalar reads of a cast column equal to a fresh read', async () => {
     const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
     const { db, items } = await openFixture(variant)

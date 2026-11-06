@@ -2717,7 +2717,7 @@ class ModelQueryBuilderBase<
       const relation = this.repository.getRelationDefinition(load.relation)
       if (relation.kind === 'belongsTo') {
         const predicates = this.repository.resolveBelongsToOwnerPredicates(relation, load.constraint)
-        if (!predicates || !this.repository.comparesWithStoredValues([relation.foreignKey])) {
+        if (!predicates || !this.repository.readsKeysAsStored([relation.foreignKey])) {
           return undefined
         }
 
@@ -2739,7 +2739,7 @@ class ModelQueryBuilderBase<
 
       if (relation.kind === 'hasMany' || relation.kind === 'hasOne') {
         const hydrationQuery = this.createPatchableRelatedHydrationQuery(relation, load.constraint)
-        if (!hydrationQuery || !this.repository.comparesWithStoredValues([relation.localKey])) {
+        if (!hydrationQuery || !this.repository.readsKeysAsStored([relation.localKey])) {
           return undefined
         }
 
