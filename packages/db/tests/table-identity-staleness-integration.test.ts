@@ -539,15 +539,24 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
     })
 
     it('compares a JSON value through its toJSON() whether or not the where() is deferred', async () => {
-      const { table } = await openDatabase(driver)
+      const { db, table } = await openDatabase(driver)
       const { bare, qualified } = tableSpellings(driver, table.tableName)
       const items = defineGeneratedTable(bare, itemColumns)
       useGeneratedTables({ items })
       const serialized = Object.defineProperty({ theme: 'dark' }, 'toJSON', { value: () => ({ theme: 'light' }), enumerable: false })
-      await DB.table(items).insert({ id: 1, name: 'first', active: true, settings: serialized })
+      const serializedList = Object.defineProperty(['dark'], 'toJSON', { value: () => ['light'], enumerable: false })
+      const serializedDate = Object.defineProperty(new Date('2026-01-01T00:00:00Z'), 'toJSON', { value: () => 'light', enumerable: false })
+      await DB.table(items).insert([
+        { id: 1, name: 'object', active: true, settings: serialized },
+        { id: 2, name: 'list', active: true, settings: serializedList },
+        { id: 3, name: 'date', active: true, settings: serializedDate },
+      ])
 
-      expect(await DB.table(qualified).where('settings', serialized).value('id')).toBe(1)
-      expect(await DB.table(items).where('settings', serialized).value('id')).toBe(1)
+      for (const [value, id] of [[serialized, 1], [serializedList, 2], [serializedDate, 3]] as const) {
+        await db.executeSchemaStatement({ sql: 'SELECT 1', source: 'schema' })
+        expect(await DB.table(qualified).where('settings', value).value('id')).toBe(id)
+        expect(await DB.table(items).where('settings', value).value('id')).toBe(id)
+      }
     })
 
     it('keeps the values a deferred whereIn() and whereBetween() were built with', async () => {

@@ -231,9 +231,19 @@ function isSnapshottablePredicateObject(value: unknown): value is Readonly<Recor
   return Reflect.ownKeys(value).every(key => typeof key === 'string' && Object.getOwnPropertyDescriptor(value, key)?.enumerable === true)
 }
 
+function isSnapshottablePredicateArray(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value)
+    && Object.getPrototypeOf(value) === Array.prototype
+    && Reflect.ownKeys(value).every(key => key === 'length' || (typeof key === 'string' && /^(?:0|[1-9]\d*)$/.test(key)))
+}
+
+function isSnapshottablePredicateDate(value: unknown): value is Date {
+  return value instanceof Date && Object.getPrototypeOf(value) === Date.prototype && Reflect.ownKeys(value).length === 0
+}
+
 function snapshotPredicateValue(value: unknown): unknown {
-  if (Array.isArray(value)) return Object.freeze(value.map(snapshotPredicateValue))
-  if (value instanceof Date) return new Date(value.getTime())
+  if (isSnapshottablePredicateArray(value)) return Object.freeze(value.map(snapshotPredicateValue))
+  if (isSnapshottablePredicateDate(value)) return new Date(value.getTime())
   if (isSnapshottablePredicateObject(value)) return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, item]) => [key, snapshotPredicateValue(item)])))
   return value
 }
