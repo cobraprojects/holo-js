@@ -17,7 +17,7 @@ import {
   type DatabaseQueryObservation,
   type DatabaseQueryResultPathSegment,
 } from '../cache'
-import { TableQueryBuilder, insertGetIdByKey } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, insertGetIdByKey, joinOnKeyColumns, selectKeyColumn, whereKeyColumn } from '../query/TableQueryBuilder'
 import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
@@ -30,7 +30,7 @@ import { assertAttributeNameAllowed, assertColumnWritable, canonicalStoredKey, o
 import { StoredKeyMap, StoredKeySet, type StoredKeyOptions } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
 import { PIVOT_TIMESTAMP_COLUMNS } from './relations'
-import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isFractionalKeyFor, isKeySeparableQuery, keysForColumn, relationKeyOptions, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
+import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isFractionalKeyFor, isKeySeparableQuery, keysForColumn, sourceKeyCast, relationKeyOptions, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
 import { assertEntitiesBelongTo, createModelCollection, setModelCollectionOwner, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
@@ -2680,35 +2680,37 @@ export class ModelRepository<
     switch (relation.kind) {
       case 'belongsTo': {
         const related = this.resolveRelatedRepository(relation.related)
-        return [this.applyRelationConstraint(relation, related, constraint)
-          .getTableQueryBuilder()
-          .whereColumn(relation.ownerKey, '=', this.qualifyParentColumn(relation.foreignKey))]
+        return [this.whereParentKey(this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder(), related.definition.table, relation.ownerKey, relation.foreignKey)]
       }
       case 'hasMany':
       case 'hasOne':
       case 'hasOneOfMany': {
         const related = this.resolveRelatedRepository(relation.related)
-        return [this.applyRelationConstraint(relation, related, constraint)
-          .getTableQueryBuilder()
-          .whereColumn(relation.foreignKey, '=', this.qualifyParentColumn(relation.localKey))]
+        return [this.whereParentKey(this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder(), related.definition.table, relation.foreignKey, relation.localKey)]
       }
       case 'morphOne':
       case 'morphMany':
       case 'morphOneOfMany': {
         const related = this.resolveRelatedRepository(relation.related)
-        return [this.applyRelationConstraint(relation, related, constraint)
-          .getTableQueryBuilder()
-          .where(relation.morphTypeColumn, this.getMorphTypeValue())
-          .whereColumn(relation.morphIdColumn, '=', this.qualifyParentColumn(relation.localKey))]
+        return [this.whereParentKey(
+          this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder().where(relation.morphTypeColumn, this.getMorphTypeValue()),
+          related.definition.table,
+          relation.morphIdColumn,
+          relation.localKey,
+        )]
       }
       case 'morphTo': {
         const references = this.resolveMorphExistenceReferences(morphTypes)
         return references.map((reference) => {
           const related = ModelRepository.from(reference)
-          return this.applyRelationConstraint(relation, related, constraint)
-            .getTableQueryBuilder()
-            .where(this.qualifyParentColumn(relation.morphTypeColumn), related.definition.morphClass)
-            .whereColumn(related.definition.primaryKey, '=', this.qualifyParentColumn(relation.morphIdColumn))
+          return this.whereParentKey(
+            this.applyRelationConstraint(relation, related, constraint)
+              .getTableQueryBuilder()
+              .where(this.qualifyParentColumn(relation.morphTypeColumn), related.definition.morphClass),
+            related.definition.table,
+            related.definition.primaryKey,
+            relation.morphIdColumn,
+          )
         })
       }
       case 'hasOneThrough':
@@ -2717,49 +2719,63 @@ export class ModelRepository<
         const related = this.resolveRelatedRepository(relation.related)
         const throughTable = through.definition.table.tableName
         const relatedTable = related.definition.table.tableName
+        const throughColumns = through.definition.table.columns
+        const joined = joinOnKeyColumns(
+          this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder(),
+          throughTable,
+          `${throughTable}.${relation.secondLocalKey}`,
+          `${relatedTable}.${relation.secondKey}`,
+          { left: sourceKeyCast(ownEntry(throughColumns, relation.secondLocalKey), ownEntry(related.definition.table.columns, relation.secondKey)) },
+        )
 
-        return [this.applyRelationConstraint(relation, related, constraint)
-          .getTableQueryBuilder()
-          .join(
-            throughTable,
-            `${throughTable}.${relation.secondLocalKey}`,
-            '=',
-            `${relatedTable}.${relation.secondKey}`,
-          )
-          .whereColumn(`${throughTable}.${relation.firstKey}`, '=', this.qualifyParentColumn(relation.localKey))]
+        return [this.whereParentKey(joined, through.definition.table, relation.firstKey, relation.localKey, `${throughTable}.${relation.firstKey}`)]
       }
       case 'belongsToMany': {
         const related = this.resolveRelatedRepository(relation.related)
-        const pivotSubquery = this.createBelongsToManyPivotQuery(relation, this.getConnection())
-          .select(relation.relatedPivotKey)
-          .whereColumn(relation.foreignPivotKey, '=', this.qualifyParentColumn(relation.parentKey))
-
-        return [this.applyRelationConstraint(relation, related, constraint)
-          .getTableQueryBuilder()
-          .whereInSub(relation.relatedKey, pivotSubquery)]
+        const pivot = this.createBelongsToManyPivotQuery(relation, this.getConnection())
+        return [this.whereHasPivot(relation, related, constraint, pivot, relation.foreignPivotKey, relation.relatedPivotKey)]
       }
       case 'morphToMany': {
         const related = this.resolveRelatedRepository(relation.related)
-        const pivotSubquery = this.createMorphToManyPivotQuery(relation, this.getConnection())
-          .select(relation.foreignPivotKey)
-          .where(relation.morphTypeColumn, this.getMorphTypeValue())
-          .whereColumn(relation.morphIdColumn, '=', this.qualifyParentColumn(relation.parentKey))
-
-        return [this.applyRelationConstraint(relation, related, constraint)
-          .getTableQueryBuilder()
-          .whereInSub(relation.relatedKey, pivotSubquery)]
+        const pivot = this.createMorphToManyPivotQuery(relation, this.getConnection()).where(relation.morphTypeColumn, this.getMorphTypeValue())
+        return [this.whereHasPivot(relation, related, constraint, pivot, relation.morphIdColumn, relation.foreignPivotKey)]
       }
       case 'morphedByMany': {
         const related = this.resolveRelatedRepository(relation.related)
-        const pivotSubquery = this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection())
-          .select(relation.morphIdColumn)
-          .whereColumn(relation.foreignPivotKey, '=', this.qualifyParentColumn(relation.parentKey))
-
-        return [this.applyRelationConstraint(relation, related, constraint)
-          .getTableQueryBuilder()
-          .whereInSub(relation.relatedKey, pivotSubquery)]
+        const pivot = this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection())
+        return [this.whereHasPivot(relation, related, constraint, pivot, relation.foreignPivotKey, relation.morphIdColumn)]
       }
     }
+  }
+
+  private whereParentKey<TQuery extends TableQueryBuilder<string | TableDefinition, Record<string, unknown>>>(
+    query: TQuery,
+    table: TableDefinition | undefined,
+    column: string,
+    parentColumn: string,
+    reference = column,
+  ): TQuery {
+    const cast = sourceKeyCast(ownEntry(this.definition.table.columns, parentColumn), table ? ownEntry(table.columns, column) : undefined)
+    return whereKeyColumn(query, reference, this.qualifyParentColumn(parentColumn), { right: cast })
+  }
+
+  private whereHasPivot(
+    relation: PivotRelationDefinition,
+    related: ModelRepository,
+    constraint: RelationConstraint | undefined,
+    pivot: TableQueryBuilder<string | TableDefinition>,
+    parentPivotColumn: string,
+    relatedPivotColumn: string,
+  ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+    const pivotTable = this.resolvePivotTable(relation.pivotTable, this.getConnection())
+    const pivotDefinition = typeof pivotTable === 'string' ? undefined : pivotTable
+    const relatedTable = related.definition.table
+    const relatedCast = sourceKeyCast(pivotDefinition ? ownEntry(pivotDefinition.columns, relatedPivotColumn) : undefined, ownEntry(relatedTable.columns, relation.relatedKey))
+    const pivotKeys = selectKeyColumn(this.whereParentKey(pivot, pivotDefinition, parentPivotColumn, relation.parentKey), relatedPivotColumn, relatedCast)
+
+    const relatedQuery = this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder()
+    const source = relatedQuery.getPlan().source
+    return relatedQuery.whereInSub(`${source.alias ?? source.tableName}.${relation.relatedKey}`, pivotKeys)
   }
 
   private resolveMorphExistenceReferences(
@@ -3273,7 +3289,7 @@ export class ModelRepository<
 
     const related = this.resolveRelatedRepository(relation.related)
     const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, related, constraint))
-    const relatedEntities = await loadRelationKeyChunks(keysForColumn(localKeys, ownEntry(related.definition.table.columns, relation.morphIdColumn)), paginated, chunk => this.applyRelationConstraint(relation, related, constraint)
+    const relatedEntities = await loadRelationKeyChunks(keysForColumn(localKeys, ownEntry(related.definition.table.columns, relation.morphIdColumn), related.getConnection().getDriver()), paginated, chunk => this.applyRelationConstraint(relation, related, constraint)
       .where(relation.morphTypeColumn, this.getMorphTypeValue())
       .where(relation.morphIdColumn, 'in', chunk)
       .get())
@@ -3312,7 +3328,7 @@ export class ModelRepository<
       const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, group.repository, constraint))
       const relatedKey = group.repository.definition.primaryKey
       const relatedKeyDefinition = ownEntry(group.repository.definition.table.columns, relatedKey)
-      const relatedEntities = await loadRelationKeyChunks(keysForColumn(distinctStoredKeys(group.ids), relatedKeyDefinition), paginated, chunk => this.applyRelationConstraint(relation, group.repository, constraint)
+      const relatedEntities = await loadRelationKeyChunks(keysForColumn(distinctStoredKeys(group.ids), relatedKeyDefinition, group.repository.getConnection().getDriver()), paginated, chunk => this.applyRelationConstraint(relation, group.repository, constraint)
         .where(relatedKey, 'in', chunk)
         .get())
       const relatedMap = indexRelation(relatedEntities, relatedKey, this.keyOptionsFor(group.repository, relation.morphIdColumn, relatedKey))
@@ -3413,7 +3429,7 @@ export class ModelRepository<
     const parentColumn = relation.kind === 'morphOneOfMany' ? relation.morphIdColumn : relation.foreignKey
     const related = this.resolveRelatedRepository(relation.related)
     const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, related, constraint))
-    const latestEntities = await loadRelationKeyChunks(keysForColumn(parentKeys, ownEntry(related.definition.table.columns, parentColumn)), paginated, chunk => this.createOneOfManyQuery(relation, related, parentColumn, chunk, constraint).get())
+    const latestEntities = await loadRelationKeyChunks(keysForColumn(parentKeys, ownEntry(related.definition.table.columns, parentColumn), related.getConnection().getDriver()), paginated, chunk => this.createOneOfManyQuery(relation, related, parentColumn, chunk, constraint).get())
     const options = this.keyOptionsFor(related, relation.localKey, parentColumn)
     const grouped = new StoredKeyMap<Entity[]>([], options)
 
@@ -3487,7 +3503,7 @@ export class ModelRepository<
     }
 
     const through = this.resolveThroughRepository(relation.through)
-    const throughEntities = await loadRelationKeyChunks(keysForColumn(parentKeys, ownEntry(through.definition.table.columns, relation.firstKey)), false, chunk => through.query()
+    const throughEntities = await loadRelationKeyChunks(keysForColumn(parentKeys, ownEntry(through.definition.table.columns, relation.firstKey), through.getConnection().getDriver()), false, chunk => through.query()
       .where(relation.firstKey, 'in', chunk)
       .get())
 

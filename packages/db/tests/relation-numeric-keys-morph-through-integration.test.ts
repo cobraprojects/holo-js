@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { DB, column, defineGeneratedTable, defineModel, hasManyThrough, hasOneThrough, latestMorphOne, morphMany, morphOne, morphTo, morphToMany, morphedByMany, RelationError, resetDB, type Entity, type TableDefinition } from '../src'
+import { DB, column, defineGeneratedTable, defineModel, hasManyThrough, hasOneThrough, latestMorphOne, morphMany, morphOne, morphTo, morphToMany, morphedByMany, resetDB, type Entity, type TableDefinition } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 type KeyKind = 'decimal' | 'text'
@@ -318,7 +318,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('mor
     })
   })
 
-  it('rejects a morph one-of-many group whose related rows store one key in different forms', async () => {
+  it('loads the morph one-of-many row whose text key is the exact integer text', async () => {
     const { schema } = await openDatabase(driver)
     onTestFinished(() => resetDB())
     const tag = suffix()
@@ -341,12 +341,8 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('mor
     const Note = defineModel(notes, { timestamps: false })
     const Owner = defineModel(owners, { morphClass: ownerType, timestamps: false, relations: { latestNote: latestMorphOne(() => Note, 'noteable') } })
 
-    if (driver === 'mysql') {
-      await expect(Owner.with('latestNote').get()).rejects.toThrow(RelationError)
-    } else {
-      const [owner] = await Owner.with('latestNote').get()
-      expect(relation<Loaded>(owner, 'latestNote').get('id' as never)).toBe(10)
-    }
+    const [owner] = await Owner.with('latestNote').get()
+    expect(relation<Loaded>(owner, 'latestNote').get('id' as never)).toBe(10)
   })
 
   it('keeps distinct numeric-looking text keys apart for morph and through relations', async () => {

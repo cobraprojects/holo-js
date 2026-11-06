@@ -13,6 +13,10 @@ import type {
 } from './ast'
 
 export class PostgresQueryCompiler extends SQLQueryCompiler {
+  protected override compileIntegerKey(expression: string): string {
+    return `CASE WHEN ${expression} ~ '^-?(0|[1-9][0-9]{0,18})([.]0+)?$' THEN CAST(split_part(${expression}, '.', 1) AS NUMERIC) END`
+  }
+
   protected override createBooleanLiteral(value: boolean): string {
     return value ? 'true' : 'false'
   }

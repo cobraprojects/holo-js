@@ -243,6 +243,16 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     return `CASE WHEN ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' THEN ${column} ELSE ${wallClock} END`
   }
 
+  protected override compileIntegerKey(expression: string): string {
+    const point = `instr(${expression}, '.')`
+    const integer = `CASE WHEN ${point} > 0 THEN substr(${expression}, 1, ${point} - 1) ELSE ${expression} END`
+    const digits = `CASE WHEN ${integer} GLOB '-*' THEN substr(${integer}, 2) ELSE ${integer} END`
+    const fraction = `substr(${expression}, ${point} + 1)`
+    const limit = `CASE WHEN ${integer} GLOB '-*' THEN '9223372036854775808' ELSE '9223372036854775807' END`
+    const inRange = `(length(${digits}) < 19 OR (length(${digits}) = 19 AND ${digits} <= ${limit}))`
+    return `CASE WHEN instr(CAST(${expression} AS BLOB), x'00') = 0 AND ${digits} <> '' AND ${digits} NOT GLOB '*[^0-9]*' AND (${digits} = '0' OR ${digits} NOT GLOB '0*') AND ${inRange} AND (${point} = 0 OR (${fraction} <> '' AND ${fraction} NOT GLOB '*[^0]*')) THEN CAST(${integer} AS INTEGER) END`
+  }
+
   protected override compileColumnComparison(predicate: QueryColumnPredicate): string {
     if (!predicate.dateOperands) return super.compileColumnComparison(predicate)
 

@@ -113,6 +113,8 @@ import type {
   QueryJoinClause,
   QueryBetweenColumnsPredicate,
   QueryColumnPredicate,
+  QueryKeyCast,
+  QueryKeyCasts,
   QueryDatePart,
   QueryOperator,
   QueryPredicateNode,
@@ -184,6 +186,22 @@ type KeyedInsert = (
 ) => Promise<number | string | undefined>
 
 let keyedInsert: KeyedInsert
+type AnyTableQuery = TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>
+let keyColumnComparison: (query: AnyTableQuery, column: string, compareTo: string, casts: QueryKeyCasts) => AnyTableQuery
+let keyColumnSelection: (query: AnyTableQuery, column: string, cast: QueryKeyCast | undefined) => AnyTableQuery
+let keyColumnJoin: (query: AnyTableQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts) => AnyTableQuery
+
+export function whereKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, compareTo: string, casts: QueryKeyCasts): TQuery {
+  return keyColumnComparison(query as unknown as AnyTableQuery, column, compareTo, casts) as unknown as TQuery
+}
+
+export function selectKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, cast: QueryKeyCast | undefined): TQuery {
+  return keyColumnSelection(query as unknown as AnyTableQuery, column, cast) as unknown as TQuery
+}
+
+export function joinOnKeyColumns<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts): TQuery {
+  return keyColumnJoin(query as unknown as AnyTableQuery, table, leftColumn, rightColumn, casts) as unknown as TQuery
+}
 
 export function resolveSourceColumnName(source: Pick<QuerySource, 'tableName' | 'alias'>, column: string): string | undefined {
   const separator = column.lastIndexOf('.')
@@ -908,6 +926,7 @@ export class TableQueryBuilder<
     column: string,
     operatorOrCompareTo: string,
     compareTo?: string,
+    casts?: QueryKeyCasts,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const comparedColumn = compareTo ?? operatorOrCompareTo
     const dateOperands = { column: this.isDateColumn(column), compareTo: this.isDateColumn(comparedColumn) }
@@ -918,6 +937,7 @@ export class TableQueryBuilder<
       operator: (typeof compareTo === 'undefined' ? '=' : operatorOrCompareTo) as QueryColumnPredicate['operator'],
       compareTo: comparedColumn,
       ...(dateOperands.column || dateOperands.compareTo ? { dateOperands } : {}),
+      ...(casts?.left || casts?.right ? { keyCasts: casts } : {}),
     }))
   }
 
@@ -2944,6 +2964,16 @@ export class TableQueryBuilder<
 
   static {
     keyedInsert = (query, values, keyColumn) => query.insertGetKey(values, keyColumn)
+    keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)
+    keyColumnSelection = (query, column, cast) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(cast ? { keyCast: cast } : {}) })]) })
+    keyColumnJoin = (query, table, leftColumn, rightColumn, casts) => query.clone(withJoin(query.plan, {
+      type: 'inner',
+      ...resolveJoinTarget(table),
+      leftColumn,
+      operator: '=',
+      rightColumn,
+      ...(casts.left || casts.right ? { keyCasts: casts } : {}),
+    }))
   }
 
   async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
