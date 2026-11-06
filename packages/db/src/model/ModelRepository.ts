@@ -12,7 +12,7 @@ import {
   readDatabaseQueryObservationCount,
   recordDatabaseQueryObservation,
   resolveQueryCacheDependencies,
-  requireDatabaseQueryObservationRefreshFrom,
+  runRequiringDatabaseQueryRefresh,
   truncateDatabaseQueryObservations,
   type DatabaseQueryAggregateObservation,
   type DatabaseQueryObservation,
@@ -2283,9 +2283,7 @@ export class ModelRepository<
   }
 
   private async loadRequiringQueryRefresh(load: () => Promise<void>): Promise<void> {
-    const observationCount = hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
-    await load()
-    if (typeof observationCount === 'number') requireDatabaseQueryObservationRefreshFrom(observationCount)
+    await runRequiringDatabaseQueryRefresh(load)
   }
 
   createTableQuery(connection: DatabaseContext = this.getConnection()): TableQueryBuilder<TTable> {
