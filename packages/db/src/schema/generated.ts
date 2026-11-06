@@ -4,6 +4,8 @@ import type { ColumnInput } from './columns'
 import type { BoundTableDefinition, DefineTableOptions } from './defineTable'
 import type { TableColumnsShape, TableDefinition, TableIndexDefinition } from './types'
 import { column } from './columns'
+import { splitTablePath } from './identifiers'
+import { canonicalTableName } from './tableIdentityRegistry'
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface GeneratedSchemaTables {}
@@ -61,12 +63,29 @@ export function useGeneratedSchemaConnection(connectionName: string): () => void
   }
 }
 
+function tableSegment(tableName: string): string {
+  return splitTablePath(tableName).table.toLowerCase()
+}
+
 export function registerGeneratedTables<TTables extends Record<string, TableDefinition>>(tables: TTables): TTables {
   for (const table of Object.values(tables)) {
     generatedTables.set(table.tableName, table)
   }
 
   return tables
+}
+
+export function listGeneratedTableSpellings(tableName: string): readonly string[] {
+  const segment = tableSegment(tableName)
+  return [...generatedTables.keys()].filter(name => tableSegment(name) === segment)
+}
+
+function findGeneratedTableByIdentity(tableName: string, connectionName: string): TableDefinition | undefined {
+  const exact = generatedTables.get(tableName)
+  if (exact) return exact
+  const identity = canonicalTableName(connectionName, tableName)
+  const spelling = listGeneratedTableSpellings(tableName).find(name => canonicalTableName(connectionName, name) === identity)
+  return spelling === undefined ? undefined : generatedTables.get(spelling)
 }
 
 export function defineGeneratedTable<
@@ -91,7 +110,7 @@ export function getGeneratedTableDefinition<TName extends string>(tableName: TNa
 export function getConnectionGeneratedTableDefinition(tableName: string, connectionName: string): TableDefinition | undefined {
   if (isGeneratedSchemaSuspended()) return undefined
   const schemaConnection = generatedSchemaSource.connectionName
-  return schemaConnection === undefined || schemaConnection === connectionName ? generatedTables.get(tableName) : undefined
+  return schemaConnection === undefined || schemaConnection === connectionName ? findGeneratedTableByIdentity(tableName, connectionName) : undefined
 }
 
 export function isGeneratedSchemaConnection(connectionName: string): boolean {

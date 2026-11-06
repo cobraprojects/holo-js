@@ -62,3 +62,8 @@ export async function openDatabase(driver: TestDriver = 'sqlite', options: Pick<
   return { db, table, schema, adapter }
 }
 
+export function tableSpellings(driver: TestDriver, tableName: string) {
+  const bare = tableName.split('.').at(-1)!
+  const schema = driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : mysqlTestConnection().database
+  return { bare, qualified: `${schema}.${bare}` }
+}
