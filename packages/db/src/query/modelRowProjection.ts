@@ -8,7 +8,13 @@ type JoinedColumns = (join: QueryJoinClause) => readonly string[] | undefined
 type SelectionRole = 'own' | 'joined' | 'other'
 
 function knownSubqueryColumns(subquery: SelectQueryPlan, connectionName: string): readonly string[] | undefined {
-  if (subquery.selections.length === 0) return knownTableColumns(subquery.source.table?.tableName ?? subquery.source.tableName, subquery.source.table, connectionName)
+  if (subquery.selections.length === 0) {
+    const tables = [
+      knownTableColumns(subquery.source.table?.tableName ?? subquery.source.tableName, subquery.source.table, connectionName),
+      ...subquery.joins.map(join => knownJoinedColumns(join, connectionName)),
+    ]
+    return tables.every((columns): columns is readonly string[] => typeof columns !== 'undefined') ? tables.flat() : undefined
+  }
   const outputs = subquery.selections.map(selection => selectionOutputName(selection))
   return outputs.every((output): output is string => typeof output === 'string' && output !== '*') ? outputs : undefined
 }
@@ -118,18 +124,20 @@ function protectModelColumns(branch: SelectQueryPlan, selections: readonly Query
   if (firstOwn === -1) return Object.freeze([...selections])
 
   const ownTable = tableWildcard(branch.source.alias ?? branch.source.tableName, driver).slice(0, -2)
-  const modelOutputs = selections.filter(isModelOutput)
-  const reselect = (name: string): readonly QuerySelection[] => {
-    const selected = modelOutputs.filter(selection => columnOutputName(selection) === name)
-    if (selected.length > 0) return selected
-    return modelOutputs.some(selection => columnOutputName(selection) === '*') ? [Object.freeze({ kind: 'column' as const, column: `${ownTable}.${name}` })] : []
+  const reselect = (name: string, before: number): readonly QuerySelection[] => {
+    const effective = selections.slice(0, before).reverse().find(selection => selection.kind !== 'column'
+      ? selectionOutputName(selection) === name
+      : selectionRole(branch.source, selection) === 'own' && [name, '*'].includes(columnOutputName(selection)))
+    if (!effective) return []
+    if (effective.kind === 'column' && columnOutputName(effective) === '*') return [Object.freeze({ kind: 'column' as const, column: `${ownTable}.${name}` })]
+    return [effective]
   }
   const moved = selections.filter((selection, index) => index > firstOwn && selection.kind === 'column' && shadowsModelColumn(branch, selection, modelColumns, joinedColumns)
     && typeof shadowedModelColumns(branch, selection, modelColumns, joinedColumns) === 'undefined')
   const kept = selections.flatMap((selection, index) => {
     if (moved.includes(selection)) return []
     if (index <= firstOwn || selection.kind !== 'column' || !shadowsModelColumn(branch, selection, modelColumns, joinedColumns)) return [selection]
-    return [selection, ...(shadowedModelColumns(branch, selection, modelColumns, joinedColumns) ?? []).flatMap(reselect)]
+    return [selection, ...(shadowedModelColumns(branch, selection, modelColumns, joinedColumns) ?? []).flatMap(name => reselect(name, index))]
   })
   return Object.freeze([...kept.slice(0, firstOwn), ...moved, ...kept.slice(firstOwn)])
 }

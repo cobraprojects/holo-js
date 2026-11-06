@@ -231,6 +231,11 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     expect(rows.map(row => [Number(row.toAttributes().id), Number(row.toAttributes().price)]).sort((left, right) => left[0]! - right[0]!)).toEqual([[1, 3], [2, 3]])
     const wildcard = await joined().select(`${products}.*`).addSelectSub(parent as never, 'price').addSelect(`${orders}.*`).get()
     expect(wildcard.map(row => [Number(row.toAttributes().id), Number(row.toAttributes().price)]).sort((left, right) => left[0]! - right[0]!)).toEqual([[1, 3], [2, 3]])
+
+    registerGeneratedTables({ [orders]: defineGeneratedTable(orders, { id: column.id(), product_id: column.integer(), price: column.integer(), parent_id: column.integer().nullable(), factor: column.integer().nullable() }) })
+    onTestFinished(() => clearGeneratedTables())
+    const known = await joined().select(`${products}.*`).addSelectSub(parent as never, 'price').addSelect(`${orders}.*`).get()
+    expect(known.map(row => [Number(row.toAttributes().id), Number(row.toAttributes().price), Number(row.toAttributes().factor)]).sort((left, right) => left[0]! - right[0]!)).toEqual([[1, 3, 2], [2, 3, 4]])
   })
 
   it('cursor paginates a joined query by the model key and by a joined column', async () => {
@@ -393,6 +398,20 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const sub = DB.table(notes).select('note_id', 'product_id', '__holo_cursor_0')
     const subPage = await Product.query().joinSub(sub as never, 'n', 'n.product_id' as never, '=', `${products}.id`).orderBy('n.note_id' as never).cursorPaginate(2)
     expect(subPage.data.map(entity => [Number(entity.toAttributes().id), Number((entity.toAttributes() as Record<string, unknown>).__holo_cursor_0)])).toEqual([[2, 8], [1, 7]])
+
+    const links = uniqueName('links')
+    onTestFinished(async () => {
+      await schema.dropTable(links)
+    })
+    await schema.createTable(links, (table) => {
+      table.integer('owner_note')
+      table.string('tag')
+    })
+    await DB.table(links).insert([{ owner_note: 1, tag: 'a' }, { owner_note: 2, tag: 'b' }])
+    registerGeneratedTables({ [links]: defineGeneratedTable(links, { owner_note: column.integer(), tag: column.string() }) })
+    const joinedSub = DB.table(links).join(notes, `${notes}.note_id`, '=', `${links}.owner_note`)
+    const joinedSubPage = await Product.query().joinSub(joinedSub as never, 'n', 'n.product_id' as never, '=', `${products}.id`).orderBy('n.note_id' as never).cursorPaginate(2)
+    expect(joinedSubPage.data.map(entity => [Number(entity.toAttributes().id), Number((entity.toAttributes() as Record<string, unknown>).__holo_cursor_0)])).toEqual([[2, 8], [1, 7]])
   })
 
   it('accepts a joined column aliased to a name that is not a model column', async () => {
