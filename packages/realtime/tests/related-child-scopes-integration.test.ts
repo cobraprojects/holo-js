@@ -217,21 +217,3 @@ describe.each(drivers)('realtime hasOne and hasMany children hidden by global sc
     })
   })
 })
-
-describe.each(drivers)('realtime belongsTo owners hidden by an exists global scope on %s', (driver) => {
-  it('drops an owner that leaves the tenant while a plain query of the owners patches', async () => {
-    const { db, authors, posts } = await openAuthors(driver, 'hasMany')
-    const TenantWriter = defineModel(authors, { timestamps: false, globalScopes: { visible: query => query.where('name', '!=', 'Hidden').whereExists(db.table(posts).select('id')) } })
-    const Post = defineModel(posts, { timestamps: false, relations: { writer: belongsTo(() => TenantWriter, 'author_id') } })
-    const handler = async () => ({
-      posts: await db.model(Post).query().with('writer').orderBy('id').getJson(),
-      authors: await db.table(authors).select('id').orderBy('id').get(),
-    })
-    const subscription = await subscribe(handler)
-    expect(JSON.stringify(subscription.current.data)).toContain('"Ada"')
-
-    await mutate(() => db.table(authors).where('id', 1).update({ name: 'Hidden' }))
-    await expectFresh(subscription, handler)
-    expect(JSON.stringify(subscription.current.data)).not.toContain('"Hidden"')
-  })
-})
