@@ -1053,11 +1053,11 @@ export function createDeterministicQueryCacheKey(
   statement: CompiledStatement,
   connectionName: string,
 ): string {
-  const digest = createHash('sha256').update(JSON.stringify({
+  const digest = createHash('sha256').update(stringifyQueryCacheKey({
     connectionName,
     sql: statement.sql,
     bindings: statement.bindings ?? [],
-  })).digest('hex')
+  })!).digest('hex')
 
   return `db:query:${digest}`
 }
@@ -1077,8 +1077,24 @@ export function createTableCacheDependency(
   return `db:${connectionName}:${canonicalTableName(connectionName, tableName)}`
 }
 
+const INTEGER_MARKER = `integer:${randomUUID()}:`
+const INTEGER_MARKER_PATTERN = new RegExp(`"${INTEGER_MARKER}(-?\\d+)(n?)"`, 'g')
+
+function stringifyIntegers(value: unknown, exactNumbers: boolean): string | undefined {
+  return JSON.stringify(value, (_key, element: unknown) => {
+    if (typeof element === 'bigint') return `${INTEGER_MARKER}${element}n`
+    return exactNumbers && typeof element === 'number' && Number.isInteger(element) && !Number.isSafeInteger(element)
+      ? `${INTEGER_MARKER}${BigInt(element)}`
+      : element
+  })?.replace(INTEGER_MARKER_PATTERN, (_marker, digits: string, bigint: string) => exactNumbers ? digits : `${digits}${bigint}`)
+}
+
+function stringifyQueryCacheKey(value: unknown): string | undefined {
+  return stringifyIntegers(value, false)
+}
+
 function encodeDependencyValue(value: unknown): string {
-  return encodeURIComponent(JSON.stringify(value))
+  return encodeURIComponent(stringifyIntegers(value, true)!)
 }
 
 function createPredicateMetadata(
@@ -1442,6 +1458,11 @@ function isNumericText(value: unknown): boolean {
   return typeof value === 'string' && NUMERIC_TEXT_PATTERN.test(value)
 }
 
+function isUnsafeInteger(value: unknown): boolean {
+  return (typeof value === 'bigint' && !Number.isSafeInteger(Number(value)))
+    || (typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value))
+}
+
 function mayEqualOtherLiteral(column: string, value: unknown, caseInsensitiveColumns: CaseInsensitiveColumns): boolean {
   return typeof readLiteralDependencyValues(column, value, caseInsensitiveColumns) === 'undefined'
 }
@@ -1475,12 +1496,12 @@ function readLiteralDependencyValues(
   if (Array.isArray(value)) {
     return value.some(element => Array.isArray(element)
       ? typeof readLiteralDependencyValues(column, element, caseInsensitiveColumns) === 'undefined'
-      : comparesLoosely(column, element, caseInsensitiveColumns) || isNumericText(element))
+      : comparesLoosely(column, element, caseInsensitiveColumns) || isNumericText(element) || isUnsafeInteger(element))
       ? undefined
       : [value]
   }
 
-  if (comparesLoosely(column, value, caseInsensitiveColumns)) {
+  if (comparesLoosely(column, value, caseInsensitiveColumns) || isUnsafeInteger(value)) {
     return undefined
   }
 
@@ -1552,6 +1573,10 @@ function collectMutationLooseColumns(
 function queryTextMayMatchOtherValues(column: string, value: unknown, textMatching: QueryTextMatching): boolean {
   if (Array.isArray(value)) {
     return value.some(element => queryTextMayMatchOtherValues(column, element, textMatching))
+  }
+
+  if (isUnsafeInteger(value)) {
+    return true
   }
 
   if (typeof textMatching === 'boolean') {
@@ -2341,6 +2366,11 @@ function integerResultKeys(
   return resultKeys(table, row, selections, isIntegerColumn, reads)
 }
 
+function hasUnreadInteger(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
+  return resultKeys(table, row, [], isIntegerColumn, value => (typeof value === 'string' || typeof value === 'bigint' || typeof value === 'number')
+    && !Number.isSafeInteger(readCanonicalInteger(value))).length > 0
+}
+
 function hasUnreadableFetchedInteger(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
@@ -2712,6 +2742,7 @@ export const queryCacheInternals = {
   getRootDatabaseContext,
   hasUnreadBoolean,
   hasUnreadableFetchedInteger,
+  hasUnreadInteger,
   hasUnstoredFetchedBoolean,
   readFetchedRow,
   readMutationRow,
