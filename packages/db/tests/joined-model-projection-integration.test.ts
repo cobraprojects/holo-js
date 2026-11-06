@@ -320,6 +320,11 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const first = await query.cursorPaginate(1)
     const second = await query.cursorPaginate(1, first.nextCursor)
     expect([first, second].map(page => page.data.map(row => Number(row.product_key)))).toEqual([[1], [2]])
+
+    const overwritten = DB.table(products).select('id', 'id as factor', 'factor').orderBy(`${products}.id`)
+    const page = await overwritten.cursorPaginate(1)
+    const next = await overwritten.cursorPaginate(1, page.nextCursor)
+    expect([page, next].map(result => result.data.map(row => [Number(row.id), Number(row.factor)]))).toEqual([[[1, 2]], [[2, 4]]])
   })
 
   it('keeps the precedence of non-model outputs of a joined wildcard that also shadows a model column', async () => {
