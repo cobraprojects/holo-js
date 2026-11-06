@@ -101,6 +101,8 @@ jobs:
           bun run setup:examples blog-${{ matrix.framework }}
           test -s apps/blog-${{ matrix.framework }}/.env
           grep -q '^BROADCAST_APP_KEY=.' apps/blog-${{ matrix.framework }}/.env
+      - name: Typecheck the ${{ matrix.framework }} example app
+        run: bun run --cwd apps/blog-${{ matrix.framework }} typecheck
       - name: Cache Playwright browsers
         uses: actions/cache@v6
         with:

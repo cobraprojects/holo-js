@@ -4,8 +4,11 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { documentedSetupCommands, setupFailures } from './validate-contributor-setup.mjs'
+import { exampleApps } from './setup-example-apps.mjs'
 
 const repoRoot = resolve(import.meta.dirname, '..')
+const migratedSchema = 'export const tables = { "posts": posts } as const\n'
+const unmigratedSchema = 'export const tables = {} as const\n'
 
 test('the documented contributor setup installs, builds, then sets up the example apps', async () => {
   const markdown = await readFile(join(repoRoot, 'apps/docs/docs/advanced/contributing.md'), 'utf8')
@@ -65,8 +68,9 @@ test('contributor setup requires generated app and broadcast keys in every examp
   const root = await mkdtemp(join(tmpdir(), 'holo-contributor-setup-'))
   try {
     const writeApp = async (name, manifest, env) => {
-      await mkdir(join(root, 'apps', name), { recursive: true })
+      await mkdir(join(root, 'apps', name, '.holo-js/generated'), { recursive: true })
       await writeFile(join(root, 'apps', name, 'package.json'), JSON.stringify(manifest))
+      await writeFile(join(root, 'apps', name, '.holo-js/generated/schema.generated.ts'), migratedSchema)
       if (env !== undefined) await writeFile(join(root, 'apps', name, '.env'), env)
     }
     const setup = { scripts: { setup: 'holo prepare' } }
@@ -81,5 +85,33 @@ test('contributor setup requires generated app and broadcast keys in every examp
     ])
   } finally {
     await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('contributor setup requires every example app to have a generated schema from its migrated database', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'holo-contributor-setup-'))
+  try {
+    const writeApp = async (name, schema) => {
+      await mkdir(join(root, 'apps', name, '.holo-js/generated'), { recursive: true })
+      await writeFile(join(root, 'apps', name, 'package.json'), JSON.stringify({ scripts: { setup: 'holo migrate' } }))
+      await writeFile(join(root, 'apps', name, '.env'), 'APP_KEY=base64:a\nBROADCAST_APP_KEY=b\n')
+      if (schema !== undefined) await writeFile(join(root, 'apps', name, '.holo-js/generated/schema.generated.ts'), schema)
+    }
+    await writeApp('blog-next', migratedSchema)
+    await writeApp('blog-nuxt', unmigratedSchema)
+    await writeApp('blog-sveltekit')
+    assert.deepEqual(setupFailures(root), [
+      'apps/blog-nuxt/.holo-js/generated/schema.generated.ts has no tables. The app\'s setup script must run holo migrate.',
+      'apps/blog-sveltekit/.holo-js/generated/schema.generated.ts has no tables. The app\'s setup script must run holo migrate.',
+    ])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('every example app migrates its database during setup', async () => {
+  for (const app of exampleApps(repoRoot)) {
+    const manifest = JSON.parse(await readFile(join(repoRoot, 'apps', app, 'package.json'), 'utf8'))
+    assert.match(manifest.scripts.setup, /&& holo migrate$/, `apps/${app} setup must end with holo migrate`)
   }
 })

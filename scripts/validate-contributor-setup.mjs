@@ -7,6 +7,7 @@ import { exampleApps } from './setup-example-apps.mjs'
 
 const contributingPage = 'apps/docs/docs/advanced/contributing.md'
 const setupHeading = '## Set up the repository'
+const generatedSchema = '.holo-js/generated/schema.generated.ts'
 const postSetupTest = 'bun run --cwd packages/config test -- --reporter=json'
 
 export function documentedSetupCommands(source) {
@@ -31,6 +32,11 @@ export function setupFailures(checkoutDir) {
     const env = existsSync(envPath) ? readFileSync(envPath, 'utf8') : ''
     if (!/^APP_KEY=\S/m.test(env)) failures.push(`apps/${app}/.env has no APP_KEY.`)
     if (!/^BROADCAST_APP_KEY=\S/m.test(env)) failures.push(`apps/${app}/.env has no BROADCAST_APP_KEY.`)
+    const schemaPath = join('apps', app, generatedSchema)
+    const schema = existsSync(join(checkoutDir, schemaPath)) ? readFileSync(join(checkoutDir, schemaPath), 'utf8') : ''
+    if (!/^export const tables = \{\s*[^\s}]/m.test(schema)) {
+      failures.push(`${schemaPath} has no tables. The app's setup script must run holo migrate.`)
+    }
   }
   return failures
 }
