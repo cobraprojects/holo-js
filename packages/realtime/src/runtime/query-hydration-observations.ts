@@ -82,7 +82,9 @@ function isRelatedHydrationChild(
 }
 
 function foreignKeyPredicateIndex(query: DatabaseQueryObservation, hydration: DatabaseQueryRelatedHydrationObservation): number {
-  return query.predicates.findIndex(predicate => predicate.column === hydration.foreignKey && predicate.operator === '=')
+  const index = query.predicates.length - 1
+  const predicate = query.predicates[index]
+  return predicate?.column === hydration.foreignKey && predicate.operator === '=' ? index : -1
 }
 
 function foreignKeyDependency(hydration: DatabaseQueryRelatedHydrationObservation, value: unknown, textMatchesAnyNumber: boolean): string | undefined {

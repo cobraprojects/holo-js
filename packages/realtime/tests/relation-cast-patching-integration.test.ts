@@ -227,6 +227,18 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await expectFresh(false)
   })
 
+  it('keeps an eager-load constraint on the foreign key when rebinding children', async () => {
+    const { db, owners, items, Parent } = await openFixture(variant)
+    const expectFresh = await subscribeAll(variant, {
+      constrained: () => db.model(Parent).query().with('items', query => query.where('owner_id', 1).orderBy('id')).orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(owners).insert({ id: 0, ...rowValues(variant, 14) }))
+    await expectFresh(false)
+    await mutate(() => db.table(items).where('id', 1).update({ big: 31 }))
+    await expectFresh(false)
+  })
+
   it('keeps eager-loaded belongsToMany rows equal to a fresh read', async () => {
     const { db, owners, tags, ownerTags, Parent } = await openFixture(variant)
     const expectFresh = await subscribeAll(variant, {
