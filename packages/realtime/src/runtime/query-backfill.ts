@@ -1,6 +1,6 @@
 import { getExecutionDatabase } from './execution-context'
 import { DB, queryCacheInternals, type DatabaseContext, type TableDefinition } from '@holo-js/db'
-import type { DatabaseQueryObservation, RealtimeRowReader, DatabaseQuerySelectionObservation } from './query-state'
+import type { BackfillRows, DatabaseQueryObservation, RealtimeRowReader, DatabaseQuerySelectionObservation } from './query-state'
 import type { DatabaseMutationEvent } from './dependencies'
 import type { BackfillCache } from './state'
 import { getRuntimeState } from './state'
@@ -46,6 +46,13 @@ function readWithReader(readRow: RealtimeRowReader, row: Readonly<Record<string,
   } catch {
     throw new UnreadableBackfillError()
   }
+}
+
+export function convertBackfilledRows(
+  rows: BackfillRows | undefined,
+  readRow: RealtimeRowReader | undefined,
+): BackfillRows | undefined {
+  return rows && readRow ? Object.freeze(rows.map(row => readWithReader(readRow, row))) : rows
 }
 
 export class UnreadableBackfillError extends Error {

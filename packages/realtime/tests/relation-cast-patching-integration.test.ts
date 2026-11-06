@@ -520,6 +520,23 @@ describe.each(drivers)('realtime patches through models with different casts on 
     await expectFresh(false)
   })
 
+  it('backfills grouped windows through models with different casts', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, items } = await openFixture(variant)
+    await db.table(items).insert([{ id: 5, owner_id: 2, ...rowValues(variant, 6) }, { id: 6, owner_id: 1, ...rowValues(variant, 8) }])
+    const Plain = defineModel(items, { timestamps: false })
+    const Masked = defineModel(items, { timestamps: false, casts: { secret: { get: (value: unknown) => `masked:${String(value)}`, set: (value: unknown) => value } } })
+    const expectFresh = await subscribeAll(variant, {
+      maskedFirst: () => db.model(Masked).query().where('owner_id', 1).orderBy('id').offset(1).limit(1).getJson(),
+      maskedSecond: () => db.model(Masked).query().where('owner_id', 2).orderBy('id').offset(1).limit(1).getJson(),
+      plainFirst: () => db.model(Plain).query().where('owner_id', 1).orderBy('id').offset(1).limit(1).getJson(),
+      plainSecond: () => db.model(Plain).query().where('owner_id', 2).orderBy('id').offset(1).limit(1).getJson(),
+    })
+
+    await mutate(() => db.table(items).where('id', 'in', [1, 3]).delete())
+    await expectFresh(false)
+  })
+
   it('keeps scalar reads of a cast column equal to a fresh read', async () => {
     const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
     const { db, items } = await openFixture(variant)
