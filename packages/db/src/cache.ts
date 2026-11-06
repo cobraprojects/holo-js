@@ -369,6 +369,7 @@ type DatabaseDependencyCollectorState = {
   readonly dependencies: Set<string>
   readonly queries: DatabaseQueryObservation[]
   readonly refreshQueries: DatabaseQueryObservation[]
+  readonly refreshTables: Map<string, DatabaseQueryObservation | undefined>
   serializationOverridden: boolean
 }
 
@@ -386,6 +387,7 @@ const NUMERIC_TEXT_PATTERN = /^\s*[+-]?(?:(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?
 const databaseDependencyCollector = new AsyncLocalStorage<DatabaseDependencyCollectorState>()
 const refreshOnlyObservationIndexes = new AsyncLocalStorage<Set<number>>()
 const refreshOnlyObservations = new WeakSet<DatabaseQueryObservation>()
+const refreshOnlyTables = new AsyncLocalStorage<Set<string>>()
 
 type MutationPreviousRowsRequirement = (connectionName: string, tableName: string, columns: readonly string[]) => boolean
 
@@ -486,6 +488,7 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     dependencies: new Set<string>(),
     queries: [],
     refreshQueries: [],
+    refreshTables: new Map(),
     serializationOverridden: false,
   }
   const value = await databaseDependencyCollector.run(state, callback)
@@ -524,9 +527,51 @@ export function recordDatabaseQueryDependencies(dependencies: readonly string[] 
     return
   }
 
+  const tables = refreshOnlyTables.getStore()
   for (const dependency of dependencies) {
     state.dependencies.add(dependency)
+    const tableKey = tables ? parseDatabaseDependency(dependency)?.tableKey : undefined
+    if (tableKey) tables!.add(tableKey)
   }
+}
+
+export function recordDatabaseQueryRefreshTables(dependencies: readonly string[], connectionName: string, tableName: string): void {
+  const state = databaseDependencyCollector.getStore()
+  if (!state) {
+    return
+  }
+
+  const ownTable = createTableCacheDependency(connectionName, tableName)
+  for (const dependency of dependencies) {
+    const tableKey = parseDatabaseDependency(dependency)?.tableKey
+    if (!tableKey || tableKey === ownTable || (state.refreshTables.has(tableKey) && hasTableRefreshObservation(state, tableKey))) {
+      continue
+    }
+
+    const observation = tableRefreshObservation(state, tableKey)
+    state.refreshTables.set(tableKey, observation)
+    pushDatabaseQueryObservation(state, observation)
+  }
+}
+
+function hasTableRefreshObservation(state: DatabaseDependencyCollectorState, tableKey: string): boolean {
+  const observation = state.refreshTables.get(tableKey)
+  return !observation || state.queries.includes(observation)
+}
+
+function tableRefreshObservation(state: DatabaseDependencyCollectorState, tableKey: string): DatabaseQueryObservation {
+  state.dependencies.add(`${tableKey}:${WHERE_DEPENDENCY_PREFIX}${PREDICATE_WILDCARD_VALUE}:${PREDICATE_WILDCARD_VALUE}`)
+  const connectionEnd = tableKey.indexOf(':', DATABASE_DEPENDENCY_PREFIX.length)
+  return Object.freeze({
+    connectionName: tableKey.slice(DATABASE_DEPENDENCY_PREFIX.length, connectionEnd),
+    dependencies: Object.freeze([tableKey]),
+    orderBy: Object.freeze([]),
+    patchable: false,
+    predicates: Object.freeze([]),
+    selections: Object.freeze([]),
+    serialized: true,
+    tableName: tableKey.slice(connectionEnd + 1),
+  })
 }
 
 export function recordDatabaseQueryContext(connection: DatabaseContext): void {
@@ -575,12 +620,21 @@ export async function runRequiringDatabaseQueryRefresh<TValue>(load: () => Promi
   }
 
   const indexes = new Set<number>()
-  const value = await refreshOnlyObservationIndexes.run(indexes, load)
+  const tables = new Set<string>()
+  const value = await refreshOnlyTables.run(tables, () => refreshOnlyObservationIndexes.run(indexes, load))
   for (const index of indexes) {
     const query = state.queries[index]
     if (query) {
       state.queries[index] = refreshOnlyQueryObservation(query)
     }
+  }
+  for (const tableKey of tables) {
+    if (state.refreshTables.has(tableKey) && !state.refreshTables.get(tableKey)) {
+      continue
+    }
+
+    state.refreshTables.set(tableKey, undefined)
+    state.refreshQueries.push(tableRefreshObservation(state, tableKey))
   }
 
   return value
