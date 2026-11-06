@@ -413,7 +413,7 @@ function canSkipCoveredHydratedMutationValueTarget(
   relevantTargets: readonly RelevantMutationTarget[],
 ): boolean {
   const hydrations = target.query.belongsToHydrations
-  if (!hydrations || hydrations.length === 0) {
+  if (!hydrations || hydrations.length === 0 || target.query.resultBound === false) {
     return false
   }
 
@@ -425,7 +425,7 @@ function canSkipCoveredUnpatchableTarget(
   mutations: readonly DatabaseMutationEvent[],
   relevantTargets: readonly RelevantMutationTarget[],
 ): boolean {
-  if (target.query.serialized) {
+  if (target.query.serialized || target.query.resultBound === false) {
     return false
   }
 

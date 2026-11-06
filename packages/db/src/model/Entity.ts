@@ -1,4 +1,4 @@
-import { markDatabaseQueryObservationsSerialized } from '../cache'
+import { markDatabaseQueryObservationsSerialized, requireDatabaseQueryRefreshForRows, runRequiringDatabaseQueryRefresh } from '../cache'
 import { HydrationError } from '../core/errors'
 import { assertAttributeNameAllowed, exposeUntypedEntityAttributes, initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
@@ -724,7 +724,9 @@ class EntityBase<
       throw new HydrationError('The bound repository cannot load relations.')
     }
 
-    await repo.loadRelations([this], relations, false)
+    const loadRelations = repo.loadRelations.bind(repo)
+    await runRequiringDatabaseQueryRefresh(() => loadRelations([this], relations, false))
+    requireDatabaseQueryRefreshForRows([this])
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- widened return merges this + new loads
     return this as any
   }
@@ -743,7 +745,9 @@ class EntityBase<
       throw new HydrationError('The bound repository cannot load relations.')
     }
 
-    await repo.loadRelations([this], relations, true)
+    const loadRelations = repo.loadRelations.bind(repo)
+    await runRequiringDatabaseQueryRefresh(() => loadRelations([this], relations, true))
+    requireDatabaseQueryRefreshForRows([this])
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- widened return merges this + new loads
     return this as any
   }

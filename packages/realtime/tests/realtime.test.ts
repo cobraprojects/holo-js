@@ -2702,7 +2702,7 @@ describe('@holo-js/realtime', () => {
     }])
   })
 
-  it('patches subscribed exact record queries to undefined when changed predicates stop matching without rerunning the handler', async () => {
+  it('reruns subscribed exact record queries when changed predicates stop matching', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, status: 'open', title: 'First' }],
     }))
@@ -2738,20 +2738,15 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
+    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       { id: 1, status: 'open', title: 'First' },
+      undefined,
     ])
-    expect(patches.map(patch => patch.operations)).toEqual([
-      [{
-        op: 'replace',
-        path: [],
-        valueKind: 'undefined',
-      }],
-    ])
+    expect(patches).toEqual([])
   })
 
-  it('patches subscribed exact value queries without rerunning the handler', async () => {
+  it('patches subscribed exact value queries without rerunning the handler until the row is deleted', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First', views: 1 }],
     }))
@@ -2793,22 +2788,21 @@ describe('@holo-js/realtime', () => {
 
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
-    await executeRealtimeMutation(deletePost)
 
     expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual(['First'])
     expect(patches.map(patch => patch.operations)).toEqual([
       [{
         op: 'replace',
         path: [],
         value: 'Updated',
       }],
-      [{
-        op: 'replace',
-        path: [],
-        valueKind: 'undefined',
-      }],
     ])
+
+    await executeRealtimeMutation(deletePost)
+
+    expect(queryRuns).toBe(2)
+    expect(snapshots).toEqual(['First', undefined])
+    expect(patches).toHaveLength(1)
   })
 
   it('keeps subscribed exact value queries silent for irrelevant updates without rerunning the handler', async () => {
@@ -2852,7 +2846,7 @@ describe('@holo-js/realtime', () => {
     expect(patches).toEqual([])
   })
 
-  it('patches subscribed exact value queries to undefined when changed predicates stop matching without rerunning the handler', async () => {
+  it('reruns subscribed exact value queries when changed predicates stop matching', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, status: 1, title: 'First' }],
     }))
@@ -2888,15 +2882,9 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual(['First'])
-    expect(patches.map(patch => patch.operations)).toEqual([
-      [{
-        op: 'replace',
-        path: [],
-        valueKind: 'undefined',
-      }],
-    ])
+    expect(queryRuns).toBe(2)
+    expect(snapshots).toEqual(['First', undefined])
+    expect(patches).toEqual([])
   })
 
   it('patches subscribed pluck queries without rerunning the handler', async () => {
@@ -3441,7 +3429,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches empty detail subscriptions after matching inserts', async () => {
+  it('reruns empty detail subscriptions after matching inserts', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     }))
@@ -3472,7 +3460,7 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(createPost)
 
-    expect(queryRuns).toBe(1)
+    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       undefined,
       { id: 2, title: 'Second' },
@@ -3774,6 +3762,7 @@ describe('@holo-js/realtime', () => {
       posts: [
         { id: 1, author_id: 1, body: 'Hidden', title: 'First' },
         { id: 2, author_id: 2, body: 'Hidden', title: 'Second' },
+        { id: 3, author_id: 1, body: 'Hidden', title: 'Third' },
       ],
     })
     const db = await createContext(adapter)
@@ -3816,8 +3805,8 @@ describe('@holo-js/realtime', () => {
       'UPDATE "posts" SET "author_id" = ? WHERE "id" = ? RETURNING *',
     ])
     expect(snapshots).toEqual([
-      [{ id: 1, author_id: 1, title: 'First' }],
-      [],
+      [{ id: 1, author_id: 1, title: 'First' }, { id: 3, author_id: 1, title: 'Third' }],
+      [{ id: 3, author_id: 1, title: 'Third' }],
     ])
   })
 
@@ -3943,7 +3932,7 @@ describe('@holo-js/realtime', () => {
     expect(patches[0]?.dependencies).toBeUndefined()
   })
 
-  it('patches exact selected record deletes without selected identity or handler reruns', async () => {
+  it('reruns exact selected record queries when the selected row is deleted', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, body: 'Hidden', title: 'First' },
@@ -3987,27 +3976,21 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(deletePost)
 
-    expect(queryRuns).toBe(1)
+    expect(queryRuns).toBe(2)
     expect(adapter.executions).toHaveLength(0)
     expect(adapter.queries.map(query => query.sql)).toEqual([
       'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1',
       'DELETE FROM "posts" WHERE "id" = ? RETURNING *',
+      'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1',
     ])
     expect(snapshots).toEqual([
       { title: 'First' },
+      undefined,
     ])
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
-      {
-        op: 'replace',
-        path: [],
-        valueKind: 'undefined',
-      },
-    ])
-    expect(patches[0]?.dependencies).toBeUndefined()
+    expect(patches).toEqual([])
   })
 
-  it('patches exact selected record inserts from empty results without selected identity or handler reruns', async () => {
+  it('reruns exact selected record queries when the selected row is inserted into an empty result', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, body: 'Hidden', title: 'First' },
@@ -4050,26 +4033,18 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(insertPost)
 
-    expect(queryRuns).toBe(1)
+    expect(queryRuns).toBe(2)
     expect(adapter.executions).toHaveLength(0)
     expect(adapter.queries.map(query => query.sql)).toEqual([
       'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1',
       'INSERT INTO "posts" ("id", "body", "title") VALUES (?, ?, ?) RETURNING *',
+      'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1',
     ])
     expect(snapshots).toEqual([
       undefined,
+      { title: 'Third' },
     ])
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
-      {
-        op: 'replace',
-        path: [],
-        value: {
-          title: 'Third',
-        },
-      },
-    ])
-    expect(patches[0]?.dependencies).toBeUndefined()
+    expect(patches).toEqual([])
   })
 
   it('patches selected subscriptions when returning upserts move rows out of predicates', async () => {
@@ -4077,6 +4052,7 @@ describe('@holo-js/realtime', () => {
       posts: [
         { id: 1, author_id: 1, body: 'Hidden', title: 'First' },
         { id: 2, author_id: 2, body: 'Hidden', title: 'Second' },
+        { id: 3, author_id: 1, body: 'Hidden', title: 'Third' },
       ],
     })
     const db = await createContext(adapter)
@@ -4124,8 +4100,8 @@ describe('@holo-js/realtime', () => {
       'INSERT INTO "posts" ("id", "author_id", "body", "title") VALUES (?, ?, ?, ?) ON CONFLICT ("id") DO UPDATE SET "author_id" = EXCLUDED."author_id" RETURNING *',
     ])
     expect(snapshots).toEqual([
-      [{ id: 1, author_id: 1, title: 'First' }],
-      [],
+      [{ id: 1, author_id: 1, title: 'First' }, { id: 3, author_id: 1, title: 'Third' }],
+      [{ id: 3, author_id: 1, title: 'Third' }],
     ])
   })
 
@@ -4785,6 +4761,7 @@ describe('@holo-js/realtime', () => {
       posts: [
         { id: 1, author_id: 1, title: 'First' },
         { id: 2, author_id: 2, title: 'Second' },
+        { id: 3, author_id: 1, title: 'Third' },
       ],
     }))
     configureRealtimeRuntime({
@@ -4820,8 +4797,8 @@ describe('@holo-js/realtime', () => {
 
     expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
-      [1],
-      [],
+      [1, 3],
+      [3],
     ])
   })
 
@@ -5268,9 +5245,12 @@ describe('@holo-js/realtime', () => {
       },
     })
     await executeRealtimeMutation(movePost)
-    await executeRealtimeMutation(deletePost)
 
     expect(queryRuns).toBe(1)
+
+    await executeRealtimeMutation(deletePost)
+
+    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       [1, 2],
       [2],
@@ -7965,8 +7945,11 @@ describe('@holo-js/realtime', () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
+        { id: 2, name: 'Grace' },
       ],
-      posts: [],
+      posts: [
+        { id: 2, author_id: 2, title: 'Second' },
+      ],
     }, {"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}})
     const db = await createContext(adapter)
     configureDB(createConnectionManager({
@@ -8027,7 +8010,7 @@ describe('@holo-js/realtime', () => {
 
     expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
-      [],
+      [{ author: { id: 2, name: 'Grace' }, author_id: 2, id: 2, title: 'Second' }],
     ])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
@@ -8051,7 +8034,9 @@ describe('@holo-js/realtime', () => {
   it('patches subscribed belongs-to eager parent inserts with missing related rows to null without rerunning the handler', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [],
-      posts: [],
+      posts: [
+        { id: 2, author_id: 98, title: 'Second' },
+      ],
     }, {"authors":{"id":"INTEGER","name":"TEXT"},"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}})
     const db = await createContext(adapter)
     configureDB(createConnectionManager({
@@ -8112,7 +8097,7 @@ describe('@holo-js/realtime', () => {
 
     expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
-      [],
+      [{ author: null, author_id: 98, id: 2, title: 'Second' }],
     ])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
@@ -8137,8 +8122,11 @@ describe('@holo-js/realtime', () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
+        { id: 2, name: 'Grace' },
       ],
-      posts: [],
+      posts: [
+        { id: 2, author_id: 2, title: 'Second' },
+      ],
     }, {"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}})
     const db = await createContext(adapter)
     configureDB(createConnectionManager({
@@ -8199,14 +8187,14 @@ describe('@holo-js/realtime', () => {
 
     expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
-      undefined,
+      { author: { id: 2, name: 'Grace' }, author_id: 2, id: 2, title: 'Second' },
     ])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
       {
-        op: 'replace',
+        op: 'merge',
         path: [],
-        value: {
+        fields: {
           author: { id: 1, name: 'Ada' },
           author_id: 1,
           id: 1,
@@ -8220,8 +8208,11 @@ describe('@holo-js/realtime', () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
+        { id: 2, name: 'Grace' },
       ],
-      posts: [],
+      posts: [
+        { id: 2, author_id: 2, title: 'Second' },
+      ],
     }, {"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}})
     const db = await createContext(adapter)
     configureDB(createConnectionManager({
@@ -8283,16 +8274,16 @@ describe('@holo-js/realtime', () => {
     expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       {
-        data: [],
+        data: [{ author: { id: 2, name: 'Grace' }, author_id: 2, id: 2, title: 'Second' }],
         meta: {
           currentPage: 1,
-          from: null,
+          from: 1,
           hasMorePages: false,
           lastPage: 1,
           pageName: 'page',
           perPage: 10,
-          to: null,
-          total: 0,
+          to: 1,
+          total: 1,
         },
       },
     ])
@@ -8316,9 +8307,8 @@ describe('@holo-js/realtime', () => {
         op: 'merge',
         path: ['meta'],
         fields: {
-          from: 1,
-          to: 1,
-          total: 1,
+          to: 2,
+          total: 2,
         },
       },
     ])
@@ -13209,7 +13199,7 @@ describe('@holo-js/realtime', () => {
     expect(adapter.queries.filter(query => query.sql.includes('__holo_count'))).toHaveLength(0)
   })
 
-  it('patches subscribed model value queries without rerunning the handler', async () => {
+  it('patches subscribed model value queries without rerunning the handler until the row is deleted', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     })
@@ -13260,22 +13250,21 @@ describe('@holo-js/realtime', () => {
 
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
-    await executeRealtimeMutation(deleteMutation)
 
     expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual(['First'])
     expect(patches.map(patch => patch.operations)).toEqual([
       [{
         op: 'replace',
         path: [],
         value: 'Updated',
       }],
-      [{
-        op: 'replace',
-        path: [],
-        valueKind: 'undefined',
-      }],
     ])
+
+    await executeRealtimeMutation(deleteMutation)
+
+    expect(queryRuns).toBe(2)
+    expect(snapshots).toEqual(['First', undefined])
+    expect(patches).toHaveLength(1)
   })
 
   it('patches subscribed model pluck queries without rerunning the handler', async () => {

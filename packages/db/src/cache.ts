@@ -247,12 +247,20 @@ export interface DatabaseQueryObservation {
   readonly relation?: DatabaseQueryRelationObservation
   readonly result?: unknown
   readonly resultPath?: readonly DatabaseQueryResultPathSegment[]
+  readonly observedResult?: DatabaseQueryObservedResult
+  readonly serializedSources?: readonly unknown[]
   readonly scalarColumn?: string
   readonly scalarListColumn?: string
   readonly scalarListRows?: readonly Readonly<Record<string, unknown>>[]
   readonly relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[]
   readonly selections: readonly DatabaseQuerySelectionObservation[]
   readonly serialized?: boolean
+}
+
+export interface DatabaseQueryObservedResult {
+  readonly list: boolean
+  readonly values: readonly unknown[]
+  readonly fields: readonly (Readonly<Record<string, unknown>> | undefined)[]
 }
 
 export interface DatabaseQueryBelongsToHydrationObservation {
@@ -368,6 +376,8 @@ type DatabaseDependencyCollectorState = {
   readonly contexts: Map<string, Set<number>>
   readonly dependencies: Set<string>
   readonly queries: DatabaseQueryObservation[]
+  readonly observedResults: WeakMap<object, DatabaseQueryObservedResult>
+  readonly serializedResults: WeakMap<object, unknown>
   serializationOverridden: boolean
 }
 
@@ -483,6 +493,8 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     contexts: new Map(),
     dependencies: new Set<string>(),
     queries: [],
+    observedResults: new WeakMap(),
+    serializedResults: new WeakMap(),
     serializationOverridden: false,
   }
   const value = await databaseDependencyCollector.run(state, callback)
@@ -491,8 +503,79 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     value,
     contexts: state.contexts,
     dependencies: Object.freeze([...state.dependencies]),
-    queries: Object.freeze([...state.queries]),
+    queries: Object.freeze(state.queries.map(query => withObservedResult(state, query))),
   })
+}
+
+function replaceDatabaseQueryObservation(state: DatabaseDependencyCollectorState, index: number, query: DatabaseQueryObservation): void {
+  state.queries[index] = query
+  rememberObservedResult(state, query)
+}
+
+function rememberObservedResult(state: DatabaseDependencyCollectorState, query: DatabaseQueryObservation | undefined): void {
+  const result = query?.result
+  if (Array.isArray(result)) {
+    state.observedResults.set(result, observeResultValues(true, [...result]))
+  } else if (readObservedFields(result)) {
+    state.observedResults.set(result as object, observeResultValues(false, [result]))
+  }
+}
+
+function observeResultValues(list: boolean, values: readonly unknown[]): DatabaseQueryObservedResult {
+  return Object.freeze({
+    list,
+    values: Object.freeze(values),
+    fields: Object.freeze(values.map(value => {
+      const fields = readObservedFields(value)
+      return fields ? Object.freeze({ ...fields }) : undefined
+    })),
+  })
+}
+
+function readObservedFields(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  if (isPlainResultRecord(value)) {
+    return value
+  }
+
+  return isAttributeRecord(value) ? value.toAttributes() : undefined
+}
+
+function isAttributeRecord(value: unknown): value is { toAttributes(): Readonly<Record<string, unknown>> } {
+  return Boolean(value) && typeof value === 'object' && typeof (value as { toAttributes?: unknown }).toAttributes === 'function'
+}
+
+function isPlainResultRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function hasObservedResultChanged(observed: DatabaseQueryObservedResult, result: unknown): boolean {
+  const values = observed.list ? result : [result]
+  if (!Array.isArray(values) || values.length !== observed.values.length) {
+    return true
+  }
+
+  return observed.values.some((value, index) => !Object.is(value, values[index]) || hasObservedFieldsChanged(observed.fields[index], value))
+}
+
+function hasObservedFieldsChanged(fields: Readonly<Record<string, unknown>> | undefined, value: unknown): boolean {
+  const current = fields ? readObservedFields(value) : undefined
+  if (!fields || !current) {
+    return false
+  }
+
+  const keys = Object.keys(fields)
+  return keys.length !== Object.keys(current).length
+    || keys.some(key => !Object.hasOwn(current, key) || !Object.is(fields[key], current[key]))
+}
+
+function withObservedResult(state: DatabaseDependencyCollectorState, query: DatabaseQueryObservation): DatabaseQueryObservation {
+  const observedResult = query.result && typeof query.result === 'object' ? state.observedResults.get(query.result) : undefined
+  return observedResult ? Object.freeze({ ...query, observedResult }) : query
 }
 
 export function hasActiveDatabaseDependencyCollector(): boolean {
@@ -550,6 +633,7 @@ export function recordDatabaseQueryObservation(observation: DatabaseQueryObserva
 
 function pushDatabaseQueryObservation(state: DatabaseDependencyCollectorState, observation: DatabaseQueryObservation): void {
   state.queries.push(observation)
+  rememberObservedResult(state, observation)
   refreshOnlyObservationIndexes.getStore()?.add(state.queries.length - 1)
 }
 
@@ -576,7 +660,7 @@ export async function runRequiringDatabaseQueryRefresh<TValue>(load: () => Promi
   for (const index of indexes) {
     const query = state.queries[index]
     if (query) {
-      state.queries[index] = serializedQueryObservation(query)
+      replaceDatabaseQueryObservation(state, index, serializedQueryObservation(query))
     }
   }
 
@@ -634,7 +718,7 @@ export function rebindDatabaseQueryObservationPagination(
       continue
     }
 
-    state.queries[index] = Object.freeze({
+    replaceDatabaseQueryObservation(state, index, Object.freeze({
       aggregate: undefined,
       belongsToHydrations: belongsToHydrations ?? query.belongsToHydrations,
       connectionName: query.connectionName,
@@ -657,7 +741,7 @@ export function rebindDatabaseQueryObservationPagination(
       scalarListRows: undefined,
       selections: query.selections,
       serialized: query.serialized,
-    })
+    }))
     pushDatabaseQueryObservation(state, Object.freeze({
       aggregate: undefined,
       belongsToHydrations: undefined,
@@ -705,7 +789,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       continue
     }
 
-    state.queries[index] = Object.freeze({
+    replaceDatabaseQueryObservation(state, index, Object.freeze({
       aggregate: undefined,
       belongsToHydrations: belongsToHydrations ?? query.belongsToHydrations,
       connectionName: query.connectionName,
@@ -731,7 +815,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       scalarListRows: undefined,
       selections: query.selections,
       serialized: query.serialized,
-    })
+    }))
     pushDatabaseQueryObservation(state, Object.freeze({
       aggregate: undefined,
       belongsToHydrations: undefined,
@@ -775,7 +859,7 @@ export function disableDatabaseQueryObservationPatching(
       continue
     }
 
-    state.queries[index] = Object.freeze({
+    replaceDatabaseQueryObservation(state, index, Object.freeze({
       aggregate: query.aggregate,
       belongsToHydrations: query.belongsToHydrations,
       connectionName: query.connectionName,
@@ -798,8 +882,56 @@ export function disableDatabaseQueryObservationPatching(
       scalarListRows: query.scalarListRows,
       selections: query.selections,
       serialized: options.serialized || query.serialized,
-    })
+    }))
     return
+  }
+}
+
+function holdsLoadedRows(query: DatabaseQueryObservation, loadedRows: ReadonlySet<unknown>): boolean {
+  return loadedRows.has(query.result) || (Array.isArray(query.result) && query.result.some(row => loadedRows.has(row)))
+}
+
+export function requireDatabaseQueryRefreshForRows(rows: readonly unknown[]): void {
+  const state = databaseDependencyCollector.getStore()
+  if (!state || rows.length === 0) {
+    return
+  }
+
+  const loadedRows = new Set(rows)
+  for (let index = 0; index < state.queries.length; index += 1) {
+    const query = state.queries[index]
+    if (!query || query.serialized || !holdsLoadedRows(query, loadedRows)) {
+      continue
+    }
+
+    replaceDatabaseQueryObservation(state, index, serializedQueryObservation(query))
+  }
+}
+
+export function rebindDatabaseQueryObservationSerializedResult(source: unknown, result: unknown): void {
+  const state = databaseDependencyCollector.getStore()
+  if (!state || !source || typeof source !== 'object') {
+    return
+  }
+
+  const earlierResult = state.serializedResults.get(source)
+  state.serializedResults.set(source, result)
+  const observed = state.observedResults.get(source)
+  const sourceChanged = observed ? hasObservedResultChanged(observed, source) : false
+  for (let index = 0; index < state.queries.length; index += 1) {
+    const query = state.queries[index]
+    if (!query) {
+      continue
+    }
+
+    if (earlierResult !== undefined && query.result === earlierResult && !query.serialized) {
+      replaceDatabaseQueryObservation(state, index, serializedQueryObservation(query))
+      continue
+    }
+
+    if (query.result === source && !sourceChanged) {
+      replaceDatabaseQueryObservation(state, index, Object.freeze({ ...query, result, serializedSources: Object.freeze(Array.isArray(source) ? [source, ...source] : [source]) }))
+    }
   }
 }
 
@@ -816,7 +948,7 @@ export function markDatabaseQueryObservationsSerialized(): void {
       continue
     }
 
-    state.queries[index] = serializedQueryObservation(query)
+    replaceDatabaseQueryObservation(state, index, serializedQueryObservation(query))
   }
 }
 
@@ -865,7 +997,7 @@ function rebindDatabaseQueryObservation(
       continue
     }
 
-    state.queries[index] = Object.freeze({
+    replaceDatabaseQueryObservation(state, index, Object.freeze({
       aggregate,
       belongsToHydrations,
       connectionName: query.connectionName,
@@ -888,7 +1020,7 @@ function rebindDatabaseQueryObservation(
       scalarListRows,
       selections: query.selections,
       serialized: query.serialized,
-    })
+    }))
     return
   }
 }
@@ -2709,6 +2841,7 @@ export async function invalidateQueryCacheDependencies(
 }
 
 export const queryCacheInternals = {
+  hasObservedResultChanged,
   getRootDatabaseContext,
   hasUnreadBoolean,
   hasUnreadableFetchedInteger,

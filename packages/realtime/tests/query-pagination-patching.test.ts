@@ -41,12 +41,14 @@ describe('native paginated subscriptions', () => {
       () => db.table('records').where('id', 1).delete(),
       () => db.table('records').where('id', 2).update({ active: 0 }),
       () => db.table('records').where('id', 3).update({ score: 40 }),
-      () => db.table('records').where('active', 1).delete(),
     ]) {
       await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: change }))
       await verify()
     }
     expect(reads).toBe(1)
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table('records').where('active', 1).delete() }))
+    await verify()
+    expect(reads).toBe(2)
   })
 
   it('refreshes joined pages against native rows when mutations require a full query', async () => {

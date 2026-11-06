@@ -1,3 +1,4 @@
+import { queryCacheInternals } from '@holo-js/db'
 import {
   createQueryObservationMetadata,
 } from './query-metadata'
@@ -147,11 +148,13 @@ export function bindQueryObservationsToSerializedValue(
   const bindingsByValue = collectSerializedResultBindings(implicitQueries, rawValue, serializedValue)
   const boundQueries: DatabaseQueryObservation[] = [...explicitlyBoundQueries]
   for (const query of implicitQueries) {
-    const bindings = bindingsByValue.get(query.result)!
+    const bindings = hasChangedObservedResult(query) || returnsSerializedSource(query, rawValue) ? [] : bindingsByValue.get(query.result)!
     if (bindings.length === 0) {
       boundQueries.push(Object.freeze({
         ...query,
         ...createQueryObservationMetadata(query),
+        observedResult: undefined,
+      serializedSources: undefined,
         resultBound: false,
         resultPath: EMPTY_RESULT_PATH,
         resultPathKey: EMPTY_RESULT_PATH_KEY,
@@ -163,7 +166,10 @@ export function bindQueryObservationsToSerializedValue(
       boundQueries.push(Object.freeze({
         ...query,
         ...createQueryObservationMetadata(query),
+        observedResult: undefined,
+      serializedSources: undefined,
         resultBound: true,
+        resultFoundInHandlerValue: true,
         result: binding.value,
         resultPath: binding.path,
         resultPathKey: binding.pathKey,
@@ -173,6 +179,32 @@ export function bindQueryObservationsToSerializedValue(
   }
 
   return Object.freeze(boundQueries)
+}
+
+function returnsSerializedSource(query: DatabaseQueryObservation, rawValue: unknown): boolean {
+  return query.serializedSources !== undefined
+    && containsAnyValue(rawValue, new Set(query.serializedSources), new WeakSet())
+}
+
+function containsAnyValue(current: unknown, targets: ReadonlySet<unknown>, visited: WeakSet<object>): boolean {
+  if (targets.has(current)) {
+    return true
+  }
+
+  if (!isBindingTraversalValue(current) || visited.has(current)) {
+    return false
+  }
+
+  visited.add(current)
+  if (Array.isArray(current)) {
+    return current.some(value => containsAnyValue(value, targets, visited))
+  }
+
+  return isBindingTraversalRecord(current) && Object.values(current).some(value => containsAnyValue(value, targets, visited))
+}
+
+function hasChangedObservedResult(query: DatabaseQueryObservation): boolean {
+  return query.observedResult !== undefined && queryCacheInternals.hasObservedResultChanged(query.observedResult, query.result)
 }
 
 function bindExplicitQueryObservationPaths(
@@ -191,6 +223,8 @@ function bindExplicitQueryObservationPaths(
     boundQueries.push(Object.freeze({
       ...query,
       ...createQueryObservationMetadata(query),
+      observedResult: undefined,
+      serializedSources: undefined,
       result,
       resultBound: true,
       resultPath,
