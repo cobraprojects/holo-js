@@ -4,7 +4,7 @@ export function stableStringify(value: unknown): string {
 
 function stableStringifyValue(value: unknown, ancestors: WeakSet<object>): string {
   if (typeof value === 'bigint') {
-    return value.toString()
+    return `${value}n`
   }
 
   if (!value || typeof value !== 'object') {

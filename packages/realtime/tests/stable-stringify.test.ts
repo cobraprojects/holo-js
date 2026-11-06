@@ -26,7 +26,9 @@ describe('@holo-js/realtime stable stringification', () => {
     expect(stableStringify(items)).toBe('["[Circular]"]')
   })
 
-  it('serializes BigInt values as the integers they hold', () => {
-    expect(stableStringify({ id: 9007199254740993n, ids: [1n, 2], n: 0n })).toBe('{"id":9007199254740993,"ids":[1,2],"n":0}')
+  it('serializes BigInt values apart from equal numbers and strings', () => {
+    expect(stableStringify({ id: 9007199254740993n, ids: [1n, 2], n: 0n })).toBe('{"id":9007199254740993n,"ids":[1n,2],"n":0n}')
+    expect(stableStringify(1n)).not.toBe(stableStringify(1))
+    expect(stableStringify(1n)).not.toBe(stableStringify('1n'))
   })
 })

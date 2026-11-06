@@ -82,6 +82,24 @@ describe.each(drivers)('realtime BigInt values on %s', (driver) => {
     await expectFresh()
   })
 
+  it('keeps subscriptions on BigInt primary keys equal to a fresh query after writes by number', async () => {
+    const { db, counters } = await openFixture(driver)
+    const expectFresh = await subscribeAll({
+      rows: () => db.table(counters).where('id', 1n).get(),
+      first: () => db.table(counters).where('id', 2n).first(),
+      all: () => db.table(counters).orderBy('id').get(),
+    })
+
+    await mutate(() => db.table(counters).where('id', 1).update({ n: 7 }))
+    await expectFresh()
+    await mutate(() => db.table(counters).where('id', 2).update({ label: 'renamed' }))
+    await expectFresh()
+    await mutate(() => db.table(counters).where('id', 1n).delete())
+    await expectFresh()
+    await mutate(() => db.table(counters).where('id', 2n).update({ n: 8n }))
+    await expectFresh()
+  })
+
   it('keeps cached queries filtered by BigInt predicates equal to a fresh query', async () => {
     const { db, counters } = await openFixture(driver)
     const { configureCacheRuntime, resetCacheRuntime } = await import('../../cache/src')
