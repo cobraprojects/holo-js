@@ -1082,7 +1082,7 @@ const BIGINT_MARKER_PATTERN = new RegExp(`"${BIGINT_MARKER}(-?\\d+)"`, 'g')
 
 function stringifyBigIntsAsIntegers(value: unknown): string | undefined {
   return JSON.stringify(value, (_key, element: unknown) => typeof element === 'bigint' ? `${BIGINT_MARKER}${element}` : element)
-    ?.replace(BIGINT_MARKER_PATTERN, '$1')
+    ?.replace(BIGINT_MARKER_PATTERN, (_marker, digits: string) => Number.isSafeInteger(Number(digits)) ? digits : `${digits}n`)
 }
 
 function encodeDependencyValue(value: unknown): string {

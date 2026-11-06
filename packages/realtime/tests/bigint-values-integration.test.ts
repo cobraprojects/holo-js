@@ -132,6 +132,21 @@ describe.each(drivers)('realtime BigInt values on %s', (driver) => {
     expect(await cached()).toHaveLength(2)
   })
 
+  it('keeps cached queries on an unsafe BigInt apart from the unequal number with the same digits', async () => {
+    const { db, counters } = await openFixture(driver)
+    const { configureCacheRuntime, resetCacheRuntime } = await import('../../cache/src')
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    onTestFinished(() => resetCacheRuntime())
+    await db.table(counters.tableName).insert([{ id: 6, n: '1000000000000000100', label: 'bigint' }, { id: 7, n: '1000000000000000128', label: 'number' }])
+    const read = (value: bigint | number, cache: boolean) => {
+      const query = db.table(counters).select('id').where('n', value)
+      return (cache ? query.cache(60) : query).get()
+    }
+
+    expect(await read(1000000000000000100n, true)).toEqual(await read(1000000000000000100n, false))
+    expect(await read(1000000000000000100, true)).toEqual(await read(1000000000000000100, false))
+  })
+
   it('re-runs a typed subscription when a write by table name stores an integer a typed read rejects', async () => {
     const { db, counters, Counter } = await openFixture(driver)
     const queries: Record<string, () => Promise<unknown>> = {
