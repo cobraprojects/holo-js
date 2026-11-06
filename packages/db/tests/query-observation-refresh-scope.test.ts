@@ -95,6 +95,28 @@ describe('refresh-only query observations', () => {
     ])
   })
 
+  it('keeps no result rows on the refresh-only observations a truncation moves', async () => {
+    const rows = [{ id: 1 }, { id: 2 }]
+    const result = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      const count = readDatabaseQueryObservationCount()
+      await runRequiringDatabaseQueryRefresh(async () => {
+        recordDatabaseQueryObservation(Object.freeze({ ...observation('rows'), result: rows, cursorRows: rows, scalarListRows: rows, resultPath: Object.freeze(['items']) }))
+      })
+      truncateDatabaseQueryObservations(count)
+    }) as { queries: readonly DatabaseQueryObservation[] }
+
+    expect(result.queries).toEqual([Object.freeze({
+      connectionName: 'default',
+      dependencies: ['db:default:rows'],
+      orderBy: [],
+      patchable: false,
+      predicates: [],
+      selections: [],
+      serialized: true,
+      tableName: 'rows',
+    })])
+  })
+
   it('returns the value of the scoped load outside a collector', async () => {
     await expect(runRequiringDatabaseQueryRefresh(async () => 'loaded')).resolves.toBe('loaded')
   })

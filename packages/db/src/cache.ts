@@ -586,6 +586,20 @@ export async function runRequiringDatabaseQueryRefresh<TValue>(load: () => Promi
   return value
 }
 
+function refreshQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
+  return Object.freeze({
+    connectionName: observation.connectionName,
+    dependencies: observation.dependencies,
+    orderBy: observation.orderBy,
+    patchable: false,
+    predicates: observation.predicates,
+    selections: observation.selections,
+    serialized: true,
+    tableName: observation.tableName,
+    ...(observation.table ? { table: observation.table } : {}),
+  })
+}
+
 function replaceDatabaseQueryObservation(state: DatabaseDependencyCollectorState, index: number, next: DatabaseQueryObservation): void {
   const current = state.queries[index]
   if (current && refreshOnlyObservations.has(current)) {
@@ -610,10 +624,8 @@ export function truncateDatabaseQueryObservations(count: number): void {
   const indexes = refreshOnlyObservationIndexes.getStore()
   for (let index = length; index < state.queries.length; index += 1) {
     const query = state.queries[index]!
-    if (refreshOnlyObservations.has(query)) {
-      state.refreshQueries.push(query)
-    } else if (indexes?.has(index)) {
-      state.refreshQueries.push(refreshOnlyQueryObservation(query))
+    if (refreshOnlyObservations.has(query) || indexes?.has(index)) {
+      state.refreshQueries.push(refreshQueryObservation(query))
     }
   }
   state.queries.length = length
