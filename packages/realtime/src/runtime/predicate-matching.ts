@@ -58,14 +58,26 @@ function isNumberLike(value: unknown): boolean {
   return typeof value === 'number' || typeof value === 'bigint'
 }
 
+function isUnsafeInteger(value: unknown): boolean {
+  return (typeof value === 'bigint' || (typeof value === 'number' && Number.isInteger(value))) && !Number.isSafeInteger(Number(value))
+}
+
 function comparesBooleanWithNumber(left: unknown, right: unknown): boolean {
   return (typeof left === 'boolean' && (typeof right === 'boolean' || isNumberLike(right)))
     || (typeof right === 'boolean' && isNumberLike(left))
 }
 
+export function holdsUnsafeIntegerPredicate(predicates: readonly DatabaseQueryPredicateObservation[]): boolean {
+  return predicates.some(predicate => Array.isArray(predicate.value) ? predicate.value.some(isUnsafeInteger) : isUnsafeInteger(predicate.value))
+}
+
 export function compareValues(left: unknown, right: unknown): number | undefined {
   if (comparesBooleanWithNumber(left, right)) {
     return compareValues(Number(left), Number(right))
+  }
+
+  if (isNumberLike(left) && isNumberLike(right) && (isUnsafeInteger(left) || isUnsafeInteger(right))) {
+    return undefined
   }
 
   if (typeof left === 'number' && typeof right === 'number') {
@@ -101,7 +113,11 @@ export function equalValues(left: unknown, right: unknown): boolean | undefined 
   if (left === right) return true
   if (Array.isArray(left) || Array.isArray(right)) return undefined
   if (comparesBooleanWithNumber(left, right)) return Number(left) === Number(right)
-  if (isNumberLike(left) && isNumberLike(right)) return compareValues(left, right) === 0
+  if (isNumberLike(left) && isNumberLike(right)) {
+    if (Number.isNaN(left) || Number.isNaN(right)) return false
+    const comparison = compareValues(left, right)
+    return comparison === undefined ? undefined : comparison === 0
+  }
   const textComparison = (typeof left === 'string' && comparesAsText(right)) || (typeof right === 'string' && comparesAsText(left))
   return textComparison ? undefined : false
 }

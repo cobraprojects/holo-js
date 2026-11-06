@@ -177,6 +177,50 @@ describe.each(drivers)('realtime BigInt values on %s', (driver) => {
     await expectCachedFresh('after')
   })
 
+  it('keeps subscriptions by table name on unsafe primary keys equal to a fresh query after writes by the other representation', async () => {
+    const { db, counters } = await openFixture(driver)
+    await db.table(counters.tableName).insert([
+      { id: '1000000000000000100', n: 2, label: 'exact' },
+      { id: '1000000000000000128', n: 3, label: 'rounded' },
+    ])
+    const expectFresh = await subscribeAll({
+      byNumber: () => db.table(counters.tableName).select('id', 'label').where('id', 1000000000000000100).get(),
+      byBigInt: () => db.table(counters.tableName).select('id', 'label').where('id', 1000000000000000128n).get(),
+    })
+
+    await mutate(() => db.table(counters.tableName).where('id', 1000000000000000100n).delete())
+    await expectFresh()
+    await mutate(() => db.table(counters.tableName).where('id', 1000000000000000128).delete())
+    await expectFresh()
+  })
+
+  it('keeps subscriptions comparing an unsafe BigInt with a floating-point column equal to a fresh query', async () => {
+    const { db, schema } = await openDatabase(driver)
+    onTestFinished(() => resetRealtimeRuntime())
+    const name = `holo_bigint_floats_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.real('n')
+      table.string('label')
+    })
+    if (driver === 'postgres') {
+      await db.executeCompiled({ sql: `ALTER TABLE "${name}" ALTER COLUMN "n" TYPE DOUBLE PRECISION`, source: 'schema' })
+    }
+    if (driver === 'mysql') {
+      await db.executeCompiled({ sql: `ALTER TABLE \`${name}\` MODIFY \`n\` DOUBLE`, source: 'schema' })
+    }
+    onTestFinished(() => schema.dropTable(name))
+    await db.table(name).insert({ id: 1, n: 9007199254740992, label: 'before' })
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const expectFresh = await subscribeAll({
+      rows: () => db.table(name).select('id', 'label').where('n', 9007199254740993n).get(),
+      others: () => db.table(name).select('id', 'label').where('n', '!=', 9007199254740993n).get(),
+    })
+
+    await mutate(() => db.table(name).where('id', 1).update({ label: 'after' }))
+    await expectFresh()
+  })
+
   it('keeps cached queries on an unsafe BigInt apart from the unequal number with the same digits', async () => {
     const { db, counters } = await openFixture(driver)
     const { configureCacheRuntime, resetCacheRuntime } = await import('../../cache/src')

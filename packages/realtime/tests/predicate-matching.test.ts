@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   compareValues,
   createMutationPredicateMatchContext,
+  holdsUnsafeIntegerPredicate,
   createPredicateMatchContext,
   matchesPatchedPredicate,
   matchesPredicate,
@@ -24,14 +25,22 @@ describe('@holo-js/realtime predicate matching', () => {
     expect(compareValues(0, 0n)).toBe(0)
     expect(compareValues(1n, 2)).toBe(-1)
     expect(compareValues(3n, 2n)).toBe(1)
-    expect(compareValues(9007199254740992, 9007199254740993n)).toBe(-1)
+    expect(compareValues(9007199254740991, 9007199254740991n)).toBe(0)
+    expect(compareValues(9007199254740992, 9007199254740993n)).toBeUndefined()
+    expect(compareValues(9007199254740993n, 9007199254740992)).toBeUndefined()
+    expect(compareValues(9007199254740993n, 9007199254740992n)).toBeUndefined()
+    expect(compareValues(9007199254740994, 9007199254740992)).toBeUndefined()
+    expect(holdsUnsafeIntegerPredicate([{ column: 'n', operator: '=', value: 9007199254740991n }, { column: 'm', operator: 'in', value: [1, 2n] }])).toBe(false)
+    expect(holdsUnsafeIntegerPredicate([{ column: 'n', operator: 'in', value: [1, 9007199254740992n] }])).toBe(true)
+    expect(holdsUnsafeIntegerPredicate([{ column: 'n', operator: '=', value: 9007199254740992 }])).toBe(true)
     expect(matchesPredicateValue(0, { column: 'n', operator: '=', value: 0n })).toBe(true)
     expect(matchesPredicateValue(1, { column: 'n', operator: '=', value: 0n })).toBe(false)
     expect(matchesPredicateValue(2, { column: 'n', operator: '!=', value: 2n })).toBe(false)
     expect(matchesPredicateValue(2, { column: 'n', operator: 'in', value: [1n, 2n] })).toBe(true)
     expect(matchesPredicateValue(3, { column: 'n', operator: 'in', value: [1n, 2n] })).toBe(false)
     expect(matchesPredicateValue(3, { column: 'n', operator: '>', value: 2n })).toBe(true)
-    expect(matchesPredicateValue(9007199254740992, { column: 'n', operator: '=', value: 9007199254740993n })).toBe(false)
+    expect(matchesPredicateValue(9007199254740992, { column: 'n', operator: '=', value: 9007199254740993n })).toBeUndefined()
+    expect(matchesPredicateValue(9007199254740992, { column: 'n', operator: '!=', value: 9007199254740993n })).toBeUndefined()
     expect(compareValues(Number.NaN, 5n)).toBeUndefined()
     expect(matchesPredicateValue(Number.NaN, { column: 'n', operator: '=', value: 5n })).toBe(false)
   })

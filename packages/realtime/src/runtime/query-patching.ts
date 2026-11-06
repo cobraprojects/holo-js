@@ -4,6 +4,7 @@ import {
 } from './dependencies'
 import {
   hasRecordKey,
+  holdsUnsafeIntegerPredicate,
   readPrimaryKey,
 } from './predicate-matching'
 import {
@@ -70,7 +71,7 @@ export async function tryPatchObservedQuery(
     return UNPATCHED_RESULT
   }
 
-  if (readsConvertedColumnsAsDriverValues(query, mutations)) {
+  if (readsConvertedColumnsAsDriverValues(query, mutations) || holdsUnsafeIntegerPredicate(query.predicates)) {
     return UNPATCHED_RESULT
   }
 
