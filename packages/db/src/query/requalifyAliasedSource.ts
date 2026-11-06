@@ -53,17 +53,18 @@ function requalifyColumn(column: string, tableName: string, alias: string, scope
   return `${alias}${column.slice(separator)}`
 }
 
-function requalifyPlan(plan: SelectQueryPlan, tableName: string, alias: string, scope: readonly Binding[]): SelectQueryPlan {
-  return requalifyPlanBody(plan, tableName, alias, [...scope, ...bindingsOf(plan)])
+function requalifyPlan(plan: SelectQueryPlan, tableName: string, alias: string, enclosing: readonly Binding[]): SelectQueryPlan {
+  return requalifyPlanBody(plan, tableName, alias, enclosing, bindingsOf(plan))
 }
 
 export function requalifyAliasedSource(plan: SelectQueryPlan): SelectQueryPlan {
   const alias = plan.source.alias
   if (alias === undefined) return plan
-  return requalifyPlanBody(plan, plan.source.tableName, alias, bindingsOf(plan, false))
+  return requalifyPlanBody(plan, plan.source.tableName, alias, [], bindingsOf(plan, false))
 }
 
-function requalifyPlanBody(plan: SelectQueryPlan, tableName: string, alias: string, scope: readonly Binding[]): SelectQueryPlan {
+function requalifyPlanBody(plan: SelectQueryPlan, tableName: string, alias: string, enclosing: readonly Binding[], own: readonly Binding[]): SelectQueryPlan {
+  const scope = [...enclosing, ...own]
   const column = (value: string) => requalifyColumn(value, tableName, alias, scope)
   const selection = (item: QuerySelection): QuerySelection => {
     switch (item.kind) {
@@ -91,7 +92,7 @@ function requalifyPlanBody(plan: SelectQueryPlan, tableName: string, alias: stri
     ...plan,
     selections: Object.freeze(plan.selections.map(selection)),
     joins: Object.freeze(plan.joins.map(join)),
-    unions: Object.freeze(plan.unions.map(union => Object.freeze({ ...union, query: requalifyPlan(union.query, tableName, alias, scope) }))),
+    unions: Object.freeze(plan.unions.map(union => Object.freeze({ ...union, query: requalifyPlan(union.query, tableName, alias, enclosing) }))),
     predicates: requalifyPredicates(plan.predicates, tableName, alias, scope),
     groupBy: Object.freeze(plan.groupBy.map(column)),
     orderBy: Object.freeze(plan.orderBy.map(orderBy)),

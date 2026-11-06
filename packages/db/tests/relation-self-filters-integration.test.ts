@@ -456,4 +456,18 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(expected).toEqual([1])
     expect(filtered.map(id)).toEqual(expected)
   })
+
+  it('rewrites references in a union branch that does not list the table itself', async () => {
+    const { Category, table } = await openSelfFixtures(driver)
+    const postsTable = table.replace('sr_categories_', 'sr_posts_')
+    const constraint = (query: { whereExists(subquery: unknown): unknown }) => query.whereExists(DB.table(table).select('id').where('id', -1)
+      .unionAll(DB.table(postsTable).select('id').whereColumn(`${postsTable}.category_id`, '=', `${table}.id`).where('id', 3)))
+    const loaded = await Category.with('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
+
+    const filtered = await Category.whereHas('children', constraint as never).orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1])
+    expect(filtered.map(id)).toEqual(expected)
+  })
 })
