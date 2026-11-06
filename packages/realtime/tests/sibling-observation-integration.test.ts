@@ -67,7 +67,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rea
   it.each(Object.entries(sequences))('keeps an eager-loaded belongsToMany equal to a fresh read after %s', async (_, steps) => {
     const tables = await openPostTags(driver)
     const { db, Post } = tables
-    const handler = () => db.model(Post).query().with({ tags: query => query.orderBy('id') }).orderBy('id').getJson()
+    const handler = () => db.model(Post).query().with('tags').orderBy('id').getJson()
     const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
 
     for (const [index, step] of steps.entries()) {
