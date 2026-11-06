@@ -22,4 +22,12 @@ describe('@holo-js/realtime row key matching', () => {
     expect(matchesExactRowIdentity({ active: true }, 1n, 'active')).toBe(true)
     expect(matchesPatchedExactRowIdentity({ active: false }, { active: true }, 1n, 'active')).toBe(true)
   })
+
+  it('matches equal number and BigInt keys and treats unsafe integer keys as possibly equal', () => {
+    expect(exactIdsDiffer(1, 1n)).toBe(false)
+    expect(exactIdsDiffer(1, 2n)).toBe(true)
+    expect(exactIdsDiffer(1000000000000000100, 1000000000000000100n)).toBe(false)
+    expect(exactIdsDiffer(9007199254740993n, 9007199254740992n)).toBe(false)
+    expect(rowIdentityIndexMayHold(new Map([[1000000000000000100, 0]]), 1000000000000000100n)).toBe(true)
+  })
 })

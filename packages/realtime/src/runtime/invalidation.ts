@@ -134,8 +134,10 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
       result,
       resultHash: createResultHash(result.data),
     } satisfies RefreshDelivery<typeof entry.definition>
+    entry.refreshFailed = false
     await deliverRefreshData(entry, delivery)
   } catch (error) {
+    entry.refreshFailed = true
     await deliverRefreshError(entry, error)
   }
 }

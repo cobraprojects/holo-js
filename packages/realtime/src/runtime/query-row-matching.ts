@@ -1,5 +1,6 @@
 import {
   NO_EXACT_ID_PREDICATE,
+  compareValues,
   equalValues,
   hasRecordKey,
 } from './predicate-matching'
@@ -48,6 +49,7 @@ function rowIdentitiesMayMatch(left: unknown, right: unknown): boolean {
   return left === right
     || Array.isArray(left)
     || Array.isArray(right)
+    || (isNumericIdentity(left) && isNumericIdentity(right) && compareValues(left, right) !== -1 && compareValues(left, right) !== 1)
     || (typeof left === 'string' && isNumericIdentity(right))
     || (typeof right === 'string' && isNumericIdentity(left))
     || (typeof left === 'boolean' && isStoredScalarIdentity(right))

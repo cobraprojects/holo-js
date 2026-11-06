@@ -16,9 +16,18 @@ function createTableKey(connectionName: string, tableName: string): string {
   return queryCacheInternals.createTableCacheDependency(connectionName, tableName)
 }
 
+function holdsUnsafeInteger(value: unknown): boolean {
+  if (value && typeof value === 'object') {
+    return Object.values(value).some(holdsUnsafeInteger)
+  }
+
+  return typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value)
+}
+
 function decodeDependencyValue(encodedValue: string): unknown | typeof UNREADABLE_DEPENDENCY_VALUE {
   try {
-    return JSON.parse(decodeURIComponent(encodedValue)) as unknown
+    const value = JSON.parse(decodeURIComponent(encodedValue)) as unknown
+    return holdsUnsafeInteger(value) ? UNREADABLE_DEPENDENCY_VALUE : value
   } catch {
     return UNREADABLE_DEPENDENCY_VALUE
   }

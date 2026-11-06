@@ -378,6 +378,7 @@ type DatabaseDependencyCollectorState = {
   readonly queries: DatabaseQueryObservation[]
   readonly observedResults: WeakMap<object, DatabaseQueryObservedResult>
   readonly serializedResults: WeakMap<object, unknown>
+  readonly refreshQueries: DatabaseQueryObservation[]
   serializationOverridden: boolean
 }
 
@@ -394,6 +395,7 @@ const NUMERIC_TEXT_PATTERN = /^\s*[+-]?(?:(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?
 
 const databaseDependencyCollector = new AsyncLocalStorage<DatabaseDependencyCollectorState>()
 const refreshOnlyObservationIndexes = new AsyncLocalStorage<Set<number>>()
+const refreshOnlyObservations = new WeakSet<DatabaseQueryObservation>()
 
 type MutationPreviousRowsRequirement = (connectionName: string, tableName: string, columns: readonly string[]) => boolean
 
@@ -495,6 +497,7 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     queries: [],
     observedResults: new WeakMap(),
     serializedResults: new WeakMap(),
+    refreshQueries: [],
     serializationOverridden: false,
   }
   const value = await databaseDependencyCollector.run(state, callback)
@@ -503,13 +506,8 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     value,
     contexts: state.contexts,
     dependencies: Object.freeze([...state.dependencies]),
-    queries: Object.freeze(state.queries.map(query => withObservedResult(state, query))),
+    queries: Object.freeze([...state.queries.map(query => withObservedResult(state, query)), ...state.refreshQueries]),
   })
-}
-
-function replaceDatabaseQueryObservation(state: DatabaseDependencyCollectorState, index: number, query: DatabaseQueryObservation): void {
-  state.queries[index] = query
-  rememberObservedResult(state, query)
 }
 
 function rememberObservedResult(state: DatabaseDependencyCollectorState, query: DatabaseQueryObservation | undefined): void {
@@ -660,11 +658,40 @@ export async function runRequiringDatabaseQueryRefresh<TValue>(load: () => Promi
   for (const index of indexes) {
     const query = state.queries[index]
     if (query) {
-      replaceDatabaseQueryObservation(state, index, serializedQueryObservation(query))
+      replaceDatabaseQueryObservation(state, index, refreshOnlyQueryObservation(query))
     }
   }
 
   return value
+}
+
+function refreshQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
+  return Object.freeze({
+    connectionName: observation.connectionName,
+    dependencies: observation.dependencies,
+    orderBy: observation.orderBy,
+    patchable: false,
+    predicates: observation.predicates,
+    selections: observation.selections,
+    serialized: true,
+    tableName: observation.tableName,
+    ...(observation.table ? { table: observation.table } : {}),
+  })
+}
+
+function replaceDatabaseQueryObservation(state: DatabaseDependencyCollectorState, index: number, next: DatabaseQueryObservation): void {
+  const current = state.queries[index]
+  if (current && refreshOnlyObservations.has(current)) {
+    refreshOnlyObservations.add(next)
+  }
+  state.queries[index] = next
+  rememberObservedResult(state, next)
+}
+
+function refreshOnlyQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
+  const refreshOnly = serializedQueryObservation(observation)
+  refreshOnlyObservations.add(refreshOnly)
+  return refreshOnly
 }
 
 export function truncateDatabaseQueryObservations(count: number): void {
@@ -674,8 +701,14 @@ export function truncateDatabaseQueryObservations(count: number): void {
   }
 
   const length = Math.max(0, count)
-  state.queries.length = length
   const indexes = refreshOnlyObservationIndexes.getStore()
+  for (let index = length; index < state.queries.length; index += 1) {
+    const query = state.queries[index]!
+    if (refreshOnlyObservations.has(query) || indexes?.has(index)) {
+      state.refreshQueries.push(refreshQueryObservation(query))
+    }
+  }
+  state.queries.length = length
   if (indexes) {
     for (const index of indexes) {
       if (index >= length) {
@@ -904,7 +937,7 @@ export function requireDatabaseQueryRefreshForRows(rows: readonly unknown[]): vo
       continue
     }
 
-    replaceDatabaseQueryObservation(state, index, serializedQueryObservation(query))
+    replaceDatabaseQueryObservation(state, index, refreshOnlyQueryObservation(query))
   }
 }
 
@@ -925,7 +958,7 @@ export function rebindDatabaseQueryObservationSerializedResult(source: unknown, 
     }
 
     if (earlierResult !== undefined && query.result === earlierResult && !query.serialized) {
-      replaceDatabaseQueryObservation(state, index, serializedQueryObservation(query))
+      replaceDatabaseQueryObservation(state, index, refreshOnlyQueryObservation(query))
       continue
     }
 
@@ -1185,11 +1218,11 @@ export function createDeterministicQueryCacheKey(
   statement: CompiledStatement,
   connectionName: string,
 ): string {
-  const digest = createHash('sha256').update(JSON.stringify({
+  const digest = createHash('sha256').update(stringifyQueryCacheKey({
     connectionName,
     sql: statement.sql,
     bindings: statement.bindings ?? [],
-  })).digest('hex')
+  })!).digest('hex')
 
   return `db:query:${digest}`
 }
@@ -1209,8 +1242,24 @@ export function createTableCacheDependency(
   return `db:${connectionName}:${canonicalTableName(connectionName, tableName)}`
 }
 
+const INTEGER_MARKER = `integer:${randomUUID()}:`
+const INTEGER_MARKER_PATTERN = new RegExp(`"${INTEGER_MARKER}(-?\\d+)(n?)"`, 'g')
+
+function stringifyIntegers(value: unknown, exactNumbers: boolean): string | undefined {
+  return JSON.stringify(value, (_key, element: unknown) => {
+    if (typeof element === 'bigint') return `${INTEGER_MARKER}${element}n`
+    return exactNumbers && typeof element === 'number' && Number.isInteger(element) && !Number.isSafeInteger(element)
+      ? `${INTEGER_MARKER}${BigInt(element)}`
+      : element
+  })?.replace(INTEGER_MARKER_PATTERN, (_marker, digits: string, bigint: string) => exactNumbers ? digits : `${digits}${bigint}`)
+}
+
+function stringifyQueryCacheKey(value: unknown): string | undefined {
+  return stringifyIntegers(value, false)
+}
+
 function encodeDependencyValue(value: unknown): string {
-  return encodeURIComponent(JSON.stringify(value))
+  return encodeURIComponent(stringifyIntegers(value, true)!)
 }
 
 function createPredicateMetadata(
@@ -1574,6 +1623,11 @@ function isNumericText(value: unknown): boolean {
   return typeof value === 'string' && NUMERIC_TEXT_PATTERN.test(value)
 }
 
+function isUnsafeInteger(value: unknown): boolean {
+  return (typeof value === 'bigint' && !Number.isSafeInteger(Number(value)))
+    || (typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value))
+}
+
 function mayEqualOtherLiteral(column: string, value: unknown, caseInsensitiveColumns: CaseInsensitiveColumns): boolean {
   return typeof readLiteralDependencyValues(column, value, caseInsensitiveColumns) === 'undefined'
 }
@@ -1607,12 +1661,12 @@ function readLiteralDependencyValues(
   if (Array.isArray(value)) {
     return value.some(element => Array.isArray(element)
       ? typeof readLiteralDependencyValues(column, element, caseInsensitiveColumns) === 'undefined'
-      : comparesLoosely(column, element, caseInsensitiveColumns) || isNumericText(element))
+      : comparesLoosely(column, element, caseInsensitiveColumns) || isNumericText(element) || isUnsafeInteger(element))
       ? undefined
       : [value]
   }
 
-  if (comparesLoosely(column, value, caseInsensitiveColumns)) {
+  if (comparesLoosely(column, value, caseInsensitiveColumns) || isUnsafeInteger(value)) {
     return undefined
   }
 
@@ -1684,6 +1738,10 @@ function collectMutationLooseColumns(
 function queryTextMayMatchOtherValues(column: string, value: unknown, textMatching: QueryTextMatching): boolean {
   if (Array.isArray(value)) {
     return value.some(element => queryTextMayMatchOtherValues(column, element, textMatching))
+  }
+
+  if (isUnsafeInteger(value)) {
+    return true
   }
 
   if (typeof textMatching === 'boolean') {
@@ -2473,6 +2531,11 @@ function integerResultKeys(
   return resultKeys(table, row, selections, isIntegerColumn, reads)
 }
 
+function hasUnreadInteger(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
+  return resultKeys(table, row, [], isIntegerColumn, value => (typeof value === 'string' || typeof value === 'bigint' || typeof value === 'number')
+    && !Number.isSafeInteger(readCanonicalInteger(value))).length > 0
+}
+
 function hasUnreadableFetchedInteger(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
@@ -2845,6 +2908,7 @@ export const queryCacheInternals = {
   getRootDatabaseContext,
   hasUnreadBoolean,
   hasUnreadableFetchedInteger,
+  hasUnreadInteger,
   hasUnstoredFetchedBoolean,
   readFetchedRow,
   readMutationRow,
