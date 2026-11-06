@@ -14,7 +14,7 @@ bun run build
 bun run setup:examples
 ```
 
-`bun install` only installs dependencies. The example apps run the `holo` CLI, so `bun run build` builds every package first. `bun run setup:examples` then runs each example app's `setup` script, which generates its `.env` keys, installs broadcast support, and prepares its framework files. Pass app names to set up only some of them, for example `bun run setup:examples blog-next`. Run it again after a rebuild or a `git clean` that removes the generated files.
+`bun install` only installs dependencies. The example apps run the `holo` CLI, so `bun run build` builds every package first. `bun run setup:examples` then runs each example app's `setup` script, which generates its `.env` keys, installs broadcast support, prepares its framework files, and runs `holo migrate`. Migrating creates the app's SQLite database and writes its generated schema from it, so the app's models are typed and `bun run --cwd apps/blog-next typecheck` passes. Pass app names to set up only some of them, for example `bun run setup:examples blog-next`. Run it again after a rebuild or a `git clean` that removes the generated files.
 
 `bun run test:contributor-setup` clones your current commit into a temporary folder, runs these steps there, and then runs one package's tests, the same way CI does.
 
