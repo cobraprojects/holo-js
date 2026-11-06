@@ -121,7 +121,7 @@ async function openFixture(variant: Variant) {
   const casts = variant.casts
   const Tag = defineModel(tags, { timestamps: false, casts })
   const Owner = defineModel(owners, { timestamps: false, casts })
-  const Item = defineModel(items, { timestamps: false, casts, fillable: ['owner_id', ...Object.keys(columns)], relations: { owner: belongsTo(() => Owner, 'owner_id') } })
+  const Item = defineModel(items, { timestamps: false, casts, fillable: ['owner_id', ...Object.keys(columns)] as ('owner_id' | keyof typeof scalarColumns)[], relations: { owner: belongsTo(() => Owner, 'owner_id') } })
   const ActiveItem = defineModel(items, { timestamps: false, casts, globalScopes: { active: query => query.where('active', true) } })
   const Parent = defineModel(owners, { timestamps: false, casts, relations: {
     activeItems: hasMany(() => ActiveItem, 'owner_id'),
