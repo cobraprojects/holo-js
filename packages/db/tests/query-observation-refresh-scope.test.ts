@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { queryCacheInternals, readDatabaseQueryObservationCount, recordDatabaseQueryObservation, runRequiringDatabaseQueryRefresh, truncateDatabaseQueryObservations, type DatabaseQueryObservation } from '../src/cache'
+import { queryCacheInternals, readDatabaseQueryObservationCount, rebindDatabaseQueryObservationResult, recordDatabaseQueryObservation, runRequiringDatabaseQueryRefresh, truncateDatabaseQueryObservations, type DatabaseQueryObservation } from '../src/cache'
 
 function observation(tableName: string): DatabaseQueryObservation {
   return Object.freeze({
@@ -69,6 +69,29 @@ describe('refresh-only query observations', () => {
     expect(result.queries.map(query => [query.tableName, query.patchable, query.serialized === true])).toEqual([
       ['inside_kept', false, true],
       ['concurrent', true, false],
+      ['inside_truncated', false, true],
+    ])
+  })
+
+  it('keeps refresh-only observations that a later loader truncates, even after rebinding their result', async () => {
+    const rows = [{ id: 1 }]
+    const rebound = [{ id: 1 }]
+    const result = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      recordDatabaseQueryObservation(observation('before'))
+      const count = readDatabaseQueryObservationCount()
+      await runRequiringDatabaseQueryRefresh(async () => {
+        recordDatabaseQueryObservation(Object.freeze({ ...observation('rebound'), result: rows }))
+        recordDatabaseQueryObservation(observation('plain'))
+      })
+      rebindDatabaseQueryObservationResult(rows, rebound)
+      recordDatabaseQueryObservation(observation('truncated'))
+      truncateDatabaseQueryObservations(count)
+    }) as { queries: readonly DatabaseQueryObservation[] }
+
+    expect(result.queries.map(query => [query.tableName, query.patchable, query.serialized === true])).toEqual([
+      ['before', true, false],
+      ['rebound', false, true],
+      ['plain', false, true],
     ])
   })
 
