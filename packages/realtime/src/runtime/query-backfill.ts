@@ -37,7 +37,15 @@ export function readBackfilledRows(
     throw new UnreadableBackfillError()
   }
   const read = rows.map(row => queryCacheInternals.readFetchedRow(table, row, selections))
-  return readRow ? read.map(row => readRow(row)) : read
+  return readRow ? read.map(row => readWithReader(readRow, row)) : read
+}
+
+function readWithReader(readRow: DatabaseQueryRowReader, row: Readonly<Record<string, unknown>>, written = false): Readonly<Record<string, unknown>> {
+  try {
+    return readRow(row, written)
+  } catch {
+    throw new UnreadableBackfillError()
+  }
 }
 
 export class UnreadableBackfillError extends Error {
@@ -120,7 +128,7 @@ export function readObservedRow(
   written = false,
 ): Readonly<Record<string, unknown>> {
   const read = table ? queryCacheInternals.readMutationRow(table, row) : row
-  return readRow ? readRow(read, written) : read
+  return readRow ? readWithReader(readRow, read, written) : read
 }
 
 function readMutation(table: TableDefinition | undefined, readRow: DatabaseQueryRowReader | undefined, mutation: DatabaseMutationEvent): DatabaseMutationEvent {

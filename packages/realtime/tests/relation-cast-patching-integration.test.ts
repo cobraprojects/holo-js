@@ -308,3 +308,31 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await expectFresh()
   })
 })
+
+describe.each(drivers)('realtime relation patches with a cast that rejects a stored value on %s', (driver) => {
+  it('re-runs and reports the error a fresh read reports', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, items, owners } = await openFixture(variant)
+    const strict = { get: (value: unknown) => {
+      if (value === 'rejected') throw new Error('The secret cast rejects "rejected".')
+      return value
+    }, set: (value: unknown) => value }
+    const StrictItem = defineModel(items, { timestamps: false, casts: { secret: strict } })
+    const Owner = defineModel(owners, { timestamps: false, relations: { items: hasMany(() => StrictItem, 'owner_id') } })
+    const handler = () => db.model(Owner).query().with('items', query => query.orderBy('id')).orderBy('id').getJson()
+    const errors: unknown[] = []
+    let runs = 0
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => {
+      runs += 1
+      return handler()
+    } }), {}, { onData: () => {}, onError: (error) => {
+      errors.push(error)
+    } })
+
+    await mutate(() => db.table(items).where('id', 1).update({ secret: 'rejected' }))
+
+    await expect(handler()).rejects.toThrow('rejects "rejected"')
+    expect(runs).toBe(2)
+    expect(String(errors[0])).toContain('rejects "rejected"')
+  })
+})
