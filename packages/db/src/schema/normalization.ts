@@ -86,7 +86,9 @@ export function readIntegerKey(value: unknown): unknown {
   return Number.isSafeInteger(integer) ? integer : value
 }
 
-export const SQLITE_DECIMAL_PLACES = 2
+const SQLITE_DECIMAL_PLACES = 2
+
+export const SQLITE_DECIMAL_TEXT_FUNCTION = 'holo_decimal_text'
 
 const EXPONENT_NUMBER_TEXT = /^(-?)(\d)(?:\.(\d+))?e([+-]\d+)$/
 

@@ -250,14 +250,14 @@ describe('relation filters between decimal and text keys on sqlite', () => {
     })
     const owners = defineGeneratedTable(names.owners, { code: column.decimal().primaryKey(), name: column.string() })
     const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), name: column.string(), owner_code: column.string() })
-    await DB.table(owners).insert([{ code: '1000000000000000.00', name: 'owner 0' }, { code: '123456789012345.50', name: 'owner 1' }, { code: '0.10', name: 'owner 2' }, { code: '0.25', name: 'owner 3' }, { code: '100000000000000000000.00', name: 'owner 4' }, { code: '0.30000000000000004', name: 'owner 5' }, { code: '0.0000001', name: 'owner 6' }, { code: '1000000000000000100000.00', name: 'owner 7' }, { code: '0.000000000000000000001', name: 'owner 8' }])
-    await DB.table(items).insert(['1000000000000000.00', '123456789012345.50', '123456789012345.5', '0.1000000000000000055511151231257827', '0.1', '1000000000000000', '0.25000', '100000000000000000000.00', '0.30000000000000004', '0.3', '0.0000001', '1000000000000000100000.00', '0.000000000000000000001'].map((ownerCode, index) => ({ id: index + 1, name: `item ${index}`, owner_code: ownerCode })))
+    await DB.table(owners).insert([{ code: '1000000000000000.00', name: 'owner 0' }, { code: '123456789012345.50', name: 'owner 1' }, { code: '0.10', name: 'owner 2' }, { code: '0.25', name: 'owner 3' }, { code: '100000000000000000000.00', name: 'owner 4' }, { code: '0.30000000000000004', name: 'owner 5' }, { code: '0.0000001', name: 'owner 6' }, { code: '1000000000000000100000.00', name: 'owner 7' }, { code: '0.000000000000000000001', name: 'owner 8' }, { code: '21157831707170.605', name: 'owner 9' }])
+    await DB.table(items).insert(['1000000000000000.00', '123456789012345.50', '123456789012345.5', '0.1000000000000000055511151231257827', '0.1', '1000000000000000', '0.25000', '100000000000000000000.00', '0.30000000000000004', '0.3', '0.0000001', '1000000000000000100000.00', '0.000000000000000000001', '21157831707170.605'].map((ownerCode, index) => ({ id: index + 1, name: `item ${index}`, owner_code: ownerCode })))
     const Item = defineModel(items, { timestamps: false })
     const Owner = defineModel(owners, { primaryKey: 'code', timestamps: false, relations: { items: hasMany(() => Item, 'owner_code', 'code') } })
     const ItemWithOwner = defineModel(items, { timestamps: false, relations: { owner: belongsTo(() => Owner, 'owner_code', 'code') } })
 
-    await expectFiltersMatchEagerLoading(Owner, 'items', ['owner 0', 'owner 1', 'owner 4', 'owner 5', 'owner 6', 'owner 7', 'owner 8'])
-    await expectFiltersMatchEagerLoading(ItemWithOwner, 'owner', ['item 0', 'item 1', 'item 10', 'item 11', 'item 12', 'item 2', 'item 4', 'item 5', 'item 6', 'item 7', 'item 8'])
+    await expectFiltersMatchEagerLoading(Owner, 'items', ['owner 0', 'owner 1', 'owner 4', 'owner 5', 'owner 6', 'owner 7', 'owner 8', 'owner 9'])
+    await expectFiltersMatchEagerLoading(ItemWithOwner, 'owner', ['item 0', 'item 1', 'item 10', 'item 11', 'item 12', 'item 13', 'item 2', 'item 4', 'item 5', 'item 6', 'item 7', 'item 8'])
   })
 })
 
@@ -278,14 +278,14 @@ describe('relation filters from text keys to decimal keys on sqlite', () => {
     })
     const owners = defineGeneratedTable(names.owners, { code: column.string().primaryKey(), name: column.string() })
     const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), name: column.string(), owner_code: column.decimal() })
-    await DB.table(owners).insert(['1.234567890123456', '0.000000000000001', '10000000000000000000', '0.0000001', '1.2345678901234561', '9.99', '6\n'].map((code, index) => ({ code, name: `owner ${index}` })))
-    await DB.table(items).insert(['1.234567890123456', '0.000000000000001', '10000000000000000000', '0.0000001', '6.00'].map((ownerCode, index) => ({ id: index + 1, name: `item ${index}`, owner_code: ownerCode })))
+    await DB.table(owners).insert(['1.234567890123456', '0.000000000000001', '10000000000000000000', '0.0000001', '1.2345678901234561', '9.99', '6\n', '21157831707170.605'].map((code, index) => ({ code, name: `owner ${index}` })))
+    await DB.table(items).insert(['1.234567890123456', '0.000000000000001', '10000000000000000000', '0.0000001', '6.00', '21157831707170.605'].map((ownerCode, index) => ({ id: index + 1, name: `item ${index}`, owner_code: ownerCode })))
     const Item = defineModel(items, { timestamps: false })
     const Owner = defineModel(owners, { primaryKey: 'code', timestamps: false, relations: { items: hasMany(() => Item, 'owner_code', 'code') } })
     const ItemWithOwner = defineModel(items, { timestamps: false, relations: { owner: belongsTo(() => Owner, 'owner_code', 'code') } })
 
-    await expectFiltersMatchEagerLoading(Owner, 'items', ['owner 0', 'owner 1', 'owner 2', 'owner 3'])
-    await expectFiltersMatchEagerLoading(ItemWithOwner, 'owner', ['item 0', 'item 1', 'item 3'])
+    await expectFiltersMatchEagerLoading(Owner, 'items', ['owner 0', 'owner 1', 'owner 2', 'owner 3', 'owner 7'])
+    await expectFiltersMatchEagerLoading(ItemWithOwner, 'owner', ['item 0', 'item 1', 'item 3', 'item 5'])
   })
 
   it('loads big integer keys from an unregistered pivot between text keys', async () => {

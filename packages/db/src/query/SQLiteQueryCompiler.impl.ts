@@ -6,7 +6,7 @@ import type { TableNameFolding } from '../schema/tableIdentityRegistry'
 import { CompilerError } from '../core/errors'
 import { splitTablePath } from '../schema/identifiers'
 import { sameIdentifier } from '../schema/introspection/sqliteTokens'
-import { SQLITE_DECIMAL_PLACES } from '../schema/normalization'
+import { SQLITE_DECIMAL_TEXT_FUNCTION } from '../schema/normalization'
 import type { InsertStatementOptions, QueryColumnPredicate, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate, SelectQueryPlan } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
@@ -48,10 +48,6 @@ function compileSqliteJsonEquality(
     : `${extractedType} != '${valueType}'`
   return `${extractedType} IS NOT NULL AND (${differingType} OR ${extracted} != ${placeholder})`
 }
-
-const SQLITE_MAX_SIGNIFICANT_DIGITS = 17
-
-const SQLITE_MAX_DECIMAL_EXPONENT = 330
 
 function canonicalDecimalText(text: string): string {
   return `CASE WHEN instr(${text}, '.') > 0 THEN rtrim(rtrim(${text}, '0'), '.') ELSE ${text} END`
@@ -268,22 +264,7 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
   }
 
   protected override compileDecimalTextKey(expression: string): string {
-    return `CASE typeof(${expression}) WHEN 'integer' THEN CAST(${expression} AS TEXT) || '.${'0'.repeat(SQLITE_DECIMAL_PLACES)}' WHEN 'real' THEN ${this.compileShortestDecimalText(expression)} ELSE CAST(${expression} AS TEXT) END`
-  }
-
-  private compileShortestDecimalText(real: string): string {
-    const mantissas = Array.from({ length: SQLITE_MAX_SIGNIFICANT_DIGITS }, (_, index) => `printf('%!.${index}e', ${real})`)
-    const shortest = `CASE ${mantissas.map(mantissa => `WHEN CAST(${mantissa} AS REAL) = ${real} THEN ${mantissa}`).join(' ')} END`
-    const zeros = `'${'0'.repeat(SQLITE_MAX_DECIMAL_EXPONENT)}'`
-    const places = '0'.repeat(SQLITE_DECIMAL_PLACES)
-    const body = `ltrim(mantissa, '-')`
-    const exponentAt = `instr(${body}, 'e')`
-    const trimmed = `rtrim(replace(substr(${body}, 1, ${exponentAt} - 1), '.', ''), '0')`
-    const digits = `CASE WHEN ${trimmed} = '' THEN '0' ELSE ${trimmed} END`
-    const exponent = `CAST(substr(${body}, ${exponentAt} + 1) AS INTEGER)`
-    const plain = `CASE WHEN ${exponent} >= length(${digits}) - 1 THEN ${digits} || substr(${zeros}, 1, ${exponent} - length(${digits}) + 1) || '.${places}' WHEN ${exponent} >= 0 THEN substr(${digits}, 1, ${exponent} + 1) || '.' || substr(${digits}, ${exponent} + 2) || substr('${places}', 1 + length(${digits}) - ${exponent} - 1) ELSE '0.' || substr(${zeros}, 1, -${exponent} - 1) || ${digits} || substr('${places}', 1 + length(${digits}) - ${exponent} - 1) END`
-    const sign = `CASE WHEN substr(mantissa, 1, 1) = '-' THEN '-' ELSE '' END`
-    return `CASE WHEN ${real} = 0 THEN '0.${places}' ELSE (SELECT ${sign} || ${plain} FROM (SELECT ${shortest} AS mantissa)) END`
+    return `${SQLITE_DECIMAL_TEXT_FUNCTION}(${expression})`
   }
 
   protected override compileDecimalKey(expression: string): string {
@@ -293,7 +274,7 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     const fraction = `CASE WHEN ${point} > 0 THEN substr(${expression}, ${point} + 1) ELSE '' END`
     const valid = `instr(CAST(${expression} AS BLOB), x'00') = 0 AND ${digits} <> '' AND ${digits} NOT GLOB '*[^0-9]*' AND (${digits} = '0' OR ${digits} NOT GLOB '0*') AND (${point} = 0 OR (${fraction} <> '' AND ${fraction} NOT GLOB '*[^0-9]*'))`
     const real = `CAST(${expression} AS REAL)`
-    const exact = `CASE WHEN ${canonicalDecimalText(this.compileShortestDecimalText(real))} = ${canonicalDecimalText(expression)} THEN ${real} END`
+    const exact = `CASE WHEN ${canonicalDecimalText(this.compileDecimalTextKey(real))} = ${canonicalDecimalText(expression)} THEN ${real} END`
     return `CASE WHEN ${valid} THEN COALESCE(${this.compileIntegerKey(expression)}, ${exact}) END`
   }
 
