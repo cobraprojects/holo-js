@@ -506,6 +506,9 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const own = () => joined().select(`${products}.*`)
     expect(await pages(own().where(`${orders}.id`, 102).union(own().where(`${orders}.id`, 101)))).toEqual([[1], [2]])
     expect(await pages(own().where(`${orders}.id`, 102).union(own().where(`${orders}.id`, 101)).orderBy('price', 'desc'))).toEqual([[2], [1]])
+    const descending = own().where(`${orders}.id`, 102).union(own().where(`${orders}.id`, 101)).orderBy('price', 'desc')
+    const last = await descending.cursorPaginate(1, (await descending.cursorPaginate(1)).nextCursor)
+    expect(attributes((await descending.cursorPaginate(1, last.prevCursor)).data).map(row => row.id)).toEqual([2])
   })
 
   it('keeps the selection order between outputs that are not model columns', async () => {
@@ -532,5 +535,25 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     onTestFinished(() => clearGeneratedTables())
     expect(await labels(`${products}.*`, `${products}.price as label`, `${notes}.*`)).toEqual([[1, 'first'], [2, 'second']])
     expect(await labels(`${products}.*`, `${notes}.*`, `${products}.price as label`)).toEqual([[1, 10], [2, 20]])
+  })
+
+  it('keeps a column of a joined table without a definition that shares a hidden cursor alias name', async () => {
+    const { schema, products, Product } = await createFixture(driver)
+    const notes = uniqueName('notes')
+    onTestFinished(async () => {
+      await schema.dropTable(notes)
+    })
+    await schema.createTable(notes, (table) => {
+      table.integer('note_id')
+      table.integer('product_id')
+      table.integer('__holo_cursor_0')
+    })
+    await DB.table(notes).insert([{ note_id: 2, product_id: 1, __holo_cursor_0: 7 }, { note_id: 1, product_id: 2, __holo_cursor_0: 8 }])
+
+    const query = Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).orderBy(`${notes}.note_id` as never)
+    const first = await query.cursorPaginate(1)
+    const second = await query.cursorPaginate(1, first.nextCursor)
+    expect([first, second].map(page => page.data.map(entity => [Number(entity.toAttributes().id), Number((entity.toAttributes() as Record<string, unknown>).__holo_cursor_0)]))).toEqual([[[2, 8]], [[1, 7]]])
+    expect(second.nextCursor).toBeNull()
   })
 })

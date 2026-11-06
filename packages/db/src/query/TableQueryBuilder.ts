@@ -220,6 +220,13 @@ const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
 
 const aggregateValueKey = 'holo_aggregate_value'
 
+function unionBranchColumn(branch: SelectQueryPlan, column: string): string {
+  const aliased = branch.selections.find(selection => selection.kind === 'column' && selection.alias === column)
+  if (aliased?.kind === 'column') return aliased.column
+  if (branch.joins.length === 0 || column.includes('.') || !branch.source.table || !Object.hasOwn(branch.source.table.columns, column)) return column
+  return `${branch.source.alias ?? branch.source.tableName}.${column}`
+}
+
 function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
   return Object.freeze(predicates.map(predicate => Object.freeze({ ...predicate }) as QueryPredicateNode))
 }
@@ -2560,10 +2567,18 @@ export class TableQueryBuilder<
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     if (decodedCursor) {
       const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
-      if (plan.predicates.some(predicate => predicate.boolean === 'or')) {
-        plan = withPredicate(withoutPredicates(plan, () => true), { kind: 'group', predicates: plan.predicates })
+      const nullsLow = !this.connection.getDialect().name.includes('postgres')
+      const filter = (branch: SelectQueryPlan, branchColumn: (column: string) => string): SelectQueryPlan => {
+        const grouped = branch.predicates.some(predicate => predicate.boolean === 'or')
+          ? withPredicate(withoutPredicates(branch, () => true), { kind: 'group', predicates: branch.predicates })
+          : branch
+        return withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map(order => ({ ...order, column: branchColumn(order.column) })), nullsLow))
       }
-      plan = withPredicate(plan, cursorPredicate(normalizedCursor, cursorOrders, !this.connection.getDialect().name.includes('postgres')))
+      const filterUnion = (branch: SelectQueryPlan): SelectQueryPlan => Object.freeze({
+        ...filter(branch, column => unionBranchColumn(branch, column)),
+        unions: Object.freeze(branch.unions.map(union => Object.freeze({ ...union, query: filterUnion(union.query) }))),
+      })
+      plan = plan.unions.length === 0 ? filter(plan, column => column) : filterUnion(plan)
     }
     if (previous) plan = replaceOrderBy(plan, cursorOrders.map(order => ({ kind: 'column', column: order.column, direction: order.direction === 'asc' ? 'desc' : 'asc' })))
     const pageQuery = orderedQuery.clone(plan)
@@ -3881,7 +3896,7 @@ export class TableQueryBuilder<
       const qualifiedKey = `${tableName}.${primaryKey}`
       return current.orderBy.some(order => order.kind === 'column' && (order.column === primaryKey || order.column === qualifiedKey))
         ? current
-        : withOrderBy(current, { kind: 'column', column: current.joins.length === 0 ? primaryKey : qualifiedKey, direction: 'asc' })
+        : withOrderBy(current, { kind: 'column', column: current.joins.length === 0 || current.unions.length > 0 ? primaryKey : qualifiedKey, direction: 'asc' })
     }, this.plan)
     return plan === this.plan ? this : this.clone(plan)
   }
