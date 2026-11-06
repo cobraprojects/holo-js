@@ -82,11 +82,10 @@ async function refreshTableIdentity(connection: DatabaseContext, tableName: stri
   const identity = fold(await lookupTableIdentity(connection, tableName))
   if (replaced.length === 0) return { identity, expired: [] }
   const replacedIdentities = await Promise.all(replaced.map(previous => previous.refresh.then(resolved => resolved.identity, () => identity)))
-  const expired = [...new Set([...replacedIdentities, identity])]
-  for (const expiredIdentity of expired) {
+  for (const expiredIdentity of new Set([...replacedIdentities, identity])) {
     await evictReplacedTableIdentity(connection, expiredIdentity)
   }
-  return { identity, expired }
+  return { identity, expired: [...new Set(replacedIdentities.filter(replacedIdentity => replacedIdentity !== identity))] }
 }
 
 export async function resolveTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {

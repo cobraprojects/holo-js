@@ -176,22 +176,40 @@ describe.each(integrationDrivers(['sqlite'] as const))('%s cached reads after th
   })
 
   it('lets an invalidation listener reread the table whose identity refresh notified it', async () => {
-    const { schema, table } = await openDatabase(driver)
+    const { db, table } = await openDatabase(driver)
     useMemoryCache()
-    const { qualified } = tableSpellings(driver, table.tableName)
+    const { bare, qualified } = tableSpellings(driver, table.tableName)
     await DB.table(qualified).insert({ id: 1, name: 'first', active: false })
     expect(await cachedNames(qualified)).toEqual(['first'])
     const reread: unknown[][] = []
     const stop = onDatabaseDependencyInvalidated(async () => { reread.push(await cachedNames(qualified)) })
     onTestFinished(stop)
 
-    await schema.createTable(`${qualified}_unrelated`, (columns) => { columns.integer('id').primaryKey() })
-    onTestFinished(() => schema.dropTable(`${qualified}_unrelated`))
+    await db.executeSchemaStatement({ sql: `CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`, source: 'schema' })
 
     expect(await cachedNames(qualified)).toEqual(['first'])
     expect(reread.length).toBeGreaterThan(0)
     expect(reread.every(names => names.length === 1 && names[0] === 'first')).toBe(true)
   }, 10_000)
+
+  it('does not notify invalidation listeners when an unrelated schema change leaves a table identity unchanged', async () => {
+    const { schema, table } = await openDatabase(driver)
+    useMemoryCache()
+    const { bare, qualified } = tableSpellings(driver, table.tableName)
+    await DB.table(qualified).insert({ id: 1, name: 'first', active: false })
+    expect(await cachedNames(bare)).toEqual(['first'])
+    expect(await cachedNames(qualified)).toEqual(['first'])
+    const notified: unknown[] = []
+    const stop = onDatabaseDependencyInvalidated((event) => { notified.push(event) })
+    onTestFinished(stop)
+
+    await schema.createTable(`${qualified}_unrelated`, (columns) => { columns.integer('id').primaryKey() })
+    onTestFinished(() => schema.dropTable(`${qualified}_unrelated`))
+
+    expect(await cachedNames(bare)).toEqual(['first'])
+    expect(await cachedNames(qualified)).toEqual(['first'])
+    expect(notified).toEqual([])
+  })
 
   it('reads a model defined by the qualified name from that table after a temp table shadows the bare name', async () => {
     const { db, table } = await openDatabase(driver)
