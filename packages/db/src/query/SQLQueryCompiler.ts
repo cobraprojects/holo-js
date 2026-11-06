@@ -34,6 +34,7 @@ import type {
   QueryUpdateValue,
   QueryVectorPredicate,
   SelectQueryPlan,
+  QueryColumnSelection,
   UpdateQueryPlan,
 } from './ast'
 import { isOneOfManyAggregatePlan } from './ast'
@@ -42,6 +43,10 @@ type IdentifierQuoter = (identifier: string) => string
 type PlaceholderFactory = (index: number) => string
 
 const KEY_KINDS: readonly QueryKeyKind[] = ['integer', 'decimal', 'text']
+
+const UNKNOWN_KIND_KEY_ALIAS = '__holo_key'
+
+const UNKNOWN_KIND_KEYS_ALIAS = '__holo_keys'
 
 export class SQLQueryCompiler {
   protected readonly dialect: SchemaDialectName | undefined = undefined
@@ -212,9 +217,7 @@ export class SQLQueryCompiler {
             return this.compileAllColumnsOf(allColumnsOf, plan)
           }
 
-          const column = selection.unknownKeyKind
-            ? this.compileUnknownKindKeySelection(this.compileColumnReference(selection.column), selection.unknownKeyKind)
-            : this.compileKeyOperand(this.compileColumnReference(selection.column), selection.keyCast)
+          const column = this.compileKeyOperand(this.compileColumnReference(selection.column), selection.keyCast)
           return selection.alias
             ? `${column} AS ${this.quoteIdentifier(selection.alias)}`
             : column
@@ -657,6 +660,10 @@ export class SQLQueryCompiler {
     }
 
     if (predicate.kind === 'subquery') {
+      const keySelection = predicate.subquery.selections[0]
+      if (predicate.operator === 'in' && keySelection?.kind === 'column' && keySelection.unknownKeyKind) {
+        return this.compileUnknownKindKeyIn(this.compileColumnReference(predicate.column), predicate.subquery, { ...keySelection, unknownKeyKind: keySelection.unknownKeyKind }, bindings)
+      }
       const nested = this.compileSelectSql(predicate.subquery, bindings)
       const column = this.compileColumnReference(predicate.column)
       if (predicate.operator === 'in' || predicate.operator === 'not in') {
@@ -734,9 +741,16 @@ export class SQLQueryCompiler {
     return `CASE ${this.compileKeyKind(unknown, unknownKind.table, unknownKind.column)} ${branches.join(' ')} ELSE ${this.compileUnknownKindFallback(unknown, known, operator)} END`
   }
 
-  private compileUnknownKindKeySelection(reference: string, unknownKind: QueryUnknownKeyKind): string {
-    const branches = KEY_KINDS.map(kind => `WHEN ${this.createSqlStringLiteral(kind)} THEN ${this.compileKeyOperand(this.compileKeyOfKind(reference, kind), keyCastFor(kind, unknownKind.otherKind))}`)
-    return `CASE ${this.compileKeyKind(reference, unknownKind.table, unknownKind.column)} ${branches.join(' ')} ELSE ${this.compileKeyOfKind(reference, unknownKind.otherKind)} END`
+  private compileUnknownKindKeyIn(column: string, subquery: SelectQueryPlan, selection: QueryColumnSelection & { readonly unknownKeyKind: QueryUnknownKeyKind }, bindings: unknown[]): string {
+    const { unknownKeyKind } = selection
+    const key = this.quoteIdentifier(UNKNOWN_KIND_KEY_ALIAS)
+    const keys = { ...subquery, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column: selection.column, alias: UNKNOWN_KIND_KEY_ALIAS })]) }
+    const kind = this.compileKeyKind(key, unknownKeyKind.table, unknownKeyKind.column)
+    const arms = [
+      ...KEY_KINDS.map(keyKind => [this.compileKeyOperand(this.compileKeyOfKind(key, keyKind), keyCastFor(keyKind, unknownKeyKind.otherKind)), `${kind} = ${this.createSqlStringLiteral(keyKind)}`] as const),
+      [this.compileKeyOfKind(key, unknownKeyKind.otherKind), `${kind} IS NULL`] as const,
+    ]
+    return `(${arms.map(([selected, condition]) => `${column} IN (SELECT ${selected} FROM (${this.compileSelectSql(keys, bindings)}) AS ${this.quoteIdentifier(UNKNOWN_KIND_KEYS_ALIAS)} WHERE ${condition})`).join(' OR ')})`
   }
 
   private compileKeyComparison(left: string, leftCast: QueryKeyCast | undefined, operator: string, right: string, rightCast?: QueryKeyCast): string {

@@ -278,8 +278,8 @@ describe('relation filters from text keys to decimal keys on sqlite', () => {
     })
     const owners = defineGeneratedTable(names.owners, { code: column.string().primaryKey(), name: column.string() })
     const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), name: column.string(), owner_code: column.decimal() })
-    await DB.table(owners).insert(['1.234567890123456', '0.000000000000001', '10000000000000000000', '0.0000001', '1.2345678901234561', '9.99'].map((code, index) => ({ code, name: `owner ${index}` })))
-    await DB.table(items).insert(['1.234567890123456', '0.000000000000001', '10000000000000000000', '0.0000001'].map((ownerCode, index) => ({ id: index + 1, name: `item ${index}`, owner_code: ownerCode })))
+    await DB.table(owners).insert(['1.234567890123456', '0.000000000000001', '10000000000000000000', '0.0000001', '1.2345678901234561', '9.99', '6\n'].map((code, index) => ({ code, name: `owner ${index}` })))
+    await DB.table(items).insert(['1.234567890123456', '0.000000000000001', '10000000000000000000', '0.0000001', '6.00'].map((ownerCode, index) => ({ id: index + 1, name: `item ${index}`, owner_code: ownerCode })))
     const Item = defineModel(items, { timestamps: false })
     const Owner = defineModel(owners, { primaryKey: 'code', timestamps: false, relations: { items: hasMany(() => Item, 'owner_code', 'code') } })
     const ItemWithOwner = defineModel(items, { timestamps: false, relations: { owner: belongsTo(() => Owner, 'owner_code', 'code') } })
@@ -345,6 +345,42 @@ describe.each(integrationDrivers(['mysql'] as const))('relation filters from tex
 })
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('relation filters through pivot tables without a resolved definition on %s', (driver) => {
+  it('matches text pivot keys against decimal keys exactly beyond the integers a double holds', async () => {
+    const { schema, db } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const tag = suffix()
+    const names = { owners: `dx_owners_${tag}`, tags: `dx_tags_${tag}`, pivot: `dx_owner_tags_${tag}` }
+    await createTable(schema, names.owners, (table) => {
+      table.integer('id').primaryKey()
+      table.string('name')
+    })
+    if (driver === 'mysql') {
+      await db.executeCompiled({ sql: `CREATE TABLE \`${names.tags}\` (code DECIMAL(30, 2) PRIMARY KEY, name VARCHAR(255) NOT NULL)`, source: 'schema' })
+      onTestFinished(() => schema.dropTable(names.tags))
+    } else {
+      await createTable(schema, names.tags, (table) => {
+        table.decimal('code').primaryKey()
+        table.string('name')
+      })
+    }
+    await createTable(schema, names.pivot, (table) => {
+      table.integer('id').primaryKey()
+      table.integer('owner_id')
+      table.string('tag_code')
+    })
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey(), name: column.string() })
+    const tags = defineGeneratedTable(names.tags, { code: column.decimal().primaryKey(), name: column.string() })
+    await DB.table(owners).insert([{ id: 1, name: 'owner 0' }, { id: 2, name: 'owner 1' }])
+    await DB.table(tags).insert([{ code: '9007199254740992.00', name: 'tag 0' }, { code: '7.00', name: 'tag 1' }])
+    await DB.table(names.pivot).insert([{ id: 1, owner_id: 1, tag_code: '9007199254740993.00' }, { id: 2, owner_id: 2, tag_code: '7' }])
+    const Tag = defineModel(tags, { primaryKey: 'code', timestamps: false })
+    const Owner = defineModel(owners, { timestamps: false, relations: { tags: belongsToMany(() => Tag, names.pivot, 'owner_id', 'tag_code', 'id', 'code') } })
+
+    const unloaded = await readFilters(Owner, 'tags')
+    await expectFiltersMatchEagerLoading(Owner, 'tags', ['owner 1'], unloaded)
+    await expectFiltersMatchEagerLoading(Owner, 'tags', ['owner 1'])
+  })
+
   const scenarios = [
     ['integer parents with text pivot keys', { parentKind: 'integer', childKind: 'text', parentKeys: ['5', '6', '7'], childKeys: ['5', '5.0', '6.00', 'abc', '05', '8'] }, ['owner 0'], ['tag 0']],
     ['text parents with integer pivot keys', { parentKind: 'text', childKind: 'integer', parentKeys: ['5', '6.00', '05', 'abc', '7', '6'], childKeys: ['5', '6', '8'] }, ['owner 0', 'owner 1', 'owner 5'], ['tag 0', 'tag 1', 'tag 5']],
