@@ -471,10 +471,11 @@ describe.each(drivers)('realtime patches through models with different casts on 
   it('keeps rows shaped by a custom collection equal to a fresh read', async () => {
     const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
     const { db, items } = await openFixture(variant)
-    const Redacted = defineModel(items, { timestamps: false, casts: { secret: 'string' }, collection: (entities) => {
-      const collection = createModelCollection(entities)
-      return Object.assign(collection, { toJSON: () => entities.map(entity => ({ ...entity.toJSON(), secret: 'redacted' })) })
-    } })
+    const redactingCollection = (entities: readonly { toJSON(): object }[]) => Object.assign(
+      createModelCollection(entities as never),
+      { toJSON: () => entities.map(entity => ({ ...entity.toJSON(), secret: 'redacted' })) },
+    )
+    const Redacted = defineModel(items, { timestamps: false, casts: { secret: 'string' }, collection: redactingCollection as never })
     const expectFresh = await subscribeAll(variant, {
       redacted: () => db.model(Redacted).query().orderBy('id').get(),
     })
