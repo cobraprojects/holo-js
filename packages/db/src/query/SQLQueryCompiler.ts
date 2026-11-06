@@ -728,10 +728,7 @@ export class SQLQueryCompiler {
     const unknown = this.compileColumnReference(predicate.column)
     const known = this.compileColumnReference(predicate.compareTo)
     const branches = KEY_KINDS.map((kind) => {
-      const unknownOperand = this.compileKeyOfKind(unknown, kind)
-      const comparison = unknownKind.source === 'unknown'
-        ? this.compileKeyComparison(unknownOperand, keyCastFor(kind, unknownKind.otherKind), operator, known)
-        : this.compileKeyComparison(unknownOperand, undefined, operator, known, keyCastFor(unknownKind.otherKind, kind))
+      const comparison = this.compileKeyComparison(this.compileKeyOfKind(unknown, kind), undefined, operator, known, keyCastFor(unknownKind.otherKind, kind))
       return `WHEN ${this.createSqlStringLiteral(kind)} THEN ${comparison}`
     })
     return `CASE ${this.compileKeyKind(unknown, unknownKind.table, unknownKind.column)} ${branches.join(' ')} ELSE ${this.compileUnknownKindFallback(unknown, known, operator)} END`

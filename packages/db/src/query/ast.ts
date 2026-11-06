@@ -70,7 +70,6 @@ export interface QueryUnknownKeyKind {
   readonly table: string
   readonly column: string
   readonly otherKind: QueryKeyKind
-  readonly source: 'unknown' | 'other'
 }
 
 export interface QueryKeyCasts {

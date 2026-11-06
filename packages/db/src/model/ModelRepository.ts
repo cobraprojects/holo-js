@@ -201,6 +201,12 @@ function resolveActiveConnection(connection: DatabaseContext): DatabaseContext {
   return connection
 }
 
+type PivotKeyColumns = {
+  readonly parentKey: AnyColumnDefinition | undefined
+  readonly relatedKey: AnyColumnDefinition | undefined
+  readonly introspected: boolean
+}
+
 export class ModelRepository<
   TTable extends TableDefinition = TableDefinition,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
@@ -2962,18 +2968,19 @@ export class ModelRepository<
     return relationKeyOptions(ownEntry(this.definition.table.columns, parentColumn), ownEntry(related.definition.table.columns, relatedColumn))
   }
 
-  private pivotKeyOptions(relation: PivotRelationDefinition, pivotTable: TableDefinition | undefined): StoredKeyOptions {
-    return relationKeyOptions(
-      ownEntry(this.definition.table.columns, relation.parentKey),
-      pivotTable ? ownEntry(pivotTable.columns, this.pivotParentColumn(relation)) : undefined,
-    )
+  private pivotKeyOptions(relation: PivotRelationDefinition, pivotParentKey: AnyColumnDefinition | undefined): StoredKeyOptions {
+    return relationKeyOptions(ownEntry(this.definition.table.columns, relation.parentKey), pivotParentKey)
   }
 
-  private async loadPivotDefinition(relation: PivotRelationDefinition): Promise<{ readonly table: TableDefinition | undefined, readonly introspected: boolean }> {
+  private async loadPivotKeyColumns(relation: PivotRelationDefinition): Promise<PivotKeyColumns> {
     const connection = this.getConnection()
-    const pivotTable = this.resolvePivotTable(relation.pivotTable, connection)
-    if (typeof pivotTable !== 'string') return { table: pivotTable, introspected: false }
-    return { table: await loadTableDefinition(connection, pivotTable), introspected: true }
+    const resolved = this.resolvePivotTable(relation.pivotTable, connection)
+    const table = typeof resolved === 'string' ? await loadTableDefinition(connection, resolved) : resolved
+    return {
+      parentKey: table ? ownEntry(table.columns, this.pivotParentColumn(relation)) : undefined,
+      relatedKey: table ? ownEntry(table.columns, this.pivotRelatedColumn(relation)) : undefined,
+      introspected: typeof resolved === 'string',
+    }
   }
 
   private pivotParentColumn(relation: PivotRelationDefinition): string {
@@ -3727,9 +3734,7 @@ export class ModelRepository<
     const relatedColumn = this.pivotRelatedColumn(relation)
     const parentKeys = collectRelationKeys(entities, relation.parentKey)
     if (parentKeys.length === 0) return { rows: [], related: new StoredKeyMap(), options: this.pivotKeyOptions(relation, undefined) }
-    const pivot = await this.loadPivotDefinition(relation)
-    const pivotParentKey = pivot.table ? ownEntry(pivot.table.columns, parentColumn) : undefined
-    const pivotRelatedKey = pivot.table ? ownEntry(pivot.table.columns, relatedColumn) : undefined
+    const pivot = await this.loadPivotKeyColumns(relation)
     const { rows, related: relatedMap } = await retrievePivotRelation(
       parentKeys,
       () => this.createPivotQuery(relation, related),
@@ -3739,17 +3744,17 @@ export class ModelRepository<
       relation.relatedKey,
       this.getPivotSelection(relation, relation.kind === 'belongsToMany' ? [parentColumn, relatedColumn] : [parentColumn, relatedColumn, relation.morphTypeColumn]),
       rows => this.readPivotKeys(rows, [
-        [parentColumn, this.definition.table, relation.parentKey, pivot.introspected ? pivotParentKey : undefined],
-        [relatedColumn, related.definition.table, relation.relatedKey, pivot.introspected ? pivotRelatedKey : undefined],
+        [parentColumn, this.definition.table, relation.parentKey, pivot.introspected ? pivot.parentKey : undefined],
+        [relatedColumn, related.definition.table, relation.relatedKey, pivot.introspected ? pivot.relatedKey : undefined],
       ]),
       {
         parentKey: ownEntry(this.definition.table.columns, relation.parentKey),
         relatedKey: ownEntry(related.definition.table.columns, relation.relatedKey),
-        pivotParentKey,
-        pivotRelatedKey,
+        pivotParentKey: pivot.parentKey,
+        pivotRelatedKey: pivot.relatedKey,
       },
     )
-    return { rows, related: relatedMap, options: this.pivotKeyOptions(relation, pivot.table) }
+    return { rows, related: relatedMap, options: this.pivotKeyOptions(relation, pivot.parentKey) }
   }
 
   private createPivotQuery(relation: PivotRelationDefinition, related: ModelRepository): TableQueryBuilder<string | TableDefinition> {

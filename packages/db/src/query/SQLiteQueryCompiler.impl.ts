@@ -276,14 +276,14 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     const shortest = `CASE ${mantissas.map(mantissa => `WHEN CAST(${mantissa} AS REAL) = ${real} THEN ${mantissa}`).join(' ')} END`
     const zeros = `'${'0'.repeat(SQLITE_MAX_DECIMAL_EXPONENT)}'`
     const places = '0'.repeat(SQLITE_DECIMAL_PLACES)
-    const body = `ltrim(m, '-')`
+    const body = `ltrim(mantissa, '-')`
     const exponentAt = `instr(${body}, 'e')`
     const trimmed = `rtrim(replace(substr(${body}, 1, ${exponentAt} - 1), '.', ''), '0')`
     const digits = `CASE WHEN ${trimmed} = '' THEN '0' ELSE ${trimmed} END`
     const exponent = `CAST(substr(${body}, ${exponentAt} + 1) AS INTEGER)`
     const plain = `CASE WHEN ${exponent} >= length(${digits}) - 1 THEN ${digits} || substr(${zeros}, 1, ${exponent} - length(${digits}) + 1) || '.${places}' WHEN ${exponent} >= 0 THEN substr(${digits}, 1, ${exponent} + 1) || '.' || substr(${digits}, ${exponent} + 2) || substr('${places}', 1 + length(${digits}) - ${exponent} - 1) ELSE '0.' || substr(${zeros}, 1, -${exponent} - 1) || ${digits} || substr('${places}', 1 + length(${digits}) - ${exponent} - 1) END`
-    const sign = `CASE WHEN substr(m, 1, 1) = '-' THEN '-' ELSE '' END`
-    return `CASE WHEN ${real} = 0 THEN '0.${places}' ELSE (SELECT ${sign} || ${plain} FROM (SELECT ${shortest} AS m)) END`
+    const sign = `CASE WHEN substr(mantissa, 1, 1) = '-' THEN '-' ELSE '' END`
+    return `CASE WHEN ${real} = 0 THEN '0.${places}' ELSE (SELECT ${sign} || ${plain} FROM (SELECT ${shortest} AS mantissa)) END`
   }
 
   protected override compileDecimalKey(expression: string): string {

@@ -43,9 +43,21 @@ function keyDefinition(kind: KeyKind) {
   return column.string()
 }
 
-async function expectFiltersMatchEagerLoading(model: unknown, relation: string, expected: readonly string[]) {
+type FilterResults = { readonly has: unknown[], readonly whereHas: unknown[], readonly whereDoesntHave: unknown[], readonly counts: number[] }
+
+async function readFilters(model: unknown, relation: string): Promise<FilterResults> {
   const query = () => (model as FilterableModel).query()
-  const loaded = await query().with(relation).orderBy('name').get()
+  return {
+    has: valuesOf(await query().has(relation).orderBy('name').get()),
+    whereHas: valuesOf(await query().whereHas(relation, constrained => constrained).orderBy('name').get()),
+    whereDoesntHave: valuesOf(await query().whereDoesntHave(relation).orderBy('name').get()),
+    counts: valuesOf(await query().withCount(relation).orderBy('name').get(), `${relation}_count`).map(Number),
+  }
+}
+
+async function expectFiltersMatchEagerLoading(model: unknown, relation: string, expected: readonly string[], filters?: FilterResults) {
+  const filtered = filters ?? await readFilters(model, relation)
+  const loaded = await (model as FilterableModel).query().with(relation).orderBy('name').get()
   const eagerCounts = loaded.map((entity) => {
     const value = entity.getRelation<Loaded | readonly Loaded[] | null>(relation)
     return Array.isArray(value) ? value.length : value ? 1 : 0
@@ -53,10 +65,10 @@ async function expectFiltersMatchEagerLoading(model: unknown, relation: string, 
   const names = valuesOf(loaded)
 
   expect(names.filter((_, index) => eagerCounts[index]! > 0)).toEqual(expected)
-  expect(valuesOf(await query().has(relation).orderBy('name').get())).toEqual(expected)
-  expect(valuesOf(await query().whereHas(relation, constrained => constrained).orderBy('name').get())).toEqual(expected)
-  expect(valuesOf(await query().whereDoesntHave(relation).orderBy('name').get())).toEqual(names.filter((_, index) => eagerCounts[index] === 0))
-  expect(valuesOf(await query().withCount(relation).orderBy('name').get(), `${relation}_count`).map(Number)).toEqual(eagerCounts)
+  expect(filtered.has).toEqual(expected)
+  expect(filtered.whereHas).toEqual(expected)
+  expect(filtered.whereDoesntHave).toEqual(names.filter((_, index) => eagerCounts[index] === 0))
+  expect(filtered.counts).toEqual(eagerCounts)
 }
 
 type Scenario = {
@@ -343,10 +355,16 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
   it.each(scenarios.flatMap(([name, scenario, owners, tags]) => (['unregistered', 'qualified'] as const).map(spelling => [`${name} through ${spelling === 'qualified' ? 'a schema-qualified spelling of a registered' : 'an unregistered'} pivot`, scenario, owners, tags, spelling] as const)))('filters belongsToMany, morphToMany and morphedByMany for %s as eager loading does', async (_, scenario, owners, tags, spelling) => {
     const { Owner, Tag } = await openScenario(driver, scenario, spelling)
 
-    expect(valuesOf(await Owner.has('tags').orderBy('name').get())).toEqual(owners)
-    expect(valuesOf(await Owner.has('morphTags').orderBy('name').get())).toEqual(owners)
-    expect(valuesOf(await Tag.has('owners').orderBy('name').get())).toEqual(tags)
-    expect(valuesOf(await Tag.has('morphOwners').orderBy('name').get())).toEqual(tags)
+    const unloaded = {
+      tags: await readFilters(Owner, 'tags'),
+      morphTags: await readFilters(Owner, 'morphTags'),
+      owners: await readFilters(Tag, 'owners'),
+      morphOwners: await readFilters(Tag, 'morphOwners'),
+    }
+    await expectFiltersMatchEagerLoading(Owner, 'tags', owners, unloaded.tags)
+    await expectFiltersMatchEagerLoading(Owner, 'morphTags', owners, unloaded.morphTags)
+    await expectFiltersMatchEagerLoading(Tag, 'owners', tags, unloaded.owners)
+    await expectFiltersMatchEagerLoading(Tag, 'morphOwners', tags, unloaded.morphOwners)
     await expectFiltersMatchEagerLoading(Owner, 'tags', owners)
     await expectFiltersMatchEagerLoading(Owner, 'morphTags', owners)
     await expectFiltersMatchEagerLoading(Tag, 'owners', tags)

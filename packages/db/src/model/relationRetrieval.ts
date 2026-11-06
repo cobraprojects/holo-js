@@ -169,7 +169,7 @@ export function pivotKeyCasts(pivot: string | TableDefinition, pivotColumn: stri
     return source === 'pivot' ? { left: sourceKeyCast(definition, other) } : { right: sourceKeyCast(other, definition) }
   }
   const otherKind = keyKind(other)
-  return otherKind ? { unknownKind: { table: pivot, column: pivotColumn, otherKind, source: source === 'pivot' ? 'unknown' : 'other' } } : {}
+  return otherKind ? { unknownKind: { table: pivot, column: pivotColumn, otherKind } } : {}
 }
 
 function keyKind(definition: AnyColumnDefinition | undefined): QueryKeyKind | undefined {
@@ -246,7 +246,6 @@ export async function retrievePivotRelation(
   readPivotRows: (rows: readonly Record<string, unknown>[]) => Record<string, unknown>[],
   keyDefinitions: { readonly parentKey?: AnyColumnDefinition, readonly relatedKey?: AnyColumnDefinition, readonly pivotParentKey?: AnyColumnDefinition, readonly pivotRelatedKey?: AnyColumnDefinition } = {},
 ): Promise<{ rows: Record<string, unknown>[], related: StoredKeyMap<Entity> }> {
-  if (parentKeys.length === 0) return { rows: [], related: new StoredKeyMap() }
   const pivotQuery = createPivotQuery()
   const pivotParentKey = columnDefinition(pivotQuery, parentColumn) ?? keyDefinitions.pivotParentKey
   const pivotKeys = keysForColumn(parentKeys, pivotParentKey ?? keyDefinitions.parentKey, pivotQuery.getConnection().getDriver())
