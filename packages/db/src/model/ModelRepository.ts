@@ -2582,10 +2582,6 @@ export class ModelRepository<
     }
   }
 
-  relatedRowsArePatchable(related: () => ModelDefinitionLike): boolean {
-    return relatedRowsArePatchable(this.resolveRelatedRepository(related))
-  }
-
   resolveRelationHydrationQuery(
     relation: Extract<RelationDefinition, { kind: 'belongsTo' | 'hasMany' | 'hasOne' }>,
     constraint?: RelationConstraint,
