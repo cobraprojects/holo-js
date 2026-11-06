@@ -212,7 +212,8 @@ class ModelQueryBuilderBase<
     const plan = this.tableQuery.getPlan()
     const aliasedColumns = new Set(plan.selections.flatMap(selection => selection.kind === 'column' && selection.alias ? [selection.column] : []))
     const selectsTableOf = (column: string) => plan.selections.length === 0
-      || plan.selections.some(selection => selection.kind === 'column' && selection.column === `${column.slice(0, column.lastIndexOf('.'))}.*`)
+      || plan.selections.some(selection => selection.kind === 'column' && !selection.alias
+        && [column, '*', `${column.slice(0, column.lastIndexOf('.'))}.*`].includes(selection.column))
     const joinedOrders = plan.joins.length === 0
       ? []
       : plan.orderBy.flatMap(order => order.kind === 'column' && typeof resolveSourceColumnName(plan.source, order.column) === 'undefined' && !aliasedColumns.has(order.column) && selectsTableOf(order.column) ? [order.column] : [])
