@@ -3833,6 +3833,9 @@ export class TableQueryBuilder<
     if (column in row) {
       return row[column]
     }
+    const qualifier = column.slice(0, column.lastIndexOf('.'))
+    const selectsJoinedColumn = selections.length === 0 || selections.some(selection => selection.kind === 'column' && !selection.alias && [column, `${qualifier}.*`].includes(selection.column))
+    if (typeof sourceColumn === 'undefined' && !selectsJoinedColumn) return undefined
 
     return row[column.split('.').at(-1)!]
   }
