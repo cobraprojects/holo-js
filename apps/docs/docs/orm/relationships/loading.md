@@ -47,7 +47,9 @@ Eager loading attaches each related row to the model whose key holds the same va
 
 An integer key looked up in a text column matches only its exact text, on every database: an integer `id` of `1` finds the text foreign key `'1'` but not `'1.00'`. A text key looked up in an integer column matches by integral value, so a text foreign key or morph id holding `'1.00'` finds the row whose `id` is `1`, and text that isn't a number, such as `'abc'` or `'1x'`, finds nothing.
 
-`whereHas()`, `has()`, `whereDoesntHave()` and their variants filter by these same rules, so they return the rows eager loading matches.
+A `decimal()` key looked up in a text column matches only the text it reads back as, so a `decimal()` key read as `'5.00'` finds the text key `'5.00'` but not `'5'` or `'5.0'`. A text key looked up in a `decimal()` column matches by value, so `'5'` and `'5.0'` find the `decimal()` key `'5.00'`, and text that isn't a plain decimal number, such as `'abc'` or `'05'`, finds nothing.
+
+`whereHas()`, `has()`, `whereDoesntHave()` and their variants filter by these same rules, so they return the rows eager loading matches. A `belongsToMany`, `morphToMany` or `morphedByMany` relation whose pivot table isn't in the generated schema, or is named with a schema-qualified spelling such as `public.role_user`, follows them too: eager loading reads the pivot's column types from the database, and filters check them in the query.
 
 ## Nested eager loading
 

@@ -20,7 +20,7 @@ import {
   type DatabaseQueryResultPathSegment,
 } from '../cache'
 import { TableQueryBuilder, insertGetIdByKey, joinOnKeyColumns, selectKeyColumn, whereKeyColumn } from '../query/TableQueryBuilder'
-import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
+import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadTableDefinition } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition, isUnresolvedGeneratedPrimaryKey } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
 import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
@@ -32,7 +32,7 @@ import { assertAttributeNameAllowed, assertColumnWritable, canonicalStoredKey, o
 import { StoredKeyMap, StoredKeySet, type StoredKeyOptions } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
 import { PIVOT_TIMESTAMP_COLUMNS } from './relations'
-import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isFractionalKeyFor, isKeySeparableQuery, keysForColumn, sourceKeyCast, relationKeyOptions, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
+import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isFractionalKeyFor, isKeySeparableQuery, keysForColumn, pivotKeyCasts, sourceKeyCast, relationKeyOptions, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
 import { assertEntitiesBelongTo, createModelCollection, setModelCollectionOwner, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
@@ -49,7 +49,7 @@ import { listMorphModels, resolveMorphModel } from './morphRegistry'
 import { getModelRuntimeSettings } from './runtimeSettings'
 import { modelNeedsSerialization } from './serialize'
 import { applyGeneratedUniqueIds, applyPendingModelAttributes } from './uniqueIds'
-import type { TableDefinition } from '../schema/types'
+import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { canonicalTableName } from '../schema/tableIdentityRegistry'
@@ -2553,11 +2553,11 @@ export class ModelRepository<
   ): Promise<void> {
     const constrained = Boolean(constraint || relation.constraint)
     const observationCount = !constrained && hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
-    const { rows, related } = constrained
+    const { rows, related, options } = constrained
       ? await runRequiringDatabaseQueryRefresh(() => this.retrievePivotRows(entities, relation, constraint))
       : await this.retrievePivotRows(entities, relation, constraint)
     if (typeof observationCount === 'number') truncateDatabaseQueryObservations(observationCount)
-    const grouped = this.groupPivotRows(rows, related, relation)
+    const grouped = this.groupPivotRows(rows, related, relation, options)
     for (const entity of entities) {
       const parentKey = entity.toAttributes()[relation.parentKey as keyof ReturnType<typeof entity.toAttributes>]
       entity.setRelation(relationName, grouped.get(parentKey) ?? [])
@@ -2829,11 +2829,12 @@ export class ModelRepository<
     parentPivotColumn: string,
     relatedPivotColumn: string,
   ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
-    const pivotTable = this.resolvePivotTable(relation.pivotTable, this.getConnection())
-    const pivotDefinition = typeof pivotTable === 'string' ? undefined : pivotTable
+    const connection = this.getConnection()
+    const resolved = this.resolvePivotTable(relation.pivotTable, connection)
+    const pivotTable = typeof resolved === 'string' ? getLoadedTableDefinition(connection, resolved) ?? resolved : resolved
     const relatedTable = related.definition.table
-    const relatedCast = sourceKeyCast(pivotDefinition ? ownEntry(pivotDefinition.columns, relatedPivotColumn) : undefined, ownEntry(relatedTable.columns, relation.relatedKey))
-    const pivotKeys = selectKeyColumn(this.whereParentKey(pivot, pivotDefinition, parentPivotColumn, relation.parentKey), relatedPivotColumn, relatedCast)
+    const parentKeyed = whereKeyColumn(pivot, parentPivotColumn, this.qualifyParentColumn(relation.parentKey), pivotKeyCasts(pivotTable, parentPivotColumn, ownEntry(this.definition.table.columns, relation.parentKey), 'other'))
+    const pivotKeys = selectKeyColumn(parentKeyed, relatedPivotColumn, pivotKeyCasts(pivotTable, relatedPivotColumn, ownEntry(relatedTable.columns, relation.relatedKey), 'pivot'))
 
     const relatedQuery = this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder()
     const source = relatedQuery.getPlan().source
@@ -2961,12 +2962,18 @@ export class ModelRepository<
     return relationKeyOptions(ownEntry(this.definition.table.columns, parentColumn), ownEntry(related.definition.table.columns, relatedColumn))
   }
 
-  private pivotKeyOptions(relation: PivotRelationDefinition): StoredKeyOptions {
-    const pivotTable = this.resolvePivotTable(relation.pivotTable, this.getConnection())
+  private pivotKeyOptions(relation: PivotRelationDefinition, pivotTable: TableDefinition | undefined): StoredKeyOptions {
     return relationKeyOptions(
       ownEntry(this.definition.table.columns, relation.parentKey),
-      typeof pivotTable === 'string' ? undefined : ownEntry(pivotTable.columns, this.pivotParentColumn(relation)),
+      pivotTable ? ownEntry(pivotTable.columns, this.pivotParentColumn(relation)) : undefined,
     )
+  }
+
+  private async loadPivotDefinition(relation: PivotRelationDefinition): Promise<{ readonly table: TableDefinition | undefined, readonly introspected: boolean }> {
+    const connection = this.getConnection()
+    const pivotTable = this.resolvePivotTable(relation.pivotTable, connection)
+    if (typeof pivotTable !== 'string') return { table: pivotTable, introspected: false }
+    return { table: await loadTableDefinition(connection, pivotTable), introspected: true }
   }
 
   private pivotParentColumn(relation: PivotRelationDefinition): string {
@@ -3621,8 +3628,8 @@ export class ModelRepository<
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     constraint?: RelationConstraint,
   ): Promise<StoredKeySet> {
-    const { rows: pivotRows, related: relatedMap } = await this.retrievePivotRows(entities, relation, constraint)
-    const matchingParents = new StoredKeySet([], this.pivotKeyOptions(relation))
+    const { rows: pivotRows, related: relatedMap, options } = await this.retrievePivotRows(entities, relation, constraint)
+    const matchingParents = new StoredKeySet([], options)
 
     for (const row of pivotRows) {
       if (relatedMap.has(row[relation.relatedPivotKey])) {
@@ -3656,8 +3663,8 @@ export class ModelRepository<
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     constraint?: RelationConstraint,
   ): Promise<StoredKeyMap<number>> {
-    const { rows: pivotRows, related: relatedMap } = await this.retrievePivotRows(entities, relation, constraint)
-    const counts = new StoredKeyMap<number>([], this.pivotKeyOptions(relation))
+    const { rows: pivotRows, related: relatedMap, options } = await this.retrievePivotRows(entities, relation, constraint)
+    const counts = new StoredKeyMap<number>([], options)
 
     for (const row of pivotRows) {
       if (!relatedMap.has(row[relation.relatedPivotKey])) {
@@ -3706,20 +3713,25 @@ export class ModelRepository<
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     constraint?: RelationConstraint,
   ): Promise<StoredKeyMap<Entity[]>> {
-    const { rows: pivotRows, related: relatedMap } = await this.retrievePivotRows(entities, relation, constraint)
-    return this.groupPivotRows(pivotRows, relatedMap, relation)
+    const { rows: pivotRows, related: relatedMap, options } = await this.retrievePivotRows(entities, relation, constraint)
+    return this.groupPivotRows(pivotRows, relatedMap, relation, options)
   }
 
-  private retrievePivotRows(
+  private async retrievePivotRows(
     entities: readonly Entity<TTable>[],
     relation: PivotRelationDefinition,
     constraint?: RelationConstraint,
-  ): Promise<{ rows: Record<string, unknown>[], related: StoredKeyMap<Entity> }> {
+  ): Promise<{ rows: Record<string, unknown>[], related: StoredKeyMap<Entity>, options: StoredKeyOptions }> {
     const related = this.resolveRelatedRepository(relation.related)
     const parentColumn = this.pivotParentColumn(relation)
     const relatedColumn = this.pivotRelatedColumn(relation)
-    return retrievePivotRelation(
-      collectRelationKeys(entities, relation.parentKey),
+    const parentKeys = collectRelationKeys(entities, relation.parentKey)
+    if (parentKeys.length === 0) return { rows: [], related: new StoredKeyMap(), options: this.pivotKeyOptions(relation, undefined) }
+    const pivot = await this.loadPivotDefinition(relation)
+    const pivotParentKey = pivot.table ? ownEntry(pivot.table.columns, parentColumn) : undefined
+    const pivotRelatedKey = pivot.table ? ownEntry(pivot.table.columns, relatedColumn) : undefined
+    const { rows, related: relatedMap } = await retrievePivotRelation(
+      parentKeys,
       () => this.createPivotQuery(relation, related),
       parentColumn,
       relatedColumn,
@@ -3727,14 +3739,17 @@ export class ModelRepository<
       relation.relatedKey,
       this.getPivotSelection(relation, relation.kind === 'belongsToMany' ? [parentColumn, relatedColumn] : [parentColumn, relatedColumn, relation.morphTypeColumn]),
       rows => this.readPivotKeys(rows, [
-        [parentColumn, this.definition.table, relation.parentKey],
-        [relatedColumn, related.definition.table, relation.relatedKey],
+        [parentColumn, this.definition.table, relation.parentKey, pivot.introspected ? pivotParentKey : undefined],
+        [relatedColumn, related.definition.table, relation.relatedKey, pivot.introspected ? pivotRelatedKey : undefined],
       ]),
       {
         parentKey: ownEntry(this.definition.table.columns, relation.parentKey),
         relatedKey: ownEntry(related.definition.table.columns, relation.relatedKey),
+        pivotParentKey,
+        pivotRelatedKey,
       },
     )
+    return { rows, related: relatedMap, options: this.pivotKeyOptions(relation, pivot.table) }
   }
 
   private createPivotQuery(relation: PivotRelationDefinition, related: ModelRepository): TableQueryBuilder<string | TableDefinition> {
@@ -3753,8 +3768,9 @@ export class ModelRepository<
     rows: readonly Record<string, unknown>[],
     related: StoredKeyMap<Entity>,
     relation: PivotRelationDefinition,
+    options: StoredKeyOptions,
   ): StoredKeyMap<Entity[]> {
-    const grouped = new StoredKeyMap<Entity[]>([], this.pivotKeyOptions(relation))
+    const grouped = new StoredKeyMap<Entity[]>([], options)
     for (const row of rows) {
       const entity = related.get(row[this.pivotRelatedColumn(relation)])
       if (!entity) continue
@@ -3771,8 +3787,8 @@ export class ModelRepository<
     relation: Extract<RelationDefinition, { kind: 'morphToMany' }>,
     constraint?: RelationConstraint,
   ): Promise<StoredKeyMap<Entity[]>> {
-    const { rows, related } = await this.retrievePivotRows(entities, relation, constraint)
-    return this.groupPivotRows(rows, related, relation)
+    const { rows, related, options } = await this.retrievePivotRows(entities, relation, constraint)
+    return this.groupPivotRows(rows, related, relation, options)
   }
 
   private async getMorphedByManyEntitiesByParentKey(
@@ -3780,8 +3796,8 @@ export class ModelRepository<
     relation: Extract<RelationDefinition, { kind: 'morphedByMany' }>,
     constraint?: RelationConstraint,
   ): Promise<StoredKeyMap<Entity[]>> {
-    const { rows, related } = await this.retrievePivotRows(entities, relation, constraint)
-    return this.groupPivotRows(rows, related, relation)
+    const { rows, related, options } = await this.retrievePivotRows(entities, relation, constraint)
+    return this.groupPivotRows(rows, related, relation, options)
   }
 
   private createBelongsToManyPivotQuery(
@@ -3820,17 +3836,15 @@ export class ModelRepository<
 
   private readPivotKeys(
     rows: readonly Record<string, unknown>[],
-    keys: readonly (readonly [pivotColumn: string, ownerTable: TableDefinition, ownerColumn: string])[],
+    keys: readonly (readonly [pivotColumn: string, ownerTable: TableDefinition, ownerColumn: string, introspected: AnyColumnDefinition | undefined])[],
   ): Record<string, unknown>[] {
     const dialect = this.getConnection().getDriver() as SchemaDialectName
-    const columns = keys.flatMap(([pivotColumn, ownerTable, ownerColumn]) => {
-      const definition = ownEntry(ownerTable.columns, ownerColumn)
-      return definition ? [[pivotColumn, definition] as const] : []
-    })
+    const columns = keys.map(([pivotColumn, ownerTable, ownerColumn, introspected]) => [pivotColumn, ownEntry(ownerTable.columns, ownerColumn), introspected] as const)
     return rows.map(row => {
       const read = { ...row }
-      for (const [pivotColumn, definition] of columns) {
-        if (!isFractionalKeyFor(definition, row[pivotColumn])) read[pivotColumn] = normalizeDialectReadValue(dialect, definition, row[pivotColumn])
+      for (const [pivotColumn, definition, introspected] of columns) {
+        const stored = introspected?.kind === 'decimal' ? normalizeDialectReadValue(dialect, introspected, row[pivotColumn]) : row[pivotColumn]
+        read[pivotColumn] = definition && !isFractionalKeyFor(definition, stored) ? normalizeDialectReadValue(dialect, definition, stored) : stored
       }
       return read
     })

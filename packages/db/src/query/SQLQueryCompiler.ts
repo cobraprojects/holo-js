@@ -1,7 +1,7 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError, SecurityError } from '../core/errors'
-import { isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
+import { isInlineIntegerValue, keyCastFor, readAllColumnsSelectionTable } from './ast'
 import { validateQueryPlan } from './validator'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import { isTrustedRawPredicate } from './trustedRawPredicate'
@@ -29,6 +29,8 @@ import type {
   QueryPredicate,
   QueryColumnPredicate,
   QueryKeyCast,
+  QueryKeyKind,
+  QueryUnknownKeyKind,
   QueryUpdateValue,
   QueryVectorPredicate,
   SelectQueryPlan,
@@ -38,6 +40,8 @@ import { isOneOfManyAggregatePlan } from './ast'
 
 type IdentifierQuoter = (identifier: string) => string
 type PlaceholderFactory = (index: number) => string
+
+const KEY_KINDS: readonly QueryKeyKind[] = ['integer', 'decimal', 'text']
 
 export class SQLQueryCompiler {
   protected readonly dialect: SchemaDialectName | undefined = undefined
@@ -208,7 +212,9 @@ export class SQLQueryCompiler {
             return this.compileAllColumnsOf(allColumnsOf, plan)
           }
 
-          const column = this.compileKeyOperand(selection.column, selection.keyCast)
+          const column = selection.unknownKeyKind
+            ? this.compileUnknownKindKeySelection(this.compileColumnReference(selection.column), selection.unknownKeyKind)
+            : this.compileKeyOperand(this.compileColumnReference(selection.column), selection.keyCast)
           return selection.alias
             ? `${column} AS ${this.quoteIdentifier(selection.alias)}`
             : column
@@ -579,7 +585,7 @@ export class SQLQueryCompiler {
         return ` ${join.type.toUpperCase()} JOIN ${source} ON TRUE`
       }
 
-      return ` ${join.type.toUpperCase()} JOIN ${source} ON ${this.compileKeyOperand(join.leftColumn!, join.keyCasts?.left)} ${join.operator!.toUpperCase()} ${this.compileKeyOperand(join.rightColumn!, join.keyCasts?.right)}`
+      return ` ${join.type.toUpperCase()} JOIN ${source} ON ${this.compileKeyComparison(this.compileColumnReference(join.leftColumn!), join.keyCasts?.left, join.operator!.toUpperCase(), this.compileColumnReference(join.rightColumn!), join.keyCasts?.right)}`
     }).join('')
   }
 
@@ -713,22 +719,73 @@ export class SQLQueryCompiler {
   }
 
   protected compileColumnComparison(predicate: QueryColumnPredicate): string {
-    return `${this.compileKeyOperand(predicate.column, predicate.keyCasts?.left)} ${predicate.operator.toUpperCase()} ${this.compileKeyOperand(predicate.compareTo, predicate.keyCasts?.right)}`
+    if (predicate.keyCasts?.unknownKind) return this.compileUnknownKindKeyComparison(predicate, predicate.keyCasts.unknownKind)
+    return this.compileKeyComparison(this.compileColumnReference(predicate.column), predicate.keyCasts?.left, predicate.operator.toUpperCase(), this.compileColumnReference(predicate.compareTo), predicate.keyCasts?.right)
   }
 
-  private compileKeyOperand(column: string, cast?: QueryKeyCast): string {
-    const reference = this.compileColumnReference(column)
-    if (cast === 'text') return this.compileTextKey(reference)
-    if (cast === 'integer') return this.compileIntegerKey(reference)
-    return reference
+  private compileUnknownKindKeyComparison(predicate: QueryColumnPredicate, unknownKind: QueryUnknownKeyKind): string {
+    const operator = predicate.operator.toUpperCase()
+    const unknown = this.compileColumnReference(predicate.column)
+    const known = this.compileColumnReference(predicate.compareTo)
+    const branches = KEY_KINDS.map((kind) => {
+      const unknownOperand = this.compileKeyOfKind(unknown, kind)
+      const comparison = unknownKind.source === 'unknown'
+        ? this.compileKeyComparison(unknownOperand, keyCastFor(kind, unknownKind.otherKind), operator, known)
+        : this.compileKeyComparison(unknownOperand, undefined, operator, known, keyCastFor(unknownKind.otherKind, kind))
+      return `WHEN ${this.createSqlStringLiteral(kind)} THEN ${comparison}`
+    })
+    return `CASE ${this.compileKeyKind(unknown, unknownKind.table, unknownKind.column)} ${branches.join(' ')} ELSE ${this.compileUnknownKindFallback(unknown, known, operator)} END`
+  }
+
+  private compileUnknownKindKeySelection(reference: string, unknownKind: QueryUnknownKeyKind): string {
+    const branches = KEY_KINDS.map(kind => `WHEN ${this.createSqlStringLiteral(kind)} THEN ${this.compileKeyOperand(this.compileKeyOfKind(reference, kind), keyCastFor(kind, unknownKind.otherKind))}`)
+    return `CASE ${this.compileKeyKind(reference, unknownKind.table, unknownKind.column)} ${branches.join(' ')} ELSE ${this.compileKeyOfKind(reference, unknownKind.otherKind)} END`
+  }
+
+  private compileKeyComparison(left: string, leftCast: QueryKeyCast | undefined, operator: string, right: string, rightCast?: QueryKeyCast): string {
+    if (leftCast === 'decimal') return this.compileDecimalKeyComparison(right, left, operator)
+    if (rightCast === 'decimal') return this.compileDecimalKeyComparison(left, right, operator)
+    return `${this.compileKeyOperand(left, leftCast)} ${operator} ${this.compileKeyOperand(right, rightCast)}`
+  }
+
+  protected compileDecimalKeyComparison(lookedUp: string, source: string, operator: string): string {
+    return `${lookedUp} ${operator} ${this.compileDecimalKey(source)}`
+  }
+
+  private compileKeyOperand(expression: string, cast?: QueryKeyCast): string {
+    if (cast === 'text') return this.compileTextKey(expression)
+    if (cast === 'decimalText') return this.compileDecimalTextKey(expression)
+    if (cast === 'integer') return this.compileIntegerKey(expression)
+    if (cast === 'decimal') return this.compileDecimalKey(expression)
+    return expression
   }
 
   protected compileTextKey(expression: string): string {
     return `CAST(${expression} AS TEXT)`
   }
 
+  protected compileDecimalTextKey(expression: string): string {
+    return this.compileTextKey(expression)
+  }
+
   protected compileIntegerKey(_expression: string): string {
     throw new CompilerError('Integer key comparisons require a dialect-specific compiler.')
+  }
+
+  protected compileDecimalKey(_expression: string): string {
+    throw new CompilerError('Decimal key comparisons require a dialect-specific compiler.')
+  }
+
+  protected compileKeyKind(_expression: string, _table: string, _column: string): string {
+    throw new CompilerError('Key comparisons against columns of unknown kind require a dialect-specific compiler.')
+  }
+
+  protected compileKeyOfKind(expression: string, _kind: QueryKeyKind): string {
+    return expression
+  }
+
+  protected compileUnknownKindFallback(left: string, right: string, operator: string): string {
+    return `${left} ${operator} ${right}`
   }
 
   protected compileComparisonSubject(predicate: QueryPredicate): string {

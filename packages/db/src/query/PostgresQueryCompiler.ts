@@ -7,6 +7,7 @@ import type {
   QueryJsonPredicate,
   QueryLikePredicate,
   QueryJsonUpdateOperation,
+  QueryKeyKind,
   QueryLockMode,
   UpsertQueryPlan,
 } from './ast'
@@ -14,6 +15,23 @@ import type {
 export class PostgresQueryCompiler extends SQLQueryCompiler {
   protected override compileIntegerKey(expression: string): string {
     return `CASE WHEN ${expression} ~ '^-?(0|[1-9][0-9]{0,18})([.]0+)?$' THEN CAST(split_part(${expression}, '.', 1) AS NUMERIC) END`
+  }
+
+  protected override compileDecimalKey(expression: string): string {
+    return `CASE WHEN ${expression} ~ '^-?(0|[1-9][0-9]*)([.][0-9]+)?$' AND length(split_part(${expression}, '.', 1)) <= 131073 AND length(split_part(${expression}, '.', 2)) <= 16383 THEN CAST(${expression} AS NUMERIC) END`
+  }
+
+  protected override compileKeyKind(expression: string): string {
+    const type = `pg_typeof(${expression})`
+    return `CASE WHEN ${type} IN ('smallint'::regtype, 'integer'::regtype, 'bigint'::regtype) THEN 'integer' WHEN ${type} = 'numeric'::regtype THEN 'decimal' WHEN ${type} IN ('text'::regtype, 'character varying'::regtype, 'character'::regtype) THEN 'text' END`
+  }
+
+  protected override compileKeyOfKind(expression: string, kind: QueryKeyKind): string {
+    return kind === 'text' ? `CAST(${expression} AS TEXT)` : `CAST(CAST(${expression} AS TEXT) AS NUMERIC)`
+  }
+
+  protected override compileUnknownKindFallback(left: string, right: string, operator: string): string {
+    return `CAST(${left} AS TEXT) ${operator} CAST(${right} AS TEXT)`
   }
 
   protected override createBooleanLiteral(value: boolean): string {

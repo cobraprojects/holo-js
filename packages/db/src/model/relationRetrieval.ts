@@ -1,12 +1,12 @@
 import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
-import { isInlineIntegerValue } from '../query/ast'
+import { isInlineIntegerValue, keyCastFor } from '../query/ast'
 import { hasQueryCache } from '../query/TableQueryBuilder'
 import { isCanonicalIntegerText, isDecimalKeyText, readFractionalDecimalKey, readIntegralDecimalKey, readsAsInteger } from '../schema/normalization'
 import { canonicalStoredKey, ownEntry } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet, type StoredKeyOptions } from './storedKeyCollections'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { AnyColumnDefinition, ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
-import type { QueryKeyCast, QueryPredicateNode, SelectQueryPlan } from '../query/ast'
+import type { QueryKeyCast, QueryKeyCasts, QueryKeyKind, QueryPredicateNode, SelectQueryPlan } from '../query/ast'
 import type { Entity } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
 
@@ -160,9 +160,23 @@ export function relationKeyOptions(parentKey: AnyColumnDefinition | undefined, r
 }
 
 export function sourceKeyCast(source: AnyColumnDefinition | undefined, lookedUp: AnyColumnDefinition | undefined): QueryKeyCast | undefined {
-  if (source && readsAsInteger(source) && isTextKeyColumn(lookedUp)) return 'text'
-  if (isTextKeyColumn(source) && lookedUp && readsAsInteger(lookedUp)) return 'integer'
-  return undefined
+  return keyCastFor(keyKind(source), keyKind(lookedUp))
+}
+
+export function pivotKeyCasts(pivot: string | TableDefinition, pivotColumn: string, other: AnyColumnDefinition | undefined, source: 'pivot' | 'other'): QueryKeyCasts {
+  if (typeof pivot !== 'string') {
+    const definition = ownEntry(pivot.columns, pivotColumn)
+    return source === 'pivot' ? { left: sourceKeyCast(definition, other) } : { right: sourceKeyCast(other, definition) }
+  }
+  const otherKind = keyKind(other)
+  return otherKind ? { unknownKind: { table: pivot, column: pivotColumn, otherKind, source: source === 'pivot' ? 'unknown' : 'other' } } : {}
+}
+
+function keyKind(definition: AnyColumnDefinition | undefined): QueryKeyKind | undefined {
+  if (!definition) return undefined
+  if (readsAsInteger(definition)) return 'integer'
+  if (definition.kind === 'decimal') return 'decimal'
+  return isTextKeyColumn(definition) ? 'text' : undefined
 }
 
 function isTextKeyColumn(definition: AnyColumnDefinition | undefined): boolean {
@@ -230,11 +244,11 @@ export async function retrievePivotRelation(
   relatedKey: string,
   pivotSelection: readonly string[],
   readPivotRows: (rows: readonly Record<string, unknown>[]) => Record<string, unknown>[],
-  keyDefinitions: { readonly parentKey?: AnyColumnDefinition, readonly relatedKey?: AnyColumnDefinition } = {},
+  keyDefinitions: { readonly parentKey?: AnyColumnDefinition, readonly relatedKey?: AnyColumnDefinition, readonly pivotParentKey?: AnyColumnDefinition, readonly pivotRelatedKey?: AnyColumnDefinition } = {},
 ): Promise<{ rows: Record<string, unknown>[], related: StoredKeyMap<Entity> }> {
   if (parentKeys.length === 0) return { rows: [], related: new StoredKeyMap() }
   const pivotQuery = createPivotQuery()
-  const pivotParentKey = columnDefinition(pivotQuery, parentColumn)
+  const pivotParentKey = columnDefinition(pivotQuery, parentColumn) ?? keyDefinitions.pivotParentKey
   const pivotKeys = keysForColumn(parentKeys, pivotParentKey ?? keyDefinitions.parentKey, pivotQuery.getConnection().getDriver())
   const rows = await loadRelationKeyChunks(pivotKeys, false, async chunk => readPivotRows(await createPivotQuery()
     .select(...pivotSelection)
@@ -242,5 +256,5 @@ export async function retrievePivotRelation(
     .get<Record<string, unknown>>()))
   const keys = distinctStoredKeys(rows.map(row => row[relatedColumn]).filter(value => value != null))
   const { entities } = await retrieveRelation(keys, createRelatedQuery, relatedKey, false, keyDefinitions.relatedKey)
-  return { rows, related: indexRelation(entities, relatedKey, relationKeyOptions(keyDefinitions.relatedKey, columnDefinition(pivotQuery, relatedColumn))) }
+  return { rows, related: indexRelation(entities, relatedKey, relationKeyOptions(keyDefinitions.relatedKey, columnDefinition(pivotQuery, relatedColumn) ?? keyDefinitions.pivotRelatedKey)) }
 }

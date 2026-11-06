@@ -93,6 +93,7 @@ import {
   withAggregateSelection,
   withRawSelection,
   withoutPredicates,
+  hasKeyCasts,
 } from './ast'
 import { createAggregateValueCounts } from './aggregateValueCounts'
 import type { SQLQueryCompiler } from './SQLQueryCompiler'
@@ -118,7 +119,6 @@ import type {
   QueryDatePredicate,
   QueryNullPredicate,
   QueryColumnPredicate,
-  QueryKeyCast,
   QueryKeyCasts,
   QueryDatePart,
   QueryOperator,
@@ -197,15 +197,15 @@ type KeyedInsert = (
 let keyedInsert: KeyedInsert
 type AnyTableQuery = TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>
 let keyColumnComparison: (query: AnyTableQuery, column: string, compareTo: string, casts: QueryKeyCasts) => AnyTableQuery
-let keyColumnSelection: (query: AnyTableQuery, column: string, cast: QueryKeyCast | undefined) => AnyTableQuery
+let keyColumnSelection: (query: AnyTableQuery, column: string, casts: QueryKeyCasts) => AnyTableQuery
 let keyColumnJoin: (query: AnyTableQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts) => AnyTableQuery
 
 export function whereKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, compareTo: string, casts: QueryKeyCasts): TQuery {
   return keyColumnComparison(query as unknown as AnyTableQuery, column, compareTo, casts) as unknown as TQuery
 }
 
-export function selectKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, cast: QueryKeyCast | undefined): TQuery {
-  return keyColumnSelection(query as unknown as AnyTableQuery, column, cast) as unknown as TQuery
+export function selectKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, casts: QueryKeyCasts): TQuery {
+  return keyColumnSelection(query as unknown as AnyTableQuery, column, casts) as unknown as TQuery
 }
 
 export function joinOnKeyColumns<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts): TQuery {
@@ -1006,7 +1006,7 @@ export class TableQueryBuilder<
       operator: (typeof compareTo === 'undefined' ? '=' : operatorOrCompareTo) as QueryColumnPredicate['operator'],
       compareTo: comparedColumn,
       ...(dateOperands.column || dateOperands.compareTo ? { dateOperands } : {}),
-      ...(casts?.left || casts?.right ? { keyCasts: casts } : {}),
+      ...(hasKeyCasts(casts) ? { keyCasts: casts } : {}),
     }))
   }
 
@@ -3060,14 +3060,14 @@ export class TableQueryBuilder<
   static {
     keyedInsert = (query, values, keyColumn) => query.insertGetKey(values, keyColumn)
     keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)
-    keyColumnSelection = (query, column, cast) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(cast ? { keyCast: cast } : {}) })]) })
+    keyColumnSelection = (query, column, casts) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(casts.left ? { keyCast: casts.left } : {}), ...(casts.unknownKind ? { unknownKeyKind: casts.unknownKind } : {}) })]) })
     keyColumnJoin = (query, table, leftColumn, rightColumn, casts) => query.clone(withJoin(query.plan, {
       type: 'inner',
       ...resolveJoinTarget(table),
       leftColumn,
       operator: '=',
       rightColumn,
-      ...(casts.left || casts.right ? { keyCasts: casts } : {}),
+      ...(hasKeyCasts(casts) ? { keyCasts: casts } : {}),
     }))
   }
 
