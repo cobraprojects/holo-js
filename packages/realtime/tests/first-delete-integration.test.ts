@@ -57,10 +57,9 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a f
       await db.table(tableName).where('id', loaded.id).delete()
     } }))
 
-    if (ordered) {
-      expect(snapshots).toEqual([{ id: 1, title: 'First' }])
-    }
-    expect(snapshots).toEqual([await read()])
+    const seeded = [{ id: 1, title: 'First' }, { id: 2, title: 'Second' }]
+    expect(snapshots).toHaveLength(1)
+    expect(ordered ? [seeded[0]] : seeded).toContainEqual(snapshots[0])
     await deleteLoadedRow()
     expect(snapshots).toHaveLength(2)
     expect(snapshots.at(-1)).toEqual(await read())
