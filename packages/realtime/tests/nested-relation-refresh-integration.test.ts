@@ -105,6 +105,18 @@ async function swapTagActivity({ db, tags }: Blog) {
   await db.table(tags).where('id', 1).update({ active: 0 })
 }
 
+async function seedPublishedPost(blog: Blog) {
+  await swapTagActivity(blog)
+  await blog.db.table(blog.posts).where('id', 20).update({ title: 'Parsers', published: 1 })
+}
+
+async function seedPivotChanges(blog: Blog) {
+  const { db, postTags } = blog
+  await seedPublishedPost(blog)
+  await db.table(postTags).where('tag_id', 2).update({ post_id: 20 })
+  await db.table(postTags).insert({ post_id: 20, tag_id: 1 })
+}
+
 const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, run: (mutate: Mutate, blog: Blog) => Promise<void> }[] = [
   {
     name: 'tag updates',
@@ -116,7 +128,9 @@ const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, 
   },
   {
     name: 'tag inserts and deletes',
-    seed: async ({ db, posts, postTags }) => {
+    seed: async (blog) => {
+      const { db, posts, postTags } = blog
+      await seedPivotChanges(blog)
       await db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping', published: 1 })
       await db.table(postTags).insert({ post_id: 30, tag_id: 3 })
     },
@@ -129,7 +143,7 @@ const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, 
   {
     name: 'pivot inserts',
     seed: async (blog) => {
-      await swapTagActivity(blog)
+      await seedPublishedPost(blog)
       await blog.db.table(blog.tags).insert(extraTags)
     },
     run: async (mutate, { db, postTags }) => {
@@ -141,7 +155,7 @@ const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, 
     name: 'pivot updates and deletes',
     seed: async (blog) => {
       const { db, tags, postTags } = blog
-      await swapTagActivity(blog)
+      await seedPublishedPost(blog)
       await db.table(tags).insert(extraTags)
       await db.table(postTags).insert([{ post_id: 20, tag_id: 4 }, { post_id: 20, tag_id: 5 }])
     },
@@ -157,23 +171,28 @@ const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, 
     run: async (mutate, { db, posts }) => {
       await mutate('retitling a post', () => db.table(posts).where('id', 20).update({ title: 'Parsers' }))
       await mutate('publishing a post', () => db.table(posts).where('id', 20).update({ published: 1 }))
-      await mutate('moving a post to another author', () => db.table(posts).where('id', 20).update({ author_id: 1 }))
     },
   },
   {
-    name: 'post inserts and deletes',
-    seed: async (blog) => {
-      await swapTagActivity(blog)
-      await blog.db.table(blog.postTags).insert({ post_id: 20, tag_id: 1 })
-    },
+    name: 'post inserts, moves and deletes',
+    seed: seedPivotChanges,
     run: async (mutate, { db, posts, postTags }) => {
       await mutate('inserting a post', () => db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping', published: 1 }))
       await mutate('tagging the new post', () => db.table(postTags).insert({ post_id: 30, tag_id: 3 }))
+      await mutate('moving a post to another author', () => db.table(posts).where('id', 20).update({ author_id: 1 }))
       await mutate('deleting a post', () => db.table(posts).where('id', 10).delete())
     },
   },
   {
     name: 'author writes',
+    seed: async (blog) => {
+      const { db, posts, postTags, tags } = blog
+      await seedPivotChanges(blog)
+      await db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping', published: 1 })
+      await db.table(postTags).insert({ post_id: 30, tag_id: 3 })
+      await db.table(tags).where('id', 3).delete()
+      await db.table(posts).where('id', 20).update({ author_id: 1 })
+    },
     run: async (mutate, { db, authors, posts }) => {
       await mutate('inserting an author', () => db.table(authors).insert({ id: 4, name: 'Radia' }))
       await mutate('writing a post for the new author', () => db.table(posts).insert({ id: 40, author_id: 4, title: 'Spanning Trees', published: 0 }))

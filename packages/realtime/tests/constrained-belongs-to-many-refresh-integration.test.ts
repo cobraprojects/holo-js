@@ -80,6 +80,13 @@ async function swapTagActivity({ db, tags }: Awaited<ReturnType<typeof openBlog>
   await db.table(tags).where('id', 1).update({ active: 0 })
 }
 
+async function seedPivotChanges(blog: Awaited<ReturnType<typeof openBlog>>) {
+  const { db, postTags } = blog
+  await swapTagActivity(blog)
+  await db.table(postTags).where('tag_id', 2).update({ post_id: 20 })
+  await db.table(postTags).insert({ post_id: 20, tag_id: 1 })
+}
+
 function subscribeConstrainedTags({ db, Post }: Awaited<ReturnType<typeof openBlog>>) {
   return subscribeAll({
     constrainedWithSibling: () => db.model(Post).query()
@@ -102,7 +109,7 @@ function subscribeConstrainedTags({ db, Post }: Awaited<ReturnType<typeof openBl
 
 describe.each(drivers)('realtime constrained belongsToMany on %s', (driver) => {
   describe('keeps a constrained belongsToMany next to an unconstrained sibling equal to a fresh read', () => {
-    it('across tag writes', async () => {
+    it('across tag updates and inserts', async () => {
       const blog = await openBlog(driver)
       const { db, tags } = blog
       const mutate = await subscribeConstrainedTags(blog)
@@ -112,6 +119,14 @@ describe.each(drivers)('realtime constrained belongsToMany on %s', (driver) => {
       await mutate('relabeling a tag', () => db.table(tags).where('id', 3).update({ label: 'signals' }))
       await mutate('inserting an inactive tag', () => db.table(tags).insert({ id: 4, label: 'draft', active: 0 }))
       await mutate('inserting an active tag', () => db.table(tags).insert({ id: 5, label: 'live', active: 1 }))
+    })
+
+    it('across deleting a tag that shares its post with other tags', async () => {
+      const blog = await openBlog(driver)
+      const { db, tags } = blog
+      await seedPivotChanges(blog)
+      const mutate = await subscribeConstrainedTags(blog)
+
       await mutate('deleting a tag', () => db.table(tags).where('id', 3).delete())
     })
 
@@ -131,8 +146,9 @@ describe.each(drivers)('realtime constrained belongsToMany on %s', (driver) => {
 
     it('across post writes', async () => {
       const blog = await openBlog(driver)
-      const { db, posts, postTags } = blog
-      await swapTagActivity(blog)
+      const { db, posts, tags, postTags } = blog
+      await seedPivotChanges(blog)
+      await db.table(tags).where('id', 3).delete()
       const mutate = await subscribeConstrainedTags(blog)
 
       await mutate('inserting a post', () => db.table(posts).insert({ id: 30, title: 'Frequency Hopping' }))

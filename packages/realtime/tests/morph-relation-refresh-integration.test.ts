@@ -109,6 +109,13 @@ async function seedFrequencyHopping({ db, names, posts, comments, tags, postType
   await db.table(names.taggables).insert({ tag_id: 3, taggable_type: postType, taggable_id: 30 })
 }
 
+async function seedLateReferences({ db, names, posts, comments, tags, postType }: Awaited<ReturnType<typeof openBlog>>) {
+  await db.table(comments).insert({ id: 400, commentable_type: postType, commentable_id: 40, body: 'early' })
+  await db.table(names.taggables).insert([{ tag_id: 1, taggable_type: postType, taggable_id: 40 }, { tag_id: 4, taggable_type: postType, taggable_id: 10 }])
+  await db.table(posts).insert({ id: 40, title: 'Spread Spectrum' })
+  await db.table(tags).insert({ id: 4, label: 'signals' })
+}
+
 describe.each(drivers)('realtime morph relations on %s', (driver) => {
   describe('keeps every morph relation subscription equal to a fresh read', () => {
     it('after updating a post, a tag and a comment', async () => {
@@ -152,31 +159,35 @@ describe.each(drivers)('realtime morph relations on %s', (driver) => {
       expect(JSON.stringify(current.morphTags!())).toContain('signals')
     })
 
-    it('after moving and retyping rows until a post is unreferenced and deleted', async () => {
+    it('after moving a pivot row and a comment and deleting a pivot row and a comment', async () => {
       const blog = await openBlog(driver)
-      const { db, names, posts, comments } = blog
+      const { db, names, comments } = blog
       await seedFrequencyHopping(blog)
+      await seedLateReferences(blog)
       const { current, mutate } = await subscribeMorphReads(blog)
 
       await mutate('updating a pivot row', () => db.table(names.taggables).where('tag_id', 2).update({ taggable_id: 30 }))
       await mutate('moving a comment', () => db.table(comments).where('id', 200).update({ commentable_id: 30 }))
-      await mutate('retyping a pivot row', () => db.table(names.taggables).where('tag_id', 2).update({ taggable_type: 'HoloMrOther' }))
-      await mutate('deleting an unreferenced post', () => db.table(posts).where('id', 20).delete())
-      expect(JSON.stringify(current.comments!())).not.toContain('Compilers')
+      await mutate('deleting a pivot row', () => db.table(names.taggables).where('tag_id', 1).delete())
+      await mutate('deleting a comment', () => db.table(comments).where('id', 300).delete())
+      expect(JSON.stringify(current.comments!())).not.toContain('radio')
     })
 
-    it('after deleting pivot rows, comments, tags and a referenced post', async () => {
+    it('after deleting a tag, retyping a pivot row and deleting an unreferenced and a referenced post', async () => {
       const blog = await openBlog(driver)
       const { db, names, posts, comments, tags, postType } = blog
       await seedFrequencyHopping(blog)
+      await seedLateReferences(blog)
+      await db.table(names.taggables).where('tag_id', 2).update({ taggable_id: 30 })
       await db.table(comments).where('id', 200).update({ commentable_id: 30 })
-      await db.table(names.taggables).where('tag_id', 2).update({ taggable_type: 'HoloMrOther', taggable_id: 30 })
-      await db.table(names.taggables).insert({ tag_id: 1, taggable_type: postType, taggable_id: 40 })
+      await db.table(names.taggables).where('tag_id', 1).delete()
+      await db.table(comments).where('id', 300).delete()
       const { current, mutate } = await subscribeMorphReads(blog)
 
-      await mutate('deleting a pivot row', () => db.table(names.taggables).where('tag_id', 1).delete())
-      await mutate('deleting a comment', () => db.table(comments).where('id', 300).delete())
       await mutate('deleting a tag', () => db.table(tags).where('id', 3).delete())
+      await mutate('retyping a pivot row', () => db.table(names.taggables).where('tag_id', 2).update({ taggable_type: 'HoloMrOther' }))
+      await mutate('deleting an unreferenced post', () => db.table(posts).where('id', 20).delete())
+      expect(JSON.stringify(current.comments!())).not.toContain('Compilers')
       await mutate('tagging a post again', () => db.table(names.taggables).insert({ tag_id: 1, taggable_type: postType, taggable_id: 30 }))
       expect(JSON.stringify(current.taggedPosts!())).toContain('Frequency Hopping')
       await mutate('deleting a referenced post', () => db.table(posts).where('id', 30).delete())
