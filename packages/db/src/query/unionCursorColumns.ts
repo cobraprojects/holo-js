@@ -2,47 +2,49 @@ import { CompilerError } from '../core/errors'
 import type { QuerySelection, SelectQueryPlan } from './ast'
 import { knownJoinedColumns, knownTableColumns, qualifiesTable, selectionOutputName } from './modelRowProjection'
 
-type UnionOutput = { readonly name?: string, readonly column?: string } | undefined
+type UnionOutput = { readonly names: readonly string[] | undefined, readonly column?: string, readonly positioned: boolean }
 
-function qualifiedOutputs(qualifier: string, columns: readonly string[] | undefined): readonly UnionOutput[] {
-  return columns ? columns.map(name => ({ name, column: `${qualifier}.${name}` })) : [undefined]
+function unpositioned(names: readonly string[] | undefined): UnionOutput {
+  return { names, positioned: false }
 }
 
-function sourceOutputs(branch: SelectQueryPlan, connectionName: string): readonly UnionOutput[] {
-  const { source } = branch
-  return qualifiedOutputs(source.alias ?? source.tableName, knownTableColumns(source.table?.tableName ?? source.tableName, source.table, connectionName))
-}
-
-function joinOutputs(branch: SelectQueryPlan, qualifier: string, connectionName: string): readonly UnionOutput[] {
+function joinColumns(branch: SelectQueryPlan, qualifier: string, connectionName: string): readonly string[] | undefined {
   const join = branch.joins.find(candidate => qualifiesTable(qualifier, candidate.table, candidate.alias))
-  return qualifiedOutputs(qualifier, join ? knownJoinedColumns(join, connectionName) : undefined)
+  return join ? knownJoinedColumns(join, connectionName) : undefined
 }
 
-function selectionOutputs(branch: SelectQueryPlan, selection: QuerySelection, connectionName: string): readonly UnionOutput[] {
-  if (selection.kind === 'raw') return [undefined]
-  if (selection.kind !== 'column') return [{ name: selectionOutputName(selection) }]
+function sourceColumns(branch: SelectQueryPlan, connectionName: string): readonly string[] | undefined {
+  const { source } = branch
+  return knownTableColumns(source.table?.tableName ?? source.tableName, source.table, connectionName)
+}
+
+function selectionOutput(branch: SelectQueryPlan, selection: QuerySelection, connectionName: string): UnionOutput {
+  if (selection.kind === 'raw') return unpositioned(undefined)
+  const name = selectionOutputName(selection)
+  if (selection.kind !== 'column') return { names: typeof name === 'string' ? [name] : undefined, positioned: true }
   if (selection.column === '*') {
-    return [...sourceOutputs(branch, connectionName), ...branch.joins.flatMap(join => joinOutputs(branch, join.alias ?? join.table ?? '', connectionName))]
+    const tables = [sourceColumns(branch, connectionName), ...branch.joins.map(join => joinColumns(branch, join.alias ?? join.table ?? '', connectionName))]
+    return unpositioned(tables.every((columns): columns is readonly string[] => typeof columns !== 'undefined') ? tables.flat() : undefined)
   }
-  if (!selection.column.endsWith('.*')) return [{ name: selectionOutputName(selection), column: selection.column }]
+  if (!selection.column.endsWith('.*')) return { names: [name!], column: selection.column, positioned: true }
   const qualifier = selection.column.slice(0, -2)
-  return qualifiesTable(qualifier, branch.source.tableName, branch.source.alias) ? sourceOutputs(branch, connectionName) : joinOutputs(branch, qualifier, connectionName)
+  return unpositioned(qualifiesTable(qualifier, branch.source.tableName, branch.source.alias) ? sourceColumns(branch, connectionName) : joinColumns(branch, qualifier, connectionName))
 }
 
 function branchOutputs(branch: SelectQueryPlan, connectionName: string): readonly UnionOutput[] {
   const selections: readonly QuerySelection[] = branch.selections.length === 0 ? [{ kind: 'column', column: '*' }] : branch.selections
-  return selections.flatMap(selection => selectionOutputs(branch, selection, connectionName))
+  return selections.map(selection => selectionOutput(branch, selection, connectionName))
 }
 
 function outputPosition(plan: SelectQueryPlan, column: string, connectionName: string): number | undefined {
   const outputs = branchOutputs(plan, connectionName)
-  const named = outputs.findIndex(output => output?.name === column)
-  const position = named === -1 ? outputs.findIndex(output => output?.column === column) : named
+  const named = outputs.findIndex(output => output.names?.includes(column))
+  const position = named === -1 ? outputs.findIndex(output => output.column === column) : named
   if (position === -1) return undefined
-  if (outputs.slice(position + 1).some(output => !output || output.name === column)) {
+  if (outputs.slice(position + 1).some(output => !output.names || output.names.includes(column))) {
     throw new CompilerError(`Cannot cursor paginate a union by "${column}": more than one of its selected columns may be named "${column}". Select it under a name no other column has.`)
   }
-  return outputs.slice(0, position).includes(undefined) ? undefined : position
+  return outputs.slice(0, position + 1).every(output => output.positioned) ? position : undefined
 }
 
 function namedBranchColumn(branch: SelectQueryPlan, column: string): string {
@@ -54,7 +56,7 @@ function namedBranchColumn(branch: SelectQueryPlan, column: string): string {
 
 function positionedBranchColumn(branch: SelectQueryPlan, column: string, position: number, connectionName: string): string {
   const outputs = branchOutputs(branch, connectionName)
-  const output = outputs.slice(0, position).includes(undefined) ? undefined : outputs[position]
+  const output = outputs.slice(0, position).every(candidate => candidate.positioned) ? outputs[position] : undefined
   if (!output?.column) {
     throw new CompilerError(`Cannot cursor paginate a union by "${column}": a query in the union doesn't select a table column at its position. Select a column at the same position in each query.`)
   }

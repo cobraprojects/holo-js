@@ -488,6 +488,29 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     await expect(joined().where('id', 1).get()).rejects.toThrow(/ambiguous/i)
   })
 
+  it('normalizes the value of a qualified model key lookup like the column it names', async () => {
+    const { schema } = await createFixture(driver)
+    const stamps = uniqueName('stamps')
+    onTestFinished(async () => {
+      await schema.dropTable(stamps)
+    })
+    await schema.createTable(stamps, (table) => {
+      table.datetime('stamp')
+      table.string('label')
+      table.primary(['stamp'])
+    })
+    const stamp = new Date('2026-01-01T12:00:00.000Z')
+    const Stamp = defineModel(defineGeneratedTable(stamps, { stamp: column.datetime().primaryKey(), label: column.string() }), { timestamps: false })
+    await DB.table(stamps).insert({ stamp, label: 'noon' })
+
+    const iso = stamp.toISOString()
+    expect((await Stamp.query().find(iso))?.get('label')).toBe('noon')
+    expect((await Stamp.query().whereKey(iso).get()).map(entity => entity.get('label'))).toEqual(['noon'])
+    expect((await Stamp.query().whereKey([iso]).get()).map(entity => entity.get('label'))).toEqual(['noon'])
+    expect((await Stamp.query().whereKeyNot(iso).get()).map(entity => entity.get('label'))).toEqual([])
+    expect((await Stamp.query().where(`${stamps}.stamp`, iso).get()).map(entity => entity.get('label'))).toEqual(['noon'])
+  })
+
   it('cursor paginates a union of joined queries by output column names', async () => {
     const { products, orders, joined } = await createFixture(driver)
 
@@ -521,6 +544,11 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const firstSwapped = await swapped.cursorPaginate(1)
     const secondSwapped = await swapped.cursorPaginate(1, firstSwapped.nextCursor)
     expect([firstSwapped, secondSwapped].map(page => page.data.map(row => [Number(row.value), Number(row.price)]))).toEqual([[[10, 2]], [[20, 4]]])
+
+    const Reordered = defineModel(defineGeneratedTable(products, { price: column.integer(), id: column.id(), parent_id: column.integer().nullable(), factor: column.integer().nullable() }), { timestamps: false })
+    await DB.table(products).insert({ id: 3, price: 30, parent_id: 3, factor: 6 })
+    const mixed = Reordered.query().select(`${products}.*`).where('id', 1).union(Reordered.query().select('id', 'price', 'parent_id', 'factor').whereIn('id', [2, 3])).orderBy('id')
+    expect(await pages(mixed as never)).toEqual([[1], [2], [3]])
   })
 
   it('keeps the selection order between outputs that are not model columns', async () => {

@@ -4056,19 +4056,20 @@ export class TableQueryBuilder<
   }
 
   private normalizeComparisonValue(columnName: string, value: unknown, operator: unknown): Pick<QueryPredicate, 'value' | 'valueType'> {
+    const sourceColumn = this.resolveSourceColumnName(columnName) ?? columnName
     if (this.isDateColumn(columnName)) {
-      const normalized = normalizeDateColumnPredicateValue(this.source.table, this.connection.getDriver(), columnName, value, operator)
+      const normalized = normalizeDateColumnPredicateValue(this.source.table, this.connection.getDriver(), sourceColumn, value, operator)
       return normalized.comparesCalendarDates ? { value: normalized.value, valueType: 'date' } : { value: normalized.value }
     }
 
     return {
       value: this.normalizePredicateValueForColumn(columnName, value, operator),
-      ...(this.source.table?.columns[columnName]?.kind === 'json' ? { valueType: 'json' as const } : {}),
+      ...(this.source.table?.columns[sourceColumn]?.kind === 'json' ? { valueType: 'json' as const } : {}),
     }
   }
 
   private normalizePredicateValueForColumn(columnName: string, value: unknown, operator: unknown = '='): unknown {
-    return normalizeQueryPredicateValue(this.source.table, this.connection.getDriver(), columnName, value, operator)
+    return normalizeQueryPredicateValue(this.source.table, this.connection.getDriver(), this.resolveSourceColumnName(columnName) ?? columnName, value, operator)
   }
 }
 
