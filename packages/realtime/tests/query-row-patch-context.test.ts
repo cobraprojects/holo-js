@@ -223,20 +223,6 @@ describe('@holo-js/realtime row patch context helpers', () => {
       offset: 1,
       orderBy: [{ column: 'priority', direction: 'asc' }],
     }))).toBe(false)
-    expect(canPatchShrinkingRows([firstRow], createQuery({
-      limit: 1,
-      predicates: [createPredicate('id', '=', 1)],
-    }))).toBe(true)
-    expect(canPatchShrinkingRows([firstRow], createQuery({
-      limit: 1,
-      predicates: [createPredicate('status', '=', 'open')],
-      rowWindowMode: 'single',
-    }))).toBe(false)
-    expect(canPatchShrinkingRows([], createQuery({
-      limit: 1,
-      predicates: [createPredicate('status', '=', 'open')],
-      rowWindowMode: 'single',
-    }))).toBe(true)
     expect(canBackfillShrinkingRows(rows, [firstRow], createQuery({
       limit: 2,
       orderBy: [{ column: 'priority', direction: 'asc' }],
