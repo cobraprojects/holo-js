@@ -234,4 +234,21 @@ describe.each(drivers)('realtime belongsTo owners hidden by constraints or scope
     expect(subscription.current.data).toEqual(await handler())
     expect(JSON.stringify(subscription.current.data)).not.toContain('"Ada"')
   })
+
+  it('drops an owner that stops passing an exists global scope while a plain query of the owners patches', async () => {
+    const { db, authors, posts } = await openPosts(driver)
+    const ExistsAuthor = defineModel(authors, { timestamps: false, globalScopes: { visible: query => query.where('active', true).whereExists(db.table(posts).select('id')) } })
+    const ScopedPost = defineModel(posts, { timestamps: false, relations: { author: belongsTo(() => ExistsAuthor, 'author_id') } })
+    const handler = async () => ({
+      posts: await db.model(ScopedPost).query().with('author').orderBy('id').getJson(),
+      authors: await db.table(authors).select('id').orderBy('id').get(),
+    })
+    const subscription = await subscribe(handler)
+    expect(JSON.stringify(subscription.current.data)).toContain('"Ada"')
+
+    await mutate(() => db.table(authors).where('id', 1).update({ active: false, name: 'Ada Hidden' }))
+
+    expect(subscription.current.data).toEqual(await handler())
+    expect(JSON.stringify(subscription.current.data)).not.toContain('"Ada Hidden"')
+  })
 })

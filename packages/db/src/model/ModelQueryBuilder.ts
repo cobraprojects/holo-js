@@ -2701,10 +2701,6 @@ class ModelQueryBuilderBase<
 
         const related = relation.related()
         const relatedDefinition = 'definition' in related ? related.definition : related
-        if (!this.repository.relatedRowsArePatchable(relation.related)) {
-          return undefined
-        }
-
         relatedHydrations.push(Object.freeze({
           foreignKey: relation.foreignKey,
           kind: relation.kind,
@@ -2736,15 +2732,8 @@ class ModelQueryBuilderBase<
     relation: Extract<RelationDefinition, { kind: 'hasMany' | 'hasOne' }>,
     constraint?: RelationConstraint,
   ): Pick<DatabaseQueryRelatedHydrationObservation, 'orderBy' | 'predicates'> | undefined {
-    if (!relation.constraint && !constraint) {
-      return Object.freeze({
-        orderBy: Object.freeze([]),
-        predicates: Object.freeze([]),
-      })
-    }
-
     const resolved = this.repository.resolveRelationHydrationQuery(relation, constraint)
-    if (!resolved) {
+    if (!resolved?.rowsPatchable) {
       return undefined
     }
 
