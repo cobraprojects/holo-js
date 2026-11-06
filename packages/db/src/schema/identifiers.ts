@@ -51,9 +51,13 @@ export function tablePathSegments(tableName: string): string[] {
 }
 
 export function quoteTablePath(dialect: IdentifierQuoting, tableName: string): string {
-  return tablePathSegments(tableName)
-    .map(segment => dialect.quoteIdentifier(segment))
-    .join('.')
+  const { schema, table } = splitTablePath(tableName)
+  const quotedTable = dialect.quoteIdentifier(table)
+  return schema === undefined ? quotedTable : `${dialect.quoteIdentifier(schema)}.${quotedTable}`
+}
+
+export function quoteIdentifierSegment(segment: string, quote: string): string {
+  return `${quote}${segment.replaceAll(quote, `${quote}${quote}`)}${quote}`
 }
 
 export function sanitizeIdentifierForGeneratedName(identifier: string): string {

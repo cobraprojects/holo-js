@@ -1,6 +1,6 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { NumericAdjustment } from './NumericAdjustment'
-import { CompilerError } from '../core/errors'
+import { CompilerError, SecurityError } from '../core/errors'
 import { isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
 import { validateQueryPlan } from './validator'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -267,6 +267,17 @@ export class SQLQueryCompiler {
       ...metadata,
       safety: { unsafe, containsRawSql: this.planContainsRawSql(plan.query) },
     })
+  }
+
+  compileResolvedTruncate(plan: TruncateQueryPlan, tableName: string): CompiledStatement {
+    validateQueryPlan(plan, this.dialect)
+    const requested = plan.source.tableName
+    const resolved = splitTablePath(tableName)
+    const resolvesUnqualifiedRequest = splitTablePath(requested).schema === undefined && Boolean(resolved.schema) && resolved.table === requested
+    if (tableName !== requested && !resolvesUnqualifiedRequest) {
+      throw new SecurityError(`Resolved table "${tableName}" does not name the requested table "${requested}".`)
+    }
+    return this.compileTruncate({ ...plan, source: { ...plan.source, tableName } })
   }
 
   protected compileTruncate(plan: TruncateQueryPlan): CompiledStatement {

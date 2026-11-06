@@ -3,7 +3,7 @@ import { compileSQLiteWallClock, formatSQLiteDateTime } from '../sqliteDateTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type { CompiledStatement } from '../core/types'
 import { CompilerError } from '../core/errors'
-import { quoteTablePath, splitTablePath } from '../schema/identifiers'
+import { splitTablePath } from '../schema/identifiers'
 import { sameIdentifier } from '../schema/introspection/sqliteTokens'
 import type { InsertStatementOptions, QueryColumnPredicate, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate, SelectQueryPlan } from './ast'
 
@@ -59,19 +59,6 @@ function convertLikePatternToGlob(pattern: string): string {
   return pattern.replace(/[[*?%_]/g, character => SQLITE_GLOB_PATTERN_REPLACEMENTS[character] ?? character)
 }
 
-const SQLITE_ESCAPED_QUOTING = {
-  quoteIdentifier: (segment: string) => `"${segment.replaceAll('"', '""')}"`,
-}
-
-function sqliteMetadataTable(tableName: string, metadataTable: string): { readonly schemaName: string, readonly metadataTable: string, readonly table: string } {
-  const { schema, table } = splitTablePath(tableName)
-  return {
-    schemaName: schema ?? 'main',
-    metadataTable: quoteTablePath(SQLITE_ESCAPED_QUOTING, schema === undefined ? metadataTable : `${schema}.${metadataTable}`),
-    table,
-  }
-}
-
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
@@ -101,9 +88,18 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     }
   }
 
+  private sqliteMetadataTable(tableName: string, metadataTable: string): { readonly schemaName: string, readonly metadataTable: string, readonly table: string } {
+    const { schema, table } = splitTablePath(tableName)
+    return {
+      schemaName: schema ?? 'main',
+      metadataTable: this.compileTableReference(schema === undefined ? metadataTable : `${schema}.${metadataTable}`),
+      table,
+    }
+  }
+
   override compileSequenceReset(tableName: string): { readonly probe: CompiledStatement, readonly reset: CompiledStatement } {
-    const { metadataTable: master } = sqliteMetadataTable(tableName, 'sqlite_master')
-    const { metadataTable: sequence, table } = sqliteMetadataTable(tableName, 'sqlite_sequence')
+    const { metadataTable: master } = this.sqliteMetadataTable(tableName, 'sqlite_master')
+    const { metadataTable: sequence, table } = this.sqliteMetadataTable(tableName, 'sqlite_sequence')
     return {
       probe: {
         sql: `SELECT 1 AS "present" FROM ${master} WHERE "type" = 'table' AND "name" = 'sqlite_sequence'`,
@@ -119,7 +115,7 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
   }
 
   override compileReferencingTables(tableName: string): CompiledStatement {
-    const { schemaName, metadataTable: master, table } = sqliteMetadataTable(tableName, 'sqlite_master')
+    const { schemaName, metadataTable: master, table } = this.sqliteMetadataTable(tableName, 'sqlite_master')
     return {
       sql: `SELECT DISTINCT "tables"."name" AS "name" FROM ${master} AS "tables", pragma_foreign_key_list("tables"."name", ?) AS "keys" WHERE "tables"."type" = 'table' AND lower("keys"."table") = lower(?) AND lower("tables"."name") != lower(?)`,
       bindings: [schemaName, table, table],
