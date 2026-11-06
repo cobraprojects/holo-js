@@ -95,7 +95,12 @@ async function openSelfFixtures(driver: 'sqlite' | 'postgres' | 'mysql') {
   const QualifiedParent = defineModel(qualifiedCategories, { name: `QualifiedParent${suffix}`, timestamps: false, relations: { children: hasMany(() => Leaf, 'parent_id'), parent: belongsTo(() => Leaf, 'parent_id') } })
   const PlainParent = defineModel(categories, { timestamps: false, relations: { children: hasMany(() => QualifiedLeaf, 'parent_id'), parent: belongsTo(() => QualifiedLeaf, 'parent_id') } })
   const QualifiedTree = defineModel(qualifiedCategories, { name: `QualifiedTree${suffix}`, timestamps: false, relations: { children: hasMany(() => QualifiedLeaf, 'parent_id') } })
-  return { Category, Leaf, ScopedParent, GrantedParent, QualifiedParent, PlainParent, QualifiedTree, schema, adapter, db, schemaName, table: names.categories }
+  const PivotParent = defineModel(categories, {
+    name: `PivotParent${suffix}`,
+    timestamps: false,
+    relations: { branchChildren: belongsToMany(() => Leaf, qualifiedCategories, 'parent_id', 'id').wherePivot(`${names.categories}.name` as never, 'branch') },
+  })
+  return { Category, Leaf, ScopedParent, GrantedParent, QualifiedParent, PlainParent, QualifiedTree, PivotParent, schema, adapter, db, schemaName, table: names.categories }
 }
 
 const relationNames = ['children', 'firstChild', 'parent', 'linked'] as const
@@ -481,5 +486,16 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
 
     expect(shortOnQualified.map(id)).toEqual([1])
     expect(qualifiedOnShort.map(id)).toEqual([1])
+  })
+
+  it('reads qualified pivot conditions from a pivot that is the parent table spelled with its schema', async () => {
+    const { PivotParent } = await openSelfFixtures(driver)
+    const loaded = await PivotParent.with('branchChildren').orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'branchChildren').length > 0).map(id)
+
+    const has = await PivotParent.has('branchChildren').orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1])
+    expect(has.map(id)).toEqual(expected)
   })
 })

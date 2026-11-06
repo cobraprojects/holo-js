@@ -2787,7 +2787,7 @@ export class ModelRepository<
       return requalifyTableSource(aliasTableSource(query, unused), this.definition.table.tableName)
     }
     const pivotQuery = <TQuery extends TableQueryBuilder<string | TableDefinition>>(query: TQuery) => sameTable(query.getTableName(), this.definition.table.tableName)
-      ? requalifyTableSource(aliasTableSource(query, this.selfRelationAlias(parentAlias, 1)), this.definition.table.tableName)
+      ? requalifyTableSource(aliasTableSource(query, this.selfRelationAlias(parentAlias, 1)), query.getTableName())
       : query
 
     switch (relation.kind) {
