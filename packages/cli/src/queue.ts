@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, watch } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { dirname, extname, join, relative, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { configureConfigRuntime, resetConfigRuntime, type LoadedHoloConfig } from '@holo-js/config'
 import type { loadConfigDirectory } from '@holo-js/config'
 import {
@@ -15,6 +15,7 @@ import {
   bundleProjectModule,
   bundleProjectModules,
   ensureProjectConfig,
+  importBundledProjectModule,
   loadProjectConfig,
   loadGeneratedProjectRegistry,
   prepareProjectDiscovery,
@@ -320,8 +321,8 @@ export async function getQueueRuntimeEnvironment(projectRoot: string): Promise<Q
       modelEntries.map(entry => resolve(projectRoot, entry.sourcePath)),
     )
 
-    for (const [index, bundledPath] of bundledModels.paths.entries()) {
-      await import(`${pathToFileURL(bundledPath).href}?t=${Date.now()}-model-${index}`)
+    for (const [index, sources] of bundledModels.sources.entries()) {
+      await importBundledProjectModule(sources, `t=${Date.now()}-model-${index}`)
     }
 
   } catch (error) {

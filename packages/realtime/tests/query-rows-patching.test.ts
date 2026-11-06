@@ -115,6 +115,7 @@ describe('@holo-js/realtime query rows patch orchestration', () => {
       belongsToHydrations: [{
         foreignKey: 'author_id',
         ownerKey: 'id',
+        predicates: [],
         relationKey: 'author',
         relatedConnectionName: 'main',
         relatedTableName: 'users',
@@ -347,6 +348,7 @@ describe('@holo-js/realtime query rows patch orchestration', () => {
       belongsToHydrations: [{
         foreignKey: 'author_id',
         ownerKey: 'id',
+        predicates: [],
         relationKey: 'author',
         relatedConnectionName: 'main',
         relatedTableName: 'users',
@@ -580,6 +582,7 @@ describe('@holo-js/realtime query rows patch orchestration', () => {
         belongsToHydrations: [{
           foreignKey: 'author_id',
           ownerKey: 'id',
+          predicates: [],
           relationKey: 'author',
           relatedConnectionName: 'main',
           relatedTableName: 'users',
@@ -604,6 +607,7 @@ describe('@holo-js/realtime query rows patch orchestration', () => {
         belongsToHydrations: [{
           foreignKey: 'author_id',
           ownerKey: 'id',
+          predicates: [],
           relationKey: 'author',
           relatedConnectionName: 'main',
           relatedTableName: 'users',

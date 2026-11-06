@@ -81,6 +81,34 @@ function createApplier(
 }
 
 describe('@holo-js/realtime record patching', () => {
+  it('patches a record to empty when nothing else matches after its row leaves', async () => {
+    const query = createQuery({ predicates: [{ column: 'author_id', operator: '=', value: 1 }] })
+    const backfillKey = createBackfillQueryKey(query, 0, 1)
+
+    await expect(tryPatchQueryRecord(
+      query,
+      { id: 1, author_id: 1 },
+      [createMutation({ kind: 'delete' })],
+      createBackfills({ rows: new Map([[backfillKey, Promise.resolve([])]]) }),
+      createQueryContext(),
+      createApplier({ patched: true, rows: [] }),
+    )).resolves.toEqual({ patched: true, query, value: undefined })
+  })
+
+  it('leaves a record unpatched when another row matches after its row leaves', async () => {
+    const query = createQuery({ predicates: [{ column: 'author_id', operator: '=', value: 1 }] })
+    const backfillKey = createBackfillQueryKey(query, 0, 1)
+
+    await expect(tryPatchQueryRecord(
+      query,
+      { id: 1, author_id: 1 },
+      [createMutation({ kind: 'delete' })],
+      createBackfills({ rows: new Map([[backfillKey, Promise.resolve([{ id: 2, author_id: 1 }])]]) }),
+      createQueryContext(),
+      createApplier({ patched: true, rows: [] }),
+    )).resolves.toEqual({ patched: false })
+  })
+
   it('rejects record patching when there are no mutations', async () => {
     await expect(tryPatchQueryRecord(
       createQuery(),
@@ -220,6 +248,7 @@ describe('@holo-js/realtime record patching', () => {
       belongsToHydrations: [{
         foreignKey: 'author_id',
         ownerKey: 'id',
+        predicates: [],
         relatedConnectionName: 'main',
         relatedTableName: 'users',
         relationKey: 'author',

@@ -4,7 +4,7 @@ import { currentSchemaGeneration } from '../core/schemaGeneration'
 import type { TransactionFrame } from '../core/openTransactions'
 import { createQueryCompiler } from './queryCompilerFactory'
 import { invalidateReplacedTableIdentity } from '../cache'
-import { splitTablePath } from '../schema/identifiers'
+import { splitTablePath, tablePathSegments } from '../schema/identifiers'
 import { listGeneratedTableSpellings } from '../schema/generated'
 import { rememberCanonicalTableName } from '../schema/tableIdentityRegistry'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -50,7 +50,7 @@ async function lookupTableIdentity(connection: DatabaseContext, tableName: strin
 }
 
 export async function resolveTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
-  if (splitTablePath(tableName).schema === undefined || tableName.split('.').length > 2) return tableName
+  if (splitTablePath(tableName).schema === undefined || tablePathSegments(tableName).length > 2) return tableName
   const transaction = schemaChangingTransaction(connection)
   const rootIdentities = ownerIdentities(getRootDatabaseContext(connection))
   const identities = transaction ? ownerIdentities(transaction) : rootIdentities

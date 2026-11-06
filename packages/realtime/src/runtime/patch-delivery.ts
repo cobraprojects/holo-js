@@ -18,6 +18,8 @@ import {
   readPrimaryKey,
 } from './predicate-matching'
 import { collectRelevantMutationTargets } from './query-relevant-mutations'
+import { UnreadableBackfillError } from './query-backfill'
+import { UNPATCHED_RESULT } from './query-patch-results'
 import type {
   DatabaseQueryObservation,
   PatchedQueryDelivery,
@@ -45,6 +47,17 @@ import {
 
 const EMPTY_PATCHED_QUERY_DELIVERIES: readonly PatchedQueryDelivery[] = Object.freeze([])
 const EMPTY_PATCH_OPERATIONS: readonly RealtimeSubscriptionPatchOperation[] = Object.freeze([])
+
+async function tryPatchUnlessUnreadable(
+  ...args: Parameters<typeof tryPatchObservedQuery>
+): ReturnType<typeof tryPatchObservedQuery> {
+  try {
+    return await tryPatchObservedQuery(...args)
+  } catch (error) {
+    if (error instanceof UnreadableBackfillError) return UNPATCHED_RESULT
+    throw error
+  }
+}
 
 export async function tryPatchQueryEntry(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
@@ -88,7 +101,7 @@ export async function tryPatchQueryEntry(
       return false
     }
 
-    const result = await tryPatchObservedQuery(target, mutations, backfills)
+    const result = await tryPatchUnlessUnreadable(target, mutations, backfills)
     if (entry.version !== version) {
       return false
     }

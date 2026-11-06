@@ -59,16 +59,6 @@ function convertLikePatternToGlob(pattern: string): string {
   return pattern.replace(/[[*?%_]/g, character => SQLITE_GLOB_PATTERN_REPLACEMENTS[character] ?? character)
 }
 
-function splitSchemaTable(tableName: string): { readonly schemaName: string, readonly schema: string, readonly table: string } {
-  const separator = tableName.indexOf('.')
-  if (separator === -1) {
-    return { schemaName: 'main', schema: '', table: tableName }
-  }
-
-  const schemaName = tableName.slice(0, separator)
-  return { schemaName, schema: `"${schemaName.replaceAll('"', '""')}".`, table: tableName.slice(separator + 1) }
-}
-
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
@@ -98,16 +88,26 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     }
   }
 
+  private sqliteMetadataTable(tableName: string, metadataTable: string): { readonly schemaName: string, readonly metadataTable: string, readonly table: string } {
+    const { schema, table } = splitTablePath(tableName)
+    return {
+      schemaName: schema ?? 'main',
+      metadataTable: this.compileTableReference(schema === undefined ? metadataTable : `${schema}.${metadataTable}`),
+      table,
+    }
+  }
+
   override compileSequenceReset(tableName: string): { readonly probe: CompiledStatement, readonly reset: CompiledStatement } {
-    const { schema, table } = splitSchemaTable(tableName)
+    const { metadataTable: master } = this.sqliteMetadataTable(tableName, 'sqlite_master')
+    const { metadataTable: sequence, table } = this.sqliteMetadataTable(tableName, 'sqlite_sequence')
     return {
       probe: {
-        sql: `SELECT 1 AS "present" FROM ${schema}"sqlite_master" WHERE "type" = 'table' AND "name" = 'sqlite_sequence'`,
+        sql: `SELECT 1 AS "present" FROM ${master} WHERE "type" = 'table' AND "name" = 'sqlite_sequence'`,
         bindings: [],
         source: `query:select:${tableName}`,
       },
       reset: {
-        sql: `DELETE FROM ${schema}"sqlite_sequence" WHERE "name" = ? COLLATE NOCASE`,
+        sql: `DELETE FROM ${sequence} WHERE "name" = ? COLLATE NOCASE`,
         bindings: [table],
         source: `query:delete:${tableName}`,
       },
@@ -115,9 +115,9 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
   }
 
   override compileReferencingTables(tableName: string): CompiledStatement {
-    const { schemaName, schema, table } = splitSchemaTable(tableName)
+    const { schemaName, metadataTable: master, table } = this.sqliteMetadataTable(tableName, 'sqlite_master')
     return {
-      sql: `SELECT DISTINCT "tables"."name" AS "name" FROM ${schema}"sqlite_master" AS "tables", pragma_foreign_key_list("tables"."name", ?) AS "keys" WHERE "tables"."type" = 'table' AND lower("keys"."table") = lower(?) AND lower("tables"."name") != lower(?)`,
+      sql: `SELECT DISTINCT "tables"."name" AS "name" FROM ${master} AS "tables", pragma_foreign_key_list("tables"."name", ?) AS "keys" WHERE "tables"."type" = 'table' AND lower("keys"."table") = lower(?) AND lower("tables"."name") != lower(?)`,
       bindings: [schemaName, table, table],
       source: `query:select:${tableName}`,
     }
@@ -241,6 +241,16 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
 
     const wallClock = compileSQLiteWallClock(column, this.createSqlStringLiteral(timeZone))
     return `CASE WHEN ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' THEN ${column} ELSE ${wallClock} END`
+  }
+
+  protected override compileIntegerKey(expression: string): string {
+    const point = `instr(${expression}, '.')`
+    const integer = `CASE WHEN ${point} > 0 THEN substr(${expression}, 1, ${point} - 1) ELSE ${expression} END`
+    const digits = `CASE WHEN ${integer} GLOB '-*' THEN substr(${integer}, 2) ELSE ${integer} END`
+    const fraction = `substr(${expression}, ${point} + 1)`
+    const limit = `CASE WHEN ${integer} GLOB '-*' THEN '9223372036854775808' ELSE '9223372036854775807' END`
+    const inRange = `(length(${digits}) < 19 OR (length(${digits}) = 19 AND ${digits} <= ${limit}))`
+    return `CASE WHEN instr(CAST(${expression} AS BLOB), x'00') = 0 AND ${digits} <> '' AND ${digits} NOT GLOB '*[^0-9]*' AND (${digits} = '0' OR ${digits} NOT GLOB '0*') AND ${inRange} AND (${point} = 0 OR (${fraction} <> '' AND ${fraction} NOT GLOB '*[^0]*')) THEN CAST(${integer} AS INTEGER) END`
   }
 
   protected override compileColumnComparison(predicate: QueryColumnPredicate): string {

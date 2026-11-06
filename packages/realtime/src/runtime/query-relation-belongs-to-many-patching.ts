@@ -5,13 +5,15 @@ import {
   type MutationIndex,
 } from './dependencies'
 import {
+  hasRecordKey,
   matchesPredicates,
+  mutationChangesColumns,
 } from './predicate-matching'
 import {
   UNCHANGED_QUERY_RESULT,
   UNPATCHED_RESULT,
 } from './query-patch-results'
-import { getBackfillDatabaseConnection } from './query-backfill'
+import { getBackfillDatabaseConnection, readBackfilledRows } from './query-backfill'
 import type {
   DatabaseQueryBelongsToManyRelationObservation,
   DatabaseQueryObservation,
@@ -42,8 +44,13 @@ export async function tryPatchBelongsToManyRelation(
       return UNPATCHED_RESULT
     }
 
+    const relatedMutation = isRelatedRelationMutation(mutation, relation)
+    if (!relatedMutation && pivotMutationMayMoveRows(mutation, relation)) {
+      return UNPATCHED_RESULT
+    }
+
     for (const pivotRow of mutation.rows) {
-      if (isRelatedRelationMutation(mutation, relation)) {
+      if (relatedMutation) {
         const nextRows = patchRelatedBelongsToManyRelationRow(rows, pivotRow, relation, mutation.kind)
         if (!nextRows) {
           return UNPATCHED_RESULT
@@ -79,6 +86,10 @@ export async function tryPatchBelongsToManyRelation(
       }
 
       if (mutation.kind === 'update') {
+        if (mutation.values && (hasRecordKey(mutation.values, relation.foreignPivotKey) || hasRecordKey(mutation.values, relation.relatedPivotKey))) {
+          return UNPATCHED_RESULT
+        }
+
         const nextRows = updateBelongsToManyRelationPivot(rows, pivotRow, relation)
         if (!nextRows) {
           return UNPATCHED_RESULT
@@ -124,6 +135,18 @@ export async function tryPatchBelongsToManyRelation(
         value: rows,
       })
     : UNCHANGED_QUERY_RESULT
+}
+
+function pivotMutationMayMoveRows(
+  mutation: DatabaseMutationEvent,
+  relation: DatabaseQueryBelongsToManyRelationObservation,
+): boolean {
+  if (mutation.kind === 'upsert') {
+    return true
+  }
+
+  return mutation.kind === 'update'
+    && (!mutation.values || mutationChangesColumns(mutation, [relation.foreignPivotKey, relation.relatedPivotKey]))
 }
 
 function isRelatedRelationMutation(
@@ -268,13 +291,13 @@ async function fetchRelatedRelationRow(
     return undefined
   }
 
-  const rows = await new TableQueryBuilder<string, Record<string, unknown>>(
+  const rows = readBackfilledRows(relation.relatedTable, await new TableQueryBuilder<string, Record<string, unknown>>(
     relation.relatedTableName,
     connection,
   )
     .where(relation.relatedKey, relatedId)
     .limit(1)
-    .get()
+    .get())
 
   return rows[0]
 }
