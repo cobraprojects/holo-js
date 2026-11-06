@@ -29,7 +29,7 @@ function knownSubqueryColumns(subquery: SelectQueryPlan, connectionName: string)
   return outputs.every((columns): columns is readonly string[] => typeof columns !== 'undefined') ? outputs.flat() : undefined
 }
 
-function knownTableColumns(tableName: string | undefined, definition: TableDefinition | undefined, connectionName: string): readonly string[] | undefined {
+export function knownTableColumns(tableName: string | undefined, definition: TableDefinition | undefined, connectionName: string): readonly string[] | undefined {
   const table = definition ?? (tableName ? getConnectionGeneratedTableDefinition(tableName, connectionName) : undefined)
   return table ? Object.keys(table.columns) : undefined
 }

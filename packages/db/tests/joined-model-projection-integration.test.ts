@@ -509,6 +509,12 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const descending = own().where(`${orders}.id`, 102).union(own().where(`${orders}.id`, 101)).orderBy('price', 'desc')
     const last = await descending.cursorPaginate(1, (await descending.cursorPaginate(1)).nextCursor)
     expect(attributes((await descending.cursorPaginate(1, last.prevCursor)).data).map(row => row.id)).toEqual([2])
+
+    const positional = DB.table(products).select('price').where('id', 1).union(DB.table(products).select('factor').where('id', 2)).orderBy('price')
+    const firstValues = await positional.cursorPaginate(1)
+    const secondValues = await positional.cursorPaginate(1, firstValues.nextCursor)
+    expect([firstValues, secondValues].map(page => page.data.map(row => Number(row.price)))).toEqual([[4], [10]])
+    expect(secondValues.nextCursor).toBeNull()
   })
 
   it('keeps the selection order between outputs that are not model columns', async () => {
