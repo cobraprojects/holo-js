@@ -61,6 +61,31 @@ export async function tryPatchObservedQuery(
   observedMutations: readonly DatabaseMutationEvent[],
   backfills: BackfillCache,
 ): Promise<PatchQueryResult> {
+  const result = await patchObservedQuery(target, observedMutations, backfills)
+  return target.query.resultFoundInHandlerValue
+    && 'value' in result
+    && readQueryResultPresence(target.currentValue) !== readQueryResultPresence(result.value)
+    ? UNPATCHED_RESULT
+    : result
+}
+
+function readQueryResultPresence(value: unknown): 'empty-list' | 'null' | 'present' | 'undefined' {
+  if (value === null) {
+    return 'null'
+  }
+
+  if (value === undefined) {
+    return 'undefined'
+  }
+
+  return Array.isArray(value) && value.length === 0 ? 'empty-list' : 'present'
+}
+
+async function patchObservedQuery(
+  target: PatchableQueryPatchTarget,
+  observedMutations: readonly DatabaseMutationEvent[],
+  backfills: BackfillCache,
+): Promise<PatchQueryResult> {
   if (observedMutations.length === 0) {
     return UNPATCHED_RESULT
   }

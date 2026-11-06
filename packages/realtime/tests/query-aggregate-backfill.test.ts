@@ -31,12 +31,14 @@ describe('native aggregate subscriptions', () => {
       () => db.table('records').where('id', 5).update({ active: 1, score: 100 }),
       () => db.table('records').where('id', 5).update({ active: 0 }),
       () => db.table('records').where('id', 2).update({ score: null }),
-      () => db.table('records').where('active', 1).delete(),
     ]) {
       await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: change }))
       await verify()
     }
     expect(reads).toBe(1)
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table('records').where('active', 1).delete() }))
+    await verify()
+    expect(reads).toBe(kind === 'count' || kind === 'sum' ? 1 : 2)
   })
 
   it('updates several scoped aggregates without rerunning handlers or publishing unchanged values', async () => {

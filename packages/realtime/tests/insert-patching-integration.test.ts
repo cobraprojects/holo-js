@@ -52,7 +52,7 @@ describe.each(drivers)('realtime inserts on %s', (driver) => {
   it('patches a row and a list subscription on a simple table in one read', async () => {
     const { db, posts } = await openPosts(driver)
     const { subscriptions, expectPatched } = await subscribeCounted({
-      row: () => db.table(posts).where('id', 2).first(),
+      row: () => db.table(posts).orderBy('id', 'desc').first(),
       list: () => db.table(posts).orderBy('id').get(),
     })
 
@@ -61,7 +61,7 @@ describe.each(drivers)('realtime inserts on %s', (driver) => {
     await mutate(() => db.table(posts).insert({ id: 3, title: 'third', votes: 3 }))
     await expectPatched('explicit key')
     expect(subscriptions.map(subscription => subscription.current.data)).toEqual([
-      { id: 2, title: 'second', votes: 2 },
+      { id: 3, title: 'third', votes: 3 },
       [{ id: 1, title: 'first', votes: 1 }, { id: 2, title: 'second', votes: 2 }, { id: 3, title: 'third', votes: 3 }],
     ])
   })
