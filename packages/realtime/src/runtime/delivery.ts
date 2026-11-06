@@ -9,6 +9,7 @@ import { createResultHash } from './result-hash'
 import { rebindBelongsToObservations } from './query-hydration-observations'
 import {
   areDependencySetsEqual,
+  arePredicateDependenciesEqual,
   ensureRefreshDeliveryPredicateDependencies,
   ensureRefreshDeliveryTableDependencies,
   updateQueryEntryDependencies,
@@ -34,7 +35,10 @@ export async function deliverRefreshData<TDefinition extends RealtimeQueryDefini
   }
 
   const dependenciesChanged = !areDependencySetsEqual(entry.dependencies, delivery.result.dependencies)
-  if (dependenciesChanged) {
+  if (
+    dependenciesChanged
+    || !arePredicateDependenciesEqual(entry.predicateDependencies, ensureRefreshDeliveryPredicateDependencies(delivery))
+  ) {
     updateQueryEntryDependencies(
       entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
       delivery.result.dependencies,

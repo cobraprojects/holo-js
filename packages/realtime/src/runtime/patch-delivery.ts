@@ -84,6 +84,9 @@ export async function tryPatchQueryEntry(
     return entry.patchTargets.length > 0
       && entry.patchTargets.every(target => backfills.mutations.has(target.mutationIndexKey))
   }
+  if (hasNestedTargetsOnSameTable(relevantTargets)) {
+    return false
+  }
   for (const { mutations, target } of relevantTargets) {
     if (canSkipPatchedBelongsToHydrationTarget(target, patchedBelongsToHydrationKeys)) {
       continue
@@ -172,6 +175,37 @@ export async function tryPatchQueryEntry(
     additionalPatches ?? EMPTY_PATCHED_QUERY_DELIVERIES,
   )
   return true
+}
+
+function hasNestedTargetsOnSameTable(
+  relevantTargets: readonly RelevantMutationTarget[],
+): boolean {
+  if (relevantTargets.length < 2) {
+    return false
+  }
+
+  for (const { target } of relevantTargets) {
+    for (const { target: candidate } of relevantTargets) {
+      if (
+        candidate !== target
+        && candidate.mutationIndexKey === target.mutationIndexKey
+        && candidate.query.relation?.kind !== 'belongsToParentKey'
+        && isStrictAncestorPath(target.resultPath, candidate.resultPath)
+      ) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+function isStrictAncestorPath(
+  ancestor: readonly unknown[],
+  path: readonly unknown[],
+): boolean {
+  return path.length > ancestor.length
+    && ancestor.every((segment, index) => path[index] === segment)
 }
 
 function canSkipPatchedBelongsToHydrationTarget(
