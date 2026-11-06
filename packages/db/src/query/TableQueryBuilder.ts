@@ -120,6 +120,7 @@ import type {
   QueryOperator,
   QueryPredicateNode,
   QueryPredicate,
+  QueryColumnSelection,
   QuerySelection,
   SelectQueryPlan,
 } from './ast'
@@ -3809,16 +3810,26 @@ export class TableQueryBuilder<
 
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
     const sourceColumn = this.resolveSourceColumnName(column)
-    const selectsSourceColumn = typeof sourceColumn !== 'undefined' && this.plan.selections.some(selection => selection.kind === 'column'
-      && !selection.alias
-      && [sourceColumn, '*'].includes(this.resolveSourceColumnName(selection.column) ?? ''))
-    if (selectsSourceColumn && sourceColumn in row) return row[sourceColumn]
-    const outputs = this.plan.selections.map(selection => selectionOutputName(selection))
-    const selection = this.plan.selections.find((selection, index) => selection.kind === 'column'
-      && typeof selection.alias === 'string'
-      && outputs.lastIndexOf(selection.alias) === index
-      && (selection.column === column || (typeof sourceColumn !== 'undefined' && this.resolveSourceColumnName(selection.column) === sourceColumn)))
-    if (selection?.kind === 'column' && selection.alias) return row[selection.alias]
+    const selections = this.plan.selections
+    const ownColumns = Object.keys(this.source.table?.columns ?? {})
+    const connectionName = this.connection.getConnectionName()
+    const outputsName = (selection: QuerySelection, name: string): boolean => {
+      if (selection.kind !== 'column' || (!selection.column.endsWith('.*') && selection.column !== '*')) return selectionOutputName(selection) === name
+      if (this.resolveSourceColumnName(selection.column) === '*') return name === sourceColumn || ownColumns.includes(name)
+      const qualifier = selection.column.slice(0, -2)
+      const join = this.plan.joins.find(candidate => qualifiesTable(qualifier, candidate.table, candidate.alias))
+      return join ? knownJoinedColumns(join, connectionName)?.includes(name) ?? false : false
+    }
+    const survives = (index: number, name: string) => !selections.slice(index + 1).some(selection => outputsName(selection, name))
+    const selectsColumn = (selection: QuerySelection): selection is QueryColumnSelection => selection.kind === 'column'
+      && (selection.column === column || (typeof sourceColumn !== 'undefined' && this.resolveSourceColumnName(selection.column) === sourceColumn))
+    const ownOutput = typeof sourceColumn === 'undefined'
+      ? -1
+      : selections.findIndex((selection, index) => selection.kind === 'column' && !selection.alias
+        && [sourceColumn, '*'].includes(this.resolveSourceColumnName(selection.column) ?? '') && survives(index, sourceColumn))
+    if (typeof sourceColumn !== 'undefined' && ownOutput !== -1 && sourceColumn in row) return row[sourceColumn]
+    const aliased = selections.find((selection, index) => selectsColumn(selection) && typeof selection.alias === 'string' && survives(index, selection.alias))
+    if (aliased?.kind === 'column' && aliased.alias) return row[aliased.alias]
     if (column in row) {
       return row[column]
     }
