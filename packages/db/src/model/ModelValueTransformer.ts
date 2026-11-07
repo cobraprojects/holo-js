@@ -1,3 +1,4 @@
+import { serializeDatabaseQueryObservationsOnArrayWrites } from '../cache'
 import { HydrationError } from '../core/errors'
 import { booleanStorageValue, calendarMidnightWriteValue, coerceBoolean, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -91,7 +92,9 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     }
 
     if (Array.isArray(value)) {
-      return value.map(item => this.serializeRelationValue(item))
+      const serialized = value.map(item => this.serializeRelationValue(item))
+      serializeDatabaseQueryObservationsOnArrayWrites(serialized)
+      return serialized
     }
 
     if (value instanceof Date && this.definition.serializeDate) {
