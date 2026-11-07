@@ -35,7 +35,7 @@ async function subscribeAll(queries: Record<string, () => Promise<unknown>>) {
 
 async function alterToScaledDecimals(driver: Driver, db: Awaited<ReturnType<typeof openDatabase>>['db'], name: string, columns: readonly string[]) {
   if (driver !== 'postgres') return
-  await db.executeCompiled({ sql: `ALTER TABLE "${name}" ${columns.map(name => `ALTER COLUMN "${name}" TYPE NUMERIC(10, 2)`).join(', ')}`, source: 'schema' })
+  await db.executeCompiled({ sql: `ALTER TABLE "${name}" ${columns.map(columnName => `ALTER COLUMN "${columnName}" TYPE NUMERIC(10, 2)`).join(', ')}`, source: 'schema' })
 }
 
 describe.each(drivers)('realtime read-back edge cases on %s', (driver) => {
@@ -275,5 +275,29 @@ describe.each(drivers)('realtime read-back edge cases on %s', (driver) => {
     await mutate(() => db.table(scores).insertUsing(['group_id', 'points'], db.table(scores).select('group_id', 'points').where('group_id', 1)))
     await expectFresh()
     expect(await db.table(scores).whereNull('group_id').count()).toBe(2)
+  })
+
+  it('refreshes a subscription that compares a column with null in an or branch after an insert without rows', async () => {
+    const { db, schema } = await openDatabase(driver)
+    onTestFinished(() => resetRealtimeRuntime())
+    const name = uniqueName('holo_null_or')
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.integer('group_id').nullable()
+      table.integer('points')
+    })
+    onTestFinished(() => schema.dropTable(name))
+    const scores = defineGeneratedTable(name, { id: column.id(), group_id: column.integer().nullable(), points: column.integer() })
+    await db.table(scores).insert([{ group_id: 1, points: 2 }, { group_id: 2, points: 4 }])
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const expectFresh = await subscribeAll({
+      rows: () => db.table(scores).where('group_id', 1).orWhere('points', '>', null).orderBy('id').get(),
+      count: () => db.table(scores).where('group_id', 1).orWhere('points', '>', null).count(),
+    })
+
+    await mutate(() => db.table(scores).insertUsing(['group_id', 'points'], db.table(scores).select('group_id', 'points').where('group_id', 1)))
+
+    await expectFresh()
+    expect(await db.table(scores).where('group_id', 1).count()).toBe(2)
   })
 })

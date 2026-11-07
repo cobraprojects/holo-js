@@ -10,6 +10,7 @@ import {
   getBackfillDatabaseConnection,
   readBackfilledRows,
   readBackfilledValue,
+  whereObservedPredicates,
 } from './query-backfill'
 import type {
   BackfillCache,
@@ -284,13 +285,14 @@ async function fetchGroupedRelatedHydrationRows(
     }
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(
+  let builder = whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(
     hydration.relatedTableName,
     connection,
-  ).where(hydration.foreignKey, 'in', values)
-  for (const predicate of hydration.predicates) {
-    builder = builder.where(predicate.column, predicate.operator, predicate.value)
+  ).where(hydration.foreignKey, 'in', values), hydration.predicates)
+  if (!builder) {
+    return undefined
   }
+
   for (const order of hydration.orderBy) {
     builder = builder.orderBy(order.column, order.direction)
   }
@@ -469,13 +471,14 @@ async function fetchRelatedHydrationRows(
     return undefined
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(
+  let builder = whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(
     hydration.relatedTableName,
     connection,
-  ).where(hydration.foreignKey, localKey)
-  for (const predicate of hydration.predicates) {
-    builder = builder.where(predicate.column, predicate.operator, predicate.value)
+  ).where(hydration.foreignKey, localKey), hydration.predicates)
+  if (!builder) {
+    return undefined
   }
+
   for (const order of hydration.orderBy) {
     builder = builder.orderBy(order.column, order.direction)
   }
