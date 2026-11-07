@@ -10,6 +10,7 @@ import {
   getBackfillDatabaseConnection,
   readBackfilledRows,
   readBackfilledValue,
+  relatedTablePath,
 } from './query-backfill'
 import type {
   BackfillCache,
@@ -285,7 +286,7 @@ async function fetchGroupedRelatedHydrationRows(
   }
 
   let builder = new TableQueryBuilder<string, Record<string, unknown>>(
-    hydration.relatedTableName,
+    relatedTablePath(hydration),
     connection,
   ).where(hydration.foreignKey, 'in', values)
   for (const predicate of hydration.predicates) {
@@ -381,7 +382,7 @@ function compileGroupedRelatedTopOneStatement(
   const upperBoundPlaceholder = placeholder(1)
   const derivedAlias = quote('__holo_grouped_related_rows')
   const rowNumberColumn = quote(GROUPED_RELATED_ROW_NUMBER_ALIAS)
-  const sql = `SELECT * FROM (SELECT *, ${quote(hydration.foreignKey)} AS ${quote(GROUPED_RELATED_ROW_ID_ALIAS)}, ${rowNumber} FROM ${holoRuntimeInternals.quoteTablePath(dialect, hydration.relatedTableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_RELATED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
+  const sql = `SELECT * FROM (SELECT *, ${quote(hydration.foreignKey)} AS ${quote(GROUPED_RELATED_ROW_ID_ALIAS)}, ${rowNumber} FROM ${holoRuntimeInternals.quoteTablePath(dialect, relatedTablePath(hydration))} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_RELATED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
 
   return {
     bindings,
@@ -470,7 +471,7 @@ async function fetchRelatedHydrationRows(
   }
 
   let builder = new TableQueryBuilder<string, Record<string, unknown>>(
-    hydration.relatedTableName,
+    relatedTablePath(hydration),
     connection,
   ).where(hydration.foreignKey, localKey)
   for (const predicate of hydration.predicates) {

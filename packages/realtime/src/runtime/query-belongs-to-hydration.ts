@@ -8,6 +8,7 @@ import {
   getBackfillDatabaseConnection,
   readBackfilledRows,
   readBackfilledValue,
+  relatedTablePath,
 } from './query-backfill'
 import { matchesPredicates, type DatabaseQueryPredicateObservation } from './predicate-matching'
 import { canBackfillRelatedHydrationPredicates } from './query-related-hydration'
@@ -237,7 +238,7 @@ async function fetchGroupedBelongsToRelatedRows(
   }
 
   let builder = new TableQueryBuilder<string, Record<string, unknown>>(
-    target.relatedTableName,
+    relatedTablePath(target),
     connection,
   )
     .where(target.ownerKey, 'in', values)
@@ -279,7 +280,7 @@ async function fetchBelongsToRelatedRow(
   }
 
   let builder = new TableQueryBuilder<string, Record<string, unknown>>(
-    target.relatedTableName,
+    relatedTablePath(target),
     connection,
   )
     .where(target.ownerKey, foreignKey)

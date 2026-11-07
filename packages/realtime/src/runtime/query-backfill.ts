@@ -22,6 +22,10 @@ export function getBackfillDatabaseConnection(connectionName: string): DatabaseC
   }
 }
 
+export function relatedTablePath(relation: { readonly relatedTableName: string, readonly relatedTable?: TableDefinition }): string {
+  return relation.relatedTable?.tableName ?? relation.relatedTableName
+}
+
 export function createBackfillSelection(selection: DatabaseQuerySelectionObservation): string {
   return selection.resultKey === selection.column
     ? selection.column
