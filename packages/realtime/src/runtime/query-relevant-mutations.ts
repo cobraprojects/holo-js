@@ -4,6 +4,7 @@ import {
   type MutationIndex,
 } from './dependencies'
 import {
+  matchesPredicate,
   matchesPredicates,
 } from './predicate-matching'
 import {
@@ -83,7 +84,7 @@ function mutationRowsContradictTarget(
   mutation: DatabaseMutationEvent,
 ): boolean {
   const query = target.query
-  if (query.predicates.length === 0) {
+  if (query.predicates.length === 0 && !query.predicateTree?.length) {
     return false
   }
 
@@ -98,6 +99,33 @@ function mutationRowsContradictTarget(
   }
 }
 
+function matchesPredicateTree(
+  row: Readonly<Record<string, unknown>>,
+  predicates: NonNullable<QueryPatchTarget['query']['predicateTree']>,
+): boolean | undefined {
+  let branch: boolean | undefined = true
+  let result: boolean | undefined = false
+  for (let index = 0; index < predicates.length; index += 1) {
+    const predicate = predicates[index]!
+    if (index > 0 && predicate.boolean === 'or') {
+      if (branch === true) return true
+      if (branch === undefined) result = undefined
+      branch = true
+    }
+
+    const matches = predicate.kind === 'comparison' && !predicate.valueType
+      ? matchesPredicate(row, { ...predicate, column: predicate.column.split('.').at(-1)! })
+      : predicate.kind === 'group' && !predicate.negated
+        ? matchesPredicateTree(row, predicate.predicates)
+        : undefined
+    if (matches === false) branch = false
+    else if (matches === undefined && branch !== false) branch = undefined
+  }
+
+  if (branch === true) return true
+  return branch === undefined ? undefined : result
+}
+
 function mutationRowsCannotMatchTarget(
   target: QueryPatchTarget,
   rows: readonly Readonly<Record<string, unknown>>[] | undefined,
@@ -107,7 +135,9 @@ function mutationRowsCannotMatchTarget(
   }
 
   for (const row of rows) {
-    const matches = matchesPredicates(row, target.query.predicates)
+    const matches = target.query.predicateTree
+      ? matchesPredicateTree(row, target.query.predicateTree)
+      : matchesPredicates(row, target.query.predicates)
     if (matches !== false) {
       return false
     }
