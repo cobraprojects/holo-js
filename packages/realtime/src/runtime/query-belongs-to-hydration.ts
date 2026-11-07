@@ -295,12 +295,12 @@ function createBelongsToRelatedBackfillKey(
   target: BelongsToHydrationTarget,
   foreignKey: unknown,
 ): string {
-  return `belongs-to:${target.relatedConnectionName}:${target.relatedTableName}:${target.ownerKey}:${stableStringify(foreignKey)}:${stableStringify(target.predicates)}`
+  return `belongs-to:${target.relatedConnectionName}:${target.relatedTableName}:${stableStringify(relatedTablePath(target))}:${target.ownerKey}:${stableStringify(foreignKey)}:${stableStringify(target.predicates)}`
 }
 
 function createGroupedBelongsToRelatedBackfillKey(
   target: BelongsToHydrationTarget,
   values: readonly unknown[],
 ): string {
-  return `belongs-to-group:${target.relatedConnectionName}:${target.relatedTableName}:${target.ownerKey}:${stableStringify(values)}:${stableStringify(target.predicates)}`
+  return `belongs-to-group:${target.relatedConnectionName}:${target.relatedTableName}:${stableStringify(relatedTablePath(target))}:${target.ownerKey}:${stableStringify(values)}:${stableStringify(target.predicates)}`
 }

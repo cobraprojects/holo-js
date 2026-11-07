@@ -23,6 +23,7 @@ import {
   configureRealtimeRuntime,
   resetRealtimeRuntime,
 } from '../src/server'
+import { relatedTablePath } from '../src/runtime/query-backfill'
 import { stableStringify } from '../src/runtime/stable-stringify'
 
 describe('@holo-js/realtime related query hydration', () => {
@@ -958,7 +959,7 @@ function createRelatedHydrationBackfillKey(
   hydration: DatabaseQueryRelatedHydrationObservation,
   localKey: unknown,
 ): string {
-  return `related:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${hydration.foreignKey}:${stableStringify(localKey)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}`
+  return `related:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${stableStringify(relatedTablePath(hydration))}:${hydration.foreignKey}:${stableStringify(localKey)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}`
 }
 
 class RelatedHydrationAdapter implements DriverAdapter {

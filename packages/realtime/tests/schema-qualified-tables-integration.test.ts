@@ -216,6 +216,45 @@ describe('realtime relation reads on attached SQLite databases', () => {
   })
 
   it.each([
+    ['hasOne', [1]],
+    ['hasOne', [1, 2]],
+    ['hasMany', [1]],
+    ['hasMany', [1, 2]],
+  ] as const)('keeps %s relation reads of authors %j apart for an attached table and the same-named main table', async (kind, ids) => {
+    const { db, schema } = await openQualifiedDatabase('sqlite')
+    const createPosts = async (name: string, tableName: string, rows: readonly { id: number, author_id: number, score: number }[]) => {
+      await schema.createTable(tableName, (table) => {
+        table.integer('id').primaryKey()
+        table.integer('author_id')
+        table.integer('score')
+      })
+      await db.table(tableName).insert([...rows])
+      return defineModel(defineGeneratedTable(tableName, { id: column.integer().primaryKey(), author_id: column.integer(), score: column.integer() }), { name, timestamps: false })
+    }
+    await schema.createTable('authors', (table) => {
+      table.integer('id').primaryKey()
+      table.string('name')
+    })
+    await db.table('authors').insert({ id: 3, name: 'Linus' })
+    const defineAuthor = (name: string, Post: Awaited<ReturnType<typeof createPosts>>) => defineModel(defineGeneratedTable('authors', { id: column.integer().primaryKey(), name: column.string() }), {
+      name,
+      timestamps: false,
+      relations: { posts: kind === 'hasOne' ? hasOne(() => Post, 'author_id') : hasMany(() => Post, 'author_id') },
+    })
+    const ArchiveAuthor = defineAuthor('ArchiveAuthor', await createPosts('ArchivePost', 'archive.posts', [{ id: 1, author_id: 1, score: 10 }, { id: 2, author_id: 2, score: 20 }, { id: 3, author_id: 3, score: 30 }]))
+    const readArchive = () => db.model(ArchiveAuthor).query().with('posts', query => query.orderBy('score', 'desc')).orderBy('id').get()
+    const archive = await subscribe(readArchive)
+    const MainAuthor = defineAuthor('MainAuthor', await createPosts('MainPost', 'posts', [{ id: 9, author_id: 1, score: 90 }, { id: 8, author_id: 2, score: 80 }, { id: 7, author_id: 3, score: 70 }]))
+    const readMain = () => db.model(MainAuthor).query().with('posts', query => query.orderBy('score', 'desc')).orderBy('id').get()
+    const main = await subscribe(readMain)
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table('authors').insert(ids.map(id => ({ id, name: `Author ${id}` }))) }))
+
+    expect(JSON.parse(JSON.stringify(archive.current.data))).toEqual(JSON.parse(JSON.stringify(await readArchive())))
+    expect(JSON.parse(JSON.stringify(main.current.data))).toEqual(JSON.parse(JSON.stringify(await readMain())))
+  })
+
+  it.each([
     [[2]],
     [[1, 2]],
   ] as const)('hydrates the belongsTo relation of inserted rows with owners %j from the attached table after a same-named table appears in main', async (ownerIds) => {
@@ -238,6 +277,42 @@ describe('realtime relation reads on attached SQLite databases', () => {
     const fresh = JSON.parse(JSON.stringify(await read()))
     expect(fresh.map((note: { owner: unknown }) => note.owner)).toEqual([1, ...ownerIds].map(id => id === 1 ? { id: 1, name: 'Ada' } : { id: 2, name: 'Grace' }))
     expect(JSON.parse(JSON.stringify(subscription.current.data))).toEqual(fresh)
+  })
+
+  it.each([
+    [[1]],
+    [[1, 2]],
+  ] as const)('keeps belongsTo relation reads of owners %j apart for an attached table and the same-named main table', async (ownerIds) => {
+    const { db, schema } = await openQualifiedDatabase('sqlite')
+    const createOwners = async (name: string, tableName: string, label: string, ids: readonly number[]) => {
+      await schema.createTable(tableName, (table) => {
+        table.integer('id').primaryKey()
+        table.string('name')
+      })
+      await db.table(tableName).insert(ids.map(id => ({ id, name: `${label} ${id}` })))
+      return defineModel(defineGeneratedTable(tableName, { id: column.integer().primaryKey(), name: column.string() }), { name, timestamps: false })
+    }
+    await schema.createTable('notes', (table) => {
+      table.integer('id').primaryKey()
+      table.integer('owner_id')
+    })
+    await db.table('notes').insert({ id: 1, owner_id: 3 })
+    const defineNote = (name: string, Owner: Awaited<ReturnType<typeof createOwners>>) => defineModel(defineGeneratedTable('notes', { id: column.integer().primaryKey(), owner_id: column.integer() }), {
+      name,
+      timestamps: false,
+      relations: { owner: belongsTo(() => Owner, 'owner_id') },
+    })
+    const ArchiveNote = defineNote('ArchiveNote', await createOwners('ArchiveOwner', 'archive.owners', 'Archive', [1, 2, 3]))
+    const readArchive = () => db.model(ArchiveNote).query().with('owner').orderBy('id').get()
+    const archive = await subscribe(readArchive)
+    const MainNote = defineNote('MainNote', await createOwners('MainOwner', 'owners', 'Main', [1, 2]))
+    const readMain = () => db.model(MainNote).query().with('owner').orderBy('id').get()
+    const main = await subscribe(readMain)
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table('notes').insert(ownerIds.map((ownerId, index) => ({ id: index + 2, owner_id: ownerId }))) }))
+
+    expect(JSON.parse(JSON.stringify(archive.current.data))).toEqual(JSON.parse(JSON.stringify(await readArchive())))
+    expect(JSON.parse(JSON.stringify(main.current.data))).toEqual(JSON.parse(JSON.stringify(await readMain())))
   })
 
   it('reads the related row of an attached pivot row from the attached table after a same-named table appears in main', async () => {
