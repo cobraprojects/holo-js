@@ -55,3 +55,32 @@ describe.each(drivers)('name-only integer overflow on %s', driver => {
     await expect(db.table(name).get()).rejects.toBeInstanceOf(HydrationError)
   })
 })
+
+
+describe.each(drivers)('generated bigint arithmetic on %s', driver => {
+  it('adjusts unsafe bigint values in SQL while public reads still reject them', async () => {
+    const { db, schema } = await openDatabase(driver)
+    const name = `holo_counters_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, table => {
+      table.integer('id').primaryKey()
+      table.bigInteger('quantity')
+    })
+    onTestFinished(() => schema.dropTable(name))
+    onTestFinished(() => clearGeneratedTables())
+    const counters = defineGeneratedTable(name, { id: column.integer().primaryKey(), quantity: column.bigInteger() })
+    await db.table(name).insert({ id: 1, quantity: '9007199254740993' })
+    registerGeneratedTables({ counters })
+
+    expect((await db.table(name).where('id', 1).increment('quantity', 1)).affectedRows).toBe(1)
+    await expect(db.table(name).where('id', 1).first()).rejects.toBeInstanceOf(HydrationError)
+    await expect(db.table(counters).where('id', 1).first()).rejects.toBeInstanceOf(HydrationError)
+    clearGeneratedTables()
+    expect(await db.table(name).where('id', 1).value('quantity')).toBe('9007199254740994')
+    registerGeneratedTables({ counters })
+
+    expect((await db.table(name).where('id', 1).decrement('quantity', 2)).affectedRows).toBe(1)
+    await expect(db.table(name).where('id', 1).first()).rejects.toBeInstanceOf(HydrationError)
+    clearGeneratedTables()
+    expect(await db.table(name).where('id', 1).value('quantity')).toBe('9007199254740992')
+  })
+})

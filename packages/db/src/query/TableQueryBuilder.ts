@@ -3854,7 +3854,7 @@ export class TableQueryBuilder<
       undefined,
       internalPlanHandoff,
     )
-    const rows = await uncachedSelection.get() as Record<string, unknown>[]
+    const rows = await uncachedSelection.getCompiledRows<Record<string, unknown>>(() => uncachedSelection.toSQL(), false, false, false)
     for (const row of rows) {
       for (const column of columns) {
         const currentValue = row[column]
