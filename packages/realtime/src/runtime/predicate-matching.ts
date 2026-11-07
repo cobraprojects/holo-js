@@ -203,6 +203,12 @@ export function matchesPredicateValue(
   }
 }
 
+const NULL_REJECTING_OPERATORS: ReadonlySet<string> = new Set(['=', '!=', '>', '>=', '<', '<='])
+
+export function predicatesMatchNoRows(predicates: readonly DatabaseQueryPredicateObservation[]): boolean {
+  return predicates.some(predicate => predicate.value === null && NULL_REJECTING_OPERATORS.has(predicate.operator))
+}
+
 export function matchesPredicate(
   row: Readonly<Record<string, unknown>>,
   predicate: DatabaseQueryPredicateObservation,

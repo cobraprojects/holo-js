@@ -5,6 +5,7 @@ import {
 } from './dependencies'
 import {
   matchesPredicates,
+  predicatesMatchNoRows,
 } from './predicate-matching'
 import {
   isQueryObservationContradictedByExactPredicates,
@@ -165,7 +166,7 @@ export function collectRelevantMutationTargets(
   let firstRelevantTarget: RelevantMutationTarget | undefined
   let relevantTargets: RelevantMutationTarget[] | undefined
   for (const target of targets) {
-    if (targetContradictedByExactPredicates(target, backfills)) {
+    if (predicatesMatchNoRows(target.query.predicates) || targetContradictedByExactPredicates(target, backfills)) {
       continue
     }
 
