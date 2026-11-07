@@ -109,4 +109,12 @@ describe('model rows read as stored', () => {
     expect(repository.readsRowsAsStored()).toBe(false)
     expect(repository.rowReader()?.({ id: '1', body: 'a' })).toEqual({ id: 1, body: 'a' })
   })
+
+  it('treats date casts on text columns as able to reject stored values', () => {
+    const dated = defineGeneratedTable('stored_dated_columns', { id: column.id(), born_on: column.date(), body: column.string() })
+    const texted = defineGeneratedTable('stored_texted_dates', { id: column.id(), born_on: column.string() })
+
+    expect(ModelRepository.from(defineModel(dated, { timestamps: false, casts: { born_on: 'date' } })).readsWithoutRejectingValues()).toBe(true)
+    expect(ModelRepository.from(defineModel(texted, { timestamps: false, casts: { born_on: 'date' } })).readsWithoutRejectingValues()).toBe(false)
+  })
 })

@@ -195,7 +195,8 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
       const cast = this.resolveCast(key)
       if (cast === undefined) return true
       const name = this.parseBuiltInCast(cast)?.name
-      return name === 'boolean' || name === 'number' || name === 'string' || name === 'date' || name === 'datetime' || name === 'timestamp'
+      if (name === 'date' || name === 'datetime' || name === 'timestamp') return column !== undefined && storesDate(column)
+      return name === 'boolean' || name === 'number' || name === 'string'
     })
   }
 
