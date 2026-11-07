@@ -103,6 +103,21 @@ const readers: ReadonlyArray<readonly [string, 'comments' | 'tags', (database: D
   }],
 ]
 
+const filters: ReadonlyArray<readonly [string, (rows: Row[]) => void]> = [
+  ['Array.prototype.splice.call()', (rows) => {
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      if (rows[index]!.secret) Array.prototype.splice.call(rows, index, 1)
+    }
+  }],
+  ['index writes and a shorter length', (rows) => {
+    let kept = 0
+    for (const row of [...rows]) {
+      if (!row.secret) rows[kept++] = row
+    }
+    rows.length = kept
+  }],
+]
+
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a handler that filters an eager-loaded relation in place on %s', (driver) => {
   it.each(readers)('keeps rows the %s filter hides out of the snapshot after later writes', async (_label, relation, reader) => {
     const { db, Post, commentsTable, tagsTable, pivotTable } = await openPosts(driver)
@@ -174,5 +189,33 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a h
     )
 
     expect(seen).toStrictEqual(await read(db))
+  })
+
+  it.each(filters)('keeps rows a filter with %s removed at subscribe time out of the snapshot', async (_label, filter) => {
+    const { db, Post, commentsTable } = await openPosts(driver)
+    await db.table(commentsTable).insert({ id: 5, post_id: 1, body: 'Hidden at start', secret: 1 })
+    for (const method of ['get', 'getJson'] as const) {
+      const read = async (database: Database) => {
+        const posts = await database.model(Post).query().with('comments').orderBy('id')[method]() as unknown as Array<{ comments: Row[] }>
+        for (const post of posts) filter(post.comments)
+        return posts
+      }
+      const subscription = await subscribeRealtimeQuery(
+        defineRealtimeQuery({ access: 'public', handler: ({ db }) => read(db) }),
+        {},
+        { onData: () => {}, onError: (error) => { throw error } },
+      )
+      const expectFresh = async () => {
+        const snapshot = JSON.parse(JSON.stringify(subscription.current.data)) as unknown
+        expect(JSON.stringify(snapshot)).not.toContain('Hidden')
+        expect(snapshot).toEqual(JSON.parse(JSON.stringify(await read(db))))
+      }
+
+      await expectFresh()
+      await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(commentsTable).where('id', 1).update({ body: `Hidden by ${method}`, secret: 1 }) }))
+      await expectFresh()
+      await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(commentsTable).where('id', 1).update({ body: 'Public', secret: 0 }) }))
+      await expectFresh()
+    }
   })
 })

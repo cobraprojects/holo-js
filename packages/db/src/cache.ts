@@ -388,6 +388,7 @@ type DatabaseDependencyCollectorState = {
   readonly serializedResults: WeakMap<object, unknown>
   readonly refreshQueries: DatabaseQueryObservation[]
   readonly refreshTables: Map<string, DatabaseQueryObservation | undefined>
+  readonly arraySnapshots: Map<readonly unknown[], readonly unknown[]>
   serializationOverridden: boolean
 }
 
@@ -635,9 +636,13 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     serializedResults: new WeakMap(),
     refreshQueries: [],
     refreshTables: new Map(),
+    arraySnapshots: new Map(),
     serializationOverridden: false,
   }
   const value = await databaseDependencyCollector.run(state, callback)
+  if (hasChangedArraySnapshot(state)) {
+    databaseDependencyCollector.run(state, markDatabaseQueryObservationsSerialized)
+  }
 
   return Object.freeze({
     value,
@@ -1199,9 +1204,27 @@ const arrayWriteMethods = Object.fromEntries(ARRAY_WRITE_METHODS.map((name) => {
   return [name, method]
 })) as Readonly<Record<typeof ARRAY_WRITE_METHODS[number], (this: unknown[], ...args: unknown[]) => unknown>>
 
+function hasChangedArraySnapshot(state: DatabaseDependencyCollectorState): boolean {
+  for (const [array, values] of state.arraySnapshots) {
+    if (array.length !== values.length || values.some((value, index) => !Object.hasOwn(array, index) || !Object.is(value, array[index]))) {
+      return true
+    }
+  }
+
+  return false
+}
+
 export function serializeDatabaseQueryObservationsOnArrayWrites(array: unknown): void {
   const state = databaseDependencyCollector.getStore()
-  if (!state || !Array.isArray(array) || !Object.isExtensible(array) || Object.getPrototypeOf(array) !== Array.prototype) {
+  if (!state || !Array.isArray(array) || Object.isFrozen(array)) {
+    return
+  }
+
+  if (!state.arraySnapshots.has(array)) {
+    state.arraySnapshots.set(array, Object.freeze([...array]))
+  }
+
+  if (!Object.isExtensible(array) || Object.getPrototypeOf(array) !== Array.prototype) {
     return
   }
 

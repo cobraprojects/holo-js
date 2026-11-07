@@ -77,14 +77,45 @@ describe('array writes inside a dependency collection', () => {
     expect([...comments]).toEqual([1, 20])
   })
 
-  it('leaves an array with its own write methods untouched', async () => {
+  it('keeps the own write methods of an array and still sees what they change', async () => {
     const rows = [1]
     const push = (...items: number[]) => Array.prototype.push.apply(rows, items)
     Object.defineProperty(rows, 'push', { configurable: true, enumerable: false, value: push, writable: true })
     expect(await collect(() => {
       serializeDatabaseQueryObservationsOnArrayWrites(rows)
       rows.push(2)
-    })).toBe(false)
+    })).toBe(true)
     expect(rows.push).toBe(push)
+  })
+
+  it.each([
+    ['Array.prototype.splice.call()', (rows: number[]) => Array.prototype.splice.call(rows, 0, 1)],
+    ['an index write', (rows: number[]) => { rows[0] = 3 }],
+    ['a shorter length', (rows: number[]) => { rows.length = 1 }],
+    ['delete', (rows: number[]) => { delete rows[1] }],
+  ] as const)('re-runs instead of patching after %s changes the tracked array', async (_label, write) => {
+    for (const rows of [[1, 2], Comments.from([1, 2])]) {
+      expect(await collect(() => {
+        serializeDatabaseQueryObservationsOnArrayWrites(rows)
+        write(rows)
+      })).toBe(true)
+    }
+  })
+
+  it('re-runs instead of patching after an index write changes a sealed array', async () => {
+    const rows = Object.seal([1, 2])
+    expect(await collect(() => {
+      serializeDatabaseQueryObservationsOnArrayWrites(rows)
+      rows[0] = 3
+    })).toBe(true)
+  })
+
+  it('keeps patching when a write outside the wrapped methods leaves the array as it was', async () => {
+    expect(await collect(() => {
+      const rows = [1, 2]
+      serializeDatabaseQueryObservationsOnArrayWrites(rows)
+      Array.prototype.splice.call(rows, 0, 0)
+      rows[0] = 1
+    })).toBe(false)
   })
 })
