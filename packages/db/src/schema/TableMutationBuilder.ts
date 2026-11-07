@@ -426,8 +426,8 @@ export class TableMutationBuilder {
     return this.columnMutation(columnName, () => column.real())
   }
 
-  decimal(columnName: string): TableColumnMutationBuilder {
-    return this.columnMutation(columnName, () => column.decimal())
+  decimal(columnName: string, total?: number, places?: number): TableColumnMutationBuilder {
+    return this.columnMutation(columnName, () => column.decimal(undefined, total, places))
   }
 
   date(columnName: string): TableColumnMutationBuilder {

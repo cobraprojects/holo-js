@@ -288,7 +288,9 @@ function renderColumnBuilder(table: TableDefinition, columnDefinition: TableDefi
       case 'real':
         return 'column.real()'
       case 'decimal':
-        return 'column.decimal()'
+        return columnDefinition.decimalTotal === undefined && columnDefinition.decimalPlaces === undefined
+          ? 'column.decimal()'
+          : `column.decimal(undefined, ${columnDefinition.decimalTotal ?? 8}, ${columnDefinition.decimalPlaces ?? 2})`
       case 'date':
         return 'column.date()'
       case 'datetime':

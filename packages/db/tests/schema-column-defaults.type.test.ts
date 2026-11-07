@@ -13,4 +13,7 @@ const mysqlModel = defineModel('column_defaults_raw_mysql', { timestamps: false 
 it('lets create omit every column the database fills with a literal, now or expression default', () => {
   expectTypeOf<Record<never, never>>().toExtend<InsertPayload<typeof sqliteModel>>()
   expectTypeOf<Record<never, never>>().toExtend<InsertPayload<typeof postgresModel>>()
-  expectTypeOf<Record<never, never>>().toExtend<InsertPayload<typeof mysqlModel>>()})
+  expectTypeOf<Record<never, never>>().toExtend<InsertPayload<typeof mysqlModel>>()
+  expectTypeOf<InsertPayload<typeof postgresModel>['balance']>().toEqualTypeOf<string | undefined>()
+  expectTypeOf<InsertPayload<typeof mysqlModel>['balance']>().toEqualTypeOf<string | undefined>()
+})

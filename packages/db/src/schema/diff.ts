@@ -226,7 +226,10 @@ async function diffTable(
   const mismatchedColumns = expectedColumns
     .filter(column => actualColumnByName.has(column.name))
     .flatMap((column) => {
-      const actual = actualColumnByName.get(column.name)!
+      const stored = actualColumnByName.get(column.name)!
+      const actual = stored.logicalType === 'decimal'
+        ? { ...stored, type: lowerLogicalColumnType({ ...column, kind: 'decimal', decimalTotal: stored.decimalTotal, decimalPlaces: stored.decimalPlaces }, schema.getDialectName()) }
+        : stored
       const expected = {
         type: lowerLogicalColumnType(column, schema.getDialectName()),
         notNull: !column.nullable,

@@ -2,7 +2,7 @@ import { SchemaError } from '../../core/errors'
 import { splitTablePath } from '../identifiers'
 import { parseSqlDefault } from './defaults'
 import { createIntrospect } from './introspect'
-import { findStoredColumn, readEnumChecks, readForeignKeys, readGeneratedExpression, readStringLength, type IndexKeyColumn } from './sqlDefinitions'
+import { readDecimalParameters, findStoredColumn, readEnumChecks, readForeignKeys, readGeneratedExpression, readStringLength, type IndexKeyColumn } from './sqlDefinitions'
 import { parseCreateTableSql, type ForeignKeyConstraint, type StoredTable } from './sqliteDefinitionGrammar'
 import { readNamesInSql, sameIdentifier, sameIdentifiers } from './sqliteTokens'
 import type { DatabaseContext } from '../../core/DatabaseContext'
@@ -332,6 +332,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
         name: row.name,
         dataType: row.type,
         fullType: row.type,
+        ...readDecimalParameters(row.type),
         length: readStringLength(row.type),
         notNull: row.notnull === 1,
         defaultExpression: row.dflt_value,

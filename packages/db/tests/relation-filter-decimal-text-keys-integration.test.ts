@@ -407,3 +407,43 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     await expectFiltersMatchEagerLoading(Tag, 'morphOwners', tags)
   })
 })
+
+it('matches declared-scale decimal relation keys as eager loading reads them', async () => {
+  const { schema } = await openDatabase('sqlite')
+  onTestFinished(() => resetDB())
+  const tag = suffix()
+  const names = { owners: `ds_owners_${tag}`, items: `ds_items_${tag}`, tags: `ds_tags_${tag}`, pivot: `ds_pivot_${tag}` }
+  await createTable(schema, names.owners, table => {
+    table.decimal('code', 10, 4).primaryKey()
+    table.string('name')
+  })
+  await createTable(schema, names.items, table => {
+    table.integer('id').primaryKey()
+    table.string('owner_code')
+  })
+  await createTable(schema, names.tags, table => {
+    table.string('code').primaryKey()
+    table.string('name')
+  })
+  await createTable(schema, names.pivot, table => {
+    table.decimal('owner_code', 10, 4)
+    table.decimal('tag_code', 10, 4)
+  })
+  const owners = defineGeneratedTable(names.owners, { code: column.decimal(undefined, 10, 4).primaryKey(), name: column.string() })
+  const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_code: column.string() })
+  const tags = defineGeneratedTable(names.tags, { code: column.string().primaryKey(), name: column.string() })
+  await DB.table(owners).insert([{ code: '0.1', name: 'owner 0' }, { code: '0.2', name: 'owner 1' }])
+  await DB.table(items).insert([{ id: 1, owner_code: '0.1000' }, { id: 2, owner_code: '0.20' }])
+  await DB.table(tags).insert([{ code: '0.1000', name: 'tag 0' }, { code: '0.20', name: 'tag 1' }])
+  await DB.table(names.pivot).insert([{ owner_code: '0.1', tag_code: '0.1000' }, { owner_code: '0.2', tag_code: '0.20' }])
+  const Item = defineModel(items, { timestamps: false })
+  const Tag = defineModel(tags, { primaryKey: 'code', timestamps: false })
+  const Owner = defineModel(owners, { primaryKey: 'code', timestamps: false, relations: { items: hasMany(() => Item, 'owner_code', 'code'), tags: belongsToMany(() => Tag, names.pivot, 'owner_code', 'tag_code', 'code', 'code') } })
+  const TagWithOwners = defineModel(tags, { primaryKey: 'code', timestamps: false, relations: { owners: belongsToMany(() => Owner, names.pivot, 'tag_code', 'owner_code', 'code', 'code') } })
+
+  await expectFiltersMatchEagerLoading(Owner, 'items', ['owner 0'])
+  const unloadedTags = await readFilters(Owner, 'tags')
+  await expectFiltersMatchEagerLoading(Owner, 'tags', ['owner 0'], unloadedTags)
+  const unloaded = await readFilters(TagWithOwners, 'owners')
+  await expectFiltersMatchEagerLoading(TagWithOwners, 'owners', ['tag 0', 'tag 1'], unloaded)
+})

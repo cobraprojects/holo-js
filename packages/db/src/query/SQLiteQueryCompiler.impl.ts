@@ -263,8 +263,8 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     return `CASE WHEN instr(CAST(${expression} AS BLOB), x'00') = 0 AND ${digits} <> '' AND ${digits} NOT GLOB '*[^0-9]*' AND (${digits} = '0' OR ${digits} NOT GLOB '0*') AND ${inRange} AND (${point} = 0 OR (${fraction} <> '' AND ${fraction} NOT GLOB '*[^0]*')) THEN CAST(${integer} AS INTEGER) END`
   }
 
-  protected override compileDecimalTextKey(expression: string): string {
-    return `${SQLITE_DECIMAL_TEXT_FUNCTION}(${expression})`
+  protected override compileDecimalTextKey(expression: string, places = '2'): string {
+    return `${SQLITE_DECIMAL_TEXT_FUNCTION}(${expression}, ${places})`
   }
 
   protected override compileDecimalKey(expression: string): string {
@@ -279,10 +279,18 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
   }
 
   protected override compileKeyKind(_expression: string, tableName: string, column: string): string {
+    const type = 'lower(type)'
+    return this.compileKeyColumnMetadata(tableName, column, `CASE WHEN ${type} GLOB 'numeric*' OR ${type} GLOB 'decimal*' THEN 'decimal' WHEN ${type} GLOB '*int*' THEN 'integer' WHEN ${type} GLOB '*char*' OR ${type} GLOB '*clob*' OR ${type} GLOB '*text*' THEN 'text' END`)
+  }
+
+  protected override compileKeyDecimalPlaces(tableName: string, column: string): string {
+    return this.compileKeyColumnMetadata(tableName, column, "CASE WHEN instr(type, '(') = 0 THEN 2 WHEN instr(type, ',') = 0 THEN 0 ELSE CAST(substr(type, instr(type, ',') + 1) AS INTEGER) END")
+  }
+
+  private compileKeyColumnMetadata(tableName: string, column: string, expression: string): string {
     const { schema, table } = splitTablePath(tableName)
     const source = `pragma_table_info(${this.createSqlStringLiteral(table)}${schema ? `, ${this.createSqlStringLiteral(schema)}` : ''})`
-    const type = 'lower(type)'
-    return `(SELECT CASE WHEN ${type} GLOB 'numeric*' OR ${type} GLOB 'decimal*' THEN 'decimal' WHEN ${type} GLOB '*int*' THEN 'integer' WHEN ${type} GLOB '*char*' OR ${type} GLOB '*clob*' OR ${type} GLOB '*text*' THEN 'text' END FROM ${source} WHERE name = ${this.createSqlStringLiteral(column)} COLLATE NOCASE)`
+    return `(SELECT ${expression} FROM ${source} WHERE name = ${this.createSqlStringLiteral(column)} COLLATE NOCASE)`
   }
 
   protected override compileColumnComparison(predicate: QueryColumnPredicate): string {

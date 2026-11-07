@@ -63,7 +63,7 @@ export type QuerySelection
     | QueryRawSelection
     | QuerySubquerySelection
 
-export type QueryKeyCast = 'text' | 'integer' | 'decimal' | 'decimalText'
+export type QueryKeyCast = 'text' | 'integer' | 'decimal' | 'decimalText' | { readonly kind: 'decimalText', readonly places: number }
 
 export type QueryKeyKind = 'integer' | 'decimal' | 'text'
 
@@ -71,6 +71,7 @@ export interface QueryUnknownKeyKind {
   readonly table: string
   readonly column: string
   readonly otherKind: QueryKeyKind
+  readonly decimalPlaces?: number
 }
 
 export interface QueryKeyCasts {
@@ -85,8 +86,9 @@ const KEY_CASTS: Readonly<Record<QueryKeyKind, Partial<Record<QueryKeyKind, Quer
   text: { integer: 'integer', decimal: 'decimal' },
 }
 
-export function keyCastFor(source: QueryKeyKind | undefined, lookedUp: QueryKeyKind | undefined): QueryKeyCast | undefined {
-  return source && lookedUp ? KEY_CASTS[source][lookedUp] : undefined
+export function keyCastFor(source: QueryKeyKind | undefined, lookedUp: QueryKeyKind | undefined, decimalPlaces?: number): QueryKeyCast | undefined {
+  const cast = source && lookedUp ? KEY_CASTS[source][lookedUp] : undefined
+  return cast === 'decimalText' && decimalPlaces !== undefined ? { kind: 'decimalText', places: decimalPlaces } : cast
 }
 
 export function hasKeyCasts(casts: QueryKeyCasts | undefined): casts is QueryKeyCasts {

@@ -70,6 +70,16 @@ function compileVectorType(column: AnyColumnDefinition): string {
   return `VECTOR(${column.vectorDimensions})`
 }
 
+function compileDecimalType(type: string, column: AnyColumnDefinition, fallback = type): string {
+  if (column.decimalTotal === undefined && column.decimalPlaces === undefined) return fallback
+  const total = column.decimalTotal ?? 8
+  const places = column.decimalPlaces ?? 2
+  if (!Number.isSafeInteger(total) || total < 1 || !Number.isSafeInteger(places)) {
+    throw new SchemaError('Decimal columns require a positive integer total and an integer places.')
+  }
+  return `${type}(${total}, ${places})`
+}
+
 function unsupportedType(message: string): ColumnTypeResolver {
   return () => {
     throw new SchemaError(message)
@@ -84,7 +94,7 @@ const SQLITE_LOGICAL_TYPE_MAP: DialectTypeMapping = {
   text: 'TEXT',
   boolean: 'tinyint(1)',
   real: 'REAL',
-  decimal: 'NUMERIC',
+  decimal: column => compileDecimalType('NUMERIC', column),
   date: 'date',
   datetime: 'datetime',
   timestamp: 'datetime',
@@ -105,7 +115,7 @@ const POSTGRES_LOGICAL_TYPE_MAP: DialectTypeMapping = {
   text: 'TEXT',
   boolean: 'BOOLEAN',
   real: 'DOUBLE PRECISION',
-  decimal: 'NUMERIC',
+  decimal: column => compileDecimalType('NUMERIC', column),
   date: 'DATE',
   datetime: 'TIMESTAMP',
   timestamp: 'TIMESTAMP',
@@ -126,7 +136,7 @@ const MYSQL_LOGICAL_TYPE_MAP: DialectTypeMapping = {
   text: 'TEXT',
   boolean: 'TINYINT(1)',
   real: 'DOUBLE',
-  decimal: 'DECIMAL(10, 2)',
+  decimal: column => compileDecimalType('DECIMAL', column, 'DECIMAL(10, 2)'),
   date: 'DATE',
   datetime: 'DATETIME',
   timestamp: 'TIMESTAMP',
@@ -163,6 +173,8 @@ export function resolveDialectComparisonColumnType(
 ): string {
   const compiledType = resolveDialectColumnType(dialect, column)
   const normalized = compiledType.toLowerCase()
+
+  if (column.kind === 'decimal') return normalized.replace(/\s+/g, '')
 
   if (dialect === 'sqlite') {
     return normalized.split(/\s+/, 1)[0]!.toUpperCase()

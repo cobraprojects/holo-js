@@ -160,7 +160,7 @@ export function relationKeyOptions(parentKey: AnyColumnDefinition | undefined, r
 }
 
 export function sourceKeyCast(source: AnyColumnDefinition | undefined, lookedUp: AnyColumnDefinition | undefined): QueryKeyCast | undefined {
-  return keyCastFor(keyKind(source), keyKind(lookedUp))
+  return keyCastFor(keyKind(source), keyKind(lookedUp), source?.decimalPlaces)
 }
 
 export function pivotKeyCasts(pivot: string | TableDefinition, pivotColumn: string, other: AnyColumnDefinition | undefined, source: 'pivot' | 'other'): QueryKeyCasts {
@@ -169,7 +169,7 @@ export function pivotKeyCasts(pivot: string | TableDefinition, pivotColumn: stri
     return source === 'pivot' ? { left: sourceKeyCast(definition, other) } : { right: sourceKeyCast(other, definition) }
   }
   const otherKind = keyKind(other)
-  return otherKind ? { unknownKind: { table: pivot, column: pivotColumn, otherKind } } : {}
+  return otherKind ? { unknownKind: { table: pivot, column: pivotColumn, otherKind, decimalPlaces: other?.decimalPlaces } } : {}
 }
 
 function keyKind(definition: AnyColumnDefinition | undefined): QueryKeyKind | undefined {

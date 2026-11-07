@@ -155,6 +155,7 @@ function toColumnDefinition(
     ...(foreignKey ? { references: toForeignKeyReference(foreignKey) } : {}),
     ...(column.autoIncrement ? { idStrategy: 'autoIncrement' as const } : {}),
     ...(enumValues ? { enumValues } : {}),
+    ...(kind === 'decimal' && column.decimalTotal !== undefined ? { decimalTotal: column.decimalTotal, decimalPlaces: column.decimalPlaces } : {}),
     ...(vectorDimensions ? { vectorDimensions } : {}),
     ...(column.computed ? { computed: column.computed } : {}),
     ...(column.computed && column.notNull ? { explicitNotNull: true as const } : {}),

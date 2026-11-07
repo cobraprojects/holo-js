@@ -10,7 +10,7 @@ type TableNameRow = { name: string }
 type TableRow = { schema: string }
 type TableLocationRow = { schema: string, table: string, oid: string }
 type RelationRow = { present: boolean }
-type ColumnRow = { name: string, data_type: string, full_type: string, not_null: boolean, default_value: string | null, is_identity: boolean, generated_kind: string, primary_key_position: number | null }
+type ColumnRow = { name: string, data_type: string, numeric_precision: number | null, numeric_scale: number | null, full_type: string, not_null: boolean, default_value: string | null, is_identity: boolean, generated_kind: string, primary_key_position: number | null }
 type IndexRow = { name: string, is_unique: boolean, is_primary: boolean, is_constraint: boolean, representable: boolean, columns: string[] }
 type ForeignKeyRow = { name: string, owner_schema: string, table_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
 type CheckRow = { name: string, column_name: string, definition: string }
@@ -29,6 +29,8 @@ const RELATION_ID_FILTER = 't.oid = $1::oid'
 const COLUMNS_SQL = `SELECT a.attname AS name,
   COALESCE(ic.data_type, pg_catalog.format_type(a.atttypid, a.atttypmod)) AS data_type,
   pg_catalog.format_type(a.atttypid, a.atttypmod) AS full_type,
+  ic.numeric_precision,
+  ic.numeric_scale,
   a.attnotnull AS not_null,
   pg_catalog.pg_get_expr(d.adbin, d.adrelid) AS default_value,
   a.attidentity <> '' AS is_identity,
@@ -165,6 +167,7 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
             name: row.name,
             dataType: row.data_type,
             fullType: row.full_type,
+            ...(row.data_type === 'numeric' && row.numeric_precision !== null && row.numeric_scale !== null ? { decimalTotal: row.numeric_precision, decimalPlaces: row.numeric_scale } : {}),
             length: readStringLength(row.full_type),
             notNull: row.not_null,
             defaultExpression: computed ? null : row.default_value,

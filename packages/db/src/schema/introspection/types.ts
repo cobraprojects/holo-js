@@ -14,6 +14,8 @@ export interface DatabaseColumnStructure {
   readonly dataType: string
   readonly fullType: string
   readonly length?: number
+  readonly decimalTotal?: number
+  readonly decimalPlaces?: number
   readonly notNull: boolean
   readonly defaultExpression: string | null
   readonly default: DatabaseColumnDefault

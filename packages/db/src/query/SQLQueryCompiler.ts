@@ -736,7 +736,7 @@ export class SQLQueryCompiler {
     const unknown = this.compileColumnReference(predicate.column)
     const known = this.compileColumnReference(predicate.compareTo)
     const branches = KEY_KINDS.map((kind) => {
-      const comparison = this.compileKeyComparison(this.compileKeyOfKind(unknown, kind), undefined, operator, known, keyCastFor(unknownKind.otherKind, kind))
+      const comparison = this.compileKeyComparison(this.compileKeyOfKind(unknown, kind), undefined, operator, known, keyCastFor(unknownKind.otherKind, kind, unknownKind.decimalPlaces))
       return `WHEN ${this.createSqlStringLiteral(kind)} THEN ${comparison}`
     })
     return `CASE ${this.compileKeyKind(unknown, unknownKind.table, unknownKind.column)} ${branches.join(' ')} ELSE ${this.compileUnknownKindFallback(unknown, known, operator)} END`
@@ -748,7 +748,7 @@ export class SQLQueryCompiler {
     const keys = { ...subquery, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column: selection.column, alias: UNKNOWN_KIND_KEY_ALIAS })]) }
     const kind = this.compileKeyKind(key, unknownKeyKind.table, unknownKeyKind.column)
     const arms = [
-      ...KEY_KINDS.map(keyKind => [this.compileKeyOperand(this.compileKeyOfKind(key, keyKind), keyCastFor(keyKind, unknownKeyKind.otherKind)), `${kind} = ${this.createSqlStringLiteral(keyKind)}`] as const),
+      ...KEY_KINDS.map(keyKind => [this.compileKeyOperand(this.compileKeyOfKind(key, keyKind), keyCastFor(keyKind, unknownKeyKind.otherKind), keyKind === 'decimal' ? this.compileKeyDecimalPlaces(unknownKeyKind.table, unknownKeyKind.column) : undefined), `${kind} = ${this.createSqlStringLiteral(keyKind)}`] as const),
       [this.compileKeyOfKind(key, unknownKeyKind.otherKind), `${kind} IS NULL`] as const,
     ]
     return `(${arms.map(([selected, condition]) => `${column} IN (SELECT ${selected} FROM (${this.compileSelectSql(keys, bindings)}) AS ${this.quoteIdentifier(UNKNOWN_KIND_KEYS_ALIAS)} WHERE ${condition})`).join(' OR ')})`
@@ -764,9 +764,10 @@ export class SQLQueryCompiler {
     return `${lookedUp} ${operator} ${this.compileDecimalKey(source)}`
   }
 
-  private compileKeyOperand(expression: string, cast?: QueryKeyCast): string {
+  private compileKeyOperand(expression: string, cast?: QueryKeyCast, decimalPlaces?: string): string {
+    if (typeof cast === 'object') return this.compileDecimalTextKey(expression, this.createDebugLiteral(cast.places))
     if (cast === 'text') return this.compileTextKey(expression)
-    if (cast === 'decimalText') return this.compileDecimalTextKey(expression)
+    if (cast === 'decimalText') return this.compileDecimalTextKey(expression, decimalPlaces)
     if (cast === 'integer') return this.compileIntegerKey(expression)
     if (cast === 'decimal') return this.compileDecimalKey(expression)
     return expression
@@ -776,7 +777,7 @@ export class SQLQueryCompiler {
     return `CAST(${expression} AS TEXT)`
   }
 
-  protected compileDecimalTextKey(expression: string): string {
+  protected compileDecimalTextKey(expression: string, _places?: string): string {
     return this.compileTextKey(expression)
   }
 
@@ -790,6 +791,10 @@ export class SQLQueryCompiler {
 
   protected compileKeyKind(_expression: string, _table: string, _column: string): string {
     throw new CompilerError('Key comparisons against columns of unknown kind require a dialect-specific compiler.')
+  }
+
+  protected compileKeyDecimalPlaces(_table: string, _column: string): string {
+    return '2'
   }
 
   protected compileKeyOfKind(expression: string, _kind: QueryKeyKind): string {

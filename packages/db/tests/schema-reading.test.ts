@@ -69,7 +69,7 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
           status: { kind: 'enum', name: 'status', nullable: false, hasDefault: true, generated: false, primaryKey: false, unique: false, defaultKind: 'value', defaultValue: 'draft', enumValues: ['draft', 'live'] },
           published_at: { kind: kinds.timestamp, name: 'published_at', nullable: false, hasDefault: true, generated: false, primaryKey: false, unique: false, defaultKind: 'now' },
           due_on: { kind: 'date', name: 'due_on', nullable: true, hasDefault: false, generated: false, primaryKey: false, unique: false },
-          price: { kind: 'decimal', name: 'price', nullable: false, hasDefault: false, generated: false, primaryKey: false, unique: false },
+          price: { kind: 'decimal', name: 'price', nullable: false, hasDefault: false, generated: false, primaryKey: false, unique: false, ...(driver === 'mysql' ? { decimalTotal: 10, decimalPlaces: 2 } : {}) },
         },
         indexes: expect.arrayContaining([{ name: `${posts}_title_index`, columns: ['title'], unique: false }]),
       })

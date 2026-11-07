@@ -429,6 +429,14 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
         : { kind: 'text', default: { value: '"hello"' } })
     })
 
+    it('reads decimal defaults through the introspected table definitions', async () => {
+      const { db, tables } = await openDefaultsDatabase()
+      for (const table of tables) {
+        await db.table(table).insert({ id: 1 })
+        expect(await db.table(table).select('balance_zero', 'balance').first()).toEqual({ balance_zero: '0.00', balance: '12.50' })
+      }
+    })
+
     it('writes a Generated schema module with those defaults that the type tests compile', async () => {
       const { tables } = await openDefaultsDatabase()
 
