@@ -187,8 +187,8 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   readsWithoutRejectingValues(): boolean {
-    const { casts, table } = this.definition
-    const keys = new Set([...Object.keys(table.columns), ...Object.keys(casts)])
+    const { casts, createdAtColumn, updatedAtColumn, deletedAtColumn, table } = this.definition
+    const keys = new Set([...Object.keys(table.columns), ...Object.keys(casts), ...[createdAtColumn, updatedAtColumn, deletedAtColumn].filter(key => key !== undefined)])
     return [...keys].every((key) => {
       const column = ownEntry(table.columns, key)
       if (column && (column.kind === 'json' || column.kind === 'vector')) return false

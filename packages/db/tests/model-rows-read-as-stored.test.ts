@@ -116,5 +116,6 @@ describe('model rows read as stored', () => {
 
     expect(ModelRepository.from(defineModel(dated, { timestamps: false, casts: { born_on: 'date' } })).readsWithoutRejectingValues()).toBe(true)
     expect(ModelRepository.from(defineModel(texted, { timestamps: false, casts: { born_on: 'date' } })).readsWithoutRejectingValues()).toBe(false)
+    expect(ModelRepository.from(defineModel('stored_untyped_timestamped', { connectionName: 'stored_untyped', primaryKey: 'uuid' })).readsWithoutRejectingValues()).toBe(false)
   })
 })
