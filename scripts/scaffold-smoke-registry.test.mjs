@@ -68,14 +68,14 @@ test('a shallow clone cannot resolve the registry snapshot', async () => {
   })
 })
 
-test('the smoke npm environment pins resolution and prefers the local cache', async () => {
+test('the smoke npm environment pins resolution to the snapshot and ignores dist-tags', async () => {
   await withRepository((root) => {
     assert.deepEqual(scaffoldSmokeNpmEnvironment(root, {}), {
       npm_config_audit: 'false',
       npm_config_fund: 'false',
       npm_config_update_notifier: 'false',
       npm_config_before: '2026-01-02T03:04:05.000Z',
-      npm_config_prefer_offline: 'true',
+      npm_config_tag: 'holo-scaffold-smoke-snapshot',
     })
   })
 })
@@ -87,6 +87,7 @@ test('the offline mode pins resolution and never contacts the registry', async (
       npm_config_fund: 'false',
       npm_config_update_notifier: 'false',
       npm_config_before: '2026-01-02T03:04:05.000Z',
+      npm_config_tag: 'holo-scaffold-smoke-snapshot',
       npm_config_offline: 'true',
     })
   })

@@ -1165,7 +1165,7 @@ try {
   const binRoot = await createInstallWrapper(tempRoot)
   const npmEnvironment = scaffoldSmokeNpmEnvironment(rootDir)
   log('workspace', npmEnvironment.npm_config_before
-    ? `npm resolves packages published on or before ${npmEnvironment.npm_config_before}, ${npmEnvironment.npm_config_offline ? 'from the local npm cache only' : 'preferring the local npm cache'}`
+    ? `npm resolves packages published on or before ${npmEnvironment.npm_config_before}, ${npmEnvironment.npm_config_offline ? 'from the local npm cache only' : 'reusing the local npm cache'}`
     : `npm resolves packages live from the registry (${liveRegistryVariable}=1)`)
   const localPackageEnv = {
     ...npmEnvironment,
