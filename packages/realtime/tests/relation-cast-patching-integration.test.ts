@@ -338,6 +338,32 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await expectFresh(true, 2)
   })
 
+  it('keeps relations a handler filters after loading equal to a fresh read', async () => {
+    const { db, owners, items, Parent } = await openFixture(variant)
+    const visible = (secret: unknown) => !String(secret).includes('hidden')
+    const expectFresh = await subscribeAll(variant, {
+      entities: async () => {
+        const parents = await db.model(Parent).query().with('items', query => query.orderBy('id')).orderBy('id').get()
+        for (const parent of parents) {
+          parent.setRelation('items', (parent.getRelation('items') as { get(key: string): unknown }[]).filter(item => visible(item.get('secret'))))
+        }
+        return parents
+      },
+      json: async () => {
+        const parents = await db.model(Parent).query().with('items', query => query.orderBy('id')).orderBy('id').getJson() as unknown as { items: { secret: unknown }[] }[]
+        for (const parent of parents) {
+          parent.items = parent.items.filter(item => visible(item.secret))
+        }
+        return parents
+      },
+    })
+
+    await mutate(() => db.table(items).insert({ id: 11, owner_id: 1, ...rowValues(variant, 25), secret: 'hidden' }))
+    await expectFresh(false)
+    await mutate(() => db.table(owners).where('id', 1).update(rowValues(variant, 26)))
+    await expectFresh(false)
+  })
+
   it('keeps eager-loaded belongsToMany rows equal to a fresh read', async () => {
     const { db, owners, tags, ownerTags, Parent } = await openFixture(variant)
     const expectFresh = await subscribeAll(variant, {

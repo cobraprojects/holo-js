@@ -28,7 +28,7 @@ import { normalizeDialectReadValue, isConvertedByModelReads, storesJson, storesT
 import { resolveModelRowKey } from './defineModelHelpers'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type QueryPredicateNode, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
-import { Entity, captureEntityWriteState, copyEntitySerializationOverrides, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
+import { Entity, captureEntityWriteState, copyEntitySerializationOverrides, createEntityCommitRestore, getEntityKeyForSave, markEntityRelationObserved, restoreEntityWriteState } from './Entity'
 import { assertAttributeNameAllowed, assertColumnWritable, canonicalStoredKey, ownEntry, type RejectedGeneratedColumns, snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet, type StoredKeyOptions } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
@@ -990,7 +990,7 @@ export class ModelRepository<
 
       const observed = this.getRelationQueryObservation(entity, relationName)
       if (observed) {
-        recordDatabaseQueryObservation(this.withRelatedRowReader(related, Object.freeze({
+        this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, Object.freeze({
           ...observed,
           patchable: observed.patchable && relatedRowsArePatchable(related),
           ...serializedFlag(!relatedRowsArePatchable(related)),
@@ -1017,7 +1017,7 @@ export class ModelRepository<
       ])
 
       const primaryKey = resolveModelRowKey(related.definition)
-      recordDatabaseQueryObservation(this.withRelatedRowReader(related, Object.freeze({
+      this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, Object.freeze({
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
@@ -1053,7 +1053,7 @@ export class ModelRepository<
       const resultPath = createPath(index, relationName)
       const observed = this.getRelationQueryObservation(entity, relationName)
       if (observed) {
-        recordDatabaseQueryObservation(this.withRelatedRowReader(related, this.createNullableSingleRecordRelationObservation({
+        this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, this.createNullableSingleRecordRelationObservation({
           ...observed,
           patchable: observed.patchable && relatedRowsArePatchable(related),
           ...serializedFlag(!relatedRowsArePatchable(related)),
@@ -1078,7 +1078,7 @@ export class ModelRepository<
         ...(predicateDependency ? [predicateDependency] : []),
       ])
 
-      recordDatabaseQueryObservation(this.withRelatedRowReader(related, this.createNullableSingleRecordRelationObservation(Object.freeze({
+      this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, this.createNullableSingleRecordRelationObservation(Object.freeze({
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
@@ -1121,7 +1121,7 @@ export class ModelRepository<
         ownerPredicates,
       ))
       if (observed) {
-        recordDatabaseQueryObservation(this.withRelatedRowReader(related, this.createNullableSingleRecordRelationObservation({
+        this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, this.createNullableSingleRecordRelationObservation({
           ...observed,
           patchable: observed.patchable && relatedRowsArePatchable(related),
           ...serializedFlag(!relatedRowsArePatchable(related)),
@@ -1150,7 +1150,7 @@ export class ModelRepository<
         ...(predicateDependency ? [predicateDependency] : []),
       ])
 
-      recordDatabaseQueryObservation(this.withRelatedRowReader(related, this.createNullableSingleRecordRelationObservation(Object.freeze({
+      this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, this.createNullableSingleRecordRelationObservation(Object.freeze({
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
@@ -1391,7 +1391,7 @@ export class ModelRepository<
         && Object.keys(related.definition.globalScopes).length === 0
         && !related.definition.softDeletes
 
-      recordDatabaseQueryObservation(Object.freeze({
+      this.recordRelationValueObservation(entity, relationName, Object.freeze({
         connectionName: this.getConnectionName(),
         dependencies,
         orderBy: relation.pivotOrderBy,
@@ -1413,7 +1413,7 @@ export class ModelRepository<
         continue
       }
 
-      recordDatabaseQueryObservation(this.withRelatedRowReader(related, Object.freeze({
+      this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, Object.freeze({
         connectionName: related.getConnectionName(),
         dependencies: Object.freeze([
           createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
@@ -2738,6 +2738,11 @@ export class ModelRepository<
   comparesObservationWithStoredValues(observation: DatabaseQueryObservation): boolean {
     if (observation.selections.some(selection => selection.resultKey !== selection.column) && this.rowReader()) return false
     return this.comparesWithStoredValues(observationColumns(observation))
+  }
+
+  private recordRelationValueObservation(entity: Entity<TTable>, relationName: string, observation: DatabaseQueryObservation | undefined): void {
+    recordDatabaseQueryObservation(observation)
+    markEntityRelationObserved(entity, relationName)
   }
 
   private withRelatedRowReader(related: ModelRepository, observation: DatabaseQueryObservation, keys: readonly string[] = []): DatabaseQueryObservation {

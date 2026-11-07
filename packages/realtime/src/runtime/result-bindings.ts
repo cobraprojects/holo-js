@@ -139,8 +139,12 @@ export function bindQueryObservationsToSerializedValue(
   rawValue: unknown,
   serializedValue: unknown,
 ): readonly DatabaseQueryObservation[] {
-  const explicitlyBoundQueries = bindExplicitQueryObservationPaths(queries, serializedValue)
   const implicitQueries = queries.filter(query => !query.resultPath)
+  const explicitlyBoundQueries = bindExplicitQueryObservationPaths(
+    queries,
+    serializedValue,
+    implicitQueries.some(query => hasChangedObservedResult(query)),
+  )
   if (implicitQueries.length === 0) {
     return Object.freeze(explicitlyBoundQueries)
   }
@@ -181,6 +185,7 @@ export function bindQueryObservationsToSerializedValue(
   return Object.freeze(boundQueries)
 }
 
+
 function returnsSerializedSource(query: DatabaseQueryObservation, rawValue: unknown): boolean {
   return query.serializedSources !== undefined
     && containsAnyValue(rawValue, new Set(query.serializedSources), new WeakSet())
@@ -210,6 +215,7 @@ function hasChangedObservedResult(query: DatabaseQueryObservation): boolean {
 function bindExplicitQueryObservationPaths(
   queries: readonly DatabaseQueryObservation[],
   serializedValue: unknown,
+  handlerChangedObservedResults: boolean,
 ): DatabaseQueryObservation[] {
   const boundQueries: DatabaseQueryObservation[] = []
   for (const query of queries) {
@@ -225,6 +231,7 @@ function bindExplicitQueryObservationPaths(
       ...createQueryObservationMetadata(query),
       observedResult: undefined,
       serializedSources: undefined,
+      ...handlerChangedObservedResults ? { patchable: false } : {},
       result,
       resultBound: true,
       resultPath,
