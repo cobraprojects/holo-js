@@ -274,6 +274,10 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
       `${table}.category_id`,
     ))).orderBy('id').get() as unknown as Category[]
     expect(derived.map(id)).toEqual([1])
+    const laterJoin = await Category.whereHas('children', query => query.whereExists(DB.table(`${grantsTable} as g`)
+      .join(`${postsTable} as p`, 'p.category_id', '=', `${table}.id`)
+      .join(`${grantsTable} as ${table}`, `${table}.id`, '=', 'g.id'))).orderBy('id').get() as unknown as Category[]
+    expect(laterJoin.map(id)).toEqual([1])
   })
 
   it('aliases a constraint that returns a fresh query on the same table', async () => {

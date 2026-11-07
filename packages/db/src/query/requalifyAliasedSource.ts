@@ -119,10 +119,14 @@ function requalifyPlanBody(plan: SelectQueryPlan, target: Target, enclosing: rea
     }
   }
   const ownSource = own.slice(0, own.length - joinBindings(plan.joins).length)
+  const onColumn = (index: number) => {
+    const visible = [...enclosing, ...ownSource, ...joinBindings(plan.joins.slice(0, index + 1))]
+    return (value: string) => requalifyColumn(value, target, visible)
+  }
   const join = (item: QueryJoinClause, index: number): QueryJoinClause => Object.freeze({
     ...item,
-    ...(item.leftColumn === undefined ? {} : { leftColumn: column(item.leftColumn) }),
-    ...(item.rightColumn === undefined ? {} : { rightColumn: column(item.rightColumn) }),
+    ...(item.leftColumn === undefined ? {} : { leftColumn: onColumn(index)(item.leftColumn) }),
+    ...(item.rightColumn === undefined ? {} : { rightColumn: onColumn(index)(item.rightColumn) }),
     ...(item.subquery === undefined ? {} : {
       subquery: requalifyPlan(item.subquery, target, item.lateral ? [...enclosing, ...ownSource, ...joinBindings(plan.joins.slice(0, index))] : enclosing),
     }),
