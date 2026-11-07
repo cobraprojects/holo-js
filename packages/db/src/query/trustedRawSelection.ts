@@ -1,9 +1,11 @@
-import { quoteIdentifierSegment } from '../schema/identifiers'
+import { assertValidIdentifierSegment, quoteIdentifierSegment } from '../schema/identifiers'
 import type { QueryRawSelection } from './ast'
 
 const trustedRawSelections = new WeakSet<QueryRawSelection>()
 
 export function createFractionalCountSelection(column: string, alias: string): QueryRawSelection {
+  assertValidIdentifierSegment(column, 'Fractional count column')
+  assertValidIdentifierSegment(alias, 'Fractional count alias')
   const identifier = quoteIdentifierSegment(column, '"')
   const selection: QueryRawSelection = Object.freeze({
     kind: 'raw',

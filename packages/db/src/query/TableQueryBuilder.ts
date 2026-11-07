@@ -4153,6 +4153,9 @@ export function addSelectFractionalCount(
   if (!isGenuineDatabaseContext(connection)) {
     throw new SecurityError('addSelectFractionalCount() needs a connection that Holo created.')
   }
+  if (connection.getDialect().name !== 'sqlite') {
+    throw new SecurityError('addSelectFractionalCount() only supports SQLite.')
+  }
   const selection = createFractionalCountSelection(column, alias)
   return new TableQueryBuilder(query.getTableName(), connection, appendRawSelection(query.getPlan(), selection))
 }

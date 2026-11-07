@@ -200,6 +200,8 @@ describe('native database security boundaries', () => {
     if (selection.kind !== 'raw') throw new Error('Expected the generated aggregate check.')
     const policyError = 'Unsafe raw SQL is disabled by the active security policy.'
 
+    expect(() => holoRuntimeInternals.addSelectFractionalCount(db.table(table.tableName), 'id\\', 'fractional')).toThrow(SchemaError)
+    expect(() => holoRuntimeInternals.addSelectFractionalCount(db.table(table.tableName), 'id', 'fractional\\')).toThrow(SchemaError)
     await expect(db.table(table).unsafeSelect(selection.sql, selection.bindings).get()).rejects.toThrow(policyError)
     await expect(new TableQueryBuilder(table, db, { ...db.table(table).getPlan(), selections: [{ ...selection }] }).get()).rejects.toThrow(policyError)
     expect(() => holoRuntimeInternals.addSelectFractionalCount({
@@ -207,6 +209,11 @@ describe('native database security boundaries', () => {
       getPlan: () => checked.getPlan(),
       getTableName: () => table.tableName,
     } as never, 'id', 'fractional')).toThrow(SecurityError)
+  })
+
+  it.each(integrationDrivers(['postgres', 'mysql']))('rejects SQLite fractional checks on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    expect(() => holoRuntimeInternals.addSelectFractionalCount(db.table(table.tableName), 'id', 'fractional')).toThrow(SecurityError)
   })
 
   it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('keeps a hand-built or copied raw predicate gated when it carries the trusted marker on %s', async driver => {
