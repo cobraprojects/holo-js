@@ -21,6 +21,7 @@ import type {
 import type { RealtimePatchPathSegment } from './result-patching'
 
 export type RuntimeState = {
+  backfillConnectionLookups?: number
   bindings?: RealtimeRuntimeBindings
   dependencySubscribers: Map<string, Set<string>>
   invalidationBatch?: PendingInvalidationBatch
@@ -119,7 +120,9 @@ export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata
   dependencies: readonly string[]
   patchTargets: QueryPatchTarget[]
   predicateDependencies: PredicateDependencyIndex
+  observationVersion?: number
   queries: DatabaseQueryObservation[]
+  readBoundary?: number
   resultHash: string
   resultHashDirty: boolean
   tableDependencies: readonly string[]

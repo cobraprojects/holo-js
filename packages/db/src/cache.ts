@@ -332,7 +332,21 @@ type DatabaseDependencyInvalidationMetadata = {
   readonly exactPredicates: readonly DatabaseDependencyPredicateMetadata[]
   readonly hasMutationDependency: boolean
   readonly predicates: readonly DatabaseDependencyPredicateMetadata[]
+  readonly publicationStartedAt?: number
   readonly tableDependencies: readonly string[]
+  readonly unordered?: true
+}
+
+type MutationPublicationRecord = {
+  readonly identities?: ReadonlySet<string>
+  readonly publishedAt: number
+  readonly tableKey: string
+}
+
+type MutationPublicationState = {
+  prunedThrough: number
+  readonly records: MutationPublicationRecord[]
+  sequence: number
 }
 
 type DatabaseDependencyInvalidationEventWithMutations = DatabaseDependencyInvalidationEvent & {
@@ -383,6 +397,8 @@ const MUTATION_DEPENDENCY_SUFFIX = 'mutation'
 const WHERE_DEPENDENCY_PREFIX = 'where:'
 const WHERE_EXACT_DEPENDENCY_PREFIX = 'where-exact:'
 const EMPTY_COLUMNS: ReadonlySet<string> = new Set<string>()
+const MUTATION_PUBLICATION_RETENTION = 1024
+const MUTATION_PUBLICATION_IDENTITY_LIMIT = 1024
 const PREDICATE_WILDCARD_VALUE = '*'
 const IDENTITY_EXPANSION: LiteralExpansion = (_column, value) => [value]
 const SQLITE_ROWID_ALIASES: ReadonlySet<string> = new Set(['rowid', '_rowid_', 'oid'])
@@ -400,6 +416,7 @@ function getQueryCacheBridgeState(): {
   dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
   dependencyInvalidationPublishers?: DatabaseDependencyInvalidationPublisherCandidate[]
   mutationPreviousRowsRequirements?: Map<DatabaseDependencyInvalidationListenerInternal, MutationPreviousRowsRequirement>
+  mutationPublications?: MutationPublicationState
   recentDatabaseInvalidationIds?: Map<string, number>
 } {
   const runtime = globalThis as typeof globalThis & {
@@ -408,6 +425,7 @@ function getQueryCacheBridgeState(): {
       dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
       dependencyInvalidationPublishers?: DatabaseDependencyInvalidationPublisherCandidate[]
       mutationPreviousRowsRequirements?: Map<DatabaseDependencyInvalidationListenerInternal, MutationPreviousRowsRequirement>
+      mutationPublications?: MutationPublicationState
       recentDatabaseInvalidationIds?: Map<string, number>
     }
   }
@@ -434,6 +452,9 @@ export function onDatabaseDependencyInvalidated(
   const state = getQueryCacheBridgeState()
   state.dependencyInvalidationListeners ??= new Set<DatabaseDependencyInvalidationListenerInternal>()
   const internalListener = listener as DatabaseDependencyInvalidationListenerInternal
+  if (state.dependencyInvalidationListeners.size === 0) {
+    startMutationPublicationEpoch()
+  }
   state.dependencyInvalidationListeners.add(internalListener)
 
   return () => {
@@ -455,6 +476,125 @@ function onDatabaseDependencyInvalidationPublished(publisher: DatabaseDependency
 export function resetDatabaseDependencyInvalidationListeners(): void {
   getQueryCacheBridgeState().dependencyInvalidationListeners = undefined
   getQueryCacheBridgeState().mutationPreviousRowsRequirements = undefined
+}
+
+function getMutationPublicationState(): MutationPublicationState {
+  return getQueryCacheBridgeState().mutationPublications ??= { prunedThrough: 0, records: [], sequence: 0 }
+}
+
+function markMutationPublicationBoundary(): number {
+  const state = getMutationPublicationState()
+  state.sequence += 1
+  return state.sequence
+}
+
+function startMutationPublicationEpoch(): void {
+  const state = getMutationPublicationState()
+  state.sequence += 1
+  state.prunedThrough = state.sequence
+}
+
+function beginMutationPublication(): number | undefined {
+  return hasDatabaseDependencyInvalidationListeners()
+    ? getQueryCacheBridgeState().mutationPublications?.sequence ?? 0
+    : undefined
+}
+
+function createMutationPublicationTableKey(tableKey: string): string {
+  const tableStart = tableKey.indexOf(':', DATABASE_DEPENDENCY_PREFIX.length) + 1
+  const tableName = tableKey.slice(tableStart)
+  return tableKey.slice(0, tableStart) + tableName.slice(tableName.lastIndexOf('.') + 1).toLowerCase()
+}
+
+function normalizeMutationPublicationIdentity(value: unknown): string | undefined {
+  if (typeof value === 'number' || typeof value === 'bigint') return String(Number(value))
+  if (typeof value !== 'string') {
+    return JSON.stringify(value, (_key, item: unknown) => typeof item === 'bigint' ? item.toString() : item) ?? String(value)
+  }
+  if (!NUMERIC_TEXT_PATTERN.test(value)) return value.trimEnd().toLowerCase()
+  const numeric = Number(value.trim())
+  return Number.isNaN(numeric) ? undefined : String(numeric)
+}
+
+function readMutationPublicationIdentities(mutation: DatabaseMutationEvent): ReadonlySet<string> | undefined {
+  const primaryKey = mutation.primaryKey
+  const rows = [...(mutation.rows ?? []), ...(mutation.previousRows ?? [])]
+  if (
+    !primaryKey
+    || rows.length === 0
+    || rows.length > MUTATION_PUBLICATION_IDENTITY_LIMIT
+    || (mutation.values && Object.prototype.hasOwnProperty.call(mutation.values, primaryKey))
+  ) {
+    return undefined
+  }
+
+  const identities = new Set<string>()
+  for (const row of rows) {
+    const value = row[primaryKey]
+    const identity = value === undefined || value === null ? undefined : normalizeMutationPublicationIdentity(value)
+    if (identity === undefined) return undefined
+    identities.add(identity)
+  }
+  return identities
+}
+
+function mutationPublicationsOverlap(left: ReadonlySet<string> | undefined, right: ReadonlySet<string> | undefined): boolean {
+  if (!left || !right) return true
+  for (const identity of left) {
+    if (right.has(identity)) return true
+  }
+  return false
+}
+
+function hasOverlappingMutationPublication(
+  published: readonly MutationPublicationRecord[],
+  records: readonly Omit<MutationPublicationRecord, 'publishedAt'>[],
+  startedAt: number,
+): boolean {
+  for (let index = published.length - 1; index >= 0; index -= 1) {
+    const candidate = published[index]
+    if (!candidate || candidate.publishedAt <= startedAt) return false
+    if (records.some(record => record.tableKey === candidate.tableKey && mutationPublicationsOverlap(record.identities, candidate.identities))) {
+      return true
+    }
+  }
+  return false
+}
+
+function recordMutationPublications(records: readonly Omit<MutationPublicationRecord, 'publishedAt'>[], startedAt: number | undefined): boolean {
+  const state = getMutationPublicationState()
+  const ordered = startedAt !== undefined
+    && startedAt >= state.prunedThrough
+    && !hasOverlappingMutationPublication(state.records, records, startedAt)
+
+  for (const record of records) {
+    state.sequence += 1
+    state.records.push({ ...record, publishedAt: state.sequence })
+  }
+  const overflow = state.records.length - MUTATION_PUBLICATION_RETENTION
+  if (overflow > 0) {
+    const pruned = state.records.splice(0, overflow)
+    state.prunedThrough = Math.max(state.prunedThrough, pruned[pruned.length - 1]?.publishedAt ?? 0)
+  }
+  return ordered
+}
+
+function recordDatabaseMutationPublication(mutations: readonly DatabaseMutationEvent[], startedAt: number | undefined): boolean {
+  return recordMutationPublications(mutations.map(mutation => ({
+    identities: readMutationPublicationIdentities(mutation),
+    tableKey: createMutationPublicationTableKey(createTableCacheDependency(mutation.connectionName, mutation.tableName)),
+  })), startedAt)
+}
+
+function recordRemoteMutationPublication(dependencies: readonly string[]): void {
+  const records: Omit<MutationPublicationRecord, 'publishedAt'>[] = []
+  for (const dependency of dependencies) {
+    const tableKey = parseDatabaseDependency(dependency)?.tableKey
+    if (tableKey !== undefined) records.push({ tableKey: createMutationPublicationTableKey(tableKey) })
+  }
+  if (records.length > 0) {
+    recordMutationPublications(records, undefined)
+  }
 }
 
 function setMutationPreviousRowsRequirement(listener: DatabaseDependencyInvalidationListener, requirement: MutationPreviousRowsRequirement): void {
@@ -1196,6 +1336,10 @@ async function receiveRemoteDatabaseDependencyInvalidation(
     return
   }
 
+  if (hasDatabaseDependencyInvalidationListeners()) {
+    recordRemoteMutationPublication(invalidation.dependencies)
+  }
+
   await evictThenNotify(
     () => getDatabaseQueryCacheBridge()?.invalidateDependencyTables?.(invalidation.dependencies),
     () => notifyDatabaseDependencyInvalidationListeners(Object.freeze({
@@ -1577,6 +1721,7 @@ function createDatabaseDependencyInvalidationEvent(
   dependencies: readonly string[],
   mutations: readonly DatabaseMutationEvent[],
   metadata?: DatabaseDependencyInvalidationMetadata,
+  publication: { readonly startedAt?: number, readonly unordered: boolean } = { unordered: false },
 ): DatabaseDependencyInvalidationEventInternal {
   const event: DatabaseDependencyInvalidationEventInternal = {
     connectionName: connection.getConnectionName(),
@@ -1590,6 +1735,8 @@ function createDatabaseDependencyInvalidationEvent(
     value: Object.freeze({
       ...(metadata ?? createDatabaseDependencyInvalidationMetadata(dependencies, mutations)),
       contextId: connection.getContextId(),
+      ...(publication.startedAt === undefined ? {} : { publicationStartedAt: publication.startedAt }),
+      ...(publication.unordered ? { unordered: true } : {}),
     }),
     writable: false,
   })
@@ -2956,6 +3103,7 @@ export async function invalidateQueryCacheDependencies(
   dependencies: readonly string[],
   mutations: readonly DatabaseMutationEvent[] = [],
   plan?: { readonly metadata?: DatabaseDependencyInvalidationMetadata },
+  publicationStartedAt?: number,
 ): Promise<void> {
   if (dependencies.length === 0) {
     return
@@ -2972,7 +3120,8 @@ export async function invalidateQueryCacheDependencies(
           return
         }
 
-        const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata)
+        const unordered = hasLocalListeners && mutations.length > 0 && !recordDatabaseMutationPublication(mutations, publicationStartedAt)
+        const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata, { startedAt: publicationStartedAt, unordered })
         const remote = serializeDatabaseDependencyInvalidation(event)
         if (candidates.length > 0 && remote.dependencies.length > 0) {
           rememberDatabaseInvalidationId(remote.id)
@@ -2997,7 +3146,9 @@ export async function invalidateQueryCacheDependencies(
 
 export const queryCacheInternals = {
   hasObservedResultChanged,
+  beginMutationPublication,
   getRootDatabaseContext,
+  markMutationPublicationBoundary,
   hasUnreadBoolean,
   hasUnreadableFetchedInteger,
   hasUnreadInteger,

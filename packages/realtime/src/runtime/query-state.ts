@@ -366,6 +366,7 @@ export type BackfillCache<TEntry = unknown> = {
   readonly aggregates: AggregateBackfillCache
   readonly aggregateGroupedSql?: AggregateGroupedSqlBackfillCache
   readonly aggregateSql: AggregateSqlBackfillCache
+  readonly backfillConnectionLookupsAtStart?: number
   readonly entries: readonly TEntry[]
   readonly exactPredicates?: PredicateDependencyIndex
   readonly groupedAggregateValues?: GroupedAggregateValueBackfillCache
