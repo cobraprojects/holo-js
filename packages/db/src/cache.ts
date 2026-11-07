@@ -1204,12 +1204,17 @@ const arrayWriteMethods = Object.fromEntries(ARRAY_WRITE_METHODS.map((name) => {
   return [name, method]
 })) as Readonly<Record<typeof ARRAY_WRITE_METHODS[number], (this: unknown[], ...args: unknown[]) => unknown>>
 
-function snapshotArray(array: readonly unknown[]): readonly unknown[] {
+function snapshotArray(array: readonly unknown[]): readonly unknown[] | undefined {
   const values: unknown[] = []
   values.length = array.length
   for (let index = 0; index < array.length; index += 1) {
-    if (Object.hasOwn(array, index)) {
-      values[index] = array[index]
+    const descriptor = Object.getOwnPropertyDescriptor(array, index)
+    if (descriptor && !('value' in descriptor)) {
+      return undefined
+    }
+
+    if (descriptor) {
+      values[index] = descriptor.value
     }
   }
 
@@ -1223,7 +1228,8 @@ function hasChangedArraySnapshot(state: DatabaseDependencyCollectorState): boole
     }
 
     for (let index = 0; index < values.length; index += 1) {
-      if (Object.hasOwn(values, index) !== Object.hasOwn(array, index) || !Object.is(values[index], array[index])) {
+      const descriptor = Object.getOwnPropertyDescriptor(array, index)
+      if (Boolean(descriptor) !== Object.hasOwn(values, index) || (descriptor && (!('value' in descriptor) || !Object.is(values[index], descriptor.value)))) {
         return true
       }
     }
@@ -1239,7 +1245,13 @@ export function serializeDatabaseQueryObservationsOnArrayWrites(array: unknown):
   }
 
   if (!state.arraySnapshots.has(array)) {
-    state.arraySnapshots.set(array, snapshotArray(array))
+    const values = snapshotArray(array)
+    if (!values) {
+      markDatabaseQueryObservationsSerialized()
+      return
+    }
+
+    state.arraySnapshots.set(array, values)
   }
 
   if (!Object.isExtensible(array) || Object.getPrototypeOf(array) !== Array.prototype) {

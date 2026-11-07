@@ -137,4 +137,22 @@ describe('array writes inside a dependency collection', () => {
       rows[1] = undefined
     })).toBe(true)
   })
+
+  it('re-runs instead of patching an array with an indexed getter without calling the getter', async () => {
+    let reads = 0
+    const rows: number[] = [1, 2]
+    Object.defineProperty(rows, 1, { configurable: true, enumerable: true, get: () => { reads += 1; throw new Error('read') } })
+    expect(await collect(() => serializeDatabaseQueryObservationsOnArrayWrites(rows))).toBe(true)
+    expect(reads).toBe(0)
+  })
+
+  it('re-runs instead of patching after an indexed getter replaces an element of the tracked array', async () => {
+    let reads = 0
+    const rows = [1, 2]
+    expect(await collect(() => {
+      serializeDatabaseQueryObservationsOnArrayWrites(rows)
+      Object.defineProperty(rows, 0, { configurable: true, enumerable: true, get: () => { reads += 1; return 1 } })
+    })).toBe(true)
+    expect(reads).toBe(0)
+  })
 })
