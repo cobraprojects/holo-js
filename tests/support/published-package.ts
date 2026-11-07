@@ -2,6 +2,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, sy
 import { cp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { collectLibraryBuilds } from '../../scripts/build-libraries.mjs'
+import { writeLauncherSync } from './launchers'
 
 type PackageManifest = {
   dependencies?: Record<string, string>
@@ -131,6 +132,16 @@ export function symlinkPackageDependencySync(
   rmSync(dependencyPath, { recursive: true, force: true })
   mkdirSync(dirname(dependencyPath), { recursive: true })
   symlinkSync(dependencyRoot, dependencyPath)
+}
+
+export function linkPackageBinsSync(nodeModulesRoot: string, packageName: string, packageRoot: string): void {
+  const { bin } = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { bin?: string | Record<string, string> }
+  const bins = typeof bin === 'string' ? { [basename(packageName)]: bin } : bin ?? {}
+  const binRoot = join(nodeModulesRoot, '.bin')
+  mkdirSync(binRoot, { recursive: true })
+  for (const [name, script] of Object.entries(bins)) {
+    writeLauncherSync(binRoot, name, { node: { absolute: join(packageRoot, script) } })
+  }
 }
 
 export async function linkInstalledDependenciesForPackage(options: {
