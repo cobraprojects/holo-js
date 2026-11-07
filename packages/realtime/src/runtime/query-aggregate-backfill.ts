@@ -1,5 +1,5 @@
 import { TableQueryBuilder, type DatabaseContext } from '@holo-js/db'
-import { getBackfillDatabaseConnection } from './query-backfill'
+import { getBackfillDatabaseConnection, whereObservedPredicates } from './query-backfill'
 import {
   createAggregateBackfillKey,
   createAggregateSqlBackfillKey,
@@ -54,12 +54,7 @@ function createAggregateBackfillBuilder(query: DatabaseQueryObservation): TableQ
     return undefined
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
-  for (const predicate of query.predicates) {
-    builder = builder.where(predicate.column, predicate.operator, predicate.value)
-  }
-
-  return builder
+  return whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection), query.predicates)
 }
 
 async function fetchAggregateSqlBackfill(

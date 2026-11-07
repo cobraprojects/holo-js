@@ -13,6 +13,7 @@ import {
 } from './query-metadata'
 import {
   getBackfillDatabaseConnection,
+  whereObservedPredicates,
 } from './query-backfill'
 import type {
   DatabaseQueryObservation,
@@ -195,9 +196,9 @@ async function fetchPaginationCountBackfill(query: DatabaseQueryObservation): Pr
     return undefined
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
-  for (const predicate of query.predicates) {
-    builder = builder.where(predicate.column, predicate.operator, predicate.value)
+  const builder = whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection), query.predicates)
+  if (!builder) {
+    return undefined
   }
 
   const rows = await builder
