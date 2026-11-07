@@ -54,7 +54,7 @@ import type {
   PatchableQueryPatchTarget,
 } from './query-state'
 import type { BackfillCache } from './state'
-import { readMutationsForQuery } from './query-backfill'
+import { readMutationsForQuery, routesMutationsToOtherTables } from './query-backfill'
 
 export async function tryPatchObservedQuery(
   target: PatchableQueryPatchTarget,
@@ -91,6 +91,10 @@ async function patchObservedQuery(
   }
 
   const { aggregatePatchMode, currentValue, query } = target
+  if (routesMutationsToOtherTables(query, observedMutations)) {
+    return UNPATCHED_RESULT
+  }
+
   const mutations = readMutationsForQuery(query, observedMutations, backfills)
   if (!mutations) {
     return UNPATCHED_RESULT

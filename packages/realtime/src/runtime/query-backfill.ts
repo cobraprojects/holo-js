@@ -186,6 +186,23 @@ function hasUnreadMutationValue(table: TableDefinition | undefined, mutation: Da
     .some(row => queryCacheInternals.hasUnreadBoolean(table, row) || queryCacheInternals.hasUnreadInteger(table, row))
 }
 
+function observedTablePathKeys(query: DatabaseQueryObservation): ReadonlySet<string> {
+  const keys = new Set<string>()
+  const add = (connectionName: string, tableName: string, table: TableDefinition | undefined) => {
+    keys.add(connectionTableKey(connectionName, table?.tableName ?? tableName))
+  }
+  add(query.connectionName, query.tableName, query.table)
+  if (query.relation) add(query.relation.relatedConnectionName, query.relation.relatedTableName, query.relation.relatedTable)
+  for (const hydration of query.belongsToHydrations ?? []) add(hydration.relatedConnectionName, hydration.relatedTableName, hydration.relatedTable)
+  for (const hydration of query.relatedHydrations ?? []) add(hydration.relatedConnectionName, hydration.relatedTableName, hydration.relatedTable)
+  return keys
+}
+
+export function routesMutationsToOtherTables(query: DatabaseQueryObservation, mutations: readonly DatabaseMutationEvent[]): boolean {
+  const keys = observedTablePathKeys(query)
+  return mutations.some(mutation => !keys.has(connectionTableKey(mutation.connectionName, mutation.tableName)))
+}
+
 export function readMutationsForQuery(
   query: DatabaseQueryObservation,
   mutations: readonly DatabaseMutationEvent[],
