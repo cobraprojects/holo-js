@@ -1,4 +1,4 @@
-import type { TableDefinition } from '@holo-js/db'
+import type { SelectQueryPlan, TableDefinition } from '@holo-js/db'
 import type {
   NO_EXACT_ID_PREDICATE,
   DatabaseQueryPredicateObservation,
@@ -36,6 +36,7 @@ export type DatabaseQueryObservation = {
   readonly pagination?: DatabaseQueryPaginationObservation
   readonly predicateColumns?: readonly string[]
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
+  readonly predicateTree?: SelectQueryPlan['predicates']
   readonly primaryKey?: string
   readonly readRow?: RealtimeRowReader
   readonly relation?: DatabaseQueryRelationObservation
