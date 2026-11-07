@@ -112,7 +112,7 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
     expect(subscription.current.data).toEqual(await handler())
   })
 
-  it('re-runs a name-only subscription over a boolean column, which reads the values the driver returns', async () => {
+  it('patches a name-only subscription using generated boolean columns', async () => {
     const { db, flags } = await openFlags(driver)
     registerGeneratedTables({ [flags.tableName]: flags })
     onTestFinished(() => clearGeneratedTables())
@@ -127,7 +127,26 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
     expect(subscription.current.data).toEqual(await handler())
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('id', 2).update({ enabled: true }) }))
     expect(subscription.current.data).toEqual(await handler())
-    expect(handlerRuns).toBe(3)
+    expect(handlerRuns).toBe(1)
+  })
+
+  it('patches name-only grouped having results with generated boolean values', async () => {
+    const { db, flags } = await openFlags(driver)
+    registerGeneratedTables({ flags })
+    onTestFinished(() => clearGeneratedTables())
+    await db.table(flags).insert({ id: 3, group_id: 1, enabled: true })
+    let runs = 0
+    const handler = () => db.table(flags.tableName).select('enabled').addSelectCount('total').groupBy('enabled').having('count(*)', '>', 1).orderBy('enabled').get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => {
+      runs += 1
+      return handler()
+    } }), {}, { onData: () => {}, onError: error => { throw error } })
+    onTestFinished(() => subscription.unsubscribe())
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 4, group_id: 2, enabled: false }) }))
+    expect(subscription.current.data).toEqual([{ enabled: false, total: 2 }, { enabled: true, total: 2 }])
+    expect(subscription.current.data).toEqual(await handler())
+    expect(runs).toBe(1)
   })
 
   it('re-runs a name-only subscription over a table whose columns are unknown', async () => {

@@ -1,15 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { openDatabase } from '../../db/tests/support/database'
+import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 
-const drivers = [
-  'sqlite',
-  ...(process.env.HOLO_POSTGRES_INTEGRATION === '1' ? ['postgres' as const] : []),
-  ...(process.env.HOLO_MYSQL_INTEGRATION === '1' ? ['mysql' as const] : []),
-] as const
+const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'])
 
 type Driver = typeof drivers[number]
 
@@ -60,6 +56,18 @@ describe.each(drivers)('realtime decimal columns on %s', (driver) => {
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(prices).where('id', 1).update({ amount: '9.50', group_id: 2 }) }))
     await expectCurrent()
     expect(subscriptions[4]!.current.data).toEqual([{ id: 1, amount: '9.50' }, { id: 2, amount: '12.30' }, { id: 3, amount: '12.30' }])
+  })
+
+  it('keeps aliased decimal window backfills equal to typed reads without a generated definition', async () => {
+    const { db, prices } = await openPrices(driver)
+    const handler = () => db.table(prices).select('id', 'amount as total').orderBy('id').limit(1).get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: error => { throw error } })
+    onTestFinished(() => subscription.unsubscribe())
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(prices).where('id', 1).delete() }))
+
+    expect(subscription.current.data).toEqual([{ id: 2, total: '12.34' }])
+    expect(subscription.current.data).toEqual(await handler())
   })
 
   it('keeps patching subscriptions that read no decimal column', async () => {

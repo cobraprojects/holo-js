@@ -108,7 +108,7 @@ import { isAwaitingGeneratedTableIdentity, getConnectionGeneratedTableDefinition
 import { unionCursorColumns } from './unionCursorColumns'
 import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
 import { splitTablePath } from '../schema/identifiers'
-import { storesJson } from '../schema/normalization'
+import { readSQLiteDecimal, storesJson } from '../schema/normalization'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
 import { UNKNOWN_TEXT_COLUMNS, resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -2211,7 +2211,7 @@ export class TableQueryBuilder<
 
   private convertRows<TRow extends Record<string, unknown>>(convertColumns: boolean, rows: TRow[]): TRow[] {
     if (!convertColumns) return rows
-    const plan = this.plan.source.table ? withResolvedDefinitions(this.plan, this.connection.getConnectionName()) : this.plan
+    const plan = withResolvedDefinitions(this.plan, this.connection.getConnectionName())
     const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan)
     if (convertedColumns.size === 0) return rows
     const converted = rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
@@ -2238,7 +2238,7 @@ export class TableQueryBuilder<
     })
   }
 
-  private observesSQLiteDecimalColumn(): boolean {
+  private comparesSQLiteDecimalColumn(): boolean {
     if (this.connection.getDriver() !== 'sqlite') return false
     const tables = new Map<string, TableDefinition | undefined>([[this.plan.source.alias ?? this.plan.source.tableName, this.source.table]])
     for (const join of this.plan.joins) {
@@ -2251,10 +2251,24 @@ export class TableQueryBuilder<
       const columns = Object.entries(table?.columns ?? {})
       return name === '*' ? columns.some(([, definition]) => definition.kind === 'decimal') : columns.some(([key, definition]) => key === name && definition.kind === 'decimal')
     }
-    return (this.plan.selections.length === 0 && [...tables.keys()].some(table => readsDecimal(`${table}.*`)))
-      || this.plan.selections.some(selection => selection.kind === 'column' && readsDecimal(selection.column))
+    return this.plan.selections.some(selection => selection.kind === 'aggregate' && selection.column !== '*' && readsDecimal(selection.column))
       || this.plan.groupBy.some(readsDecimal)
       || this.plan.orderBy.some(order => order.kind === 'column' && readsDecimal(order.column))
+  }
+
+  private withSQLiteDecimalReader(observation: DatabaseQueryObservation | undefined): DatabaseQueryObservation | undefined {
+    if (!observation || this.connection.getDriver() !== 'sqlite') return observation
+    const decimals = Object.entries(observation.table?.columns ?? {}).filter(([name, column]) => column.kind === 'decimal'
+      && (observation.selections.length === 0 || observation.selections.some(selection => this.resolveSourceColumnName(selection.column) === name)))
+    if (decimals.length === 0) return observation
+    return Object.freeze({
+      ...observation,
+      patchable: observation.patchable && !observation.selections.some(selection => selection.column !== selection.resultKey),
+      readRow: (row: Readonly<Record<string, unknown>>) => Object.freeze({
+        ...row,
+        ...Object.fromEntries(decimals.filter(([key]) => Object.hasOwn(row, key)).map(([key, column]) => [key, readSQLiteDecimal(row[key], column.decimalPlaces)])),
+      }),
+    })
   }
 
   private async recordCollectedQueryObservation<TRow extends Record<string, unknown>>(
@@ -2268,13 +2282,14 @@ export class TableQueryBuilder<
       return
     }
 
-    const observation = createObservation(
-      this.plan,
+    const plan = withResolvedDefinitions(this.plan, this.connection.getConnectionName())
+    const observation = this.withSQLiteDecimalReader(createObservation(
+      plan,
       this.connection.getConnectionName(),
       observationDependencies,
       rows,
-    )
-    if (observation?.patchable && (rowsReadFromUnstoredBooleans.has(rows) || this.observesSQLiteDecimalColumn())) {
+    ))
+    if (observation?.patchable && (rowsReadFromUnstoredBooleans.has(rows) || this.comparesSQLiteDecimalColumn())) {
       recordDatabaseQueryObservation(Object.freeze({ ...observation, patchable: false }))
       return
     }
@@ -2302,19 +2317,19 @@ export class TableQueryBuilder<
       : undefined
 
     recordDatabaseQueryObservation(aggregateStates
-      ? createObservation(
-          this.plan,
+      ? this.withSQLiteDecimalReader(createObservation(
+          plan,
           this.connection.getConnectionName(),
           observationDependencies,
           rows,
           aggregateStates,
-        )
+        ))
       : observation)
   }
 
   private async queryMetadataRows(plan: SelectQueryPlan, groupKey: string): Promise<readonly Record<string, unknown>[]> {
     const { rows } = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(plan))
-    const read = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan).get(groupKey)
+    const read = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, withResolvedDefinitions(plan, this.connection.getConnectionName())).get(groupKey)
     return read ? rows.map(row => Object.hasOwn(row, groupKey) ? { ...row, [groupKey]: read(row[groupKey]) } : row) : rows
   }
 
