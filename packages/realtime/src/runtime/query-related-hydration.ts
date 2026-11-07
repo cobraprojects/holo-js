@@ -12,6 +12,7 @@ import {
   readBackfilledValue,
   readMergedRow,
   readerCacheKey,
+  relatedTablePath,
   whereObservedPredicates,
 } from './query-backfill'
 import type {
@@ -293,7 +294,7 @@ async function fetchGroupedRelatedHydrationRows(
   }
 
   let builder = whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(
-    hydration.relatedTableName,
+    relatedTablePath(hydration),
     connection,
   ).where(hydration.foreignKey, 'in', values), hydration.predicates)
   if (!builder) {
@@ -390,7 +391,7 @@ function compileGroupedRelatedTopOneStatement(
   const upperBoundPlaceholder = placeholder(1)
   const derivedAlias = quote('__holo_grouped_related_rows')
   const rowNumberColumn = quote(GROUPED_RELATED_ROW_NUMBER_ALIAS)
-  const sql = `SELECT * FROM (SELECT *, ${quote(hydration.foreignKey)} AS ${quote(GROUPED_RELATED_ROW_ID_ALIAS)}, ${rowNumber} FROM ${holoRuntimeInternals.quoteTablePath(dialect, hydration.relatedTableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_RELATED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
+  const sql = `SELECT * FROM (SELECT *, ${quote(hydration.foreignKey)} AS ${quote(GROUPED_RELATED_ROW_ID_ALIAS)}, ${rowNumber} FROM ${holoRuntimeInternals.quoteTablePath(dialect, relatedTablePath(hydration))} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_RELATED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
 
   return {
     bindings,
@@ -479,7 +480,7 @@ async function fetchRelatedHydrationRows(
   }
 
   let builder = whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(
-    hydration.relatedTableName,
+    relatedTablePath(hydration),
     connection,
   ).where(hydration.foreignKey, localKey), hydration.predicates)
   if (!builder) {
@@ -546,12 +547,12 @@ function createRelatedHydrationBackfillKey(
   hydration: DatabaseQueryRelatedHydrationObservation,
   localKey: unknown,
 ): string {
-  return `related:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${hydration.foreignKey}:${stableStringify(localKey)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}${readerCacheKey(hydration.readRow, hydration)}`
+  return `related:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${stableStringify(relatedTablePath(hydration))}:${hydration.foreignKey}:${stableStringify(localKey)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}${readerCacheKey(hydration.readRow, hydration)}`
 }
 
 function createGroupedRelatedHydrationBackfillKey(
   hydration: DatabaseQueryRelatedHydrationObservation,
   values: readonly unknown[],
 ): string {
-  return `related-group:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${hydration.foreignKey}:${stableStringify(values)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}${readerCacheKey(hydration.readRow, hydration)}`
+  return `related-group:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${stableStringify(relatedTablePath(hydration))}:${hydration.foreignKey}:${stableStringify(values)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}${readerCacheKey(hydration.readRow, hydration)}`
 }

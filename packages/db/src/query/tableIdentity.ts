@@ -28,6 +28,11 @@ type TableIdentityEntry = {
 
 const resolvedIdentities = new WeakMap<object, Map<string, TableIdentityEntry>>()
 const tableNameFoldings = new WeakMap<object, Promise<TableNameFolding>>()
+const resolvedTableNameFoldings = new WeakMap<object, TableNameFolding>()
+
+export function resolvedTableNameFolding(connection: DatabaseContext): TableNameFolding | undefined {
+  return resolvedTableNameFoldings.get(getRootDatabaseContext(connection))
+}
 
 async function readTableNameFolding(connection: DatabaseContext): Promise<TableNameFolding> {
   const compiler = createQueryCompiler(connection)
@@ -47,7 +52,9 @@ async function resolveTableNameFolding(connection: DatabaseContext): Promise<voi
       if (tableNameFoldings.get(owner) === folding) tableNameFoldings.delete(owner)
     })
   }
-  rememberTableNameFolding(connection.getConnectionName(), await folding)
+  const resolved = await folding
+  resolvedTableNameFoldings.set(owner, resolved)
+  rememberTableNameFolding(connection.getConnectionName(), resolved)
 }
 
 function schemaChangingTransaction(connection: DatabaseContext): TransactionFrame | undefined {

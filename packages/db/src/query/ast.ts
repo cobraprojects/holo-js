@@ -1,3 +1,4 @@
+import { SecurityError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
 
 export type QueryOperator
@@ -375,11 +376,20 @@ export type QueryUpdateValue
     | QueryJsonUpdateOperation
     | readonly QueryJsonUpdateOperation[]
 
+const RESERVED_ALIAS_PATTERN = /^holo_reserved_\d+$/i
+
+export function assertUnreservedTableAlias<TAlias extends string | undefined>(alias: TAlias): TAlias {
+  if (alias !== undefined && RESERVED_ALIAS_PATTERN.test(alias)) {
+    throw new SecurityError(`Table alias "${alias}" is reserved: Holo names the related table of a self-relation filter holo_reserved_N.`)
+  }
+  return alias
+}
+
 export function parseTableReference(table: string): { readonly tableName: string, readonly alias?: string } {
   const aliasMatch = table.trim().match(/^([A-Z_][\w.]*)(?:\s+as\s+([A-Z_]\w*))?$/i)
   return {
     tableName: aliasMatch?.[1] ?? table,
-    alias: aliasMatch?.[2],
+    alias: assertUnreservedTableAlias(aliasMatch?.[2]),
   }
 }
 

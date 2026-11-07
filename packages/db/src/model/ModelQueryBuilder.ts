@@ -31,7 +31,7 @@ import {
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
-import { projectModelRows, resolveAggregateSource, TableQueryBuilder, whereResolvedColumn } from '../query/TableQueryBuilder'
+import { aliasTableSource, projectModelRows, resolveAggregateSource, TableQueryBuilder, whereResolvedColumn } from '../query/TableQueryBuilder'
 import { isAwaitingGeneratedTableIdentity } from '../schema/generated'
 import { knownJoinedColumns, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn } from '../query/modelRowProjection'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
@@ -201,7 +201,9 @@ class ModelQueryBuilderBase<
       ...(predicates.length > 0 ? [{ kind: 'group' as const, predicates }] : []),
     ])
     if (column && this.softDeleteMode !== 'with') {
-      query = this.softDeleteMode === 'only' ? query.whereNotNull(column as never) : query.whereNull(column as never)
+      const alias = query.getPlan().source.alias
+      const reference = (alias === undefined ? column : `${alias}.${column}`) as never
+      query = this.softDeleteMode === 'only' ? query.whereNotNull(reference) : query.whereNull(reference)
     }
     return query
   }
@@ -283,9 +285,11 @@ class ModelQueryBuilderBase<
   private collectNestedPredicates(
     callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>>,
   ): TableQueryPredicates<TTable> {
+    const alias = this.tableQuery.getPlan().source.alias
+    const tableQuery = this.repository.createTableQuery(this.getConnection())
     const nested = new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables>(
       this.repository,
-      this.repository.createTableQuery(this.getConnection()),
+      alias === undefined ? tableQuery : aliasTableSource(tableQuery, alias),
     ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
     const callbackResult = callback(nested)
     const result = callbackResult instanceof ModelQueryBuilderBase ? callbackResult : nested

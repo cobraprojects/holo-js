@@ -10,6 +10,7 @@ import {
   readBackfilledValue,
   readMergedRow,
   readerCacheKey,
+  relatedTablePath,
   whereObservedPredicates,
 } from './query-backfill'
 import { matchesPredicates, type DatabaseQueryPredicateObservation } from './predicate-matching'
@@ -248,7 +249,7 @@ async function fetchGroupedBelongsToRelatedRows(
   }
 
   const builder = whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(
-    target.relatedTableName,
+    relatedTablePath(target),
     connection,
   )
     .where(target.ownerKey, 'in', values), target.predicates)
@@ -290,7 +291,7 @@ async function fetchBelongsToRelatedRow(
   }
 
   const builder = whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(
-    target.relatedTableName,
+    relatedTablePath(target),
     connection,
   )
     .where(target.ownerKey, foreignKey), target.predicates)
@@ -305,12 +306,12 @@ function createBelongsToRelatedBackfillKey(
   target: BelongsToHydrationTarget,
   foreignKey: unknown,
 ): string {
-  return `belongs-to:${target.relatedConnectionName}:${target.relatedTableName}:${target.ownerKey}:${stableStringify(foreignKey)}:${stableStringify(target.predicates)}${readerCacheKey(target.readRow ?? target.relatedReadRow, target)}`
+  return `belongs-to:${target.relatedConnectionName}:${target.relatedTableName}:${stableStringify(relatedTablePath(target))}:${target.ownerKey}:${stableStringify(foreignKey)}:${stableStringify(target.predicates)}${readerCacheKey(target.readRow ?? target.relatedReadRow, target)}`
 }
 
 function createGroupedBelongsToRelatedBackfillKey(
   target: BelongsToHydrationTarget,
   values: readonly unknown[],
 ): string {
-  return `belongs-to-group:${target.relatedConnectionName}:${target.relatedTableName}:${target.ownerKey}:${stableStringify(values)}:${stableStringify(target.predicates)}${readerCacheKey(target.readRow ?? target.relatedReadRow, target)}`
+  return `belongs-to-group:${target.relatedConnectionName}:${target.relatedTableName}:${stableStringify(relatedTablePath(target))}:${target.ownerKey}:${stableStringify(values)}:${stableStringify(target.predicates)}${readerCacheKey(target.readRow ?? target.relatedReadRow, target)}`
 }
