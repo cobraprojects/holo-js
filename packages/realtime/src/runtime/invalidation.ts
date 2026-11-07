@@ -129,6 +129,7 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
       entry.definition,
       entry.args,
     ))
+    entry.readBoundary = queryCacheInternals.markMutationPublicationBoundary()
     entry.contexts = new Map(result.contexts)
     const delivery = {
       result,
@@ -218,6 +219,7 @@ function createInvalidationBackfills(
   return {
     aggregates: new Map(),
     aggregateGroupedSql: new Map(),
+    backfillConnectionLookupsAtStart: getRuntimeState().backfillConnectionLookups ?? 0,
     aggregateSql: new Map(),
     entries,
     exactPredicates: event ? readExactPredicatesForPatching(event) : createBatchedExactPredicatesForPatching(events),

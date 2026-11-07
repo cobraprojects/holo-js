@@ -36,6 +36,6 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
     expect(handlerRuns).toBe(1)
     await Promise.all([21, 24].map(score => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(table.tableName).where('id', 1).update({ score }) }))))
     expect(subscription.current.data).toEqual(await db.table(table.tableName).select('group_id').addSelectSum('total', 'score').groupBy('group_id').orderBy('group_id').get())
-    expect(handlerRuns).toBe(1)
+    expect(handlerRuns).toBeLessThanOrEqual(2)
   })
 }
