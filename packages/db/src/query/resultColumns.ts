@@ -155,7 +155,14 @@ function createUnionReaderCheck(
   }
   return (key, reader) => {
     const position = selected.map(([selectedKey]) => selectedKey).lastIndexOf(key)
-    return branches.every(branch => columnReader(dialect, branch[position]?.[1]) === reader)
+    const definition = selected[position]?.[1]
+    return branches.every(branch => {
+      const column = branch[position]?.[1]
+      if (definition && column && readsAsSQLiteDecimal(dialect, definition) && readsAsSQLiteDecimal(dialect, column)) {
+        return (definition.decimalPlaces ?? 2) === (column.decimalPlaces ?? 2)
+      }
+      return columnReader(dialect, column) === reader
+    })
   }
 }
 

@@ -70,10 +70,39 @@ describe.each(drivers)('decimal precision on %s', (driver) => {
       const changed = defineGeneratedTable(name, { rate: column.decimal(undefined, total, places), legacy: column.decimal() })
       expect((await diffSchema(schema, [changed])).tables[0]?.mismatchedColumns.map(column => column.column)).toEqual(['rate'])
     }
-    await schema.table(name, table => table.decimal('rate', 12, 3).change())
-    await schema.table(name, table => table.string('label').nullable())
+    await schema.table(name, table => {
+      table.decimal('rate', 12, 3).change()
+    })
+    await schema.table(name, table => {
+      table.string('label').nullable()
+    })
     const changedDefinition = (await reader.readTable(name))!
     expect(changedDefinition.columns.rate).toMatchObject({ decimalTotal: 12, decimalPlaces: 3 })
     expect((await diffSchema(schema, [changedDefinition])).tables[0]?.hasChanges).toBe(false)
   })
+})
+
+it('pads SQLite unions only when every branch has the same effective decimal scale', async () => {
+  const { schema } = await openDatabase('sqlite')
+  onTestFinished(() => resetDB())
+  await schema.createTable('decimal_unions', table => {
+    table.decimal('rate', 10, 4)
+    table.decimal('other', 12, 4)
+    table.decimal('legacy')
+    table.decimal('money', 10, 2)
+  })
+  const rates = defineGeneratedTable('decimal_unions', {
+    rate: column.decimal(undefined, 10, 4),
+    other: column.decimal(undefined, 12, 4),
+    legacy: column.decimal(),
+    money: column.decimal(undefined, 10, 2),
+  })
+  await DB.table(rates).insert({ rate: '12.3000', other: '12.3000', legacy: '12.30', money: '12.30' })
+
+  expect(await DB.table(rates).select('rate as amount').unionAll(DB.table(rates).select('other as amount')).get())
+    .toEqual([{ amount: '12.3000' }, { amount: '12.3000' }])
+  expect(await DB.table(rates).select('legacy as amount').union(DB.table(rates).select('money as amount')).get())
+    .toEqual([{ amount: '12.30' }])
+  expect(await DB.table(rates).select('rate as amount').union(DB.table(rates).select('legacy as amount')).get())
+    .toEqual([{ amount: 12.3 }])
 })

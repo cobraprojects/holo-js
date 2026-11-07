@@ -295,7 +295,7 @@ export class SQLiteAdapter implements DriverAdapter {
     if (!this.hasRegisteredFunctions) {
       this.canCallFunctions = typeof this.database.function === 'function'
       this.database.function?.(holoRuntimeInternals.SQLITE_WALL_CLOCK_FUNCTION, { deterministic: true }, holoRuntimeInternals.formatSQLiteWallClock)
-      this.database.function?.(holoRuntimeInternals.SQLITE_DECIMAL_TEXT_FUNCTION, { deterministic: true, safeIntegers: true }, holoRuntimeInternals.readSQLiteDecimal)
+      this.database.function?.(holoRuntimeInternals.SQLITE_DECIMAL_TEXT_FUNCTION, { deterministic: true, safeIntegers: true }, value => holoRuntimeInternals.readSQLiteDecimal(value))
       this.hasRegisteredFunctions = true
     }
     this.connected = true
