@@ -10,6 +10,7 @@ import {
   readBackfilledValue,
   readMergedRow,
   readerCacheKey,
+  whereObservedPredicates,
 } from './query-backfill'
 import { matchesPredicates, type DatabaseQueryPredicateObservation } from './predicate-matching'
 import { canBackfillRelatedHydrationPredicates } from './query-related-hydration'
@@ -246,13 +247,13 @@ async function fetchGroupedBelongsToRelatedRows(
     return undefined
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(
+  const builder = whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(
     target.relatedTableName,
     connection,
   )
-    .where(target.ownerKey, 'in', values)
-  for (const predicate of target.predicates) {
-    builder = builder.where(predicate.column, predicate.operator, predicate.value)
+    .where(target.ownerKey, 'in', values), target.predicates)
+  if (!builder) {
+    return undefined
   }
 
   const rows = readTargetRows(target, await builder.get())
@@ -288,13 +289,13 @@ async function fetchBelongsToRelatedRow(
     return undefined
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(
+  const builder = whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(
     target.relatedTableName,
     connection,
   )
-    .where(target.ownerKey, foreignKey)
-  for (const predicate of target.predicates) {
-    builder = builder.where(predicate.column, predicate.operator, predicate.value)
+    .where(target.ownerKey, foreignKey), target.predicates)
+  if (!builder) {
+    return undefined
   }
 
   return readTargetRows(target, await builder.limit(1).get())

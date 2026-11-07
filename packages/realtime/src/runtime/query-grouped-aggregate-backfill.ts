@@ -5,7 +5,7 @@ import {
   readMatchingGroupedAggregateValue,
   sortGroupedAggregateRows,
 } from './query-grouped-aggregate-common'
-import { getBackfillDatabaseConnection, readBackfilledValue } from './query-backfill'
+import { getBackfillDatabaseConnection, readBackfilledValue, whereObservedPredicates } from './query-backfill'
 import {
   UNCHANGED_QUERY_RESULT,
   UNPATCHED_RESULT,
@@ -205,9 +205,9 @@ async function fetchGroupedAggregateValues(
     return undefined
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
-  for (const predicate of query.predicates) {
-    builder = builder.where(predicate.column, predicate.operator, predicate.value)
+  const builder = whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection), query.predicates)
+  if (!builder) {
+    return undefined
   }
 
   let aggregateBuilder = whereGroupValues(builder, groupedAggregate.groupColumn, values)
@@ -384,9 +384,9 @@ async function fetchGroupedAggregateValueCounts(
     return undefined
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
-  for (const predicate of query.predicates) {
-    builder = builder.where(predicate.column, predicate.operator, predicate.value)
+  const builder = whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection), query.predicates)
+  if (!builder) {
+    return undefined
   }
 
   const rows = await whereGroupValues(builder, groupedAggregate.groupColumn, values)
