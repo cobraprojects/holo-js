@@ -90,7 +90,7 @@ export interface SQLiteDatabaseLike {
   prepare(sql: string): SQLiteStatementLike
   exec(sql: string): unknown
   close(): unknown
-  function?(name: string, options: { deterministic: boolean, safeIntegers?: boolean }, implementation: (...args: unknown[]) => unknown): unknown
+  function?(name: string, options: { deterministic: boolean, safeIntegers?: boolean, varargs?: boolean }, implementation: (...args: unknown[]) => unknown): unknown
 }
 
 export interface SQLiteAdapterOptions {
@@ -295,7 +295,7 @@ export class SQLiteAdapter implements DriverAdapter {
     if (!this.hasRegisteredFunctions) {
       this.canCallFunctions = typeof this.database.function === 'function'
       this.database.function?.(holoRuntimeInternals.SQLITE_WALL_CLOCK_FUNCTION, { deterministic: true }, holoRuntimeInternals.formatSQLiteWallClock)
-      this.database.function?.(holoRuntimeInternals.SQLITE_DECIMAL_TEXT_FUNCTION, { deterministic: true, safeIntegers: true }, value => holoRuntimeInternals.readSQLiteDecimal(value))
+      this.database.function?.(holoRuntimeInternals.SQLITE_DECIMAL_TEXT_FUNCTION, { deterministic: true, safeIntegers: true, varargs: true }, (value, places) => holoRuntimeInternals.readSQLiteDecimal(value, places == null ? undefined : Number(places)))
       this.hasRegisteredFunctions = true
     }
     this.connected = true
