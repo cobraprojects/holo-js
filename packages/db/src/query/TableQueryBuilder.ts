@@ -203,7 +203,7 @@ let keyColumnComparison: (query: AnyTableQuery, column: string, compareTo: strin
 let keyColumnSelection: (query: AnyTableQuery, column: string, casts: QueryKeyCasts) => AnyTableQuery
 let keyColumnJoin: (query: AnyTableQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string) => AnyTableQuery
 let sourceAliasing: (query: AnyTableQuery, alias: string) => AnyTableQuery
-let sourceRequalifying: (query: AnyTableQuery, parentTableName: string, previousAlias?: string) => AnyTableQuery
+let sourceRequalifying: (query: AnyTableQuery, previousAlias?: string) => AnyTableQuery
 let connectionNameFolding: (query: AnyTableQuery) => ((name: string) => string) | undefined
 
 export function aliasTableSource<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, alias: string): TQuery {
@@ -211,8 +211,8 @@ export function aliasTableSource<TQuery extends TableQueryBuilder<TableReference
   return sourceAliasing(query as unknown as AnyTableQuery, alias) as unknown as TQuery
 }
 
-export function requalifyTableSource<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, parentTableName: string, previousAlias?: string): TQuery {
-  return sourceRequalifying(query as unknown as AnyTableQuery, parentTableName, previousAlias) as unknown as TQuery
+export function requalifyTableSource<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, previousAlias?: string): TQuery {
+  return sourceRequalifying(query as unknown as AnyTableQuery, previousAlias) as unknown as TQuery
 }
 
 export function whereKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, compareTo: string, casts: QueryKeyCasts): TQuery {
@@ -3030,7 +3030,7 @@ export class TableQueryBuilder<
       const folding = compiler.compileTableNameFoldingLookup() ? resolvedTableNameFolding(query.connection) : compiler.tableNameFolding()
       return folding === undefined ? undefined : name => applyTableNameFolding(folding, name)
     }
-    sourceRequalifying = (query, parentTableName, previousAlias) => query.clone(requalifyAliasedSource(query.plan, connectionNameFolding(query), parentTableName, previousAlias))
+    sourceRequalifying = (query, previousAlias) => query.clone(requalifyAliasedSource(query.plan, connectionNameFolding(query), previousAlias))
     keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)
     keyColumnSelection = (query, column, casts) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(casts.left ? { keyCast: casts.left } : {}), ...(casts.unknownKind ? { unknownKeyKind: casts.unknownKind } : {}) })]) })
     keyColumnJoin = (query, table, leftColumn, rightColumn, casts, alias) => query.clone(withJoin(query.plan, {

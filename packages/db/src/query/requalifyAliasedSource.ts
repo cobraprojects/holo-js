@@ -19,10 +19,6 @@ function bindsTable(binding: string, tableName: string, fold: NameFolding = igno
   return shortName(binding, fold) === shortName(tableName, fold)
 }
 
-function spelledAlike(left: string, right: string, fold: NameFolding = ignoreCase): boolean {
-  return bindsTable(left, right, fold) && schemaOf(left, fold) === schemaOf(right, fold)
-}
-
 export function sameTable(left: string, right: string, fold: NameFolding = ignoreCase): boolean {
   const leftSchema = schemaOf(left, fold)
   const rightSchema = schemaOf(right, fold)
@@ -83,14 +79,13 @@ function requalifyPlan(plan: SelectQueryPlan, target: Target, enclosing: readonl
   return requalifyPlanBody(plan, target, enclosing, bindingsOf(plan))
 }
 
-export function requalifyAliasedSource(plan: SelectQueryPlan, fold: NameFolding | undefined, parentTableName: string, previousAlias?: string): SelectQueryPlan {
+export function requalifyAliasedSource(plan: SelectQueryPlan, fold: NameFolding | undefined, previousAlias?: string): SelectQueryPlan {
   const alias = plan.source.alias
   if (alias === undefined) return plan
   const tableName = plan.source.tableName
-  const names = (qualifier: string, folding: NameFolding) => {
-    const matches = spelledAlike(parentTableName, tableName, folding) ? sameTable : spelledAlike
-    return (previousAlias !== undefined && folding(qualifier) === folding(previousAlias)) || matches(qualifier, tableName, folding)
-  }
+  const source: Binding = { name: tableName, aliased: false }
+  const names = (qualifier: string, folding: NameFolding) => (previousAlias !== undefined && folding(qualifier) === folding(previousAlias))
+    || captures(source, qualifier, folding)
   return requalifyPlanBody(plan, {
     names: qualifier => decided(fold, qualifier, folding => names(qualifier, folding)),
     captures: (binding, qualifier) => decided(fold, qualifier, folding => captures(binding, qualifier, folding)),

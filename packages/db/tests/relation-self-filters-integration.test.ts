@@ -429,11 +429,13 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
 
     const sameTenant = await Home.whereHas('audits', query => query.whereColumn(`${audit}.${name}.tenant_id` as never, '=', `${home}.${name}.tenant_id`)).orderBy('id').get() as unknown as Category[]
     const bareSameTenant = await BareHome.whereHas('audits', query => query.whereColumn(`${audit}.${name}.tenant_id` as never, '=', `${name}.tenant_id`)).orderBy('id').get() as unknown as Category[]
+    const scopedTenant = await BareHome.whereHas('audits', query => query.where(`${name}.tenant_id` as never, 9)).orderBy('id').get() as unknown as Category[]
     const has = await Home.has('audits').orderBy('id').get() as unknown as Category[]
 
     expect(has.map(id)).toEqual([1, 2])
     expect(sameTenant.map(id)).toEqual([1])
-    expect(bareSameTenant.map(id)).toEqual([1])
+    expect(bareSameTenant.map(id)).toEqual([1, 2])
+    expect(scopedTenant.map(id)).toEqual([2])
   })
 
   it('rewrites schema-qualified references next to a same-named table from another schema', async () => {

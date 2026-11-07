@@ -2790,13 +2790,13 @@ export class ModelRepository<
       const alias = preferredAlias ?? (hidesParent ? this.selfRelationAlias(parentAlias, 0) : undefined)
       if (alias === undefined) return query
       const taken = new Set([...nestedTableNames(query.getPlan()), query.getTableName(), this.definition.table.tableName, ...(parentAlias === undefined ? [] : [parentAlias])].map(folded))
-      if (current !== undefined && !taken.has(folded(current))) return requalifyTableSource(query, this.definition.table.tableName)
+      if (current !== undefined && !taken.has(folded(current))) return requalifyTableSource(query)
       let unused = alias
       for (let reserved = 2; taken.has(folded(unused)); reserved += 2) unused = this.selfRelationAlias(parentAlias, reserved)
-      return requalifyTableSource(aliasTableSource(query, unused), this.definition.table.tableName, current)
+      return requalifyTableSource(aliasTableSource(query, unused), current)
     }
     const pivotQuery = <TQuery extends TableQueryBuilder<string | TableDefinition>>(query: TQuery) => bindsParent(query.getTableName())
-      ? requalifyTableSource(aliasTableSource(query, this.selfRelationAlias(parentAlias, 1)), query.getTableName())
+      ? requalifyTableSource(aliasTableSource(query, this.selfRelationAlias(parentAlias, 1)))
       : query
 
     switch (relation.kind) {
