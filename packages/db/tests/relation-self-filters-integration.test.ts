@@ -251,7 +251,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
   })
 
   it('keeps a schema-qualified nested query on the table bound to that query', async () => {
-    const { Category, table, schemaName } = await openSelfFixtures(driver)
+    const { Category, QualifiedTree, table, schemaName } = await openSelfFixtures(driver)
     const constraint = (query: { whereExists(subquery: unknown): unknown }) => query.whereExists(DB.table(`${schemaName}.${table}`).where(`${table}.name`, 'root'))
     const loaded = await Category.with('children', constraint as never).orderBy('id').get() as unknown as Category[]
     const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
@@ -278,6 +278,11 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
       .join(`${postsTable} as p`, 'p.category_id', '=', `${table}.id`)
       .join(`${grantsTable} as ${table}`, `${table}.id`, '=', 'g.id')))
     expect(laterJoin).toThrow(`"${table}.id" in a join condition may name the later join "${table}"`)
+    const audit = `sr_audit_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const otherSchemaLater = () => QualifiedTree.whereHas('children', query => query.whereExists(DB.table(`${postsTable} as p`)
+      .join(`${grantsTable} as g`, 'g.category_id', '=', `${schemaName}.${table}.id`)
+      .join(`${audit}.${table}`, `${audit}.${table}.id`, '=', 'p.id')))
+    expect(otherSchemaLater).not.toThrow()
   })
 
   it('aliases a constraint that returns a fresh query on the same table', async () => {
