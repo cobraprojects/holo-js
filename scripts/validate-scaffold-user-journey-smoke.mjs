@@ -10,6 +10,7 @@ import {
   restoreProjectManifest,
   stageLocalWorkspacePackages,
 } from './local-workspace-packages.mjs'
+import { liveRegistryVariable, scaffoldSmokeNpmEnvironment } from './scaffold-smoke-registry.mjs'
 
 const rootDir = resolve(import.meta.dirname, '..')
 const optionalPackageNames = [
@@ -1162,7 +1163,12 @@ try {
   const realNpm = run('workspace', 'which', ['npm']).stdout.trim()
   const localPackagesRoot = await stageLocalWorkspacePackages(rootDir, tempRoot)
   const binRoot = await createInstallWrapper(tempRoot)
+  const npmEnvironment = scaffoldSmokeNpmEnvironment(rootDir)
+  log('workspace', npmEnvironment.npm_config_before
+    ? `npm resolves packages published on or before ${npmEnvironment.npm_config_before}, ${npmEnvironment.npm_config_offline ? 'from the local npm cache only' : 'reusing the local npm cache'}`
+    : `npm resolves packages live from the registry (${liveRegistryVariable}=1)`)
   const localPackageEnv = {
+    ...npmEnvironment,
     HOLO_LOCAL_PACKAGES_ROOT: localPackagesRoot,
     HOLO_REAL_NPM: realNpm,
     HOLO_SMOKE_SCRIPT: import.meta.filename,

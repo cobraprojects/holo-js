@@ -23,6 +23,7 @@ import { createSQLiteAdapter } from '../../db-sqlite/src'
 import { createPostgresAdapter } from '../../db-postgres/src'
 import { createMySQLAdapter } from '../../db-mysql/src'
 import {
+  linkPackageBinsSync,
   stageWorkspacePackagesSync,
   resolveInstalledDependencyRoot,
   symlinkPackageDependencySync,
@@ -911,7 +912,9 @@ function linkNativeFramework(projectRoot: string, framework: 'nuxt' | 'sveltekit
     : ['@sveltejs/kit', '@sveltejs/adapter-node', '@sveltejs/vite-plugin-svelte', 'svelte', 'vite']
   const nodeModulesRoot = join(projectRoot, 'node_modules')
   for (const dependency of dependencies) {
-    symlinkPackageDependencySync(nodeModulesRoot, dependency, resolveInstalledDependencyRoot(workspaceRoot, dependency))
+    const dependencyRoot = resolveInstalledDependencyRoot(workspaceRoot, dependency)
+    symlinkPackageDependencySync(nodeModulesRoot, dependency, dependencyRoot)
+    linkPackageBinsSync(nodeModulesRoot, dependency, dependencyRoot)
   }
   symlinkPackageDependencySync(nodeModulesRoot, `@holo-js/adapter-${framework}`, join(workspaceRoot, 'packages', `adapter-${framework}`))
 }
@@ -10873,6 +10876,7 @@ export default defineConfig({
     tempDirs.push(projectRoot)
     linkNativeFramework(projectRoot, 'nuxt')
     await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'nuxt' }, null, 2))
+    vi.stubEnv('npm_config_registry', 'http://127.0.0.1:9/')
 
     await (async () => {
       await runProjectPrepare(projectRoot)
