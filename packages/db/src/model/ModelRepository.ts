@@ -2701,6 +2701,10 @@ export class ModelRepository<
     return this.valueTransformer.readsColumnAsStored(column)
   }
 
+  readsWithoutRejectingValues(): boolean {
+    return this.valueTransformer.readsWithoutRejectingValues()
+  }
+
   serializesBeyondRows(): boolean {
     return modelSerializesBeyondRows(this.definition)
       || this.definition.collection !== undefined

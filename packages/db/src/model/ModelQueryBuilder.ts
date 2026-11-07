@@ -2666,8 +2666,8 @@ class ModelQueryBuilderBase<
   }
 
   private rebindModelAggregate(entities: unknown, result: unknown, aggregate: DatabaseQueryAggregateObservation): void {
-    if (aggregate.column === undefined || this.repository.readsColumnAsStored(aggregate.column)) {
-      rebindDatabaseQueryObservationAggregate(entities, result, aggregate)
+    if (this.repository.readsWithoutRejectingValues() && (aggregate.column === undefined || this.repository.readsColumnAsStored(aggregate.column))) {
+      rebindDatabaseQueryObservationAggregate(entities, result, aggregate, this.repository.rowReader())
       return
     }
 

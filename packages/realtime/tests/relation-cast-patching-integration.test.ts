@@ -403,6 +403,7 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     const expectFresh = await subscribeAll(variant, {
       json: () => db.model(Owner).query().with('notes', query => query.orderBy('id')).orderBy('id').getJson(),
       models: () => db.model(Owner).query().with('notes', query => query.orderBy('id')).orderBy('id').get(),
+      sum: () => db.model(Note).query().where('owner_id', 1).sum('id'),
     })
 
     await mutate(() => db.table(notes).where('id', 1).update({ body: 'b', updated_at: '2024-02-03 04:05:06' }))
@@ -433,6 +434,31 @@ describe.each(drivers)('realtime relation patches with a cast that rejects a sto
     } })
 
     await mutate(() => db.table(items).where('id', 1).update({ secret: 'rejected' }))
+
+    await expect(handler()).rejects.toThrow('rejects "rejected"')
+    expect(runs).toBe(2)
+    expect(String(errors[0])).toContain('rejects "rejected"')
+  })
+
+  it('re-runs an aggregate when a cast on another column rejects a stored value', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, items } = await openFixture(variant)
+    const strict = { get: (value: unknown) => {
+      if (value === 'rejected') throw new Error('The secret cast rejects "rejected".')
+      return value
+    }, set: (value: unknown) => value }
+    const StrictItem = defineModel(items, { timestamps: false, casts: { secret: strict } })
+    const handler = () => db.model(StrictItem).query().where('owner_id', 1).sum('big')
+    const errors: unknown[] = []
+    let runs = 0
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => {
+      runs += 1
+      return handler()
+    } }), {}, { onData: () => {}, onError: (error) => {
+      errors.push(error)
+    } })
+
+    await mutate(() => db.table(items).insert({ id: 12, owner_id: 1, ...rowValues(variant, 27), secret: 'rejected' }))
 
     await expect(handler()).rejects.toThrow('rejects "rejected"')
     expect(runs).toBe(2)

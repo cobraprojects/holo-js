@@ -186,6 +186,19 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return Object.freeze(Object.fromEntries(Object.entries(normalized).map(([key, value]) => [key, serializeModels(this.serializeAttributeValue(key, value))])))
   }
 
+  readsWithoutRejectingValues(): boolean {
+    const { casts, table } = this.definition
+    const keys = new Set([...Object.keys(table.columns), ...Object.keys(casts)])
+    return [...keys].every((key) => {
+      const column = ownEntry(table.columns, key)
+      if (column && (column.kind === 'json' || column.kind === 'vector')) return false
+      const cast = this.resolveCast(key)
+      if (cast === undefined) return true
+      const name = this.parseBuiltInCast(cast)?.name
+      return name === 'boolean' || name === 'number' || name === 'string' || name === 'date' || name === 'datetime' || name === 'timestamp'
+    })
+  }
+
   readsColumnAsStored(key: string): boolean {
     const column = ownEntry(this.definition.table.columns, key)
     return this.resolveCast(key) === undefined && !(column && isConvertedByModelReads(column))

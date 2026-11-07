@@ -1212,8 +1212,9 @@ export function rebindDatabaseQueryObservationAggregate(
   source: unknown,
   result: unknown,
   aggregate: DatabaseQueryAggregateObservation,
+  readRow?: DatabaseQueryRowReader,
 ): void {
-  rebindDatabaseQueryObservation(source, result, aggregate)
+  rebindDatabaseQueryObservation(source, result, aggregate, undefined, undefined, undefined, undefined, undefined, readRow)
 }
 
 export function rebindDatabaseQueryObservationScalar(
