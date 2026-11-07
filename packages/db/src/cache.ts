@@ -237,6 +237,7 @@ export interface DatabaseQueryObservation {
   readonly patchable: boolean
   readonly pagination?: DatabaseQueryPaginationObservation
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
+  readonly predicateTree?: SelectQueryPlan['predicates']
   readonly primaryKey?: string
   readonly relation?: DatabaseQueryRelationObservation
   readonly result?: unknown
@@ -869,6 +870,7 @@ function refreshQueryObservation(observation: DatabaseQueryObservation): Databas
     orderBy: observation.orderBy,
     patchable: false,
     predicates: observation.predicates,
+    predicateTree: observation.predicateTree,
     selections: observation.selections,
     serialized: true,
     tableName: observation.tableName,
@@ -961,6 +963,7 @@ export function rebindDatabaseQueryObservationPagination(
       patchable: query.patchable,
       pagination: undefined,
       predicates: query.predicates,
+      predicateTree: query.predicateTree,
       primaryKey: query.primaryKey,
       relation: query.relation,
       result: data,
@@ -985,6 +988,7 @@ export function rebindDatabaseQueryObservationPagination(
       patchable: query.patchable,
       pagination,
       predicates: query.predicates,
+      predicateTree: query.predicateTree,
       primaryKey: query.primaryKey,
       relation: query.relation,
       result: meta,
@@ -1035,6 +1039,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       patchable: query.patchable,
       pagination: undefined,
       predicates: query.predicates,
+      predicateTree: query.predicateTree,
       primaryKey: query.primaryKey,
       relation: query.relation,
       result: data,
@@ -1059,6 +1064,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       patchable: query.patchable,
       pagination,
       predicates: query.predicates,
+      predicateTree: query.predicateTree,
       primaryKey: query.primaryKey,
       relation: query.relation,
       result: meta.nextCursor,
@@ -1102,6 +1108,7 @@ export function disableDatabaseQueryObservationPatching(
       patchable: false,
       pagination: query.pagination,
       predicates: query.predicates,
+      predicateTree: query.predicateTree,
       primaryKey: query.primaryKey,
       relation: query.relation,
       result: query.result,
@@ -1349,6 +1356,7 @@ function rebindDatabaseQueryObservation(
       patchable: query.patchable && !(aggregate?.column !== undefined && isBooleanColumn(query.table, aggregate.column)),
       pagination: query.pagination,
       predicates: query.predicates,
+      predicateTree: query.predicateTree,
       primaryKey: query.primaryKey,
       relation: query.relation,
       result,
@@ -2328,6 +2336,10 @@ function createInvalidationMetadataFromParts(
 }
 
 function collectQueryPredicateObservations(predicates: readonly QueryPredicateNode[]): readonly DatabaseQueryPredicateObservation[] {
+  if (predicates.some(predicate => predicate.boolean === 'or')) {
+    return Object.freeze([])
+  }
+
   const observations: DatabaseQueryPredicateObservation[] = []
   for (const predicate of predicates) {
     if (predicate.kind === 'comparison') {
@@ -2730,6 +2742,7 @@ function createDatabaseQueryObservationFromPlan(
     patchable: patchable ?? isPatchableQueryObservation(plan, primaryKey),
     pagination: undefined,
     predicates: collectQueryPredicateObservations(plan.predicates),
+    predicateTree: hasDisjunctivePredicate(plan.predicates) ? plan.predicates : undefined,
     primaryKey,
     result,
     selections: collectQuerySelectionObservations(plan),

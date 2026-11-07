@@ -132,6 +132,7 @@ export function createPatchedQueryObservation(
     patchPlan,
     predicateColumns: readQueryPredicateColumns(query),
     predicates: query.predicates,
+    predicateTree: query.predicateTree,
     primaryKey: query.primaryKey,
     relation: query.relation,
     projectedIdentityColumn: readQueryProjectedIdentityColumn(query),
