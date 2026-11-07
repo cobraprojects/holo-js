@@ -256,7 +256,7 @@ When a realtime query runs, Holo records which tables and rows it read. When a m
 - **Bursts are batched.** Several quick writes produce one refresh with the final data.
 - **A write doesn't wait for refreshes.** Awaiting a write no longer waits for live-query refreshes already in progress; subscribers receive the update when the refresh completes.
 
-::: warning Filter related rows in the query
+::: danger Filter related rows in the query
 Don't hide related rows from a user by filtering them in the handler after they load. Holo can't see every in-place change, such as assigning to an index, or a filter that only calls `splice()` when it finds a row to remove. A later write can then patch a hidden row into the result. Put the filter in the [eager-load constraint](/orm/relationships/loading#constraining-eager-loads), as in `with('comments', query => query.where('approved', true))`, or in a [scope](/orm/scopes) on the related model, so every refresh applies it.
 :::
 

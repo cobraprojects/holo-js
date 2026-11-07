@@ -1189,15 +1189,19 @@ function markSerializedOnCollectedArrayWrite(array: object): void {
 
 const arrayWriteMethods = Object.fromEntries(ARRAY_WRITE_METHODS.map((name) => {
   const write = Array.prototype[name] as (this: unknown[], ...args: unknown[]) => unknown
-  return [name, function (this: unknown[], ...args: unknown[]) {
-    markSerializedOnCollectedArrayWrite(this)
-    return write.apply(this, args)
-  }]
+  const method = {
+    [name](this: unknown[], ...args: unknown[]) {
+      markSerializedOnCollectedArrayWrite(this)
+      return write.apply(this, args)
+    },
+  }[name]!
+  Object.defineProperty(method, 'length', { value: write.length })
+  return [name, method]
 })) as Readonly<Record<typeof ARRAY_WRITE_METHODS[number], (this: unknown[], ...args: unknown[]) => unknown>>
 
 export function serializeDatabaseQueryObservationsOnArrayWrites(array: unknown): void {
   const state = databaseDependencyCollector.getStore()
-  if (!state || !Array.isArray(array) || Object.isFrozen(array)) {
+  if (!state || !Array.isArray(array) || !Object.isExtensible(array) || Object.getPrototypeOf(array) !== Array.prototype) {
     return
   }
 
