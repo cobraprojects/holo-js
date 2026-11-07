@@ -33,6 +33,13 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: bun-${{ runner.os }}-
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install Playwright Chromium for the browser checks
+        run: bun x playwright install --with-deps chromium
       - name: Scaffold, install, build, and serve each framework with the newest published dependencies
         run: node scripts/validate-scaffold-user-journey-smoke.mjs
