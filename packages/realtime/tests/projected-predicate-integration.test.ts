@@ -52,7 +52,38 @@ async function subscribeAll(queries: Record<string, () => Promise<unknown>>) {
   return { current, expectCurrent, ids }
 }
 
-describe.each(drivers)('realtime projected queries filtered on an unselected column on %s', (driver) => {
+describe.each(drivers)('realtime full-table and projected predicate reads on %s', (driver) => {
+  it('keeps a full-table read beside a predicate read current after writes outside the predicate', async () => {
+    const { db, name } = await openItems(driver)
+    const handler = async () => ({
+      all: await db.table(name).orderBy('id').get(),
+      matching: await db.table(name).where('n', 0).orderBy('id').get(),
+    })
+    const subscription = await subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )
+    const matching = subscription.current.data.matching
+    expect(subscription.current.data.all.map(row => row.label)).toEqual(['first', 'second'])
+    expect(matching.map(row => row.label)).toEqual(['first'])
+
+    await mutate(() => db.table(name).insert({ id: 3, n: 1, label: 'third', amount: '3.25' }))
+    expect(subscription.current.data).toEqual(await handler())
+    expect(subscription.current.data.all.map(row => row.label)).toEqual(['first', 'second', 'third'])
+    expect(subscription.current.data.matching).toEqual(matching)
+
+    await mutate(() => db.table(name).where('n', 1).update({ label: 'renamed' }))
+    expect(subscription.current.data).toEqual(await handler())
+    expect(subscription.current.data.all.map(row => row.label)).toEqual(['first', 'renamed', 'renamed'])
+    expect(subscription.current.data.matching).toEqual(matching)
+
+    await mutate(() => db.table(name).where('n', 1).delete())
+    expect(subscription.current.data).toEqual(await handler())
+    expect(subscription.current.data.all.map(row => row.label)).toEqual(['first'])
+    expect(subscription.current.data.matching).toEqual(matching)
+  })
+
   it('drops a row an update stops matching and picks up a row an update starts matching', async () => {
     const { db, items, name } = await openItems(driver)
     const { current, expectCurrent, ids } = await subscribeAll({
