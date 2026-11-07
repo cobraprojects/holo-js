@@ -531,7 +531,11 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     const postsTable = table.replace('sr_categories_', 'sr_posts_')
 
     const aliased = await Category.query().from(`${table} as ${postsTable}`).has('posts').get() as unknown as Category[]
+    const upperCased = await Category.query().from(`${table} as ${postsTable.toUpperCase()}`).has('posts').get() as unknown as Category[]
+    const constraintAliased = await Category.query().from(`${table} as ${postsTable}`).whereHas('posts', query => (query as unknown as { from(table: string): unknown }).from(`${postsTable} as ${postsTable}`) as never).get() as unknown as Category[]
 
     expect(aliased.map(id).sort((left, right) => left - right)).toEqual([1, 2, 3])
+    expect(upperCased.map(id).sort((left, right) => left - right)).toEqual([1, 2, 3])
+    expect(constraintAliased.map(id).sort((left, right) => left - right)).toEqual([1, 2, 3])
   })
 })

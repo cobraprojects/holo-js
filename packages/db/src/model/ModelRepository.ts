@@ -2774,7 +2774,8 @@ export class ModelRepository<
     morphTypes?: readonly string[],
   ): readonly TableQueryBuilder<TableDefinition, Record<string, unknown>>[] {
     const parent = (column: string) => this.qualifyParentColumn(column, parentAlias)
-    const bindsParent = (tableName: string) => sameTable(tableName, this.definition.table.tableName) || (parentAlias !== undefined && sameTable(tableName, parentAlias))
+    const folded = (name: string) => name.slice(name.lastIndexOf('.') + 1).toLowerCase()
+    const bindsParent = (tableName: string) => sameTable(tableName, this.definition.table.tableName) || (parentAlias !== undefined && folded(tableName) === folded(parentAlias))
     const aliasFor = (repository: ModelRepository, reserved: number = 0) => bindsParent(repository.definition.table.tableName)
       ? this.selfRelationAlias(parentAlias, reserved)
       : undefined
@@ -2786,10 +2787,10 @@ export class ModelRepository<
         : constrained
       if (alias === undefined) return query
       const current = query.getPlan().source.alias
-      const nested = nestedTableNames(query.getPlan())
-      if (current !== undefined && !nested.has(current)) return requalifyTableSource(query, this.definition.table.tableName)
+      const taken = new Set([...nestedTableNames(query.getPlan()), query.getTableName(), this.definition.table.tableName, ...(parentAlias === undefined ? [] : [parentAlias])].map(folded))
+      if (current !== undefined && !taken.has(folded(current))) return requalifyTableSource(query, this.definition.table.tableName)
       let unused = alias
-      for (let reserved = 2; nested.has(unused) || unused === query.getTableName(); reserved += 2) unused = this.selfRelationAlias(parentAlias, reserved)
+      for (let reserved = 2; taken.has(folded(unused)); reserved += 2) unused = this.selfRelationAlias(parentAlias, reserved)
       return requalifyTableSource(aliasTableSource(query, unused), this.definition.table.tableName, current)
     }
     const pivotQuery = <TQuery extends TableQueryBuilder<string | TableDefinition>>(query: TQuery) => bindsParent(query.getTableName())
