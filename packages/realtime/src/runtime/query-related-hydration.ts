@@ -10,6 +10,8 @@ import {
   getBackfillDatabaseConnection,
   readBackfilledRows,
   readBackfilledValue,
+  readMergedRow,
+  readerCacheKey,
   relatedTablePath,
   whereObservedPredicates,
 } from './query-backfill'
@@ -137,7 +139,8 @@ function readRelatedMutationRows(
       continue
     }
 
-    for (const row of mutation.rows) {
+    for (const storedRow of mutation.rows) {
+      const row = readMergedRow(hydration.relatedTable, hydration.readRow, storedRow, mutation.values)
       const matches = row[hydration.foreignKey] === localKey && matchesPredicates(row, hydration.predicates) === true
       if (matches) {
         rows.push(row)
@@ -185,6 +188,10 @@ function compareRelatedValues(left: unknown, right: unknown): number {
 
   if (right === null || typeof right === 'undefined') {
     return 1
+  }
+
+  if (left instanceof Date && right instanceof Date) {
+    return left.getTime() - right.getTime()
   }
 
   return String(left).localeCompare(String(right), undefined, {
@@ -298,7 +305,7 @@ async function fetchGroupedRelatedHydrationRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  const rows = readBackfilledRows(hydration.relatedTable, await builder.get())
+  const rows = readBackfilledRows(hydration.relatedTable, await builder.get(), undefined, hydration.readRow)
   const readKey = (value: unknown) => readBackfilledValue(hydration.relatedTable, hydration.foreignKey, value)
   const requestedKeys = new Set(values.map(readKey))
   const rowsByLocalKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
@@ -328,7 +335,7 @@ async function fetchGroupedRelatedTopOneRows(
 ): Promise<ReadonlyMap<unknown, BackfillRows> | undefined> {
   const statement = compileGroupedRelatedTopOneStatement(connection, hydration, values)
   const rows = await connection.queryCompiled<Record<string, unknown>>(statement)
-  return groupRelatedTopOneRows(hydration, readBackfilledRows(hydration.relatedTable, rows.rows), values)
+  return groupRelatedTopOneRows(hydration, readBackfilledRows(hydration.relatedTable, rows.rows, undefined, hydration.readRow), values)
 }
 
 function groupRelatedTopOneRows(
@@ -486,7 +493,7 @@ async function fetchRelatedHydrationRows(
 
   const rows = readBackfilledRows(hydration.relatedTable, await builder
     .limit(hydration.kind === 'hasOne' ? 1 : undefined)
-    .get())
+    .get(), undefined, hydration.readRow)
   return validateRelatedHydrationRows(rows, hydration)
 }
 
@@ -540,12 +547,12 @@ function createRelatedHydrationBackfillKey(
   hydration: DatabaseQueryRelatedHydrationObservation,
   localKey: unknown,
 ): string {
-  return `related:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${stableStringify(relatedTablePath(hydration))}:${hydration.foreignKey}:${stableStringify(localKey)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}`
+  return `related:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${stableStringify(relatedTablePath(hydration))}:${hydration.foreignKey}:${stableStringify(localKey)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}${readerCacheKey(hydration.readRow, hydration)}`
 }
 
 function createGroupedRelatedHydrationBackfillKey(
   hydration: DatabaseQueryRelatedHydrationObservation,
   values: readonly unknown[],
 ): string {
-  return `related-group:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${stableStringify(relatedTablePath(hydration))}:${hydration.foreignKey}:${stableStringify(values)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}`
+  return `related-group:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${stableStringify(relatedTablePath(hydration))}:${hydration.foreignKey}:${stableStringify(values)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}${readerCacheKey(hydration.readRow, hydration)}`
 }

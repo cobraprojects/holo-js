@@ -396,6 +396,12 @@ export function readsAsCoercedBoolean(dialect: SchemaDialectName, column: AnyCol
   return dialect !== 'postgres' && column.kind === 'boolean'
 }
 
+const MODEL_CONVERTED_KINDS: ReadonlySet<string> = new Set(['json', 'date', 'datetime', 'timestamp', 'vector'])
+
+export function isConvertedByModelReads(column: AnyColumnDefinition): boolean {
+  return MODEL_CONVERTED_KINDS.has(column.kind)
+}
+
 export function normalizeDialectReadValue(
   dialect: SchemaDialectName,
   column: AnyColumnDefinition,

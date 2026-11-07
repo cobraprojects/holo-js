@@ -219,6 +219,8 @@ interface DatabaseQueryCursorPaginationMetaObservation {
 
 export type DatabaseQueryResultPathSegment = string | number
 
+export type DatabaseQueryRowReader = (row: Readonly<Record<string, unknown>>, written?: boolean) => Readonly<Record<string, unknown>>
+
 export interface DatabaseQueryObservation {
   readonly aggregate?: DatabaseQueryAggregateObservation
   readonly belongsToHydrations?: readonly DatabaseQueryBelongsToHydrationObservation[]
@@ -238,6 +240,7 @@ export interface DatabaseQueryObservation {
   readonly pagination?: DatabaseQueryPaginationObservation
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly primaryKey?: string
+  readonly readRow?: DatabaseQueryRowReader
   readonly relation?: DatabaseQueryRelationObservation
   readonly result?: unknown
   readonly resultPath?: readonly DatabaseQueryResultPathSegment[]
@@ -262,6 +265,7 @@ export interface DatabaseQueryBelongsToHydrationObservation {
   readonly ownerKey: string
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly primaryKey?: string
+  readonly readRow?: DatabaseQueryRowReader
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
@@ -274,6 +278,8 @@ export interface DatabaseQueryRelatedHydrationObservation {
   readonly localKey: string
   readonly orderBy: readonly DatabaseQueryOrderObservation[]
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
+  readonly primaryKey?: string
+  readonly readRow?: DatabaseQueryRowReader
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
@@ -293,6 +299,7 @@ export interface DatabaseQueryBelongsToManyRelationObservation {
   readonly relatedConnectionName: string
   readonly relatedKey: string
   readonly relatedPivotKey: string
+  readonly relatedReadRow?: DatabaseQueryRowReader
   readonly relatedTableName: string
   readonly relatedTable?: TableDefinition
 }
@@ -302,6 +309,7 @@ export interface DatabaseQueryBelongsToParentKeyRelationObservation {
   readonly kind: 'belongsToParentKey'
   readonly ownerKey: string
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
+  readonly relatedReadRow?: DatabaseQueryRowReader
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
@@ -915,8 +923,8 @@ export function truncateDatabaseQueryObservations(count: number): void {
   }
 }
 
-export function rebindDatabaseQueryObservationResult(source: unknown, result: unknown): void {
-  rebindDatabaseQueryObservation(source, result)
+export function rebindDatabaseQueryObservationResult(source: unknown, result: unknown, readRow?: DatabaseQueryRowReader): void {
+  rebindDatabaseQueryObservation(source, result, undefined, undefined, undefined, undefined, undefined, undefined, readRow)
 }
 
 export function rebindDatabaseQueryObservationHydratedResult(
@@ -924,8 +932,9 @@ export function rebindDatabaseQueryObservationHydratedResult(
   result: unknown,
   belongsToHydrations: readonly DatabaseQueryBelongsToHydrationObservation[],
   relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[],
+  readRow?: DatabaseQueryRowReader,
 ): void {
-  rebindDatabaseQueryObservation(source, result, undefined, undefined, undefined, undefined, belongsToHydrations, relatedHydrations)
+  rebindDatabaseQueryObservation(source, result, undefined, undefined, undefined, undefined, belongsToHydrations, relatedHydrations, readRow)
 }
 
 export function rebindDatabaseQueryObservationPagination(
@@ -962,6 +971,7 @@ export function rebindDatabaseQueryObservationPagination(
       pagination: undefined,
       predicates: query.predicates,
       primaryKey: query.primaryKey,
+      readRow: query.readRow,
       relation: query.relation,
       result: data,
       resultPath: query.resultPath,
@@ -986,6 +996,7 @@ export function rebindDatabaseQueryObservationPagination(
       pagination,
       predicates: query.predicates,
       primaryKey: query.primaryKey,
+      readRow: query.readRow,
       relation: query.relation,
       result: meta,
       resultPath: undefined,
@@ -1036,6 +1047,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       pagination: undefined,
       predicates: query.predicates,
       primaryKey: query.primaryKey,
+      readRow: query.readRow,
       relation: query.relation,
       result: data,
       resultPath: query.resultPath,
@@ -1060,6 +1072,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       pagination,
       predicates: query.predicates,
       primaryKey: query.primaryKey,
+      readRow: query.readRow,
       relation: query.relation,
       result: meta.nextCursor,
       resultPath: Object.freeze(['nextCursor']),
@@ -1103,6 +1116,7 @@ export function disableDatabaseQueryObservationPatching(
       pagination: query.pagination,
       predicates: query.predicates,
       primaryKey: query.primaryKey,
+      readRow: query.readRow,
       relation: query.relation,
       result: query.result,
       resultPath: query.resultPath,
@@ -1295,24 +1309,31 @@ export function rebindDatabaseQueryObservationAggregate(
   source: unknown,
   result: unknown,
   aggregate: DatabaseQueryAggregateObservation,
+  readRow?: DatabaseQueryRowReader,
 ): void {
-  rebindDatabaseQueryObservation(source, result, aggregate)
+  rebindDatabaseQueryObservation(source, result, aggregate, undefined, undefined, undefined, undefined, undefined, readRow)
 }
 
 export function rebindDatabaseQueryObservationScalar(
   source: unknown,
   result: unknown,
   column: string,
+  readRow?: DatabaseQueryRowReader,
 ): void {
-  rebindDatabaseQueryObservation(source, result, undefined, column)
+  rebindDatabaseQueryObservation(source, result, undefined, column, undefined, undefined, undefined, undefined, readRow)
 }
 
 export function rebindDatabaseQueryObservationScalarList(
   rows: readonly Readonly<Record<string, unknown>>[],
   result: readonly unknown[],
   column: string,
+  readRow?: DatabaseQueryRowReader,
 ): void {
-  rebindDatabaseQueryObservation(rows, result, undefined, undefined, column, rows)
+  if (!databaseDependencyCollector.getStore()) {
+    return
+  }
+
+  rebindDatabaseQueryObservation(rows, result, undefined, undefined, column, readRow ? Object.freeze(rows.map(row => readRow(row))) : rows, undefined, undefined, readRow)
 }
 
 function rebindDatabaseQueryObservation(
@@ -1324,6 +1345,7 @@ function rebindDatabaseQueryObservation(
   scalarListRows?: readonly Readonly<Record<string, unknown>>[],
   belongsToHydrations?: readonly DatabaseQueryBelongsToHydrationObservation[],
   relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[],
+  readRow?: DatabaseQueryRowReader,
 ): void {
   const state = databaseDependencyCollector.getStore()
   if (!state) {
@@ -1338,6 +1360,7 @@ function rebindDatabaseQueryObservation(
 
     replaceDatabaseQueryObservation(state, index, Object.freeze({
       aggregate,
+      readRow,
       belongsToHydrations,
       connectionName: query.connectionName,
       tableName: query.tableName,

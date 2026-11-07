@@ -6,7 +6,7 @@ import type {
 } from '../contracts'
 import { updateQueryEntryObservedQueries } from './query-patching'
 import { createResultHash } from './result-hash'
-import { rebindBelongsToObservations } from './query-hydration-observations'
+import { rebindBelongsToManyRelatedObservations, rebindBelongsToObservations, rebindRelatedHydrationObservations } from './query-hydration-observations'
 import {
   areDependencySetsEqual,
   arePredicateDependenciesEqual,
@@ -125,7 +125,7 @@ export async function deliverPatchedQueryData(
   queries: InternalRealtimeExecutionResult<RealtimeResultFor<typeof entry.definition>>['queries'],
   patchOperations: NonNullable<RefreshDelivery<typeof entry.definition>['patchOperations']>,
 ): Promise<void> {
-  const reboundQueries = rebindBelongsToObservations(queries, data)
+  const reboundQueries = rebindBelongsToManyRelatedObservations(rebindRelatedHydrationObservations(rebindBelongsToObservations(queries, data), data), data)
   let dependencies = entry.dependencies
   if (reboundQueries !== queries) {
     const previousQueryDependencies = new Set(entry.queries.flatMap(query => query.dependencies))

@@ -8,6 +8,8 @@ import {
   getBackfillDatabaseConnection,
   readBackfilledRows,
   readBackfilledValue,
+  readMergedRow,
+  readerCacheKey,
   relatedTablePath,
   whereObservedPredicates,
 } from './query-backfill'
@@ -16,6 +18,7 @@ import { canBackfillRelatedHydrationPredicates } from './query-related-hydration
 import type {
   BackfillCache,
   DatabaseQueryBelongsToHydrationObservation,
+  RealtimeRowReader,
 } from './query-state'
 import { stableStringify } from './stable-stringify'
 
@@ -23,9 +26,15 @@ type BelongsToHydrationTarget = {
   readonly foreignKey: string
   readonly ownerKey: string
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
+  readonly readRow?: RealtimeRowReader
+  readonly relatedReadRow?: RealtimeRowReader
   readonly relatedConnectionName: string
   readonly relatedTableName: string
   readonly relatedTable?: TableDefinition
+}
+
+function readTargetRows(target: BelongsToHydrationTarget, rows: readonly Readonly<Record<string, unknown>>[]): Readonly<Record<string, unknown>>[] {
+  return readBackfilledRows(target.relatedTable, rows, undefined, target.readRow ?? target.relatedReadRow)
 }
 
 export async function hydrateBelongsToMutationRows(
@@ -134,7 +143,8 @@ function findBelongsToRelatedMutationValue(
       continue
     }
 
-    for (const row of rows) {
+    for (const storedRow of rows) {
+      const row = readMergedRow(target.relatedTable, target.readRow ?? target.relatedReadRow, storedRow, mutation.values)
       if (row[target.ownerKey] !== foreignKey) {
         continue
       }
@@ -247,7 +257,7 @@ async function fetchGroupedBelongsToRelatedRows(
     return undefined
   }
 
-  const rows = readBackfilledRows(target.relatedTable, await builder.get())
+  const rows = readTargetRows(target, await builder.get())
 
   const readKey = (value: unknown) => readBackfilledValue(target.relatedTable, target.ownerKey, value)
   const requestedKeys = new Set(values.map(readKey))
@@ -289,19 +299,19 @@ async function fetchBelongsToRelatedRow(
     return undefined
   }
 
-  return readBackfilledRows(target.relatedTable, await builder.limit(1).get())
+  return readTargetRows(target, await builder.limit(1).get())
 }
 
 function createBelongsToRelatedBackfillKey(
   target: BelongsToHydrationTarget,
   foreignKey: unknown,
 ): string {
-  return `belongs-to:${target.relatedConnectionName}:${target.relatedTableName}:${stableStringify(relatedTablePath(target))}:${target.ownerKey}:${stableStringify(foreignKey)}:${stableStringify(target.predicates)}`
+  return `belongs-to:${target.relatedConnectionName}:${target.relatedTableName}:${stableStringify(relatedTablePath(target))}:${target.ownerKey}:${stableStringify(foreignKey)}:${stableStringify(target.predicates)}${readerCacheKey(target.readRow ?? target.relatedReadRow, target)}`
 }
 
 function createGroupedBelongsToRelatedBackfillKey(
   target: BelongsToHydrationTarget,
   values: readonly unknown[],
 ): string {
-  return `belongs-to-group:${target.relatedConnectionName}:${target.relatedTableName}:${stableStringify(relatedTablePath(target))}:${target.ownerKey}:${stableStringify(values)}:${stableStringify(target.predicates)}`
+  return `belongs-to-group:${target.relatedConnectionName}:${target.relatedTableName}:${stableStringify(relatedTablePath(target))}:${target.ownerKey}:${stableStringify(values)}:${stableStringify(target.predicates)}${readerCacheKey(target.readRow ?? target.relatedReadRow, target)}`
 }

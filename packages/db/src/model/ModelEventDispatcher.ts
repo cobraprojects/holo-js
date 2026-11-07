@@ -6,6 +6,24 @@ import { areModelEventsMuted } from './eventState'
 import { listModelObservers } from './modelObservers'
 import type { ModelDefinition, ModelLifecycleEventName } from './types'
 
+function prototypeDefinesHandler(observer: object, eventName: string): boolean {
+  for (let target: object | null = (observer as { prototype?: object }).prototype ?? null; target && target !== Object.prototype; target = Object.getPrototypeOf(target)) {
+    const descriptor = Object.getOwnPropertyDescriptor(target, eventName)
+    if (descriptor) return typeof descriptor.value === 'function'
+  }
+  return false
+}
+
+function observerHandles(observer: unknown, eventName: string): boolean {
+  if (typeof observer !== 'function') {
+    return typeof (observer as Record<string, unknown> | null)?.[eventName] === 'function'
+  }
+
+  if (prototypeDefinesHandler(observer, eventName)) return true
+  const instance = new (observer as new () => Record<string, unknown>)()
+  return typeof instance[eventName] === 'function'
+}
+
 export class ModelEventDispatcher<TTable extends TableDefinition> {
   constructor(
     private readonly definition: ModelDefinition<TTable>,
@@ -50,6 +68,12 @@ export class ModelEventDispatcher<TTable extends TableDefinition> {
   dispatchSync(eventName: Extract<ModelLifecycleEventName, 'replicating'>, entity: Entity<TTable>): void {
     if (areModelEventsMuted()) return
     for (const handler of this.resolveHandlers(eventName)) handler(entity, this.repository)
+  }
+
+  hasHandlers(eventName: ModelLifecycleEventName): boolean {
+    const handlers = this.definition.events[eventName]
+    if (handlers && handlers.length > 0) return true
+    return listModelObservers(this.definition).some(observer => observerHandles(observer, eventName))
   }
 
   private resolveHandlers(eventName: ModelLifecycleEventName): readonly ((...args: unknown[]) => unknown)[] {

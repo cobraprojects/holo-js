@@ -108,10 +108,15 @@ function comparesAsText(value: unknown): boolean {
   return typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint' || typeof value === 'boolean'
 }
 
+function holdsStructuredValue(value: unknown): boolean {
+  return typeof value === 'object' && value !== null
+}
+
 export function equalValues(left: unknown, right: unknown): boolean | undefined {
   if (left === null || right === null) return false
   if (left === right) return true
-  if (Array.isArray(left) || Array.isArray(right)) return undefined
+  if (left instanceof Date && right instanceof Date) return left.getTime() === right.getTime()
+  if (holdsStructuredValue(left) || holdsStructuredValue(right)) return undefined
   if (comparesBooleanWithNumber(left, right)) return Number(left) === Number(right)
   if (isNumberLike(left) && isNumberLike(right)) {
     if (Number.isNaN(left) || Number.isNaN(right)) return false

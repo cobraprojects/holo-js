@@ -16,6 +16,7 @@ import {
   truncateDatabaseQueryObservations,
   type DatabaseQueryAggregateObservation,
   type DatabaseQueryObservation,
+  type DatabaseQueryRowReader,
   type DatabaseQueryPredicateObservation,
   type DatabaseQueryResultPathSegment,
 } from '../cache'
@@ -24,11 +25,11 @@ import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadTableDefinition } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition, isUnresolvedGeneratedPrimaryKey } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
-import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
+import { normalizeDialectReadValue, isConvertedByModelReads, storesJson, storesText } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type QueryPredicateNode, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
-import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
+import { Entity, captureEntityWriteState, copyEntitySerializationOverrides, createEntityCommitRestore, getEntityKeyForSave, markEntityRelationObserved, restoreEntityWriteState } from './Entity'
 import { assertAttributeNameAllowed, assertColumnWritable, canonicalStoredKey, ownEntry, type RejectedGeneratedColumns, snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet, type StoredKeyOptions } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
@@ -48,7 +49,7 @@ import {
 } from './RelationAggregateCalculator'
 import { listMorphModels, resolveMorphModel } from './morphRegistry'
 import { getModelRuntimeSettings } from './runtimeSettings'
-import { modelNeedsSerialization } from './serialize'
+import { modelNeedsSerialization, modelSerializesBeyondRows } from './serialize'
 import { applyGeneratedUniqueIds, applyPendingModelAttributes } from './uniqueIds'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -118,7 +119,43 @@ function readsSQLiteDecimals(connection: DatabaseContext, table: string | TableD
 }
 
 function relatedRowsArePatchable(related: ModelRepository): boolean {
-  return !modelNeedsSerialization(related.definition) && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
+  return !related.serializesBeyondRows()
+    && related.definition.with.length === 0
+    && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
+}
+
+const storedRowReaders = new WeakMap<object, WeakMap<object, DatabaseQueryRowReader>>()
+const storedAttributeReaders = new WeakMap<object, WeakMap<object, DatabaseQueryRowReader>>()
+
+function cachedReader(
+  cache: WeakMap<object, WeakMap<object, DatabaseQueryRowReader>>,
+  definition: object,
+  connection: object,
+  create: () => DatabaseQueryRowReader,
+): DatabaseQueryRowReader {
+  const readers = cache.get(definition) ?? new WeakMap<object, DatabaseQueryRowReader>()
+  cache.set(definition, readers)
+  const cached = readers.get(connection)
+  if (cached) return cached
+  const reader = create()
+  readers.set(connection, reader)
+  return reader
+}
+
+function relatedReadRow(related: ModelRepository): { readonly relatedReadRow?: DatabaseQueryRowReader } {
+  const reader = related.rowReader()
+  return reader ? { relatedReadRow: reader } : {}
+}
+
+function observationColumns(observation: DatabaseQueryObservation): readonly string[] {
+  return [
+    ...observation.predicates.map(predicate => predicate.column),
+    ...observation.orderBy.map(order => order.column),
+  ]
+}
+
+function pivotTableReadsAsStored(table: string | TableDefinition | undefined): boolean {
+  return typeof table !== 'object' || !Object.values(table.columns).some(isConvertedByModelReads)
 }
 
 function hasTypedComparison(predicates: readonly QueryPredicateNode[]): boolean {
@@ -958,12 +995,12 @@ export class ModelRepository<
 
       const observed = this.getRelationQueryObservation(entity, relationName)
       if (observed) {
-        recordDatabaseQueryObservation(Object.freeze({
+        this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, Object.freeze({
           ...observed,
           patchable: observed.patchable && relatedRowsArePatchable(related),
           ...serializedFlag(!relatedRowsArePatchable(related)),
           resultPath: createPath(index, relationName),
-        }))
+        }), [relation.foreignKey]))
         continue
       }
 
@@ -985,7 +1022,7 @@ export class ModelRepository<
       ])
 
       const primaryKey = resolveModelRowKey(related.definition)
-      recordDatabaseQueryObservation(Object.freeze({
+      this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, Object.freeze({
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
@@ -1001,7 +1038,7 @@ export class ModelRepository<
         selections: [],
         table: related.definition.table,
         tableName: related.definition.table.tableName,
-      }))
+      })))
     }
   }
 
@@ -1021,11 +1058,11 @@ export class ModelRepository<
       const resultPath = createPath(index, relationName)
       const observed = this.getRelationQueryObservation(entity, relationName)
       if (observed) {
-        recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation({
+        this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, this.createNullableSingleRecordRelationObservation({
           ...observed,
           patchable: observed.patchable && relatedRowsArePatchable(related),
           ...serializedFlag(!relatedRowsArePatchable(related)),
-        }, resultPath))
+        }, resultPath)))
         continue
       }
 
@@ -1046,7 +1083,7 @@ export class ModelRepository<
         ...(predicateDependency ? [predicateDependency] : []),
       ])
 
-      recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(Object.freeze({
+      this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, this.createNullableSingleRecordRelationObservation(Object.freeze({
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
@@ -1060,7 +1097,7 @@ export class ModelRepository<
         selections: [],
         table: related.definition.table,
         tableName: related.definition.table.tableName,
-      }), resultPath))
+      }), resultPath)))
     }
   }
 
@@ -1089,11 +1126,11 @@ export class ModelRepository<
         ownerPredicates,
       ))
       if (observed) {
-        recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation({
+        this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, this.createNullableSingleRecordRelationObservation({
           ...observed,
           patchable: observed.patchable && relatedRowsArePatchable(related),
           ...serializedFlag(!relatedRowsArePatchable(related)),
-        }, resultPath))
+        }, resultPath)))
         continue
       }
 
@@ -1118,7 +1155,7 @@ export class ModelRepository<
         ...(predicateDependency ? [predicateDependency] : []),
       ])
 
-      recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(Object.freeze({
+      this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, this.createNullableSingleRecordRelationObservation(Object.freeze({
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
@@ -1132,7 +1169,7 @@ export class ModelRepository<
         selections: [],
         table: related.definition.table,
         tableName: related.definition.table.tableName,
-      }), resultPath))
+      }), resultPath)))
     }
   }
 
@@ -1165,7 +1202,7 @@ export class ModelRepository<
       connectionName: this.getConnectionName(),
       dependencies,
       orderBy: [],
-      patchable: typeof ownerPredicates !== 'undefined',
+      patchable: typeof ownerPredicates !== 'undefined' && this.readsKeysAsStored([relation.foreignKey]),
       ...serializedFlag(!relatedRowsArePatchable(related)),
       predicates: Object.freeze([Object.freeze({
         column: this.definition.primaryKey,
@@ -1177,6 +1214,7 @@ export class ModelRepository<
         kind: 'belongsToParentKey' as const,
         ownerKey: relation.ownerKey,
         predicates: ownerPredicates ?? Object.freeze([]),
+        ...relatedReadRow(related),
         relationKey: relationName,
         relatedConnectionName: related.getConnectionName(),
         relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
@@ -1350,15 +1388,19 @@ export class ModelRepository<
         relatedConnectionName: related.getConnectionName(),
         relatedKey: relation.relatedKey,
         relatedPivotKey: relation.relatedPivotKey,
+        ...relatedReadRow(related),
         relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
         relatedTable: related.definition.table,
       })
+      const relatedComparable = related.readsKeysAsStored([relation.relatedKey])
+        && Object.keys(related.definition.globalScopes).length === 0
+        && !related.definition.softDeletes
 
-      recordDatabaseQueryObservation(Object.freeze({
+      this.recordRelationValueObservation(entity, relationName, Object.freeze({
         connectionName: this.getConnectionName(),
         dependencies,
         orderBy: relation.pivotOrderBy,
-        patchable: relation.pivotWheres.length === 0 && relatedRowsArePatchable(related) && this.pivotRowsArePatchable(relation),
+        patchable: relation.pivotWheres.length === 0 && relatedComparable && relatedRowsArePatchable(related) && this.pivotRowsArePatchable(relation),
         ...serializedFlag(!relatedRowsArePatchable(related) || !this.pivotRowsArePatchable(relation)),
         predicates: Object.freeze([Object.freeze({
           column: relation.foreignPivotKey,
@@ -1376,14 +1418,14 @@ export class ModelRepository<
         continue
       }
 
-      recordDatabaseQueryObservation(Object.freeze({
+      this.recordRelationValueObservation(entity, relationName, this.withRelatedRowReader(related, Object.freeze({
         connectionName: related.getConnectionName(),
         dependencies: Object.freeze([
           createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
           ...relatedMetadata.dependencies,
         ]),
         orderBy: [],
-        patchable: relatedRowsArePatchable(related),
+        patchable: relatedRowsArePatchable(related) && relatedComparable,
         ...serializedFlag(!relatedRowsArePatchable(related)),
         predicates: Object.freeze([Object.freeze({
           column: relation.relatedKey,
@@ -1395,16 +1437,17 @@ export class ModelRepository<
         selections: [],
         table: related.definition.table,
         tableName: related.definition.table.tableName,
-      }))
+      })))
     }
   }
 
   private pivotRowsArePatchable(relation: PivotRelationDefinition): boolean {
     const connection = this.getConnection()
-    if (readsSQLiteDecimals(connection, this.resolvePivotTable(relation.pivotTable, connection))) return false
+    const pivotTable = this.resolvePivotTable(relation.pivotTable, connection)
+    if (readsSQLiteDecimals(connection, pivotTable) || !pivotTableReadsAsStored(pivotTable)) return false
     if (!relation.pivotModel) return true
     const pivot = this.resolveRelatedRepository(relation.pivotModel)
-    return !modelNeedsSerialization(pivot.definition) && !readsSQLiteDecimals(connection, pivot.definition.table)
+    return !modelNeedsSerialization(pivot.definition) && pivot.readsRowsAsStored() && !readsSQLiteDecimals(connection, pivot.definition.table)
   }
 
   private createBelongsToManyRelatedObservationMetadata(
@@ -2642,7 +2685,10 @@ export class ModelRepository<
 
     return Object.freeze({
       observation,
-      rowsPatchable: relatedRowsArePatchable(related) && query.canPatchLoadedRows() && observation.selections.length === 0,
+      rowsPatchable: relatedRowsArePatchable(related)
+        && query.canPatchLoadedRows()
+        && observation.selections.length === 0
+        && related.readsKeysAsStored([relation.kind === 'belongsTo' ? relation.ownerKey : relation.foreignKey]),
     })
   }
 
@@ -2652,6 +2698,73 @@ export class ModelRepository<
   ): readonly DatabaseQueryPredicateObservation[] | undefined {
     const resolved = this.resolveRelationHydrationQuery(relation, constraint)
     return resolved?.rowsPatchable ? resolved.observation.predicates : undefined
+  }
+
+  readsRowsAsStored(): boolean {
+    return this.valueTransformer.readsRowsAsStored()
+  }
+
+  readsColumnAsStored(column: string): boolean {
+    return this.valueTransformer.readsColumnAsStored(column)
+  }
+
+  readsWithoutRejectingValues(): boolean {
+    return this.valueTransformer.readsWithoutRejectingValues()
+  }
+
+  serializesBeyondRows(): boolean {
+    return modelSerializesBeyondRows(this.definition)
+      || this.definition.collection !== undefined
+      || this.eventDispatcher.hasHandlers('retrieved')
+  }
+
+  rowReader(): DatabaseQueryRowReader | undefined {
+    if (this.valueTransformer.readsRowsAsStored()) return undefined
+    return cachedReader(storedRowReaders, this.definition, this.getConnection(), () => (row, written) => this.valueTransformer.readStoredRow(row, this.getConnection().getDriver() as SchemaDialectName, written))
+  }
+
+  attributeReader(): DatabaseQueryRowReader | undefined {
+    if (this.valueTransformer.readsRowsAsStored()) return undefined
+    return cachedReader(storedAttributeReaders, this.definition, this.getConnection(), () => (row, written) => this.valueTransformer.readStoredAttributes(row, this.getConnection().getDriver() as SchemaDialectName, written))
+  }
+
+  relatedRowReader(related: () => ModelDefinitionLike): DatabaseQueryRowReader | undefined {
+    return this.resolveRelatedRepository(related).rowReader()
+  }
+
+  comparesWithStoredValues(columns: Iterable<string>): boolean {
+    for (const column of columns) {
+      if (!this.valueTransformer.comparesWithStoredValues(column)) return false
+    }
+    return this.readsKeysAsStored([])
+  }
+
+  readsKeysAsStored(keys: Iterable<string>): boolean {
+    for (const key of keys) {
+      if (!this.valueTransformer.readsKeyAsStored(key)) return false
+    }
+    return this.valueTransformer.readsKeyAsStored(this.definition.primaryKey)
+  }
+
+  comparesObservationWithStoredValues(observation: DatabaseQueryObservation): boolean {
+    if (observation.selections.some(selection => selection.resultKey !== selection.column) && this.rowReader()) return false
+    return this.comparesWithStoredValues(observationColumns(observation))
+  }
+
+  private recordRelationValueObservation(entity: Entity<TTable>, relationName: string, observation: DatabaseQueryObservation | undefined): void {
+    recordDatabaseQueryObservation(observation)
+    markEntityRelationObserved(entity, relationName)
+  }
+
+  private withRelatedRowReader(related: ModelRepository, observation: DatabaseQueryObservation, keys: readonly string[] = []): DatabaseQueryObservation {
+    const readRow = related.rowReader()
+    const comparable = related.comparesObservationWithStoredValues(observation) && related.readsKeysAsStored(keys)
+    if (!readRow && comparable) return observation
+    return Object.freeze({
+      ...observation,
+      ...readRow ? { readRow } : {},
+      ...comparable ? {} : { patchable: false },
+    })
   }
 
   private resolveRelatedRepository(related: () => ModelDefinitionLike): ModelRepository {
@@ -3950,7 +4063,11 @@ export class ModelRepository<
     relation: PivotRelationDefinition,
   ): Entity {
     const relatedRepository = entity.getRepository() as ModelRepository
-    const cloned = relatedRepository.hydrate(entity.toAttributes())
+    const cloned = new Entity(relatedRepository, { ...entity.toAttributes() }, true)
+    for (const [name, value] of Object.entries(entity.getLoadedRelations())) {
+      cloned.setRelation(name, value)
+    }
+    copyEntitySerializationOverrides(cloned, entity)
     cloned.setRelation(relation.pivotAccessor, this.extractPivotAttributes(row, relation))
     return cloned
   }

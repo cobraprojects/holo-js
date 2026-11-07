@@ -13,7 +13,7 @@ import {
   UNCHANGED_QUERY_RESULT,
   UNPATCHED_RESULT,
 } from './query-patch-results'
-import { getBackfillDatabaseConnection, readBackfilledRows, relatedTablePath } from './query-backfill'
+import { getBackfillDatabaseConnection, readBackfilledRows, readMergedRow, relatedTablePath } from './query-backfill'
 import type {
   DatabaseQueryBelongsToManyRelationObservation,
   DatabaseQueryObservation,
@@ -274,7 +274,8 @@ function findRelatedMutationRow(
       continue
     }
 
-    for (const row of mutation.rows) {
+    for (const storedRow of mutation.rows) {
+      const row = readMergedRow(relation.relatedTable, relation.relatedReadRow, storedRow, mutation.values)
       if (row[relation.relatedKey] === relatedId) {
         return row
       }
@@ -300,7 +301,7 @@ async function fetchRelatedRelationRow(
   )
     .where(relation.relatedKey, relatedId)
     .limit(1)
-    .get())
+    .get(), undefined, relation.relatedReadRow)
 
   return rows[0]
 }

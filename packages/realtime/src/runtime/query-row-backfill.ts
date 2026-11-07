@@ -59,7 +59,7 @@ async function fetchLimitedQueryBackfillRows(
   return readBackfilledRows(query.table, await builder
     .offset(offset)
     .limit(limit)
-    .get(), selections)
+    .get(), selections, query.readRow)
 }
 
 export async function backfillLimitedQueryRows(

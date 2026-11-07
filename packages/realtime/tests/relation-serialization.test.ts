@@ -38,10 +38,6 @@ const authorsTable = () => defineGeneratedTable('authors', {
 const authorModels = [
   ['hides', () => defineModel(authorsTable(), { timestamps: false, hidden: ['password'] })],
   ['limits', () => defineModel(authorsTable(), { timestamps: false, visible: ['id', 'name'] })],
-  ['casts', () => defineModel(authorsTable(), {
-    timestamps: false,
-    casts: { name: { get: value => `cast:${String(value)}` } },
-  })],
   ['accessors', () => defineModel(authorsTable(), {
     timestamps: false,
     accessors: { name: value => String(value).toUpperCase() },
@@ -61,6 +57,50 @@ async function seedAuthorsAndPosts({ adapter }: RealtimeTestDatabase) {
 }
 
 describe('realtime relation serialization', () => {
+  it('patches belongs-to relations whose related model casts attributes', async () => {
+    const context = await openRealtimeDatabase()
+    const { db } = context
+    await seedAuthorsAndPosts(context)
+    const Author = defineModel(authorsTable(), {
+      timestamps: false,
+      casts: { name: { get: value => `cast:${String(value)}` } },
+    })
+    const Post = defineModel(defineGeneratedTable('posts', {
+      id: column.id(),
+      title: column.string(),
+      author_id: column.integer().nullable(),
+    }), {
+      timestamps: false,
+      relations: { author: belongsTo(() => Author, 'author_id') },
+    })
+    const handler = () => db.model(Post).query().with('author').orderBy('id').getJson()
+    let reads = 0
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({
+      access: 'public',
+      handler: () => {
+        reads += 1
+        return handler()
+      },
+    }), {}, observePatches([]))
+    const changes = [
+      () => db.table('posts').insert([
+        { id: 2, title: 'Shared', author_id: 1 },
+        { id: 3, title: 'Other', author_id: 2 },
+      ]),
+      () => db.table('authors').where('id', 1).update({ name: 'Updated Ada' }),
+      () => db.table('authors').where('id', 2).update({ password: 'grace-rotated-secret' }),
+      () => db.table('authors').insert({ id: 3, name: 'Linus', password: 'linus-secret' }),
+      () => db.table('posts').where('id', 3).update({ author_id: 3 }),
+    ]
+
+    for (const change of changes) {
+      await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: change }))
+      expect(subscription.current.data).toEqual(await handler())
+    }
+    expect(JSON.stringify(subscription.current.data)).toContain('cast:Linus')
+    expect(reads).toBe(1)
+  })
+
   it.each(authorModels)('refreshes belongs-to relations whose related model %s attributes', async (_, createAuthor) => {
     const context = await openRealtimeDatabase()
     const { db } = context

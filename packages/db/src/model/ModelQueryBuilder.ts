@@ -3,6 +3,7 @@ import { CompilerError, ConfigurationError, HydrationError, ModelNotFoundExcepti
 import { readNumericValue } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
 import {
+  createDatabaseQueryObservation,
   disableDatabaseQueryObservationPatching,
   hasActiveDatabaseDependencyCollector,
   rebindDatabaseQueryObservationHydratedResult,
@@ -12,8 +13,10 @@ import {
   rebindDatabaseQueryObservationSerializedResult,
   rebindDatabaseQueryObservationScalar,
   rebindDatabaseQueryObservationScalarList,
+  type DatabaseQueryAggregateObservation,
   type DatabaseQueryBelongsToHydrationObservation,
   type DatabaseQueryRelatedHydrationObservation,
+  type DatabaseQueryRowReader,
   type QueryCacheConfig,
   type QueryCacheTtlInput,
 } from '../cache'
@@ -34,7 +37,6 @@ import { knownJoinedColumns, resolveSourceColumnName, selectionOutputName, selec
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
-import { modelNeedsSerialization } from './serialize'
 import type { ModelCollection } from './collection'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { DriverExecutionResult } from '../core/types'
@@ -49,7 +51,7 @@ import type {
 } from '../query/types'
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
-import type { EmptyScopeMap, ModelScopeMethods, ModelScopesDefinition } from './types'
+import type { EmptyScopeMap, ModelDefinitionLike, ModelScopeMethods, ModelScopesDefinition } from './types'
 import { canonicalTableName } from '../schema/tableIdentityRegistry'
 import type {
   AggregateRelationConstraintMap,
@@ -1805,14 +1807,18 @@ class ModelQueryBuilderBase<
       : this
     const { collection, rows } = await query.getRowsAndEntities()
     const result = collection.map(entity => entity.get(column)) as Array<ModelRecord<TTable>[TColumn]>
-    rebindDatabaseQueryObservationScalarList(rows, result, column)
+    if (!this.repository.serializesBeyondRows() && query.rowsCompareWithStoredValues()) {
+      rebindDatabaseQueryObservationScalarList(rows, result, column, this.repository.attributeReader())
+    } else {
+      disableDatabaseQueryObservationPatching(rows, { serialized: true })
+    }
     return result
   }
 
   async value<TColumn extends ModelAttributeKey<TTable>>(column: TColumn): Promise<ModelRecord<TTable>[TColumn] | undefined> {
     const entity = await this.first()
     const value = entity?.get(column)
-    rebindDatabaseQueryObservationScalar(entity, value, column)
+    rebindDatabaseQueryObservationScalar(entity, value, column, this.repository.attributeReader())
     return value
   }
 
@@ -1827,7 +1833,7 @@ class ModelQueryBuilderBase<
       throw new HydrationError(`${this.repository.definition.name} query returned no value for column "${column}".`)
     }
 
-    rebindDatabaseQueryObservationScalar(entity, value, column)
+    rebindDatabaseQueryObservationScalar(entity, value, column, this.repository.attributeReader())
     return value
   }
 
@@ -1838,7 +1844,7 @@ class ModelQueryBuilderBase<
       throw new HydrationError(`${this.repository.definition.name} query returned no value for column "${column}".`)
     }
 
-    rebindDatabaseQueryObservationScalar(entity, value, column)
+    rebindDatabaseQueryObservationScalar(entity, value, column, this.repository.attributeReader())
     return value
   }
 
@@ -1848,14 +1854,14 @@ class ModelQueryBuilderBase<
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
-        rebindDatabaseQueryObservationAggregate(entities, 0, Object.freeze({ column, kind: 'sum' }))
+        this.rebindModelAggregate(entities, 0, Object.freeze({ column, kind: 'sum' }))
       }
       return 0
     }
 
     const result = this.extractNumericValues(entities, column, 'sum').reduce((sum, value) => sum + value, 0)
     if (hasActiveDatabaseDependencyCollector()) {
-      rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({ column, kind: 'sum' }))
+      this.rebindModelAggregate(entities, result, Object.freeze({ column, kind: 'sum' }))
     }
     return result
   }
@@ -1870,7 +1876,7 @@ class ModelQueryBuilderBase<
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
-        rebindDatabaseQueryObservationAggregate(entities, null, createAverageAggregateObservation(column, []))
+        this.rebindModelAggregate(entities, null, createAverageAggregateObservation(column, []))
       }
       return null
     }
@@ -1879,7 +1885,7 @@ class ModelQueryBuilderBase<
     const sum = values.reduce((total, value) => total + value, 0)
     const result = values.length > 0 ? sum / values.length : null
     if (hasActiveDatabaseDependencyCollector()) {
-      rebindDatabaseQueryObservationAggregate(entities, result, createAverageAggregateObservation(column, values))
+      this.rebindModelAggregate(entities, result, createAverageAggregateObservation(column, values))
     }
     return result
   }
@@ -1890,7 +1896,7 @@ class ModelQueryBuilderBase<
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
-        rebindDatabaseQueryObservationAggregate(entities, null, Object.freeze({ column, kind: 'min' }))
+        this.rebindModelAggregate(entities, null, Object.freeze({ column, kind: 'min' }))
       }
       return null
     }
@@ -1898,7 +1904,7 @@ class ModelQueryBuilderBase<
     const values = this.extractNumericValues(entities, column, 'min')
     const result = values.length > 0 ? Math.min(...values) : null
     if (hasActiveDatabaseDependencyCollector()) {
-      rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({
+      this.rebindModelAggregate(entities, result, Object.freeze({
         column,
         currentValueCount: values.filter(value => value === result).length,
         kind: 'min',
@@ -1914,7 +1920,7 @@ class ModelQueryBuilderBase<
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
-        rebindDatabaseQueryObservationAggregate(entities, null, Object.freeze({ column, kind: 'max' }))
+        this.rebindModelAggregate(entities, null, Object.freeze({ column, kind: 'max' }))
       }
       return null
     }
@@ -1922,7 +1928,7 @@ class ModelQueryBuilderBase<
     const values = this.extractNumericValues(entities, column, 'max')
     const result = values.length > 0 ? Math.max(...values) : null
     if (hasActiveDatabaseDependencyCollector()) {
-      rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({
+      this.rebindModelAggregate(entities, result, Object.freeze({
         column,
         currentValueCount: values.filter(value => value === result).length,
         kind: 'max',
@@ -2663,8 +2669,28 @@ class ModelQueryBuilderBase<
     )
   }
 
+  private rebindModelAggregate(entities: unknown, result: unknown, aggregate: DatabaseQueryAggregateObservation): void {
+    if (this.repository.readsWithoutRejectingValues() && (aggregate.column === undefined || this.repository.readsColumnAsStored(aggregate.column))) {
+      rebindDatabaseQueryObservationAggregate(entities, result, aggregate, this.repository.rowReader())
+      return
+    }
+
+    disableDatabaseQueryObservationPatching(entities, { serialized: true })
+  }
+
+  private relatedReadRow(related: () => ModelDefinitionLike): { readonly readRow?: DatabaseQueryRowReader } {
+    const readRow = this.repository.relatedRowReader(related)
+    return readRow ? { readRow } : {}
+  }
+
+  private rowsCompareWithStoredValues(): boolean {
+    const observation = createDatabaseQueryObservation(this.getTableQueryBuilder().getPlan(), this.getConnectionName(), [])
+    return observation !== undefined && this.repository.comparesObservationWithStoredValues(observation)
+  }
+
   private canBindRowsToSerializedResultBase(): boolean {
-    return !modelNeedsSerialization(this.repository.definition)
+    return !this.repository.serializesBeyondRows()
+      && this.rowsCompareWithStoredValues()
       && Object.keys(this.queryCasts).length === 0
       && this.relationFilters.length === 0
       && this.aggregateLoads.length === 0
@@ -2697,7 +2723,7 @@ class ModelQueryBuilderBase<
       const relation = this.repository.getRelationDefinition(load.relation)
       if (relation.kind === 'belongsTo') {
         const predicates = this.repository.resolveBelongsToOwnerPredicates(relation, load.constraint)
-        if (!predicates) {
+        if (!predicates || !this.repository.readsKeysAsStored([relation.foreignKey])) {
           return undefined
         }
 
@@ -2708,6 +2734,7 @@ class ModelQueryBuilderBase<
           ownerKey: relation.ownerKey,
           predicates,
           primaryKey: resolveModelRowKey(relatedDefinition),
+          ...this.relatedReadRow(relation.related),
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
           relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
@@ -2718,7 +2745,7 @@ class ModelQueryBuilderBase<
 
       if (relation.kind === 'hasMany' || relation.kind === 'hasOne') {
         const hydrationQuery = this.createPatchableRelatedHydrationQuery(relation, load.constraint)
-        if (!hydrationQuery) {
+        if (!hydrationQuery || !this.repository.readsKeysAsStored([relation.localKey])) {
           return undefined
         }
 
@@ -2730,6 +2757,8 @@ class ModelQueryBuilderBase<
           localKey: relation.localKey,
           orderBy: hydrationQuery.orderBy,
           predicates: hydrationQuery.predicates,
+          primaryKey: resolveModelRowKey(relatedDefinition),
+          ...this.relatedReadRow(relation.related),
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
           relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
@@ -2775,7 +2804,7 @@ class ModelQueryBuilderBase<
     }
 
     if (this.canBindRowsToSerializedResult()) {
-      rebindDatabaseQueryObservationResult(rows, result)
+      rebindDatabaseQueryObservationResult(rows, result, this.repository.rowReader())
       return
     }
 
@@ -2786,6 +2815,7 @@ class ModelQueryBuilderBase<
         result,
         hydrations.belongsToHydrations ?? Object.freeze([]),
         hydrations.relatedHydrations,
+        this.repository.rowReader(),
       )
       return
     }
@@ -2797,7 +2827,8 @@ class ModelQueryBuilderBase<
   }
 
   private rowsNeedSerialization(): boolean {
-    return modelNeedsSerialization(this.repository.definition)
+    return this.repository.serializesBeyondRows()
+      || !this.rowsCompareWithStoredValues()
       || Object.keys(this.queryCasts).length > 0
   }
 

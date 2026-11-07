@@ -133,6 +133,7 @@ export function createPatchedQueryObservation(
     predicateColumns: readQueryPredicateColumns(query),
     predicates: query.predicates,
     primaryKey: query.primaryKey,
+    readRow: query.readRow,
     relation: query.relation,
     projectedIdentityColumn: readQueryProjectedIdentityColumn(query),
     result,

@@ -62,6 +62,8 @@ type EntityRepositoryRuntime<TTable extends TableDefinition, TRelations extends 
 let readOriginalAttribute: (entity: EntityBase, key: string) => unknown
 let readWriteState: (entity: EntityBase) => EntityWriteState
 let applyWriteState: (entity: EntityBase, state: EntityWriteState) => void
+let copySerializationOverrides: (target: EntityBase, source: EntityBase) => void
+let observeRelation: (entity: EntityBase, name: string) => void
 
 export interface EntityWriteState {
   readonly attributes: Record<string, unknown>
@@ -85,9 +87,19 @@ class EntityBase<
   #visibleOverrides = new Set<string>()
   #visibleOnly: string[] | null = null
   #appendedOverrides: string[] | null = null
+  #observedRelations = new Set<string>()
 
   static {
     readOriginalAttribute = (entity, key) => entity.#original[key]
+    observeRelation = (entity, name) => {
+      entity.#observedRelations.add(name)
+    }
+    copySerializationOverrides = (target, source) => {
+      target.#hiddenOverrides = new Set(source.#hiddenOverrides)
+      target.#visibleOverrides = new Set(source.#visibleOverrides)
+      target.#visibleOnly = source.#visibleOnly ? [...source.#visibleOnly] : null
+      target.#appendedOverrides = source.#appendedOverrides ? [...source.#appendedOverrides] : null
+    }
     readWriteState = entity => ({
       attributes: snapshotAttributes(entity.#attributes),
       original: snapshotAttributes(entity.#original),
@@ -312,6 +324,10 @@ class EntityBase<
   }
 
   setRelation(name: string, value: unknown): this {
+    if (this.#observedRelations.has(name)) {
+      markDatabaseQueryObservationsSerialized()
+    }
+
     if (!(name in this)) {
       Object.defineProperty(this, name, {
         configurable: true,
@@ -413,6 +429,10 @@ class EntityBase<
   }
 
   forgetRelation(name: string): this {
+    if (this.#observedRelations.has(name)) {
+      markDatabaseQueryObservationsSerialized()
+    }
+
     Reflect.deleteProperty(this.#relations, name)
     return this
   }
@@ -1086,4 +1106,18 @@ export function restoreEntityWriteState<TTable extends TableDefinition, TRelatio
   state: EntityWriteState,
 ): void {
   applyWriteState(entity as unknown as EntityBase, state)
+}
+
+export function copyEntitySerializationOverrides<TTable extends TableDefinition, TRelations extends RelationMap>(
+  target: Entity<TTable, TRelations>,
+  source: Entity<TTable, TRelations>,
+): void {
+  copySerializationOverrides(target as unknown as EntityBase, source as unknown as EntityBase)
+}
+
+export function markEntityRelationObserved<TTable extends TableDefinition, TRelations extends RelationMap>(
+  entity: Entity<TTable, TRelations>,
+  name: string,
+): void {
+  observeRelation(entity as unknown as EntityBase, name)
 }

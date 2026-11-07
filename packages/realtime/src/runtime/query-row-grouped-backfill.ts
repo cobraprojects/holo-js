@@ -16,6 +16,7 @@ import {
   observedTableKey,
   readBackfilledRows,
   readBackfilledValue,
+  convertBackfilledRows,
 } from './query-backfill'
 import type {
   BackfillRows,
@@ -53,7 +54,7 @@ export async function getGroupedExactRowBackfill(
   const pendingBackfill = rowGroups.get(key) ?? fetchGroupedExactRowBackfill(query, values)
   rowGroups.set(key, pendingBackfill)
   const rowsById = await pendingBackfill
-  return rowsById?.get(readBackfilledValue(query.table, readPrimaryKey(query), exactId))
+  return convertBackfilledRows(rowsById?.get(readBackfilledValue(query.table, readPrimaryKey(query), exactId)), query.readRow)
 }
 
 export async function getGroupedWindowRowBackfill(
@@ -82,7 +83,7 @@ export async function getGroupedWindowRowBackfill(
   const pendingBackfill = rowGroups.get(key) ?? fetchGroupedWindowBackfill(query, groupPredicate.column, values, offset, limit)
   rowGroups.set(key, pendingBackfill)
   const rowsByGroup = await pendingBackfill
-  return rowsByGroup?.get(readBackfilledValue(query.table, groupPredicate.column, groupPredicate.value))
+  return convertBackfilledRows(rowsByGroup?.get(readBackfilledValue(query.table, groupPredicate.column, groupPredicate.value)), query.readRow)
 }
 
 function collectGroupedExactRowBackfillQueries(
