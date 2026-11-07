@@ -19,7 +19,9 @@ export function addAggregateReadChecks(
 ): TableQueryBuilder<string, Record<string, unknown>> {
   const dialect = builder.getConnection().getDialect()
   for (const [index, { column, integer }] of columns.entries()) {
-    builder = builder.addSelectMin(`__holo_read_min_${index}`, column).addSelectMax(`__holo_read_max_${index}`, column)
+    builder = integer
+      ? builder.addSelectMin(`__holo_read_min_${index}`, column).addSelectMax(`__holo_read_max_${index}`, column)
+      : holoRuntimeInternals.addSelectDateExtrema(builder, column, `__holo_read_min_${index}`, `__holo_read_max_${index}`)
     if (integer && dialect.name === 'sqlite') {
       builder = holoRuntimeInternals.addSelectFractionalCount(builder, column, `__holo_fractional_${index}`)
     }

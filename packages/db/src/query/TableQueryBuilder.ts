@@ -4,7 +4,8 @@ import { redactBindings } from '../security/policy'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
-import { createFractionalCountSelection } from './trustedRawSelection'
+import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
+import type { QueryRawSelection } from './ast'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -238,6 +239,7 @@ export function insertGetIdByKey(
 }
 
 const trustedRawWhereAppenders = new WeakMap<object, (sql: string, bindings: readonly unknown[]) => unknown>()
+const trustedRawSelectionAppenders = new WeakMap<object, (selection: QueryRawSelection) => unknown>()
 const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
 
 const aggregateValueKey = 'holo_aggregate_value'
@@ -327,6 +329,7 @@ export class TableQueryBuilder<
       ? { ...plan, predicates: copyTopLevelPredicates(plan.predicates) }
       : plan
     this.plan = ownPlan ? withSource(ownPlan, source) : createSelectQueryPlan(source)
+    trustedRawSelectionAppenders.set(this, selection => this.clone(appendRawSelection(this.plan, selection)))
     trustedRawWhereAppenders.set(this, (sql, bindings) => this.clone(withPredicate(this.plan, createTrustedRawPredicate({
       kind: 'raw',
       boolean: 'and',
@@ -4141,23 +4144,38 @@ export class TableQueryBuilder<
   }
 }
 
+function internalSelectionContext(query: TableQueryBuilder<string, Record<string, unknown>>) {
+  const append = trustedRawSelectionAppenders.get(query)
+  if (!append) {
+    throw new SecurityError('Internal selections need a query builder that Holo created.')
+  }
+  const connection = query.getConnection()
+  if (!isGenuineDatabaseContext(connection)) {
+    throw new SecurityError('Internal selections need a connection that Holo created.')
+  }
+  return { connection, append: (selection: QueryRawSelection) => append(selection) as TableQueryBuilder<string, Record<string, unknown>> }
+}
+
+export function addSelectDateExtrema(
+  query: TableQueryBuilder<string, Record<string, unknown>>,
+  column: string,
+  minAlias: string,
+  maxAlias: string,
+): TableQueryBuilder<string, Record<string, unknown>> {
+  const { connection, append } = internalSelectionContext(query)
+  return append(createDateExtremaSelection(connection.getDialect(), column, minAlias, maxAlias))
+}
+
 export function addSelectFractionalCount(
   query: TableQueryBuilder<string, Record<string, unknown>>,
   column: string,
   alias: string,
 ): TableQueryBuilder<string, Record<string, unknown>> {
-  if (!trustedRawWhereAppenders.has(query)) {
-    throw new SecurityError('addSelectFractionalCount() needs a query builder that Holo created.')
-  }
-  const connection = query.getConnection()
-  if (!isGenuineDatabaseContext(connection)) {
-    throw new SecurityError('addSelectFractionalCount() needs a connection that Holo created.')
-  }
+  const { connection, append } = internalSelectionContext(query)
   if (connection.getDialect().name !== 'sqlite') {
     throw new SecurityError('addSelectFractionalCount() only supports SQLite.')
   }
-  const selection = createFractionalCountSelection(column, alias)
-  return new TableQueryBuilder(query.getTableName(), connection, appendRawSelection(query.getPlan(), selection))
+  return append(createFractionalCountSelection(column, alias))
 }
 
 export function whereColumnNotExpiredByDatabaseClock<

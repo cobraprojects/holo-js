@@ -193,6 +193,16 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).count()).toBe(1)
   })
 
+  it('preserves internal database-clock predicates when adding fractional checks', async () => {
+    const { db, table } = await openDatabase('sqlite')
+    await db.table(table).insert([{ id: 1, name: '2999-01-01 00:00:00' }, { id: 2, name: '2000-01-01 00:00:00' }])
+    const query = holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(db.table(table.tableName), 'name').selectCount('total')
+    expect(await holoRuntimeInternals.addSelectFractionalCount(query, 'id', 'fractional').get()).toEqual([{ total: 1, fractional: 0 }])
+
+    const external = new TableQueryBuilder(table.tableName, db, query.getPlan())
+    await expect(holoRuntimeInternals.addSelectFractionalCount(external, 'id', 'fractional').get()).rejects.toThrow('Unsafe raw SQL is disabled')
+  })
+
   it('keeps copied aggregate checks and matching user SQL gated by the raw SQL policy', async () => {
     const { db, table } = await openDatabase('sqlite')
     const checked = holoRuntimeInternals.addSelectFractionalCount(db.table(table.tableName), 'id', 'fractional')
