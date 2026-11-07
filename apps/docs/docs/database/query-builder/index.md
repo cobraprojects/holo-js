@@ -94,9 +94,9 @@ const drafts = await posts.where('status', 'draft').get()
 const published = await posts.where('status', 'published').get()
 ```
 
-Rows come back with the values the database driver returns, as in Laravel's query builder. For example, PostgreSQL returns `bigint` columns as strings, and SQLite and MySQL return booleans as `1` and `0`. Use a [model](/orm/) with [casts](/orm/casts) when you want typed attributes.
+When a table has no definition in the generated schema, rows keep the database driver's values. For example, PostgreSQL returns `bigint` columns as strings, and SQLite and MySQL return booleans as `1` and `0`.
 
-On the default connection, a table name resolves through the Generated schema, the table definitions `holo migrate` and `holo build` write from your database. When the table is in it, Holo uses its columns and primary key to check the columns you name and to prepare the values you write and compare. The Generated schema describes only the default connection, so a table name on another connection uses no definition. A table that isn't in the Generated schema, such as one created earlier in the same script, uses no definition until the Generated schema is regenerated. Pass a table definition to `DB.table()` to use its columns right away.
+On the default connection, a table name resolves through the Generated schema, the table definitions `holo migrate` and `holo build` write from your database. When the table is in it, Holo uses its columns and primary key to check the columns you name and to prepare the values you write, compare and read. The Generated schema describes only the default connection, so a table name on another connection uses no definition. A table that isn't in the Generated schema, such as one created earlier in the same script, uses no definition until the Generated schema is regenerated. Pass a table definition to `DB.table()` to use its columns right away.
 
 You can alias the table with `as`:
 
@@ -131,7 +131,7 @@ await DB.table('users').where('id', 7).update({ active: true })
 const activeUsers = await DB.table('users').where('active', true).get()
 ```
 
-As Laravel does, Holo binds scalar `true` as `1` and `false` as `0` on every driver, so a filter matches what an insert stored, and you don't need to register a table schema for this conversion. A column of a table definition you pass to `DB.table()` gets the value its type stores, so a PostgreSQL `boolean` column binds `true` and `false`. Query-builder rows keep the database's values when read back. For boolean model attributes, use a [boolean cast](/orm/casts#built-in-casts). Booleans inside JSON values remain JSON booleans.
+As Laravel does, Holo binds scalar `true` as `1` and `false` as `0` on every driver, so a filter matches what an insert stored, and you don't need to register a table schema for this conversion. A column of a table definition you pass to `DB.table()` gets the value its type stores, so a PostgreSQL `boolean` column binds `true` and `false`. Query-builder reads use the table definition, including one resolved from the generated schema, to convert boolean columns to booleans. Without a definition, rows keep the driver's values. Booleans inside JSON values remain JSON booleans.
 
 ## Get all rows
 
@@ -372,7 +372,7 @@ const rows = await DB.table(posts)
 
 With a table definition, `select()`, `where()`, `orderBy()`, `groupBy()`, `pluck()`, and `value()` only accept real column names, and `select('title as heading')` renames the key in the result type.
 
-A table definition also sets how integer columns are read. `id()`, `integer()`, `bigInteger()`, and `foreignId()` columns come back as numbers on every driver, the same values a [model](/orm/) returns, including columns of a definition you pass to `join()`. PostgreSQL sends `bigint` columns as text, so with a table name you get strings such as `"1"` there. A value above `Number.MAX_SAFE_INTEGER` throws a `HydrationError` on every database, MySQL included. Raw SQL selections keep the driver's values.
+A table definition also sets how integer columns are read. `id()`, `integer()`, `bigInteger()`, and `foreignId()` columns come back as numbers on every driver, the same values a [model](/orm/) returns, including columns of a definition you pass to `join()`. Name-only queries use the same conversions when the generated schema contains the table; otherwise they keep the driver's values, such as PostgreSQL `bigint` text. A value above `Number.MAX_SAFE_INTEGER` throws a `HydrationError` on every database, MySQL included. Raw SQL selections keep the driver's values.
 
 **Or annotate the row type.** `get()`, `first()`, and `sole()` accept a row type:
 

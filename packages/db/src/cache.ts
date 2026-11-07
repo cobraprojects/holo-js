@@ -1367,7 +1367,7 @@ function rebindDatabaseQueryObservation(
 
     replaceDatabaseQueryObservation(state, index, Object.freeze({
       aggregate,
-      readRow,
+      readRow: readRow ?? query.readRow,
       belongsToHydrations,
       connectionName: query.connectionName,
       tableName: query.tableName,

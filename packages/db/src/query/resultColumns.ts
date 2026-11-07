@@ -101,6 +101,7 @@ function resultColumnDefinitions(plan: SelectQueryPlan): ReadonlyMap<string, Any
 export function withResolvedDefinitions(plan: SelectQueryPlan, connectionName: string): SelectQueryPlan {
   return {
     ...plan,
+    source: plan.source.table ? plan.source : { ...plan.source, table: getConnectionGeneratedTableDefinition(plan.source.tableName, connectionName) },
     joins: plan.joins.map(join => join.table && !join.definition
       ? { ...join, definition: getConnectionGeneratedTableDefinition(join.table, connectionName) }
       : join),
