@@ -1,3 +1,4 @@
+import { queryCacheInternals } from '@holo-js/db'
 import type { RealtimeQueryDefinitionMetadata } from '../contracts'
 import type { DatabaseMutationEvent } from './dependencies'
 import { deliverPatchedQueryData } from './delivery'
@@ -59,6 +60,11 @@ async function tryPatchUnlessUnreadable(
   }
 }
 
+function isPatchableAfterRead(mutation: DatabaseMutationEvent, readBoundary: number | undefined): boolean {
+  if (mutation.unordered) return false
+  return readBoundary === undefined || mutation.publicationStartedAt === undefined || mutation.publicationStartedAt >= readBoundary
+}
+
 export async function tryPatchQueryEntry(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   backfills: BackfillCache,
@@ -78,12 +84,23 @@ export async function tryPatchQueryEntry(
   let patchedBelongsToHydrationKeys: Set<string> | undefined
   let handledUnchangedPatch = false
   const version = entry.version
+  let readBoundary = entry.readBoundary
+  let observationVersion = entry.observationVersion ?? 0
+  const markBackfilledRead = () => {
+    if ((getRuntimeState().backfillConnectionLookups ?? 0) === (backfills.backfillConnectionLookupsAtStart ?? 0)) return
+    readBoundary = queryCacheInternals.markMutationPublicationBoundary()
+    entry.readBoundary = readBoundary
+  }
   const data = entry.current.data
   const relevantTargets = collectRelevantMutationTargets(entry.patchTargets, backfills)
   if (relevantTargets.length === 0) {
     return entry.patchTargets.length > 0
       && entry.patchTargets.every(target => backfills.mutations.has(target.mutationIndexKey))
   }
+  if (relevantTargets.some(({ mutations }) => mutations.some(mutation => !isPatchableAfterRead(mutation, readBoundary)))) {
+    return false
+  }
+
   if (hasNestedTargetsOnSameTable(relevantTargets)) {
     return false
   }
@@ -105,7 +122,7 @@ export async function tryPatchQueryEntry(
     }
 
     const result = await tryPatchUnlessUnreadable(target, mutations, backfills)
-    if (entry.version !== version) {
+    if (entry.version !== version || entry.readBoundary !== readBoundary || (entry.observationVersion ?? 0) !== observationVersion) {
       return false
     }
 
@@ -116,6 +133,9 @@ export async function tryPatchQueryEntry(
     if ('unchanged' in result) {
       handledUnchangedPatch = true
       if (result.nextQuery) {
+        markBackfilledRead()
+        observationVersion += 1
+        entry.observationVersion = observationVersion
         const pathKey = readPatchPathKey(result.nextQuery, target)
         const nextQuery = createPatchedQueryObservation(result.nextQuery, target.currentValue, pathKey)
         const path = nextQuery.resultPath!
@@ -164,6 +184,9 @@ export async function tryPatchQueryEntry(
         })
   }
 
+  if (firstPatch || handledUnchangedPatch) {
+    markBackfilledRead()
+  }
   if (!firstPatch) {
     return handledUnchangedPatch
   }
