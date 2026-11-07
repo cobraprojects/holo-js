@@ -1204,10 +1204,28 @@ const arrayWriteMethods = Object.fromEntries(ARRAY_WRITE_METHODS.map((name) => {
   return [name, method]
 })) as Readonly<Record<typeof ARRAY_WRITE_METHODS[number], (this: unknown[], ...args: unknown[]) => unknown>>
 
+function snapshotArray(array: readonly unknown[]): readonly unknown[] {
+  const values: unknown[] = []
+  values.length = array.length
+  for (let index = 0; index < array.length; index += 1) {
+    if (Object.hasOwn(array, index)) {
+      values[index] = array[index]
+    }
+  }
+
+  return Object.freeze(values)
+}
+
 function hasChangedArraySnapshot(state: DatabaseDependencyCollectorState): boolean {
   for (const [array, values] of state.arraySnapshots) {
-    if (array.length !== values.length || values.some((value, index) => !Object.hasOwn(array, index) || !Object.is(value, array[index]))) {
+    if (array.length !== values.length) {
       return true
+    }
+
+    for (let index = 0; index < values.length; index += 1) {
+      if (Object.hasOwn(values, index) !== Object.hasOwn(array, index) || !Object.is(values[index], array[index])) {
+        return true
+      }
     }
   }
 
@@ -1221,7 +1239,7 @@ export function serializeDatabaseQueryObservationsOnArrayWrites(array: unknown):
   }
 
   if (!state.arraySnapshots.has(array)) {
-    state.arraySnapshots.set(array, Object.freeze([...array]))
+    state.arraySnapshots.set(array, snapshotArray(array))
   }
 
   if (!Object.isExtensible(array) || Object.getPrototypeOf(array) !== Array.prototype) {

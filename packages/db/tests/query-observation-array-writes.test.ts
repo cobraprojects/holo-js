@@ -118,4 +118,23 @@ describe('array writes inside a dependency collection', () => {
       rows[0] = 1
     })).toBe(false)
   })
+
+  it('registers an array without running its own iterator', async () => {
+    class OneShotComments extends Array<number> {
+      override [Symbol.iterator](): ArrayIterator<number> {
+        throw new Error('iterated')
+      }
+    }
+    const rows = OneShotComments.from([1, 2])
+    expect(await collect(() => serializeDatabaseQueryObservationsOnArrayWrites(rows))).toBe(false)
+  })
+
+  it('re-runs instead of patching after a hole in the tracked array is filled', async () => {
+    const rows: Array<number | undefined> = [1, 2, 3]
+    delete rows[1]
+    expect(await collect(() => {
+      serializeDatabaseQueryObservationsOnArrayWrites(rows)
+      rows[1] = undefined
+    })).toBe(true)
+  })
 })
