@@ -109,7 +109,7 @@ function plainNumberText(value: number): string {
   return point >= digits.length ? `${sign}${digits.padEnd(point, '0')}` : `${sign}${digits.slice(0, point)}.${digits.slice(point)}`
 }
 
-export function readSQLiteDecimal(value: unknown): unknown {
+export function readSQLiteDecimal(value: unknown, places = SQLITE_DECIMAL_PLACES): unknown {
   const text = typeof value === 'number' && Number.isFinite(value)
     ? plainNumberText(value)
     : typeof value === 'bigint' || isCanonicalIntegerText(value) ? String(value) : undefined
@@ -118,7 +118,8 @@ export function readSQLiteDecimal(value: unknown): unknown {
   }
 
   const [integer = '', fraction = ''] = text.split('.')
-  return `${integer}.${fraction.padEnd(SQLITE_DECIMAL_PLACES, '0')}`
+  const padded = fraction.padEnd(places, '0')
+  return padded === '' ? integer : `${integer}.${padded}`
 }
 
 function parseJson(value: unknown): unknown {
@@ -416,7 +417,7 @@ export function normalizeDialectReadValue(
     case 'boolean':
       return coerceBoolean(value)
     case 'decimal':
-      return dialect === 'sqlite' ? readSQLiteDecimal(value) : value
+      return dialect === 'sqlite' ? readSQLiteDecimal(value, column.decimalPlaces) : value
     case 'json':
       return parseJson(value)
     case 'date':

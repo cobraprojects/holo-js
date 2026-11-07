@@ -47,7 +47,7 @@ const expectedColumns = {
     { name: 'status', type: 'enum', logicalType: 'enum', notNull: true, defaultValue: 'draft', primaryKey: false },
     { name: 'published_at', type: 'timestamp', logicalType: 'timestamp', notNull: true, defaultValue: 'CURRENT_TIMESTAMP', primaryKey: false },
     { name: 'token', type: 'char', logicalType: 'uuid', notNull: false, defaultValue: null, primaryKey: false },
-    { name: 'price', type: 'decimal', logicalType: 'decimal', notNull: true, defaultValue: null, primaryKey: false },
+    { name: 'price', type: 'decimal', logicalType: 'decimal', decimalTotal: 10, decimalPlaces: 2, notNull: true, defaultValue: null, primaryKey: false },
   ],
 } as const
 

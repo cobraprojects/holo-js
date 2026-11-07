@@ -28,6 +28,8 @@ export interface IntrospectedColumn {
   name: string
   type: string
   logicalType: LogicalColumnKind | null
+  decimalTotal?: number
+  decimalPlaces?: number
   notNull: boolean
   defaultValue: string | null
   primaryKey: boolean
@@ -176,6 +178,7 @@ export class SchemaService {
     return structure?.columns.map(column => ({
       name: column.name,
       type: column.dataType,
+      ...(column.decimalTotal !== undefined ? { decimalTotal: column.decimalTotal, decimalPlaces: column.decimalPlaces } : {}),
       logicalType: inferColumnKind(structure.dialect, column.fullType),
       notNull: column.notNull,
       defaultValue: column.defaultExpression,

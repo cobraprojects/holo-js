@@ -241,11 +241,13 @@ class TableCreateColumnBuilder<
 
   decimal<TColumnName extends string>(
     columnName: TColumnName,
+    total?: number,
+    places?: number,
   ): TableCreateColumnBuilder<
     TName,
     WithColumn<TColumns, TColumnName, ReturnType<typeof column.decimal>>
   > {
-    return this.root.decimal(columnName)
+    return this.root.decimal(columnName, total, places)
   }
 
   date<TColumnName extends string>(
@@ -704,11 +706,13 @@ export class TableDefinitionBuilder<
 
   decimal<TColumnName extends string>(
     columnName: TColumnName,
+    total?: number,
+    places?: number,
   ): TableCreateColumnBuilder<
     TName,
     WithColumn<TColumns, TColumnName, ReturnType<typeof column.decimal>>
   > {
-    return this.column(columnName, column.decimal())
+    return this.column(columnName, column.decimal(undefined, total, places))
   }
 
   date<TColumnName extends string>(

@@ -33,7 +33,7 @@ function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | 
   if (!column) return undefined
   if (readsAsInteger(column)) return readIntegerResult
   if (readsAsCoercedBoolean(dialect, column)) return coerceBoolean
-  return readsAsSQLiteDecimal(dialect, column) ? readSQLiteDecimal : undefined
+  return readsAsSQLiteDecimal(dialect, column) ? value => readSQLiteDecimal(value, column.decimalPlaces) : undefined
 }
 
 function columnsOf(table: TableDefinition | undefined): SelectedColumn[] {

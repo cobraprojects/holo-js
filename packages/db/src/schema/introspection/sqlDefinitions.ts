@@ -191,3 +191,8 @@ export function withoutUniquesBackingIndex(table: StoredTable, indexKey: readonl
     return sameIdentifier(keyColumn.name, indexColumn?.name) && sameIdentifier(keyCollation(table, keyColumn), indexColumn?.collation)
   }))
 }
+
+export function readDecimalParameters(type: string): { decimalTotal: number, decimalPlaces: number } | undefined {
+  const match = /^\s*(?:numeric|decimal)\s*\(\s*(\d+)\s*(?:,\s*(-?\d+)\s*)?\)/i.exec(type)
+  return match ? { decimalTotal: Number(match[1]), decimalPlaces: Number(match[2] ?? 0) } : undefined
+}

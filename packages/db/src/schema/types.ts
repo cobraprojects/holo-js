@@ -56,6 +56,8 @@ export interface ColumnDefinition<
   readonly references?: ForeignKeyReference
   readonly idStrategy?: IdGenerationStrategy
   readonly enumValues?: readonly string[]
+  readonly decimalTotal?: number
+  readonly decimalPlaces?: number
   readonly vectorDimensions?: number
   readonly computed?: TComputed extends true ? ComputedColumn : never
   readonly explicitNotNull?: true

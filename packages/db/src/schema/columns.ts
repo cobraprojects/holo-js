@@ -45,6 +45,8 @@ type ColumnMetadata = {
   referenceOnUpdate?: ForeignKeyReference['onUpdate']
   idStrategy?: IdGenerationStrategy
   enumValues?: readonly string[]
+  decimalTotal?: number
+  decimalPlaces?: number
   vectorDimensions?: number
   computed?: ComputedColumn
   explicitNotNull?: true
@@ -255,6 +257,8 @@ export class ColumnBuilder<
         : undefined,
       idStrategy: this.metadata.idStrategy,
       enumValues: this.metadata.enumValues,
+      decimalTotal: this.metadata.decimalTotal,
+      decimalPlaces: this.metadata.decimalPlaces,
       vectorDimensions: this.metadata.vectorDimensions,
       explicitNotNull: this.metadata.explicitNotNull,
       computed: this.metadata.computed as ColumnDefinition<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed>['computed'],
@@ -328,8 +332,10 @@ export const column = {
   real(name?: string) {
     return scalar<number>('real', name)
   },
-  decimal(name?: string) {
-    return scalar<string>('decimal', name)
+  decimal(name?: string, total?: number, places?: number) {
+    return new ColumnBuilder<string>('decimal', name, total === undefined && places === undefined
+      ? {}
+      : { decimalTotal: total ?? 8, decimalPlaces: places ?? 2 })
   },
   date(name?: string) {
     return scalar<Date>('date', name)

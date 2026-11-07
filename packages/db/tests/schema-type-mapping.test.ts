@@ -24,6 +24,14 @@ describe('schema type mapping', () => {
     expect(resolveDialectColumnType('postgres', column.vector({ dimensions: 3 }).toDefinition({ name: 'embedding' }))).toBe('VECTOR(3)')
   })
 
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('compiles decimal precision and preserves omitted arguments on %s', (dialect) => {
+    const definition = column.decimal('rate', 10, 4).toDefinition({ name: 'rate' })
+    expect(resolveDialectColumnType(dialect, definition)).toBe(dialect === 'mysql' ? 'DECIMAL(10, 4)' : 'NUMERIC(10, 4)')
+    expect(resolveDialectColumnType(dialect, column.decimal().toDefinition({ name: 'rate' }))).toBe(dialect === 'mysql' ? 'DECIMAL(10, 2)' : 'NUMERIC')
+    expect(resolveDialectColumnType(dialect, column.decimal(undefined, 8).toDefinition({ name: 'rate' }))).toBe(dialect === 'mysql' ? 'DECIMAL(8, 2)' : 'NUMERIC(8, 2)')
+    expect(resolveDialectColumnType(dialect, column.decimal(undefined, undefined, 0).toDefinition({ name: 'rate' }))).toBe(dialect === 'mysql' ? 'DECIMAL(8, 0)' : 'NUMERIC(8, 0)')
+  })
+
   it('defines explicit ID strategy mappings for every schema dialect', () => {
     expect(DIALECT_ID_STRATEGY_MAP).toEqual({
       sqlite: {

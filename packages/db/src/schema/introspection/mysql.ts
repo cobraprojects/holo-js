@@ -7,7 +7,7 @@ import type { DatabaseColumnDefault, DatabaseEnumCheckStructure, DatabaseIndexSt
 
 type TableNameRow = { name: string }
 type TableLocationRow = { table_schema: string, table_name: string }
-type ColumnRow = { table_schema: string, name: string, data_type: string, column_type: string, is_nullable: 'YES' | 'NO', column_default: string | null, extra: string, generation_expression: string | null }
+type ColumnRow = { table_schema: string, name: string, data_type: string, numeric_precision: number | null, numeric_scale: number | null, column_type: string, is_nullable: 'YES' | 'NO', column_default: string | null, extra: string, generation_expression: string | null }
 type IndexRow = { name: string, non_unique: number | string, column_name: string | null, sub_part: number | null, expression: string | null }
 type ForeignKeyRow = { name: string, table_schema: string, referenced_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
 
@@ -113,7 +113,7 @@ export function createMySQLSchemaReader(connection: DatabaseContext): DialectSch
     async readTableStructure(tableName) {
       const { schema, table } = splitTablePath(tableName)
       const bindings = [schema ?? configuredSchema, table]
-      const columns = await introspect<ColumnRow>(`SELECT table_schema AS table_schema, column_name AS name, data_type AS data_type, column_type AS column_type, is_nullable AS is_nullable, column_default AS column_default, extra AS extra, generation_expression AS generation_expression FROM information_schema.columns WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? ORDER BY ordinal_position`, bindings, `schema:introspect:columns:${tableName}`)
+      const columns = await introspect<ColumnRow>(`SELECT table_schema AS table_schema, column_name AS name, data_type AS data_type, column_type AS column_type, numeric_precision AS numeric_precision, numeric_scale AS numeric_scale, is_nullable AS is_nullable, column_default AS column_default, extra AS extra, generation_expression AS generation_expression FROM information_schema.columns WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? ORDER BY ordinal_position`, bindings, `schema:introspect:columns:${tableName}`)
       const resolvedSchema = columns.rows[0]?.table_schema
       if (resolvedSchema === undefined) return undefined
 
@@ -131,6 +131,7 @@ export function createMySQLSchemaReader(connection: DatabaseContext): DialectSch
           name: row.name,
           dataType: row.data_type,
           fullType: row.column_type,
+          ...(row.data_type === 'decimal' && row.numeric_precision !== null && row.numeric_scale !== null ? { decimalTotal: Number(row.numeric_precision), decimalPlaces: Number(row.numeric_scale) } : {}),
           length: readStringLength(row.column_type),
           notNull: row.is_nullable === 'NO',
           defaultExpression: row.column_default,
