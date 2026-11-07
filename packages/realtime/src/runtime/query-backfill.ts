@@ -7,6 +7,8 @@ import type { BackfillCache } from './state'
 import { getRuntimeState } from './state'
 
 export function getBackfillDatabaseConnection(connectionName: string): DatabaseContext | undefined {
+  const state = getRuntimeState()
+  state.backfillConnectionLookups = (state.backfillConnectionLookups ?? 0) + 1
   const boundConnection = getExecutionDatabase() ?? getRuntimeState().bindings?.db?.()
   if (boundConnection) {
     return boundConnection.getConnectionName() === connectionName
