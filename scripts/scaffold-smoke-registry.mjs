@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process'
 
 export const liveRegistryVariable = 'HOLO_SCAFFOLD_SMOKE_LIVE_REGISTRY'
-export const offlineVariable = 'HOLO_SCAFFOLD_SMOKE_OFFLINE'
-export const snapshotDistTag = 'holo-scaffold-smoke-snapshot'
+const offlineVariable = 'HOLO_SCAFFOLD_SMOKE_OFFLINE'
+const snapshotDistTag = 'holo-scaffold-smoke-snapshot'
 
 function git(rootDir, args) {
   const result = spawnSync('git', args, { cwd: rootDir, encoding: 'utf8' })
