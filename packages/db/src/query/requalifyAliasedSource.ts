@@ -121,7 +121,16 @@ function requalifyPlanBody(plan: SelectQueryPlan, target: Target, enclosing: rea
   const ownSource = own.slice(0, own.length - joinBindings(plan.joins).length)
   const onColumn = (index: number) => {
     const visible = [...enclosing, ...ownSource, ...joinBindings(plan.joins.slice(0, index + 1))]
-    return (value: string) => requalifyColumn(value, target, visible)
+    const later = joinBindings(plan.joins.slice(index + 1))
+    return (value: string) => {
+      const requalified = requalifyColumn(value, target, visible)
+      const qualifier = value.slice(0, value.split('->', 1)[0]!.lastIndexOf('.'))
+      const shadowing = qualifier.length > 0 && target.concerns(qualifier) ? later.find(binding => bindsTable(binding.name, qualifier)) : undefined
+      if (shadowing !== undefined) {
+        throw new CompilerError(`"${value}" in a join condition may name the later join "${shadowing.name}" or the related table, depending on the database. Give the later join a different alias.`)
+      }
+      return requalified
+    }
   }
   const join = (item: QueryJoinClause, index: number): QueryJoinClause => Object.freeze({
     ...item,
