@@ -1,5 +1,6 @@
 import { getExecutionDatabase } from './execution-context'
-import { DB, queryCacheInternals, type DatabaseContext, type TableDefinition } from '@holo-js/db'
+import { DB, queryCacheInternals, type DatabaseContext, type TableDefinition, type TableQueryBuilder } from '@holo-js/db'
+import type { DatabaseQueryPredicateObservation } from './predicate-matching'
 import type { DatabaseQueryObservation, DatabaseQuerySelectionObservation } from './query-state'
 import type { DatabaseMutationEvent } from './dependencies'
 import type { BackfillCache } from './state'
@@ -24,6 +25,17 @@ export function getBackfillDatabaseConnection(connectionName: string): DatabaseC
 
 export function relatedTablePath(relation: { readonly relatedTableName: string, readonly relatedTable?: TableDefinition }): string {
   return relation.relatedTable?.tableName ?? relation.relatedTableName
+}
+
+export function whereObservedPredicates(
+  builder: TableQueryBuilder<string, Record<string, unknown>>,
+  predicates: readonly DatabaseQueryPredicateObservation[],
+): TableQueryBuilder<string, Record<string, unknown>> | undefined {
+  if (predicates.some(predicate => predicate.value === null)) {
+    return undefined
+  }
+
+  return predicates.reduce((current, predicate) => current.where(predicate.column, predicate.operator, predicate.value), builder)
 }
 
 export function createBackfillSelection(selection: DatabaseQuerySelectionObservation): string {
