@@ -80,6 +80,18 @@ test('the smoke npm environment pins resolution and prefers the local cache', as
   })
 })
 
+test('the offline mode pins resolution and never contacts the registry', async () => {
+  await withRepository((root) => {
+    assert.deepEqual(scaffoldSmokeNpmEnvironment(root, { HOLO_SCAFFOLD_SMOKE_OFFLINE: '1' }), {
+      npm_config_audit: 'false',
+      npm_config_fund: 'false',
+      npm_config_update_notifier: 'false',
+      npm_config_before: '2026-01-02T03:04:05.000Z',
+      npm_config_offline: 'true',
+    })
+  })
+})
+
 test('the live registry mode resolves packages without a snapshot', async () => {
   await withRepository((root) => {
     assert.deepEqual(scaffoldSmokeNpmEnvironment(root, { HOLO_SCAFFOLD_SMOKE_LIVE_REGISTRY: '1' }), {

@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 
 export const liveRegistryVariable = 'HOLO_SCAFFOLD_SMOKE_LIVE_REGISTRY'
+export const offlineVariable = 'HOLO_SCAFFOLD_SMOKE_OFFLINE'
 
 function git(rootDir, args) {
   const result = spawnSync('git', args, { cwd: rootDir, encoding: 'utf8' })
@@ -28,18 +29,18 @@ export function resolveRegistrySnapshot(rootDir, now = new Date()) {
 }
 
 export function scaffoldSmokeNpmEnvironment(rootDir, env = process.env) {
-  const common = {
+  const quietNpmSettings = {
     npm_config_audit: 'false',
     npm_config_fund: 'false',
     npm_config_update_notifier: 'false',
   }
   if (env[liveRegistryVariable] === '1') {
-    return common
+    return quietNpmSettings
   }
 
   return {
-    ...common,
+    ...quietNpmSettings,
     npm_config_before: resolveRegistrySnapshot(rootDir),
-    npm_config_prefer_offline: 'true',
+    ...(env[offlineVariable] === '1' ? { npm_config_offline: 'true' } : { npm_config_prefer_offline: 'true' }),
   }
 }

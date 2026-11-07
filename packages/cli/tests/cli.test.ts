@@ -23,6 +23,7 @@ import { createSQLiteAdapter } from '../../db-sqlite/src'
 import { createPostgresAdapter } from '../../db-postgres/src'
 import { createMySQLAdapter } from '../../db-mysql/src'
 import {
+  linkPackageBinsSync,
   stageWorkspacePackagesSync,
   resolveInstalledDependencyRoot,
   symlinkPackageDependencySync,
@@ -910,16 +911,10 @@ function linkNativeFramework(projectRoot: string, framework: 'nuxt' | 'sveltekit
     ? ['nuxt', '@nuxt/kit', 'vue', 'vue-router']
     : ['@sveltejs/kit', '@sveltejs/adapter-node', '@sveltejs/vite-plugin-svelte', 'svelte', 'vite']
   const nodeModulesRoot = join(projectRoot, 'node_modules')
-  const binRoot = join(nodeModulesRoot, '.bin')
-  mkdirSync(binRoot, { recursive: true })
   for (const dependency of dependencies) {
     const dependencyRoot = resolveInstalledDependencyRoot(workspaceRoot, dependency)
     symlinkPackageDependencySync(nodeModulesRoot, dependency, dependencyRoot)
-    const { bin } = JSON.parse(readFileSync(join(dependencyRoot, 'package.json'), 'utf8')) as { bin?: string | Record<string, string> }
-    const bins = typeof bin === 'string' ? { [dependency.split('/').at(-1) as string]: bin } : bin ?? {}
-    for (const [name, script] of Object.entries(bins)) {
-      writeLauncherSync(binRoot, name, { node: { absolute: join(dependencyRoot, script) } })
-    }
+    linkPackageBinsSync(nodeModulesRoot, dependency, dependencyRoot)
   }
   symlinkPackageDependencySync(nodeModulesRoot, `@holo-js/adapter-${framework}`, join(workspaceRoot, 'packages', `adapter-${framework}`))
 }

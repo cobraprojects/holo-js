@@ -35,10 +35,11 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: bun-${{ runner.os }}-
       - name: Cache the scaffold smoke npm downloads
+        id: scaffold-npm-cache
         uses: actions/cache@v6
         with:
           path: ~/.npm/_cacache
-          key: scaffold-npm-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          key: scaffold-npm-${{ runner.os }}-${{ hashFiles('bun.lock', 'packages/*/package.json', 'packages/cli/src/**', 'scripts/validate-scaffold-user-journey-smoke.mjs', 'scripts/scaffold-smoke-registry.mjs', 'scripts/local-workspace-packages.mjs') }}
           restore-keys: scaffold-npm-${{ runner.os }}-
       - name: Cache Playwright browsers
         uses: actions/cache@v6
@@ -49,6 +50,8 @@ jobs:
       - name: Install Playwright Chromium for the browser bundle check
         run: bun x playwright install --with-deps chromium
       - name: Run the published package, scaffold, and browser bundle acceptance checks
+        env:
+          HOLO_SCAFFOLD_SMOKE_OFFLINE: ${{ steps.scaffold-npm-cache.outputs.cache-hit == 'true' && '1' || '0' }}
         run: bun run test:acceptance
 
   examples:
