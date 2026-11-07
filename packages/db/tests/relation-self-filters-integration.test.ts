@@ -257,9 +257,14 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
 
     const filtered = await Category.whereHas('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const qualifiedNested = await Category.whereHas('children', query => query.whereExists(DB.table(`${schemaName}.${table}`).where(`${schemaName}.${table}.id`, 2))).orderBy('id').get() as unknown as Category[]
 
     expect(expected).toEqual([1, 2])
     expect(filtered.map(id)).toEqual(expected)
+    expect(qualifiedNested.map(id)).toEqual([1, 2])
+    const postsTable = table.replace('sr_categories_', 'sr_posts_')
+    const unrelated = await Category.whereHas('children', query => query.whereExists(DB.table(postsTable).where(`${schemaName}.${postsTable}.id`, 3))).orderBy('id').get() as unknown as Category[]
+    expect(unrelated.map(id)).toEqual([1, 2])
   })
 
   it('aliases a constraint that returns a fresh query on the same table', async () => {

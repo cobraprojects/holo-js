@@ -26,6 +26,7 @@ export function sameTable(left: string, right: string, fold: NameFolding = ignor
 }
 
 interface Target {
+  readonly concerns: (qualifier: string) => boolean
   readonly names: (qualifier: string) => boolean
   readonly captures: (binding: Binding, qualifier: string) => boolean
   readonly alias: string
@@ -72,8 +73,11 @@ function requalifyColumn(column: string, target: Target, scope: readonly Binding
   if (separator < 0) return column
 
   const qualifier = root.slice(0, separator)
-  if (!target.names(qualifier) || scope.some(binding => target.captures(binding, qualifier))) return column
-  return `${target.alias}${column.slice(separator)}`
+  if (!target.concerns(qualifier)) return column
+  for (let index = scope.length - 1; index >= 0; index -= 1) {
+    if (target.captures(scope[index]!, qualifier)) return column
+  }
+  return target.names(qualifier) ? `${target.alias}${column.slice(separator)}` : column
 }
 
 function requalifyPlan(plan: SelectQueryPlan, target: Target, enclosing: readonly Binding[]): SelectQueryPlan {
@@ -88,6 +92,7 @@ export function requalifyAliasedSource(plan: SelectQueryPlan, fold: NameFolding 
   const names = (qualifier: string, folding: NameFolding) => (previousAlias !== undefined && folding(qualifier) === folding(previousAlias))
     || captures(source, qualifier, folding)
   return requalifyPlanBody(plan, {
+    concerns: qualifier => bindsTable(qualifier, tableName) || (previousAlias !== undefined && bindsTable(qualifier, previousAlias)),
     names: qualifier => decided(fold, qualifier, folding => names(qualifier, folding)),
     captures: (binding, qualifier) => decided(fold, qualifier, folding => captures(binding, qualifier, folding)),
     alias,
