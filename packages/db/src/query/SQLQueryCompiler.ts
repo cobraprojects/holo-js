@@ -5,6 +5,7 @@ import { isInlineIntegerValue, keyCastFor, readAllColumnsSelectionTable } from '
 import { validateQueryPlan } from './validator'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import { isTrustedRawPredicate } from './trustedRawPredicate'
+import { isTrustedRawSelection } from './trustedRawSelection'
 import { quoteTablePath, splitTablePath } from '../schema/identifiers'
 import type { CompiledStatement, CompiledStatementMetadata } from '../core/types'
 import type { TableNameFolding } from '../schema/tableIdentityRegistry'
@@ -1058,7 +1059,7 @@ export class SQLQueryCompiler {
 
   protected isUnsafeSelectPlan(plan: SelectQueryPlan, root = false): boolean {
     const hasUnsafeSelection = plan.selections.some(selection => (
-      selection.kind === 'raw'
+      (selection.kind === 'raw' && !isTrustedRawSelection(selection))
       || (selection.kind === 'subquery' && this.isUnsafeSelectPlan(selection.query))
     ))
     const hasUnsafePredicate = plan.predicates.some(predicate => (

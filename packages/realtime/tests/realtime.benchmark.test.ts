@@ -736,6 +736,12 @@ class BenchmarkModelAdapter implements DriverAdapter {
 
       const match = selection.match(/^(COUNT|SUM|AVG|MIN|MAX)\((\*|"([^"]+)")\) AS "([^"]+)"$/)
       if (!match) {
+        const fractional = selection.match(/^SUM\(CASE WHEN "([^"]+)" <> ROUND\("\1"\) THEN 1 ELSE 0 END\) AS "([^"]+)"$/)
+        if (fractional) {
+          const column = fractional[1]!
+          target[fractional[2]!] = rows.length === 0 ? null : rows.filter(row => row[column] != null && Number(row[column]) !== Math.round(Number(row[column]))).length
+          continue
+        }
         return false
       }
 

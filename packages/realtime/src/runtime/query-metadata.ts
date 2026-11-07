@@ -19,6 +19,7 @@ import {
 } from './query-state'
 import { observedTableKey, readerCacheKey } from './query-backfill'
 import { stableStringify } from './stable-stringify'
+import { aggregateReadColumns } from './query-aggregate-readability'
 
 export function readQueryOrderColumns(query: DatabaseQueryObservation): readonly string[] {
   return query.orderColumns ?? createQueryOrderColumns(query.orderBy)
@@ -169,6 +170,8 @@ export function createRowBackfillKeyPrefix(query: DatabaseQueryObservation): str
 export function createAggregateBackfillKey(query: DatabaseQueryObservation): string {
   return query.aggregateBackfillKey ?? '{"aggregate":'
     + stableStringify(query.aggregate)
+    + ',"readColumns":'
+    + stableStringify(aggregateReadColumns(query))
     + ',"connectionName":'
     + stableStringify(query.connectionName)
     + (query.aggregate?.kind === 'avg' ? ',"orderBy":' + stableStringify(query.orderBy) : '')
@@ -195,6 +198,8 @@ export function createAggregateSqlBackfillKey(
 ): string {
   return '{"columns":'
     + stableStringify(columns)
+    + ',"readColumns":'
+    + stableStringify(aggregateReadColumns(query))
     + ',"scope":'
     + createAggregateScopeKey(query)
     + '}'

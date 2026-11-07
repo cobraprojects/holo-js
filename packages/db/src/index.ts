@@ -6,6 +6,7 @@ import { SQLITE_WALL_CLOCK_FUNCTION, formatSQLiteDateTime, formatSQLiteWallClock
 import { driverErrorCodes, isDatabaseDeadlockError } from './core/driverErrors'
 import { driverConnection, driverConnectionKey, transactionScopeKey } from './core/transactionScope'
 import { whereColumnNotExpiredByDatabaseClock } from './query'
+import { addSelectDateExtrema, addSelectFractionalCount } from './query/TableQueryBuilder'
 import { getQueryBounds } from './query/queryBounds'
 import { createSchemaReader, listedTablePath } from './schema/introspection'
 import { quoteTablePath } from './schema/identifiers'
@@ -412,6 +413,8 @@ export const holoRuntimeInternals = Object.freeze({
   getQueryBounds,
   PooledTransactionClients,
   whereColumnNotExpiredByDatabaseClock,
+  addSelectFractionalCount,
+  addSelectDateExtrema,
   reportError,
   getApplicationTimezone,
   formatWallClockSeconds,
