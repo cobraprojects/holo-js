@@ -11,6 +11,7 @@ import {
   createAggregateScopeKey,
 } from './query-metadata'
 import { stableStringify } from './stable-stringify'
+import { aggregateReadColumns } from './query-aggregate-readability'
 import {
   EMPTY_AGGREGATE_COLUMNS,
   EMPTY_AGGREGATE_COLUMNS_BY_SCOPE,
@@ -93,6 +94,8 @@ export function createGroupedAggregateBackfillKey(
 ): string {
   return '{"columns":'
     + stableStringify(columns)
+    + ',"readColumns":'
+    + stableStringify(aggregateReadColumns(query))
     + ',"connectionName":'
     + stableStringify(query.connectionName)
     + ',"groupColumn":'

@@ -39,6 +39,7 @@ import {
   normalizeSqlAggregateCount,
   readAggregateSqlBackfillRow,
 } from './query-aggregate-sql-results'
+import { aggregateReadColumns, addAggregateReadChecks, hasReadableAggregateValues } from './query-aggregate-readability'
 
 const AGGREGATE_VALUE_COUNT_ALIAS = '__holo_value_count'
 const EMPTY_AGGREGATE_VALUE_COUNTS = Object.freeze([])
@@ -76,8 +77,10 @@ async function fetchAggregateSqlBackfill(
       .addSelectMax(`__holo_max_${index}`, column)
   }
 
-  const rows = await aggregateBuilder
-    .get<Record<string, unknown>>()
+  const readColumns = aggregateReadColumns(query)
+  const rows = await addAggregateReadChecks(aggregateBuilder, readColumns)
+    .get<Record<string, unknown>>().catch(() => undefined)
+  if (!rows || !hasReadableAggregateValues(rows, readColumns, true)) return undefined
   const row = rows[0]
   const result = row ? readAggregateSqlBackfillRow(row, columns) : undefined
   return result ? await attachAggregateSqlExtremeValueCounts(builder, result, extremeKinds) : undefined
@@ -107,9 +110,11 @@ async function fetchGroupedAggregateSqlBackfill(
       .addSelectMax(`__holo_max_${index}`, column)
   }
 
-  const rows = await aggregateBuilder
+  const readColumns = aggregateReadColumns(query)
+  const rows = await addAggregateReadChecks(aggregateBuilder, readColumns)
     .groupBy(groupColumn)
-    .get<Record<string, unknown>>()
+    .get<Record<string, unknown>>().catch(() => undefined)
+  if (!rows || !hasReadableAggregateValues(rows, readColumns, true)) return undefined
   const results = new Map<unknown, AggregateSqlBackfillResult>()
   for (const row of rows) {
     const value = row[groupColumn]
@@ -508,7 +513,9 @@ async function backfillAverageAggregate(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  const rows = await builder.select(column).get<Record<string, unknown>>()
+  const readColumns = aggregateReadColumns(query)
+  const rows = await builder.select(...new Set([column, ...readColumns.map(read => read.column)])).get<Record<string, unknown>>().catch(() => undefined)
+  if (!rows || !hasReadableAggregateValues(rows, readColumns)) return undefined
   const values: number[] = []
   for (const row of rows) {
     const value = normalizeAverageValue(row[column])
