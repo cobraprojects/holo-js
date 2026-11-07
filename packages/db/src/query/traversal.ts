@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto'
 import { rebindDatabaseQueryObservationResult } from '../cache'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import type { TableDefinition } from '../schema/types'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from './chunkOrdering'
+import { selectionOutputName } from './modelRowProjection'
 import { resultColumnDefinition, withResolvedDefinitions } from './resultColumns'
 import type { QueryDirection } from './ast'
 import type { TableQueryBuilder } from './TableQueryBuilder'
@@ -90,12 +92,17 @@ export async function* queryBatches<
   const cursorColumns = orders.map(order => order.column)
   const hiddenColumns: string[] = []
   if (plan.selections.length > 0) {
+    const suffix = createHash('sha256').update(JSON.stringify([
+      tableName,
+      plan.selections.map(selection => selection.kind === 'column' ? [selection.column, selection.alias] : selectionOutputName(selection)),
+      cursorColumns,
+    ])).digest('hex').slice(0, 12)
     const selectedNames = new Set([
       ...Object.keys(table?.columns ?? {}),
       ...plan.selections.map(selection => selection.kind === 'column' ? selection.alias ?? selection.column.split('.').at(-1) : 'alias' in selection ? selection.alias : undefined),
     ])
     for (const cursorColumn of cursorColumns) {
-      let alias = `__holo_chunk_${hiddenColumns.length}`
+      let alias = `__holo_chunk_${suffix}_${hiddenColumns.length}`
       while (selectedNames.has(alias)) alias += '_'
       hiddenColumns.push(alias)
       selectedNames.add(alias)

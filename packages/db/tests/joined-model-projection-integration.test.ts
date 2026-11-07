@@ -585,6 +585,22 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     expect(await labels(`${products}.*`, `${notes}.*`, `${products}.price as label`)).toEqual([[1, 10], [2, 20]])
   })
 
+  it.each(['chunk', 'lazy'] as const)('keeps an undefined joined wildcard column named like a traversal alias during %s', async method => {
+    const { schema, products, Product } = await createFixture(driver)
+    const notes = uniqueName('notes')
+    onTestFinished(() => schema.dropTable(notes))
+    await schema.createTable(notes, table => {
+      table.integer('product_id')
+      table.string('__holo_chunk_0')
+    })
+    await DB.table(notes).insert([{ product_id: 1, __holo_chunk_0: 'first' }, { product_id: 2, __holo_chunk_0: 'second' }])
+    const query = Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).orderBy(`${products}.id`)
+    const rows: Record<string, unknown>[] = []
+    if (method === 'chunk') await query.chunk(1, batch => { rows.push(...batch.map(row => row.toAttributes())) })
+    else for await (const row of query.lazy(1)) rows.push(row.toAttributes())
+    expect(rows.map(row => [Number(row.id), row.__holo_chunk_0])).toEqual([[1, 'first'], [2, 'second']])
+  })
+
   it('keeps a column of a joined table without a definition that shares a hidden cursor alias name', async () => {
     const { schema, products, Product } = await createFixture(driver)
     const notes = uniqueName('notes')
