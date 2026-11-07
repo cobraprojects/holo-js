@@ -61,7 +61,8 @@ function captures(binding: Binding, qualifier: string, fold: NameFolding): boole
   if (qualifierSchema === undefined) return true
   if (binding.aliased) return false
   const bindingSchema = schemaOf(binding.name, fold)
-  return bindingSchema === undefined || bindingSchema === qualifierSchema
+  if (bindingSchema !== undefined) return bindingSchema === qualifierSchema
+  throw new CompilerError(`Cannot tell whether "${qualifier}" names the table "${binding.name}" in a relation filter, because the database decides which schema "${binding.name}" is in. Spell the table the same way in both places.`)
 }
 
 function requalifyColumn(column: string, target: Target, scope: readonly Binding[]): string {

@@ -484,10 +484,10 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     const { Category, QualifiedTree, table, schemaName } = await openSelfFixtures(driver)
 
     const shortOnQualified = await QualifiedTree.whereHas('children', query => query.where(`${table}.name` as never, 'branch')).orderBy('id').get() as unknown as Category[]
-    const qualifiedOnShort = await Category.whereHas('children', query => query.where(`${schemaName}.${table}.name`, 'branch')).orderBy('id').get() as unknown as Category[]
+    const qualifiedOnShort = () => Category.whereHas('children', query => query.where(`${schemaName}.${table}.name`, 'branch'))
 
     expect(shortOnQualified.map(id)).toEqual([1])
-    expect(qualifiedOnShort.map(id)).toEqual([1])
+    expect(qualifiedOnShort).toThrow(`Cannot tell whether "${schemaName}.${table}" names the table "${table}"`)
   })
 
   it('reads qualified pivot conditions from a pivot that is the parent table spelled with its schema', async () => {
@@ -615,5 +615,34 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
 
     expect(loaded.filter(entity => related(entity, 'children').length > 0).map(id)).toEqual([1])
     expect(filtered.map(id)).toEqual([1])
+  })
+
+  it('refuses schema-qualified references to a table that a nested query names without its schema', async () => {
+    const { table, adapter, db, schema } = await openSelfFixtures(driver)
+    const audit = `sr_audit_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const quote = (identifier: string) => driver === 'mysql' ? `\`${identifier}\`` : `"${identifier}"`
+    if (driver === 'sqlite') {
+      await db.executeCompiled({ sql: `ATTACH DATABASE ':memory:' AS ${quote(audit)}`, source: 'schema' })
+    }
+    else {
+      await adapter.execute(`${driver === 'postgres' ? 'CREATE SCHEMA' : 'CREATE DATABASE'} ${quote(audit)}`)
+      onTestFinished(async () => {
+        await adapter.execute(`${driver === 'postgres' ? 'DROP SCHEMA IF EXISTS' : 'DROP DATABASE IF EXISTS'} ${quote(audit)}${driver === 'postgres' ? ' CASCADE' : ''}`)
+      })
+    }
+    await schema.createTable(`${audit}.${table}`, (columns) => {
+      columns.integer('id').primaryKey()
+      columns.integer('parent_id').nullable()
+    })
+    const auditTable = defineGeneratedTable(`${audit}.${table}`, { id: column.integer().primaryKey(), parent_id: column.integer().nullable() })
+    await DB.table(auditTable).insert([{ id: 1, parent_id: null }, { id: 2, parent_id: 1 }, { id: 3, parent_id: null }, { id: 4, parent_id: 3 }])
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const AuditLeaf = defineModel(auditTable, { name: `AuditLeaf${suffix}`, timestamps: false })
+    const AuditTree = defineModel(auditTable, { name: `AuditTree${suffix}`, timestamps: false, relations: { children: hasMany(() => AuditLeaf, 'parent_id') } })
+    const crossSchema = (query: { whereExists(subquery: unknown): unknown }) => query.whereExists(DB.table(table)
+      .whereColumn(`${table}.id`, '=', `${audit}.${table}.id`)
+      .where(`${table}.name`, 'branch'))
+
+    expect(() => AuditTree.whereHas('children', crossSchema as never)).toThrow(`Cannot tell whether "${audit}.${table}" names the table "${table}"`)
   })
 })
