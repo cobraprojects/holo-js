@@ -139,8 +139,8 @@ import {
   normalizeQueryWriteValue,
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
-import { applyTableNameFolding, rememberedTableNameFolding } from '../schema/tableIdentityRegistry'
-import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolveTableIdentity } from './tableIdentity'
+import { applyTableNameFolding } from '../schema/tableIdentityRegistry'
+import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolveTableIdentity, resolvedTableNameFolding } from './tableIdentity'
 import { currentRootTransaction } from '../core/openTransactions'
 import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalization, deferPredicateNormalization } from './deferredPredicateValues'
 import { assertQueryTablePath, validateQueryPlan } from './validator'
@@ -3026,9 +3026,8 @@ export class TableQueryBuilder<
     keyedInsert = (query, values, keyColumn) => query.insertGetKey(values, keyColumn)
     sourceAliasing = (query, alias) => query.clone(withSource(query.plan, Object.freeze({ ...query.source, alias })))
     connectionNameFolding = (query) => {
-      const connectionName = query.connection.getConnectionName()
       const compiler = createQueryCompiler(query.connection)
-      const folding = rememberedTableNameFolding(connectionName) ?? (compiler.compileTableNameFoldingLookup() ? undefined : compiler.tableNameFolding())
+      const folding = compiler.compileTableNameFoldingLookup() ? resolvedTableNameFolding(query.connection) : compiler.tableNameFolding()
       return folding === undefined ? undefined : name => applyTableNameFolding(folding, name)
     }
     sourceRequalifying = (query, parentTableName, previousAlias) => query.clone(requalifyAliasedSource(query.plan, connectionNameFolding(query), parentTableName, previousAlias))

@@ -19,10 +19,6 @@ export function rememberTableNameFolding(connectionName: string, folding: TableN
   foldings.set(connectionName, folding)
 }
 
-export function rememberedTableNameFolding(connectionName: string): TableNameFolding | undefined {
-  return foldings.get(connectionName)
-}
-
 export function applyTableNameFolding(folding: TableNameFolding | undefined, tableName: string): string {
   switch (folding) {
     case 'ascii':
