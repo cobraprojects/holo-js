@@ -122,73 +122,144 @@ async function openLibrary(driver: typeof drivers[number]) {
   return { db, qualifiedLibrary, plainLibrary, names, posts, reviews, comments, postType }
 }
 
-type Library = Awaited<ReturnType<typeof openLibrary>>['qualifiedLibrary']
+type Opened = Awaited<ReturnType<typeof openLibrary>>
+type Library = Opened['qualifiedLibrary']
+
+function readsOf({ db }: Opened, library: Library) {
+  return {
+    topPost: () => db.model(library.Author).query().with('topPost').orderBy('id').getJson(),
+    posts: () => db.model(library.Author).query().with('posts').orderBy('id').getJson(),
+    latestPost: () => db.model(library.Author).query().with('latestPost').orderBy('id').getJson(),
+    reviews: () => db.model(library.Author).query().with('reviews').orderBy('id').getJson(),
+    firstReview: () => db.model(library.Author).query().with('firstReview').orderBy('id').getJson(),
+    author: () => db.model(library.Post).query().with('author').orderBy('id').getJson(),
+    tags: () => db.model(library.Post).query().with('tags').orderBy('id').getJson(),
+    comments: () => db.model(library.Post).query().with('comments', 'firstComment', 'latestComment').orderBy('id').getJson(),
+    commentable: () => db.model(library.Comment).query().with('commentable').orderBy('id').getJson(),
+    morphTags: () => db.model(library.Post).query().with('morphTags').orderBy('id').getJson(),
+    taggedPosts: () => db.model(library.Tag).query().with('taggedPosts').orderBy('id').getJson(),
+  } satisfies Record<string, () => Promise<unknown>>
+}
+
+type Relation = keyof ReturnType<typeof readsOf>
+
+async function subscribeRelations(opened: Opened, relations: readonly Relation[]) {
+  const subscribe = async (library: Library) => {
+    const reads = readsOf(opened, library)
+    const runs: Partial<Record<Relation, number>> = {}
+    const current: Partial<Record<Relation, () => unknown>> = {}
+    for (const name of relations) {
+      runs[name] = 0
+      const subscription = await subscribeRealtimeQuery(
+        defineRealtimeQuery({ access: 'public', handler: (): Promise<unknown> => {
+          runs[name]! += 1
+          return reads[name]()
+        } }),
+        {},
+        { onData: () => {}, onError: (error) => { throw error } },
+      )
+      current[name] = () => subscription.current.data
+    }
+    return { runs, current }
+  }
+  const qualifiedReads = readsOf(opened, opened.qualifiedLibrary)
+  const qualified = await subscribe(opened.qualifiedLibrary)
+  const plain = await subscribe(opened.plainLibrary)
+  const mutate = async (handler: () => Promise<unknown>, skipped: readonly Relation[] = []) => {
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler }))
+    for (const name of relations.filter(name => !skipped.includes(name))) {
+      const fresh = await qualifiedReads[name]()
+      expect(qualified.current[name]!(), name).toEqual(fresh)
+      expect(plain.current[name]!(), name).toEqual(fresh)
+    }
+  }
+  const text = (name: Relation) => JSON.stringify(qualified.current[name]!())
+  return { qualified, plain, mutate, text }
+}
 
 describe.each(drivers)('realtime relations with table-qualified keys on %s', (driver) => {
-  it('patches every relation kind like unqualified keys and the same as a fresh read', async () => {
-    const { db, qualifiedLibrary, plainLibrary, names, posts, reviews, comments, postType } = await openLibrary(driver)
-    const readsOf = (library: Library): Record<string, () => Promise<unknown>> => ({
-      topPost: () => db.model(library.Author).query().with('topPost').orderBy('id').getJson(),
-      posts: () => db.model(library.Author).query().with('posts').orderBy('id').getJson(),
-      latestPost: () => db.model(library.Author).query().with('latestPost').orderBy('id').getJson(),
-      reviews: () => db.model(library.Author).query().with('reviews').orderBy('id').getJson(),
-      firstReview: () => db.model(library.Author).query().with('firstReview').orderBy('id').getJson(),
-      author: () => db.model(library.Post).query().with('author').orderBy('id').getJson(),
-      tags: () => db.model(library.Post).query().with('tags').orderBy('id').getJson(),
-      comments: () => db.model(library.Post).query().with('comments', 'firstComment', 'latestComment').orderBy('id').getJson(),
-      commentable: () => db.model(library.Comment).query().with('commentable').orderBy('id').getJson(),
-      morphTags: () => db.model(library.Post).query().with('morphTags').orderBy('id').getJson(),
-      taggedPosts: () => db.model(library.Tag).query().with('taggedPosts').orderBy('id').getJson(),
+  describe('patches every relation kind like unqualified keys and the same as a fresh read', () => {
+    it('for hasOne, hasMany, latestOfMany and belongsTo relations', async () => {
+      const opened = await openLibrary(driver)
+      const { db, posts } = opened
+      const { qualified, plain, mutate, text } = await subscribeRelations(opened, ['topPost', 'posts', 'latestPost', 'author'])
+
+      await mutate(() => db.table(posts).where('id', 10).update({ title: 'Analytical Engines' }))
+      await mutate(() => db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping' }))
+      await mutate(() => db.table(posts).where('id', 20).delete())
+      await mutate(() => db.table(posts).where('id', 30).update({ author_id: 2 }))
+
+      expect(text('topPost')).toContain('Analytical Engines')
+      expect(text('latestPost')).toContain('Frequency Hopping')
+      expect(qualified.runs.topPost).toBe(1)
+      expect(qualified.runs).toEqual(plain.runs)
     })
-    const subscribe = async (reads: ReturnType<typeof readsOf>) => {
-      const runs: Record<string, number> = {}
-      const current: Record<string, () => unknown> = {}
-      for (const [name, handler] of Object.entries(reads)) {
-        runs[name] = 0
-        const subscription = await subscribeRealtimeQuery(
-          defineRealtimeQuery({ access: 'public', handler: (): Promise<unknown> => {
-            runs[name]! += 1
-            return handler()
-          } }),
-          {},
-          { onData: () => {}, onError: (error) => { throw error } },
-        )
-        current[name] = () => subscription.current.data
-      }
-      return { runs, current }
-    }
-    const qualifiedReads = readsOf(qualifiedLibrary)
-    const qualified = await subscribe(qualifiedReads)
-    const plain = await subscribe(readsOf(plainLibrary))
-    const expectCurrent = async (skipped: readonly string[] = []) => {
-      for (const [name, handler] of Object.entries(qualifiedReads).filter(([name]) => !skipped.includes(name))) {
-        const fresh = await handler()
-        expect(qualified.current[name]!(), name).toEqual(fresh)
-        expect(plain.current[name]!(), name).toEqual(fresh)
-      }
-    }
-    const mutate = async (handler: () => Promise<unknown>, skipped: readonly string[] = []) => {
-      await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler }))
-      await expectCurrent(skipped)
-    }
 
-    await mutate(() => db.table(posts).where('id', 10).update({ title: 'Analytical Engines' }))
-    await mutate(() => db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping' }))
-    await mutate(() => db.table(names.postTag).insert({ post_id: 30, tag_id: 100 }))
-    await mutate(() => db.table(reviews).insert({ id: 3000, post_id: 30, body: 'clear' }))
-    expect(JSON.stringify(qualified.current.reviews!())).toContain('clear')
-    await mutate(() => db.table(comments).insert({ id: 7000, commentable_type: postType, commentable_id: 30, body: 'radio' }))
-    await mutate(() => db.table(names.taggables).insert({ tag_id: 200, taggable_type: postType, taggable_id: 30 }))
-    await mutate(() => db.table(comments).where('id', 5000).update({ body: 'edited' }))
-    await mutate(() => db.table(names.tags).where('id', 200).update({ label: 'programs' }))
-    expect(JSON.stringify(qualified.current.morphTags!())).toContain('programs')
-    expect(JSON.stringify(qualified.current.commentable!())).toContain('Analytical Engines')
-    expect(JSON.stringify(qualified.current.taggedPosts!())).toContain('Frequency Hopping')
-    await mutate(() => db.table(posts).where('id', 20).delete())
-    await mutate(() => db.table(posts).where('id', 30).update({ author_id: 2 }), ['reviews', 'firstReview'])
+    it('for hasManyThrough and hasOneThrough relations', async () => {
+      const opened = await openLibrary(driver)
+      const { db, posts, reviews } = opened
+      const { qualified, plain, mutate, text } = await subscribeRelations(opened, ['reviews', 'firstReview'])
 
-    expect(JSON.stringify(qualified.current.topPost!())).toContain('Analytical Engines')
-    expect(JSON.stringify(qualified.current.comments!())).toContain('edited')
+      await mutate(() => db.table(posts).where('id', 10).update({ title: 'Analytical Engines' }))
+      await mutate(() => db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping' }))
+      await mutate(() => db.table(reviews).insert({ id: 3000, post_id: 30, body: 'clear' }))
+      expect(text('reviews')).toContain('clear')
+      await mutate(() => db.table(posts).where('id', 20).delete())
+      await mutate(() => db.table(posts).where('id', 30).update({ author_id: 2 }), ['reviews', 'firstReview'])
+
+      expect(qualified.runs).toEqual(plain.runs)
+    })
+
+    it('for belongsToMany, morphToMany and morphedByMany relations', async () => {
+      const opened = await openLibrary(driver)
+      const { db, names, posts, postType } = opened
+      const { qualified, plain, mutate, text } = await subscribeRelations(opened, ['tags', 'morphTags', 'taggedPosts'])
+
+      await mutate(() => db.table(posts).where('id', 10).update({ title: 'Analytical Engines' }))
+      await mutate(() => db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping' }))
+      await mutate(() => db.table(names.postTag).insert({ post_id: 30, tag_id: 100 }))
+      await mutate(() => db.table(names.taggables).insert({ tag_id: 200, taggable_type: postType, taggable_id: 30 }))
+      await mutate(() => db.table(names.tags).where('id', 200).update({ label: 'programs' }))
+      expect(text('morphTags')).toContain('programs')
+      expect(text('taggedPosts')).toContain('Frequency Hopping')
+      await mutate(() => db.table(posts).where('id', 20).delete())
+      await mutate(() => db.table(posts).where('id', 30).update({ author_id: 2 }))
+
+      expect(qualified.runs).toEqual(plain.runs)
+    })
+
+    it('for morphMany, morphOne, latestMorphOne and morphTo relations', async () => {
+      const opened = await openLibrary(driver)
+      const { db, posts, comments, postType } = opened
+      const { qualified, plain, mutate, text } = await subscribeRelations(opened, ['comments', 'commentable'])
+
+      await mutate(() => db.table(posts).where('id', 10).update({ title: 'Analytical Engines' }))
+      await mutate(() => db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping' }))
+      await mutate(() => db.table(comments).insert({ id: 7000, commentable_type: postType, commentable_id: 30, body: 'radio' }))
+      await mutate(() => db.table(comments).where('id', 5000).update({ body: 'edited' }))
+      expect(text('commentable')).toContain('Analytical Engines')
+      await mutate(() => db.table(posts).where('id', 20).delete())
+      await mutate(() => db.table(posts).where('id', 30).update({ author_id: 2 }))
+
+      expect(text('comments')).toContain('edited')
+      expect(qualified.runs).toEqual(plain.runs)
+    })
+  })
+
+  it('re-runs the same subscriptions for qualified and unqualified keys when other tables change', async () => {
+    const opened = await openLibrary(driver)
+    const { db, names, posts, reviews, comments, postType } = opened
+    await db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping' })
+    const { qualified, plain } = await subscribeRelations(opened, Object.keys(readsOf(opened, opened.qualifiedLibrary)) as Relation[])
+    const write = (handler: () => Promise<unknown>) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler }))
+
+    await write(() => db.table(names.postTag).insert({ post_id: 30, tag_id: 100 }))
+    await write(() => db.table(reviews).insert({ id: 3000, post_id: 30, body: 'clear' }))
+    await write(() => db.table(comments).insert({ id: 7000, commentable_type: postType, commentable_id: 30, body: 'radio' }))
+    await write(() => db.table(names.taggables).insert({ tag_id: 200, taggable_type: postType, taggable_id: 30 }))
+    await write(() => db.table(comments).where('id', 5000).update({ body: 'edited' }))
+    await write(() => db.table(names.tags).where('id', 200).update({ label: 'programs' }))
+
     expect(qualified.runs.topPost).toBe(1)
     expect(qualified.runs).toEqual(plain.runs)
   })

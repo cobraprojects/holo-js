@@ -12,6 +12,7 @@ import type {
   RealtimeResultFor,
   RealtimeSubscriptionSnapshot,
 } from '../contracts'
+import { queryCacheInternals } from '@holo-js/db'
 import { EMPTY_TABLE_DEPENDENCIES } from './dependencies'
 import { executeInitialQuery } from './query-execution'
 import {
@@ -73,6 +74,7 @@ export async function createQueryEntry<TDefinition extends RealtimeQueryDefiniti
   const generationsAtStart = snapshotTableInvalidationGenerations()
   try {
     const result = await executeInitialQuery(definition, args, undefined)
+    entry.readBoundary = queryCacheInternals.markMutationPublicationBoundary()
     const auth = await captureAuthContext(state.bindings)
     entry.runWithContext = createExecutionContext(database, auth)
     entry.contexts = new Map(result.contexts)

@@ -14,6 +14,7 @@ import type {
 import { backfillAggregate } from './query-aggregate-backfill'
 import {
   aggregateMutationCannotChangeValue,
+  isSafeIntegerNumber,
   type AggregateBackfillEntry,
 } from './query-aggregate-common'
 
@@ -39,12 +40,16 @@ function applyAggregateCountRows(
     }
 
     const value = row[aggregate.column]
-    if (typeof value !== 'number' || Number.isNaN(value)) {
+    if (!isSafeIntegerNumber(value)) {
       return undefined
     }
 
     state.count += direction
     state.sum += direction * value
+    state.absoluteSum += direction * Math.abs(value)
+    if (!isSafeIntegerNumber(state.absoluteSum)) {
+      return undefined
+    }
   }
 
   return true
@@ -132,10 +137,6 @@ function averageMutationCanAffectQuery(
   aggregate: DatabaseQueryAggregateObservation,
   mutation: DatabaseMutationEvent,
 ): boolean | undefined {
-  if (aggregateMutationCannotChangeValue(query, aggregate, mutation)) {
-    return false
-  }
-
   if (mutation.kind === 'insert' || mutation.kind === 'delete') {
     return averageRowsCanAffectQuery(query, aggregate, mutation.rows)
   }
@@ -201,7 +202,8 @@ export function tryPatchAverageAggregate(
   mutations: readonly DatabaseMutationEvent[],
   backfills: BackfillCache<AggregateBackfillEntry>,
 ): Promise<PatchQueryResult> | PatchQueryResult {
-  if (typeof aggregate.count !== 'number' || typeof aggregate.sum !== 'number') {
+  const { absoluteSum, sum } = aggregate
+  if (typeof aggregate.count !== 'number' || !isSafeIntegerNumber(sum) || !isSafeIntegerNumber(absoluteSum)) {
     const canAffect = averageMutationsCanAffectQuery(query, aggregate, mutations)
     return canAffect === false ? UNCHANGED_QUERY_RESULT : backfillAggregate(query, backfills, value)
   }
@@ -211,8 +213,9 @@ export function tryPatchAverageAggregate(
   }
 
   const state: AggregateCountState = {
+    absoluteSum,
     count: aggregate.count,
-    sum: aggregate.sum,
+    sum,
   }
   for (const mutation of mutations) {
     if (!applyAggregateMutationCount(query, mutation, state)) {
@@ -227,11 +230,12 @@ export function tryPatchAverageAggregate(
   const nextValue = state.count === 0 ? null : state.sum / state.count
   const nextAggregate = Object.freeze({
     ...aggregate,
+    absoluteSum: state.absoluteSum,
     count: state.count,
     sum: state.sum,
   })
   if (nextValue === value) {
-    return state.count === aggregate.count && state.sum === aggregate.sum
+    return state.count === aggregate.count && state.sum === aggregate.sum && state.absoluteSum === aggregate.absoluteSum
       ? UNCHANGED_QUERY_RESULT
       : Object.freeze({
           nextQuery: Object.freeze({
