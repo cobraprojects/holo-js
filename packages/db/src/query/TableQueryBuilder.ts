@@ -4,6 +4,7 @@ import { redactBindings } from '../security/policy'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
+import { createFractionalCountSelection } from './trustedRawSelection'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -4138,6 +4139,22 @@ export class TableQueryBuilder<
   private normalizePredicateValueForColumn(columnName: string, value: unknown, operator: unknown = '='): unknown {
     return normalizeQueryPredicateValue(this.source.table, this.connection.getDriver(), this.resolveSourceColumnName(columnName) ?? columnName, value, operator)
   }
+}
+
+export function addSelectFractionalCount(
+  query: TableQueryBuilder<string, Record<string, unknown>>,
+  column: string,
+  alias: string,
+): TableQueryBuilder<string, Record<string, unknown>> {
+  if (!trustedRawWhereAppenders.has(query)) {
+    throw new SecurityError('addSelectFractionalCount() needs a query builder that Holo created.')
+  }
+  const connection = query.getConnection()
+  if (!isGenuineDatabaseContext(connection)) {
+    throw new SecurityError('addSelectFractionalCount() needs a connection that Holo created.')
+  }
+  const selection = createFractionalCountSelection(column, alias)
+  return new TableQueryBuilder(query.getTableName(), connection, appendRawSelection(query.getPlan(), selection))
 }
 
 export function whereColumnNotExpiredByDatabaseClock<

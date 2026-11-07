@@ -1,4 +1,4 @@
-import type { TableQueryBuilder } from '@holo-js/db'
+import { holoRuntimeInternals, type TableQueryBuilder } from '@holo-js/db'
 import type { DatabaseQueryObservation } from './query-state'
 
 type AggregateReadColumn = { readonly column: string, readonly integer: boolean }
@@ -21,8 +21,7 @@ export function addAggregateReadChecks(
   for (const [index, { column, integer }] of columns.entries()) {
     builder = builder.addSelectMin(`__holo_read_min_${index}`, column).addSelectMax(`__holo_read_max_${index}`, column)
     if (integer && dialect.name === 'sqlite') {
-      const identifier = dialect.quoteIdentifier(column)
-      builder = builder.addUnsafeSelect(`SUM(CASE WHEN ${identifier} <> ROUND(${identifier}) THEN 1 ELSE 0 END) AS "__holo_fractional_${index}"`, [])
+      builder = holoRuntimeInternals.addSelectFractionalCount(builder, column, `__holo_fractional_${index}`)
     }
   }
   return builder

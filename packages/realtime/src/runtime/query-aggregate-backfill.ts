@@ -77,7 +77,7 @@ async function fetchAggregateSqlBackfill(
       .addSelectMax(`__holo_max_${index}`, column)
   }
 
-  const readColumns = aggregateReadColumns(query)
+  const readColumns = columns.length > 0 ? aggregateReadColumns(query) : []
   const rows = await addAggregateReadChecks(aggregateBuilder, readColumns)
     .get<Record<string, unknown>>().catch(() => undefined)
   if (!rows || !hasReadableAggregateValues(rows, readColumns, true)) return undefined
@@ -110,7 +110,7 @@ async function fetchGroupedAggregateSqlBackfill(
       .addSelectMax(`__holo_max_${index}`, column)
   }
 
-  const readColumns = aggregateReadColumns(query)
+  const readColumns = columns.length > 0 ? aggregateReadColumns(query) : []
   const rows = await addAggregateReadChecks(aggregateBuilder, readColumns)
     .groupBy(groupColumn)
     .get<Record<string, unknown>>().catch(() => undefined)

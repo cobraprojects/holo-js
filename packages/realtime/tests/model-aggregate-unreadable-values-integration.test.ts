@@ -5,14 +5,16 @@ import { integrationDrivers, openDatabase } from '../../db/tests/support/databas
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 
+type AggregateCase = readonly [kind: 'timestamp' | 'bigint', unreadable: string, readable: string, grouped: boolean, untyped: boolean]
+
 describe.each(integrationDrivers(['sqlite', 'postgres'] as const))('model aggregate unreadable values on %s', (driver) => {
-  const cases = driver === 'sqlite' ? [['bigint', '1.5', '1', false, false] as const] : [
+  const cases: readonly AggregateCase[] = driver === 'sqlite' ? [['bigint', '1.5', '1', false, false]] : [
     ['timestamp', '280000-01-01 00:00:00', '2026-01-01 00:00:00', false, false],
     ['bigint', '9007199254740993', '7', false, false],
     ['timestamp', '280000-01-01 00:00:00', '2026-01-01 00:00:00', true, false],
     ['bigint', '9007199254740993', '7', true, false],
     ['timestamp', '280000-01-01 00:00:00', '2026-01-01 00:00:00', false, true],
-  ] as const
+  ]
   it.each(cases)('surfaces fresh errors for %s value %s (safe: %s, grouped: %s, untyped: %s)', async (kind, unreadable, readable, grouped, untyped) => {
     const { db, schema } = await openDatabase(driver, { connectionName: 'unreadable' })
     if (untyped) {
@@ -45,7 +47,8 @@ describe.each(integrationDrivers(['sqlite', 'postgres'] as const))('model aggreg
       group_id: column.integer(),
       stored: kind === 'timestamp' ? column.timestamp() : column.bigInteger(),
     })
-    const Model = defineModel(untyped ? name : table, { timestamps: false, connectionName: db.getConnectionName() })
+    const options = { timestamps: false, connectionName: db.getConnectionName() }
+    const Model = untyped ? defineModel(name, options) : defineModel(table, options)
     await db.table(name).insert([
       { id: 1, score: 3, group_id: 1, stored: readable },
       { id: 2, score: 3, group_id: 2, stored: driver === 'sqlite' ? '9' : readable },
