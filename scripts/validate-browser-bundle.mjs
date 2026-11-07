@@ -7,17 +7,19 @@ import { dirname, join, resolve } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { verifyBrowserExports } from './validate-browser-exports.mjs'
 import { stageLocalWorkspacePackages } from './local-workspace-packages.mjs'
+import { scaffoldSmokeNpmEnvironment } from './scaffold-smoke-registry.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const require = createRequire(join(root, 'packages/adapter-next/package.json'))
 const consumer = process.env.HOLO_BROWSER_BUNDLE_DIR ?? await mkdtemp(join(tmpdir(), 'holo-browser-bundle-'))
 const registryVersion = process.env.HOLO_BROWSER_BUNDLE_VERSION
+const npmEnvironment = registryVersion ? {} : scaffoldSmokeNpmEnvironment(root)
 
 function run(command, args, cwd = consumer) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+    env: { ...process.env, ...npmEnvironment, NEXT_TELEMETRY_DISABLED: '1' },
     maxBuffer: 20 * 1024 * 1024,
   })
   assert.equal(result.status, 0, `${command} ${args.join(' ')}\n${result.stdout}\n${result.stderr}`)

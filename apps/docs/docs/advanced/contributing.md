@@ -96,11 +96,15 @@ Run `bun run check` before you push. Running one package's tests is fine while y
 
 CI runs the critical checks on every pull request: library and test typechecks and lint on Node 24, every library test suite against real services on each supported Node version (22.18.0, 24, and 26), the dependency audit and dead-code gate, the real-database gating check, the documented contributor setup in a fresh clone, native package loading and server lifecycle checks on Linux, Windows, and macOS with the same Node versions, the published-package, scaffold, and browser-bundle acceptance checks, and each example app against SQLite, Postgres, and MySQL. Run `bun run test` locally to cover the same suites, and `bun run test:contributor-setup` for changes to the setup steps or the example apps' scripts.
 
-The scaffold acceptance check installs each scaffolded app with npm, but a package published moments ago can't change or break it. npm only picks the highest matching version published on or before the last commit that changed `bun.lock`, and ignores the `latest` tag, so the check needs the full git history. While `bun.lock` has uncommitted changes, it uses the current time instead.
+The scaffold and browser-bundle acceptance checks install their apps with npm, but a package published moments ago can't change or break them. npm only picks the highest matching version published on or before the last commit that changed `bun.lock`, and ignores the `latest` tag, so the checks need the full git history. While `bun.lock` has uncommitted changes, it uses the current time instead.
 
 CI keeps the npm cache between runs. When it restores the cache for unchanged inputs, it sets `HOLO_SCAFFOLD_SMOKE_OFFLINE=1`, so npm installs from the cache and never contacts the registry. After an input changes, npm refreshes package metadata and downloads only the versions it is missing from before that commit.
 
-The Scaffold smoke against the live npm registry workflow, in `.github/workflows/scaffold-live-registry.yml`, runs the same check every night and on demand. It sets `HOLO_SCAFFOLD_SMOKE_LIVE_REGISTRY=1`, which removes the date limit, so npm installs the newest published versions the way a new app gets them. A failure there points at a new dependency release, not at a pull request.
+The published-package acceptance check installs nothing. It links the packages the workspace already installed from `bun.lock`.
+
+The package upgrade check, `bun run test:package-upgrade`, installs the newest published `@holo-js` release with npm and Bun and upgrades it to the packages in the commit. It needs the live registry, so pull requests don't run it. CI runs it on every push to `main`, so a release still waits for it.
+
+The Acceptance checks against the live npm registry workflow, in `.github/workflows/scaffold-live-registry.yml`, runs the scaffold, browser-bundle, and package upgrade checks every night and on demand. It sets `HOLO_SCAFFOLD_SMOKE_LIVE_REGISTRY=1`, which removes the date limit, so npm installs the newest published versions the way a new app gets them. A failure there points at a new dependency release, not at a pull request.
 
 CI splits the library suites into three jobs per Node version by running `bun run test:libraries --skip-build --shard <n>/3` after it builds the packages. Each package stays whole, and the split balances the measured durations in `scripts/library-suite-durations.json`, so a package missing from it still runs. Update a package's entry when its tests get much slower or faster.
 

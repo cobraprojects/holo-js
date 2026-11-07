@@ -396,6 +396,7 @@ type DatabaseDependencyCollectorState = {
   readonly serializedResults: WeakMap<object, unknown>
   readonly refreshQueries: DatabaseQueryObservation[]
   readonly refreshTables: Map<string, DatabaseQueryObservation | undefined>
+  readonly arraySnapshots: Map<readonly unknown[], readonly unknown[]>
   serializationOverridden: boolean
 }
 
@@ -643,9 +644,13 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     serializedResults: new WeakMap(),
     refreshQueries: [],
     refreshTables: new Map(),
+    arraySnapshots: new Map(),
     serializationOverridden: false,
   }
   const value = await databaseDependencyCollector.run(state, callback)
+  if (hasChangedArraySnapshot(state)) {
+    databaseDependencyCollector.run(state, markDatabaseQueryObservationsSerialized)
+  }
 
   return Object.freeze({
     value,
@@ -1188,6 +1193,98 @@ export function markDatabaseQueryObservationsSerialized(): void {
     }
 
     replaceDatabaseQueryObservation(state, index, serializedQueryObservation(query))
+  }
+}
+
+const ARRAY_WRITE_METHODS = ['copyWithin', 'fill', 'pop', 'push', 'reverse', 'shift', 'sort', 'splice', 'unshift'] as const
+const arrayWriteCollectors = new WeakMap<object, WeakSet<DatabaseDependencyCollectorState>>()
+
+function markSerializedOnCollectedArrayWrite(array: object): void {
+  const state = databaseDependencyCollector.getStore()
+  if (state && arrayWriteCollectors.get(array)?.has(state)) {
+    markDatabaseQueryObservationsSerialized()
+  }
+}
+
+const arrayWriteMethods = Object.fromEntries(ARRAY_WRITE_METHODS.map((name) => {
+  const write = Array.prototype[name] as (this: unknown[], ...args: unknown[]) => unknown
+  const method = {
+    [name](this: unknown[], ...args: unknown[]) {
+      markSerializedOnCollectedArrayWrite(this)
+      return write.apply(this, args)
+    },
+  }[name]!
+  Object.defineProperty(method, 'length', { value: write.length })
+  return [name, method]
+})) as Readonly<Record<typeof ARRAY_WRITE_METHODS[number], (this: unknown[], ...args: unknown[]) => unknown>>
+
+function snapshotArray(array: readonly unknown[]): readonly unknown[] | undefined {
+  const values: unknown[] = []
+  values.length = array.length
+  for (let index = 0; index < array.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(array, index)
+    if (descriptor && !('value' in descriptor)) {
+      return undefined
+    }
+
+    if (descriptor) {
+      values[index] = descriptor.value
+    }
+  }
+
+  return Object.freeze(values)
+}
+
+function hasChangedArraySnapshot(state: DatabaseDependencyCollectorState): boolean {
+  for (const [array, values] of state.arraySnapshots) {
+    if (array.length !== values.length) {
+      return true
+    }
+
+    for (let index = 0; index < values.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(array, index)
+      if (Boolean(descriptor) !== Object.hasOwn(values, index) || (descriptor && (!('value' in descriptor) || !Object.is(values[index], descriptor.value)))) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+export function serializeDatabaseQueryObservationsOnArrayWrites(array: unknown): void {
+  const state = databaseDependencyCollector.getStore()
+  if (!state || !Array.isArray(array) || Object.isFrozen(array)) {
+    return
+  }
+
+  if (!state.arraySnapshots.has(array)) {
+    const values = snapshotArray(array)
+    if (!values) {
+      markDatabaseQueryObservationsSerialized()
+      return
+    }
+
+    state.arraySnapshots.set(array, values)
+  }
+
+  if (!Object.isExtensible(array) || Object.getPrototypeOf(array) !== Array.prototype) {
+    return
+  }
+
+  const collectors = arrayWriteCollectors.get(array)
+  if (collectors) {
+    collectors.add(state)
+    return
+  }
+
+  if (ARRAY_WRITE_METHODS.some(name => Object.hasOwn(array, name))) {
+    return
+  }
+
+  arrayWriteCollectors.set(array, new WeakSet([state]))
+  for (const name of ARRAY_WRITE_METHODS) {
+    Object.defineProperty(array, name, { configurable: true, enumerable: false, value: arrayWriteMethods[name], writable: true })
   }
 }
 
