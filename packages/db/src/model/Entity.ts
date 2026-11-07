@@ -1,4 +1,4 @@
-import { markDatabaseQueryObservationsSerialized, requireDatabaseQueryRefreshForRows, runRequiringDatabaseQueryRefresh } from '../cache'
+import { markDatabaseQueryObservationsSerialized, requireDatabaseQueryRefreshForRows, runRequiringDatabaseQueryRefresh, serializeDatabaseQueryObservationsOnArrayWrites } from '../cache'
 import { HydrationError } from '../core/errors'
 import { assertAttributeNameAllowed, exposeUntypedEntityAttributes, initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
@@ -319,6 +319,7 @@ class EntityBase<
         get: () => this.getRelation(name),
       })
     }
+    serializeDatabaseQueryObservationsOnArrayWrites(value)
     this.#relations[name] = value
     return this
   }

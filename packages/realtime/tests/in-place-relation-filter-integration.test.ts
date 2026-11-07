@@ -76,8 +76,18 @@ const readers: ReadonlyArray<readonly [string, 'comments' | 'tags', (database: D
     for (const post of posts) withoutSecrets(post.comments as unknown as Row[])
     return posts
   }],
+  ['model hasMany truncated and refilled', 'comments', async (database, Post) => {
+    const posts = await database.model(Post).query().with('comments').orderBy('id').get()
+    for (const post of posts) {
+      const comments = post.comments as unknown as Row[]
+      const kept = comments.filter(row => !row.secret)
+      comments.length = 0
+      comments.push(...kept)
+    }
+    return posts
+  }],
   ['JSON hasMany', 'comments', async (database, Post) => {
-    const posts = await database.model(Post).query().with('comments').orderBy('id').getJson() as Array<{ comments: Row[] }>
+    const posts = await database.model(Post).query().with('comments').orderBy('id').getJson() as unknown as Array<{ comments: Row[] }>
     for (const post of posts) withoutSecrets(post.comments)
     return posts
   }],
@@ -87,7 +97,7 @@ const readers: ReadonlyArray<readonly [string, 'comments' | 'tags', (database: D
     return posts
   }],
   ['JSON belongsToMany', 'tags', async (database, Post) => {
-    const posts = await database.model(Post).query().with('tags').orderBy('id').getJson() as Array<{ tags: Row[] }>
+    const posts = await database.model(Post).query().with('tags').orderBy('id').getJson() as unknown as Array<{ tags: Row[] }>
     for (const post of posts) withoutSecrets(post.tags)
     return posts
   }],
@@ -124,5 +134,45 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a h
       await mutate(write)
       await expectFresh()
     }
+  })
+
+  it.each(['get', 'getJson'] as const)('still patches a related update for a handler that only reads the relation with %s()', async (method) => {
+    const { db, Post, commentsTable } = await openPosts(driver)
+    let runs = 0
+    const read = (database: Database) => database.model(Post).query().with('comments').orderBy('id')[method]()
+    const subscription = await subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler: async ({ db }) => {
+        runs += 1
+        const posts = await read(db) as unknown as Array<{ comments: Row[] }>
+        expect(posts.flatMap(post => post.comments.filter(row => !row.secret))).toHaveLength(2)
+        return posts
+      } }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(commentsTable).where('id', 1).update({ body: 'Edited' }) }))
+    expect(JSON.parse(JSON.stringify(subscription.current.data))).toEqual(JSON.parse(JSON.stringify(await read(db))))
+    expect(runs).toBe(1)
+  })
+
+  it.each(['get', 'getJson'] as const)('leaves loaded relation arrays looking unchanged to the handler with %s()', async (method) => {
+    const { db, Post } = await openPosts(driver)
+    const read = async (database: Database) => {
+      const posts = await database.model(Post).query().with('comments').orderBy('id')[method]() as unknown as Array<{ comments: Row[] }>
+      const comments = posts[0]!.comments
+      return [Array.isArray(comments), Object.keys(comments), JSON.stringify(comments), structuredClone(comments), Object.prototype.propertyIsEnumerable.call(comments, 'splice')]
+    }
+    let seen: unknown
+    await subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler: async ({ db }) => {
+        seen = await read(db)
+        return null
+      } }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )
+
+    expect(seen).toStrictEqual(await read(db))
   })
 })

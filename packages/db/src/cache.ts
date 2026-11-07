@@ -1177,6 +1177,46 @@ export function markDatabaseQueryObservationsSerialized(): void {
   }
 }
 
+const ARRAY_WRITE_METHODS = ['copyWithin', 'fill', 'pop', 'push', 'reverse', 'shift', 'sort', 'splice', 'unshift'] as const
+const arrayWriteCollectors = new WeakMap<object, WeakSet<DatabaseDependencyCollectorState>>()
+
+function markSerializedOnCollectedArrayWrite(array: object): void {
+  const state = databaseDependencyCollector.getStore()
+  if (state && arrayWriteCollectors.get(array)?.has(state)) {
+    markDatabaseQueryObservationsSerialized()
+  }
+}
+
+const arrayWriteMethods = Object.fromEntries(ARRAY_WRITE_METHODS.map((name) => {
+  const write = Array.prototype[name] as (this: unknown[], ...args: unknown[]) => unknown
+  return [name, function (this: unknown[], ...args: unknown[]) {
+    markSerializedOnCollectedArrayWrite(this)
+    return write.apply(this, args)
+  }]
+})) as Readonly<Record<typeof ARRAY_WRITE_METHODS[number], (this: unknown[], ...args: unknown[]) => unknown>>
+
+export function serializeDatabaseQueryObservationsOnArrayWrites(array: unknown): void {
+  const state = databaseDependencyCollector.getStore()
+  if (!state || !Array.isArray(array) || Object.isFrozen(array)) {
+    return
+  }
+
+  const collectors = arrayWriteCollectors.get(array)
+  if (collectors) {
+    collectors.add(state)
+    return
+  }
+
+  if (ARRAY_WRITE_METHODS.some(name => Object.hasOwn(array, name))) {
+    return
+  }
+
+  arrayWriteCollectors.set(array, new WeakSet([state]))
+  for (const name of ARRAY_WRITE_METHODS) {
+    Object.defineProperty(array, name, { configurable: true, enumerable: false, value: arrayWriteMethods[name], writable: true })
+  }
+}
+
 export function createAverageAggregateObservation(
   column: string,
   values: readonly number[],
