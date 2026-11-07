@@ -8,6 +8,7 @@ import {
   createBackfillSelection,
   getBackfillDatabaseConnection,
   readBackfilledRows,
+  whereObservedPredicates,
 } from './query-backfill'
 import {
   applySortedRowsWindow,
@@ -42,13 +43,14 @@ async function fetchLimitedQueryBackfillRows(
     return undefined
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
+  let builder = whereObservedPredicates(new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection), query.predicates)
+  if (!builder) {
+    return undefined
+  }
+
   const selections = query.selections ?? []
   if (selections.length > 0) {
     builder = builder.select(...selections.map(createBackfillSelection))
-  }
-  for (const predicate of query.predicates) {
-    builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
   for (const order of query.orderBy) {
     builder = builder.orderBy(order.column, order.direction)
