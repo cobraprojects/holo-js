@@ -64,6 +64,7 @@ import {
 } from './pagination'
 import { cursorPredicate } from './cursorPredicate'
 import {
+  assertUnreservedTableAlias,
   createDeleteQueryPlan,
   createInsertUsingQueryPlan,
   createTruncateQueryPlan,
@@ -138,10 +139,12 @@ import {
   normalizeQueryWriteValue,
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
-import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolveTableIdentity } from './tableIdentity'
+import { applyTableNameFolding } from '../schema/tableIdentityRegistry'
+import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolveTableIdentity, resolvedTableNameFolding } from './tableIdentity'
 import { currentRootTransaction } from '../core/openTransactions'
 import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalization, deferPredicateNormalization } from './deferredPredicateValues'
 import { assertQueryTablePath, validateQueryPlan } from './validator'
+import { requalifyAliasedSource } from './requalifyAliasedSource'
 
 import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
 
@@ -198,7 +201,19 @@ let keyedInsert: KeyedInsert
 type AnyTableQuery = TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>
 let keyColumnComparison: (query: AnyTableQuery, column: string, compareTo: string, casts: QueryKeyCasts) => AnyTableQuery
 let keyColumnSelection: (query: AnyTableQuery, column: string, casts: QueryKeyCasts) => AnyTableQuery
-let keyColumnJoin: (query: AnyTableQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts) => AnyTableQuery
+let keyColumnJoin: (query: AnyTableQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string) => AnyTableQuery
+let sourceAliasing: (query: AnyTableQuery, alias: string) => AnyTableQuery
+let sourceRequalifying: (query: AnyTableQuery, previousAlias?: string) => AnyTableQuery
+let connectionNameFolding: (query: AnyTableQuery) => ((name: string) => string) | undefined
+
+export function aliasTableSource<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, alias: string): TQuery {
+  if (!/^[A-Z_]\w*$/i.test(alias)) throw new CompilerError(`Table alias "${alias}" must be a plain identifier.`)
+  return sourceAliasing(query as unknown as AnyTableQuery, alias) as unknown as TQuery
+}
+
+export function requalifyTableSource<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, previousAlias?: string): TQuery {
+  return sourceRequalifying(query as unknown as AnyTableQuery, previousAlias) as unknown as TQuery
+}
 
 export function whereKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, compareTo: string, casts: QueryKeyCasts): TQuery {
   return keyColumnComparison(query as unknown as AnyTableQuery, column, compareTo, casts) as unknown as TQuery
@@ -208,8 +223,8 @@ export function selectKeyColumn<TQuery extends TableQueryBuilder<TableReference,
   return keyColumnSelection(query as unknown as AnyTableQuery, column, casts) as unknown as TQuery
 }
 
-export function joinOnKeyColumns<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts): TQuery {
-  return keyColumnJoin(query as unknown as AnyTableQuery, table, leftColumn, rightColumn, casts) as unknown as TQuery
+export function joinOnKeyColumns<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string): TQuery {
+  return keyColumnJoin(query as unknown as AnyTableQuery, table, leftColumn, rightColumn, casts, alias) as unknown as TQuery
 }
 
 
@@ -1590,7 +1605,7 @@ export class TableQueryBuilder<
     return this.clone(withJoin(this.plan, {
       type: 'inner',
       subquery: query.getPlan(),
-      alias,
+      alias: assertUnreservedTableAlias(alias),
       leftColumn,
       operator,
       rightColumn,
@@ -1607,7 +1622,7 @@ export class TableQueryBuilder<
     return this.clone(withJoin(this.plan, {
       type: 'left',
       subquery: query.getPlan(),
-      alias,
+      alias: assertUnreservedTableAlias(alias),
       leftColumn,
       operator,
       rightColumn,
@@ -1624,7 +1639,7 @@ export class TableQueryBuilder<
     return this.clone(withJoin(this.plan, {
       type: 'right',
       subquery: query.getPlan(),
-      alias,
+      alias: assertUnreservedTableAlias(alias),
       leftColumn,
       operator,
       rightColumn,
@@ -1638,7 +1653,7 @@ export class TableQueryBuilder<
     return this.clone(withJoin(this.plan, {
       type: 'inner',
       subquery: query.getPlan(),
-      alias,
+      alias: assertUnreservedTableAlias(alias),
       lateral: true,
     }))
   }
@@ -1650,7 +1665,7 @@ export class TableQueryBuilder<
     return this.clone(withJoin(this.plan, {
       type: 'left',
       subquery: query.getPlan(),
-      alias,
+      alias: assertUnreservedTableAlias(alias),
       lateral: true,
     }))
   }
@@ -3009,11 +3024,19 @@ export class TableQueryBuilder<
 
   static {
     keyedInsert = (query, values, keyColumn) => query.insertGetKey(values, keyColumn)
+    sourceAliasing = (query, alias) => query.clone(withSource(query.plan, Object.freeze({ ...query.source, alias })))
+    connectionNameFolding = (query) => {
+      const compiler = createQueryCompiler(query.connection)
+      const folding = compiler.compileTableNameFoldingLookup() ? resolvedTableNameFolding(query.connection) : compiler.tableNameFolding()
+      return folding === undefined ? undefined : name => applyTableNameFolding(folding, name)
+    }
+    sourceRequalifying = (query, previousAlias) => query.clone(requalifyAliasedSource(query.plan, connectionNameFolding(query), previousAlias))
     keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)
     keyColumnSelection = (query, column, casts) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(casts.left ? { keyCast: casts.left } : {}), ...(casts.unknownKind ? { unknownKeyKind: casts.unknownKind } : {}) })]) })
-    keyColumnJoin = (query, table, leftColumn, rightColumn, casts) => query.clone(withJoin(query.plan, {
+    keyColumnJoin = (query, table, leftColumn, rightColumn, casts, alias) => query.clone(withJoin(query.plan, {
       type: 'inner',
       ...resolveJoinTarget(table),
+      ...(alias === undefined ? {} : { alias }),
       leftColumn,
       operator: '=',
       rightColumn,

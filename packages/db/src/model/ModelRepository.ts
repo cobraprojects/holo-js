@@ -19,7 +19,8 @@ import {
   type DatabaseQueryPredicateObservation,
   type DatabaseQueryResultPathSegment,
 } from '../cache'
-import { TableQueryBuilder, insertGetIdByKey, joinOnKeyColumns, selectKeyColumn, whereKeyColumn } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, aliasTableSource, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn } from '../query/TableQueryBuilder'
+import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadTableDefinition } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition, isUnresolvedGeneratedPrimaryKey } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
@@ -656,25 +657,28 @@ export class ModelRepository<
           return nested
         }
 
+    const parentAlias = query.getPlan().source.alias
     const subqueries = this.buildRelationExistenceSubqueries(
       relation,
+      parentAlias,
       constraint,
       filter.morphTypes,
     )
+    const parentPrimaryKey = this.qualifyParentColumn(this.definition.primaryKey, parentAlias)
 
     if (subqueries.length === 0) {
       if (filter.negate) {
         return filter.boolean === 'or'
           ? query.orWhere(builder => builder
-              .whereNull(this.qualifyParentColumn(this.definition.primaryKey) as never)
-              .orWhereNotNull(this.qualifyParentColumn(this.definition.primaryKey) as never))
+              .whereNull(parentPrimaryKey as never)
+              .orWhereNotNull(parentPrimaryKey as never))
           : query
       }
 
       const impossible = (builder: TableQueryBuilder<TTable, Record<string, unknown>>) => (
         builder
-          .whereNull(this.qualifyParentColumn(this.definition.primaryKey) as never)
-          .whereNotNull(this.qualifyParentColumn(this.definition.primaryKey) as never)
+          .whereNull(parentPrimaryKey as never)
+          .whereNotNull(parentPrimaryKey as never)
       )
 
       switch (filter.boolean) {
@@ -2343,8 +2347,10 @@ export class ModelRepository<
     applyGlobalScopes: boolean,
     applyDefaultRelations: boolean,
     excludedGlobalScopes: ReadonlySet<string> = new Set(),
+    alias?: string,
   ): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
-    let query = new ModelQueryBuilder(this, this.createTableQuery())
+    const tableQuery = this.createTableQuery()
+    let query = new ModelQueryBuilder(this, alias === undefined ? tableQuery : aliasTableSource(tableQuery, alias))
 
     const deletedAtColumn = this.getDeletedAtColumn()
     if (applySoftDeletes && deletedAtColumn) {
@@ -2746,8 +2752,9 @@ export class ModelRepository<
     relation: RelationDefinition,
     repository: ModelRepository,
     constraint?: RelationConstraint,
+    alias?: string,
   ): ModelQueryBuilder {
-    const query = repository.query()
+    const query = repository.createQuery(true, true, true, new Set(), alias)
     const relationConstraint = relation.constraint
     const relationResult = relationConstraint?.(query)
     const constrained = relationResult instanceof ModelQueryBuilder ? relationResult as ModelQueryBuilder : query
@@ -2762,29 +2769,57 @@ export class ModelRepository<
 
   private buildRelationExistenceSubqueries(
     relation: RelationDefinition,
+    parentAlias: string | undefined,
     constraint?: RelationConstraint,
     morphTypes?: readonly string[],
   ): readonly TableQueryBuilder<TableDefinition, Record<string, unknown>>[] {
+    const parent = (column: string) => this.qualifyParentColumn(column, parentAlias)
+    const folded = (name: string) => name.slice(name.lastIndexOf('.') + 1).toLowerCase()
+    const bindsParent = (tableName: string) => sameTable(tableName, this.definition.table.tableName) || (parentAlias !== undefined && folded(tableName) === folded(parentAlias))
+    const aliasFor = (repository: ModelRepository, reserved: number = 0) => bindsParent(repository.definition.table.tableName)
+      ? this.selfRelationAlias(parentAlias, reserved)
+      : undefined
+    const existenceQuery = (repository: ModelRepository, preferredAlias = aliasFor(repository)) => {
+      const constrained = this.applyRelationConstraint(relation, repository, constraint, preferredAlias).getTableQueryBuilder()
+      const predicates = constrained.getPlan().predicates
+      const query = predicates.some(predicate => predicate.boolean === 'or')
+        ? constrained.withPredicates([{ kind: 'group', boolean: 'and', predicates }])
+        : constrained
+      const current = query.getPlan().source.alias
+      const hidesParent = folded(current ?? query.getTableName()) === folded(parentAlias ?? this.definition.table.tableName)
+      const alias = preferredAlias ?? (hidesParent ? this.selfRelationAlias(parentAlias, 0) : undefined)
+      if (alias === undefined) return query
+      const taken = new Set([...nestedTableNames(query.getPlan()), query.getTableName(), this.definition.table.tableName, ...(parentAlias === undefined ? [] : [parentAlias])].map(folded))
+      if (current !== undefined && !taken.has(folded(current))) return requalifyTableSource(query)
+      let unused = alias
+      for (let reserved = 2; taken.has(folded(unused)); reserved += 2) unused = this.selfRelationAlias(parentAlias, reserved)
+      return requalifyTableSource(aliasTableSource(query, unused), current)
+    }
+    const pivotQuery = <TQuery extends TableQueryBuilder<string | TableDefinition>>(query: TQuery) => bindsParent(query.getTableName())
+      ? requalifyTableSource(aliasTableSource(query, this.selfRelationAlias(parentAlias, 1)))
+      : query
+
     switch (relation.kind) {
       case 'belongsTo': {
         const related = this.resolveRelatedRepository(relation.related)
-        return [this.whereParentKey(this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder(), related.definition.table, relation.ownerKey, relation.foreignKey)]
+        return [this.whereParentKey(existenceQuery(related), related.definition.table, relation.ownerKey, relation.foreignKey, parentAlias)]
       }
       case 'hasMany':
       case 'hasOne':
       case 'hasOneOfMany': {
         const related = this.resolveRelatedRepository(relation.related)
-        return [this.whereParentKey(this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder(), related.definition.table, relation.foreignKey, relation.localKey)]
+        return [this.whereParentKey(existenceQuery(related), related.definition.table, relation.foreignKey, relation.localKey, parentAlias)]
       }
       case 'morphOne':
       case 'morphMany':
       case 'morphOneOfMany': {
         const related = this.resolveRelatedRepository(relation.related)
         return [this.whereParentKey(
-          this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder().where(relation.morphTypeColumn, this.getMorphTypeValue()),
+          existenceQuery(related).where(relation.morphTypeColumn, this.getMorphTypeValue()),
           related.definition.table,
           relation.morphIdColumn,
           relation.localKey,
+          parentAlias,
         )]
       }
       case 'morphTo': {
@@ -2792,12 +2827,11 @@ export class ModelRepository<
         return references.map((reference) => {
           const related = ModelRepository.from(reference)
           return this.whereParentKey(
-            this.applyRelationConstraint(relation, related, constraint)
-              .getTableQueryBuilder()
-              .where(this.qualifyParentColumn(relation.morphTypeColumn), related.definition.morphClass),
+            existenceQuery(related).where(parent(relation.morphTypeColumn), related.definition.morphClass),
             related.definition.table,
             related.definition.primaryKey,
             relation.morphIdColumn,
+            parentAlias,
           )
         })
       }
@@ -2806,32 +2840,40 @@ export class ModelRepository<
         const through = this.resolveThroughRepository(relation.through)
         const related = this.resolveRelatedRepository(relation.related)
         const throughTable = through.definition.table.tableName
-        const relatedTable = related.definition.table.tableName
         const throughColumns = through.definition.table.columns
+        const relatedAlias = aliasFor(related)
+        const throughAlias = aliasFor(through, 1)
+        const relatedQuery = existenceQuery(related, relatedAlias)
+        const relatedSource = relatedQuery.getPlan().source.alias ?? related.definition.table.tableName
+        const throughSource = throughAlias ?? throughTable
         const joined = joinOnKeyColumns(
-          this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder(),
+          relatedQuery,
           throughTable,
-          `${throughTable}.${relation.secondLocalKey}`,
-          `${relatedTable}.${relation.secondKey}`,
+          `${throughSource}.${relation.secondLocalKey}`,
+          `${relatedSource}.${relation.secondKey}`,
           { left: sourceKeyCast(ownEntry(throughColumns, relation.secondLocalKey), ownEntry(related.definition.table.columns, relation.secondKey)) },
+          throughAlias,
         )
 
-        return [this.whereParentKey(joined, through.definition.table, relation.firstKey, relation.localKey, `${throughTable}.${relation.firstKey}`)]
+        const throughDeletedAt = through.getDeletedAtColumn()
+        const scopedJoin = throughDeletedAt === undefined ? joined : joined.whereNull(`${throughSource}.${throughDeletedAt}` as never)
+
+        return [this.whereParentKey(scopedJoin, through.definition.table, relation.firstKey, relation.localKey, parentAlias, `${throughSource}.${relation.firstKey}`)]
       }
       case 'belongsToMany': {
         const related = this.resolveRelatedRepository(relation.related)
-        const pivot = this.createBelongsToManyPivotQuery(relation, this.getConnection())
-        return [this.whereHasPivot(relation, related, constraint, pivot, relation.foreignPivotKey, relation.relatedPivotKey)]
+        const pivot = pivotQuery(this.createBelongsToManyPivotQuery(relation, this.getConnection()))
+        return [this.whereHasPivot(relation, related, existenceQuery(related), pivot, relation.foreignPivotKey, relation.relatedPivotKey, parentAlias)]
       }
       case 'morphToMany': {
         const related = this.resolveRelatedRepository(relation.related)
-        const pivot = this.createMorphToManyPivotQuery(relation, this.getConnection()).where(relation.morphTypeColumn, this.getMorphTypeValue())
-        return [this.whereHasPivot(relation, related, constraint, pivot, relation.morphIdColumn, relation.foreignPivotKey)]
+        const pivot = pivotQuery(this.createMorphToManyPivotQuery(relation, this.getConnection())).where(relation.morphTypeColumn, this.getMorphTypeValue())
+        return [this.whereHasPivot(relation, related, existenceQuery(related), pivot, relation.morphIdColumn, relation.foreignPivotKey, parentAlias)]
       }
       case 'morphedByMany': {
         const related = this.resolveRelatedRepository(relation.related)
-        const pivot = this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection())
-        return [this.whereHasPivot(relation, related, constraint, pivot, relation.foreignPivotKey, relation.morphIdColumn)]
+        const pivot = pivotQuery(this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection()))
+        return [this.whereHasPivot(relation, related, existenceQuery(related), pivot, relation.foreignPivotKey, relation.morphIdColumn, parentAlias)]
       }
     }
   }
@@ -2841,30 +2883,36 @@ export class ModelRepository<
     table: TableDefinition | undefined,
     column: string,
     parentColumn: string,
+    parentAlias: string | undefined,
     reference = column,
   ): TQuery {
     const cast = sourceKeyCast(ownEntry(this.definition.table.columns, parentColumn), table ? ownEntry(table.columns, column) : undefined)
-    return whereKeyColumn(query, reference, this.qualifyParentColumn(parentColumn), { right: cast })
+    return whereKeyColumn(query, reference, this.qualifyParentColumn(parentColumn, parentAlias), { right: cast })
   }
 
   private whereHasPivot(
     relation: PivotRelationDefinition,
     related: ModelRepository,
-    constraint: RelationConstraint | undefined,
+    relatedQuery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
     pivot: TableQueryBuilder<string | TableDefinition>,
     parentPivotColumn: string,
     relatedPivotColumn: string,
+    parentAlias: string | undefined,
   ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
     const connection = this.getConnection()
     const resolved = this.resolvePivotTable(relation.pivotTable, connection)
     const pivotTable = typeof resolved === 'string' ? getLoadedTableDefinition(connection, resolved) ?? resolved : resolved
     const relatedTable = related.definition.table
-    const parentKeyed = whereKeyColumn(pivot, parentPivotColumn, this.qualifyParentColumn(relation.parentKey), pivotKeyCasts(pivotTable, parentPivotColumn, ownEntry(this.definition.table.columns, relation.parentKey), 'other'))
+    const parentKeyed = whereKeyColumn(pivot, parentPivotColumn, this.qualifyParentColumn(relation.parentKey, parentAlias), pivotKeyCasts(pivotTable, parentPivotColumn, ownEntry(this.definition.table.columns, relation.parentKey), 'other'))
     const pivotKeys = selectKeyColumn(parentKeyed, relatedPivotColumn, pivotKeyCasts(pivotTable, relatedPivotColumn, ownEntry(relatedTable.columns, relation.relatedKey), 'pivot'))
 
-    const relatedQuery = this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder()
     const source = relatedQuery.getPlan().source
     return relatedQuery.whereInSub(`${source.alias ?? source.tableName}.${relation.relatedKey}`, pivotKeys)
+  }
+
+  private selfRelationAlias(parentAlias: string | undefined, reserved: number): string {
+    const parentIndex = parentAlias?.match(/^holo_reserved_(\d+)$/)?.[1]
+    return `holo_reserved_${(parentIndex === undefined ? 0 : Number(parentIndex) + 2) + reserved}`
   }
 
   private resolveMorphExistenceReferences(
@@ -2980,8 +3028,8 @@ export class ModelRepository<
       : query.where(callback)
   }
 
-  private qualifyParentColumn(column: string): string {
-    return `${this.definition.table.tableName}.${column}`
+  private qualifyParentColumn(column: string, parentAlias?: string): string {
+    return `${parentAlias ?? this.definition.table.tableName}.${column}`
   }
 
   private keyOptionsFor(related: ModelRepository, parentColumn: string, relatedColumn: string): StoredKeyOptions {

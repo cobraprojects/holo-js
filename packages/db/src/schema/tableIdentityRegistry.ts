@@ -19,8 +19,8 @@ export function rememberTableNameFolding(connectionName: string, folding: TableN
   foldings.set(connectionName, folding)
 }
 
-export function foldTableName(connectionName: string, tableName: string): string {
-  switch (foldings.get(connectionName)) {
+export function applyTableNameFolding(folding: TableNameFolding | undefined, tableName: string): string {
+  switch (folding) {
     case 'ascii':
       return tableName.replace(/[A-Z]/g, letter => letter.toLowerCase())
     case 'lower':
@@ -28,6 +28,10 @@ export function foldTableName(connectionName: string, tableName: string): string
     default:
       return tableName
   }
+}
+
+export function foldTableName(connectionName: string, tableName: string): string {
+  return applyTableNameFolding(foldings.get(connectionName), tableName)
 }
 
 function namesFor(frame: TransactionFrame | undefined): CanonicalTableNames {
