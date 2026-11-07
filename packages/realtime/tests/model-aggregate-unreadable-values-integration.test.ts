@@ -5,14 +5,15 @@ import { integrationDrivers, openDatabase } from '../../db/tests/support/databas
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 
-describe.each(integrationDrivers(['postgres'] as const))('model aggregate unreadable values on %s', (driver) => {
-  it.each([
+describe.each(integrationDrivers(['sqlite', 'postgres'] as const))('model aggregate unreadable values on %s', (driver) => {
+  const cases = driver === 'sqlite' ? [['bigint', '1.5', '1', false, false] as const] : [
     ['timestamp', '280000-01-01 00:00:00', '2026-01-01 00:00:00', false, false],
     ['bigint', '9007199254740993', '7', false, false],
     ['timestamp', '280000-01-01 00:00:00', '2026-01-01 00:00:00', true, false],
     ['bigint', '9007199254740993', '7', true, false],
     ['timestamp', '280000-01-01 00:00:00', '2026-01-01 00:00:00', false, true],
-  ] as const)('surfaces fresh errors for %s value %s (safe: %s, grouped: %s, untyped: %s)', async (kind, unreadable, readable, grouped, untyped) => {
+  ] as const
+  it.each(cases)('surfaces fresh errors for %s value %s (safe: %s, grouped: %s, untyped: %s)', async (kind, unreadable, readable, grouped, untyped) => {
     const { db, schema } = await openDatabase(driver, { connectionName: 'unreadable' })
     if (untyped) {
       const { db: primary } = await openDatabase('sqlite', { connectionName: 'primary' })
@@ -20,7 +21,7 @@ describe.each(integrationDrivers(['postgres'] as const))('model aggregate unread
     }
     onTestFinished(() => resetRealtimeRuntime())
     const name = `holo_unreadable_${randomUUID().replaceAll('-', '').slice(0, 12)}`
-    await schema.createTable(name, (table) => {
+    const createTable = (tableName: string) => schema.createTable(tableName, (table) => {
       table.integer('id').primaryKey()
       table.integer('score')
       table.integer('group_id')
@@ -28,7 +29,8 @@ describe.each(integrationDrivers(['postgres'] as const))('model aggregate unread
       else table.bigInteger('stored')
     })
     const staging = `${name}_staging`
-    await db.executeCompiled({ sql: `CREATE TABLE "${staging}" (LIKE "${name}")`, source: 'schema' })
+    await createTable(name)
+    await createTable(staging)
     onTestFinished(async () => {
       await schema.dropTable(staging)
       await schema.dropTable(name)
@@ -46,7 +48,7 @@ describe.each(integrationDrivers(['postgres'] as const))('model aggregate unread
     const Model = defineModel(untyped ? name : table, { timestamps: false, connectionName: db.getConnectionName() })
     await db.table(name).insert([
       { id: 1, score: 3, group_id: 1, stored: readable },
-      { id: 2, score: 3, group_id: 2, stored: readable },
+      { id: 2, score: 3, group_id: 2, stored: driver === 'sqlite' ? '9' : readable },
     ])
     configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
     const groups = grouped ? [1, 2] : [undefined]

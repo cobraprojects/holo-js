@@ -17,8 +17,13 @@ export function addAggregateReadChecks(
   builder: TableQueryBuilder<string, Record<string, unknown>>,
   columns: readonly AggregateReadColumn[],
 ): TableQueryBuilder<string, Record<string, unknown>> {
-  for (const [index, { column }] of columns.entries()) {
+  const dialect = builder.getConnection().getDialect()
+  for (const [index, { column, integer }] of columns.entries()) {
     builder = builder.addSelectMin(`__holo_read_min_${index}`, column).addSelectMax(`__holo_read_max_${index}`, column)
+    if (integer && dialect.name === 'sqlite') {
+      const identifier = dialect.quoteIdentifier(column)
+      builder = builder.addUnsafeSelect(`SUM(CASE WHEN ${identifier} <> ROUND(${identifier}) THEN 1 ELSE 0 END) AS "__holo_fractional_${index}"`, [])
+    }
   }
   return builder
 }
@@ -29,6 +34,7 @@ export function hasReadableAggregateValues(
   aggregated = false,
 ): boolean {
   return rows.every(row => columns.every(({ column, integer }, index) => {
+    if (aggregated && Number(row[`__holo_fractional_${index}`] ?? 0) !== 0) return false
     const values = aggregated ? [row[`__holo_read_min_${index}`], row[`__holo_read_max_${index}`]] : [row[column]]
     return values.every(value => value == null || (integer
       ? Number.isSafeInteger(Number(value))
