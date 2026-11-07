@@ -139,6 +139,7 @@ import {
   normalizeQueryWriteValue,
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
+import { applyTableNameFolding, rememberedTableNameFolding } from '../schema/tableIdentityRegistry'
 import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolveTableIdentity } from './tableIdentity'
 import { currentRootTransaction } from '../core/openTransactions'
 import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalization, deferPredicateNormalization } from './deferredPredicateValues'
@@ -203,6 +204,7 @@ let keyColumnSelection: (query: AnyTableQuery, column: string, casts: QueryKeyCa
 let keyColumnJoin: (query: AnyTableQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string) => AnyTableQuery
 let sourceAliasing: (query: AnyTableQuery, alias: string) => AnyTableQuery
 let sourceRequalifying: (query: AnyTableQuery, parentTableName: string, previousAlias?: string) => AnyTableQuery
+let connectionNameFolding: (query: AnyTableQuery) => (name: string) => string
 
 export function aliasTableSource<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, alias: string): TQuery {
   if (!/^[A-Z_]\w*$/i.test(alias)) throw new CompilerError(`Table alias "${alias}" must be a plain identifier.`)
@@ -3023,7 +3025,12 @@ export class TableQueryBuilder<
   static {
     keyedInsert = (query, values, keyColumn) => query.insertGetKey(values, keyColumn)
     sourceAliasing = (query, alias) => query.clone(withSource(query.plan, Object.freeze({ ...query.source, alias })))
-    sourceRequalifying = (query, parentTableName, previousAlias) => query.clone(requalifyAliasedSource(query.plan, parentTableName, previousAlias))
+    connectionNameFolding = (query) => {
+      const connectionName = query.connection.getConnectionName()
+      const folding = rememberedTableNameFolding(connectionName) ?? createQueryCompiler(query.connection).tableNameFolding()
+      return name => applyTableNameFolding(folding, name)
+    }
+    sourceRequalifying = (query, parentTableName, previousAlias) => query.clone(requalifyAliasedSource(query.plan, connectionNameFolding(query), parentTableName, previousAlias))
     keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)
     keyColumnSelection = (query, column, casts) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(casts.left ? { keyCast: casts.left } : {}), ...(casts.unknownKind ? { unknownKeyKind: casts.unknownKind } : {}) })]) })
     keyColumnJoin = (query, table, leftColumn, rightColumn, casts, alias) => query.clone(withJoin(query.plan, {

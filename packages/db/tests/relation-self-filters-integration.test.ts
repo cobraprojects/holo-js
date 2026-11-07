@@ -547,10 +547,40 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
 
     const nonSelf = await Category.whereHas('posts', fromAlias(`${postsTable} as ${table}`)).get() as unknown as Category[]
     const parentAliased = await Category.query().from(`${table} as c`).whereHas('posts', fromAlias(`${postsTable} as c`)).get() as unknown as Category[]
-    const upperCased = await Category.whereHas('children', query => (query as unknown as { from(source: string): { where(column: string, value: unknown): unknown } }).from(`${table} as ${table}`).where(`${table.toUpperCase()}.id`, 2) as never).get() as unknown as Category[]
-
     expect(sorted(nonSelf)).toEqual([1, 2, 3])
     expect(sorted(parentAliased)).toEqual([1, 2, 3])
-    expect(sorted(upperCased)).toEqual([1])
+    if (driver === 'sqlite') {
+      const upperCased = await Category.whereHas('children', query => (query as unknown as { from(source: string): { where(column: string, value: unknown): unknown } }).from(`${table} as ${table}`).where(`${table.toUpperCase()}.id`, 2) as never).get() as unknown as Category[]
+      expect(sorted(upperCased)).toEqual([1])
+    }
+  })
+
+  it.skipIf(driver !== 'postgres')('keeps tables whose names differ only in case apart on PostgreSQL', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const lower = `sr_cased_${suffix}`
+    const upper = `SR_Cased_${suffix}`
+    await schema.createTable(upper, (table) => {
+      table.integer('id').primaryKey()
+      table.integer('tenant_id')
+    })
+    onTestFinished(() => schema.dropTable(upper))
+    await schema.createTable(lower, (table) => {
+      table.integer('id').primaryKey()
+      table.integer('owner_id')
+      table.integer('tenant_id')
+    })
+    onTestFinished(() => schema.dropTable(lower))
+    const upperTable = defineGeneratedTable(upper, { id: column.integer().primaryKey(), tenant_id: column.integer() })
+    const lowerTable = defineGeneratedTable(lower, { id: column.integer().primaryKey(), owner_id: column.integer(), tenant_id: column.integer() })
+    await DB.table(upperTable).insert([{ id: 1, tenant_id: 1 }, { id: 2, tenant_id: 2 }])
+    await DB.table(lowerTable).insert([{ id: 10, owner_id: 1, tenant_id: 1 }, { id: 20, owner_id: 2, tenant_id: 9 }])
+    const Entry = defineModel(lowerTable, { name: `CasedEntry${suffix}`, timestamps: false })
+    const Owner = defineModel(upperTable, { name: `CasedOwner${suffix}`, timestamps: false, relations: { entries: hasMany(() => Entry, 'owner_id') } })
+
+    const sameTenant = await Owner.whereHas('entries', query => query.whereColumn(`${lower}.tenant_id` as never, '=', `${upper}.tenant_id`)).orderBy('id').get() as unknown as Category[]
+
+    expect(sameTenant.map(id)).toEqual([1])
   })
 })

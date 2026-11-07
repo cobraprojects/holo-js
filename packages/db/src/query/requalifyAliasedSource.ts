@@ -1,27 +1,31 @@
 import type { QueryJoinClause, QueryOrderBy, QueryPredicateNode, QuerySelection, SelectQueryPlan } from './ast'
 import { remapDeferredPredicateNormalization } from './deferredPredicateValues'
 
-function shortName(name: string): string {
-  return name.slice(name.lastIndexOf('.') + 1).toLowerCase()
+export type NameFolding = (name: string) => string
+
+const ignoreCase: NameFolding = name => name.toLowerCase()
+
+function shortName(name: string, fold: NameFolding): string {
+  return fold(name.slice(name.lastIndexOf('.') + 1))
 }
 
-function schemaOf(name: string): string | undefined {
+function schemaOf(name: string, fold: NameFolding): string | undefined {
   const separator = name.lastIndexOf('.')
-  return separator < 0 ? undefined : name.slice(0, separator).toLowerCase()
+  return separator < 0 ? undefined : fold(name.slice(0, separator))
 }
 
-function bindsTable(binding: string, tableName: string): boolean {
-  return shortName(binding) === shortName(tableName)
+function bindsTable(binding: string, tableName: string, fold: NameFolding = ignoreCase): boolean {
+  return shortName(binding, fold) === shortName(tableName, fold)
 }
 
-function spelledAlike(left: string, right: string): boolean {
-  return bindsTable(left, right) && schemaOf(left) === schemaOf(right)
+function spelledAlike(left: string, right: string, fold: NameFolding = ignoreCase): boolean {
+  return bindsTable(left, right, fold) && schemaOf(left, fold) === schemaOf(right, fold)
 }
 
-export function sameTable(left: string, right: string): boolean {
-  const leftSchema = schemaOf(left)
-  const rightSchema = schemaOf(right)
-  return bindsTable(left, right) && (leftSchema === undefined || rightSchema === undefined || leftSchema === rightSchema)
+export function sameTable(left: string, right: string, fold: NameFolding = ignoreCase): boolean {
+  const leftSchema = schemaOf(left, fold)
+  const rightSchema = schemaOf(right, fold)
+  return bindsTable(left, right, fold) && (leftSchema === undefined || rightSchema === undefined || leftSchema === rightSchema)
 }
 
 interface Target {
@@ -44,10 +48,10 @@ function bindingsOf(plan: SelectQueryPlan, includeSource = true): readonly Bindi
 
 function captures(binding: Binding, qualifier: string): boolean {
   if (!bindsTable(binding.name, qualifier)) return false
-  const qualifierSchema = schemaOf(qualifier)
+  const qualifierSchema = schemaOf(qualifier, ignoreCase)
   if (qualifierSchema === undefined) return true
   if (binding.aliased) return false
-  const bindingSchema = schemaOf(binding.name)
+  const bindingSchema = schemaOf(binding.name, ignoreCase)
   return bindingSchema === undefined || bindingSchema === qualifierSchema
 }
 
@@ -66,13 +70,13 @@ function requalifyPlan(plan: SelectQueryPlan, target: Target, enclosing: readonl
   return requalifyPlanBody(plan, target, enclosing, bindingsOf(plan))
 }
 
-export function requalifyAliasedSource(plan: SelectQueryPlan, parentTableName: string, previousAlias?: string): SelectQueryPlan {
+export function requalifyAliasedSource(plan: SelectQueryPlan, fold: NameFolding, parentTableName: string, previousAlias?: string): SelectQueryPlan {
   const alias = plan.source.alias
   if (alias === undefined) return plan
   const tableName = plan.source.tableName
-  const names = spelledAlike(parentTableName, tableName) ? sameTable : spelledAlike
-  const previous = previousAlias?.toLowerCase()
-  return requalifyPlanBody(plan, { names: qualifier => qualifier.toLowerCase() === previous || names(qualifier, tableName), alias }, [], bindingsOf(plan, false))
+  const names = spelledAlike(parentTableName, tableName, fold) ? sameTable : spelledAlike
+  const previous = previousAlias === undefined ? undefined : fold(previousAlias)
+  return requalifyPlanBody(plan, { names: qualifier => fold(qualifier) === previous || names(qualifier, tableName, fold), alias }, [], bindingsOf(plan, false))
 }
 
 function requalifyPlanBody(plan: SelectQueryPlan, target: Target, enclosing: readonly Binding[], own: readonly Binding[]): SelectQueryPlan {
