@@ -36,14 +36,21 @@ function branchOutputs(branch: SelectQueryPlan, connectionName: string): readonl
   return selections.map(selection => selectionOutput(branch, selection, connectionName))
 }
 
+function assertKnownPosition(outputs: readonly UnionOutput[], column: string): void {
+  if (outputs.some(output => !output.names)) {
+    throw new CompilerError(`Cannot cursor paginate a union by "${column}": its column position cannot be determined. Select the order column explicitly in each query without preceding wildcards.`)
+  }
+}
+
 function outputPosition(plan: SelectQueryPlan, column: string, connectionName: string): number | undefined {
   const outputs = branchOutputs(plan, connectionName)
   const named = outputs.findIndex(output => output.names?.includes(column))
   const position = named === -1 ? outputs.findIndex(output => output.column === column) : named
-  if (position === -1) return undefined
-  if (outputs.slice(position + 1).some(output => !output.names || output.names.includes(column))) {
+  if (position !== -1 && outputs.slice(position + 1).some(output => !output.names || output.names.includes(column))) {
     throw new CompilerError(`Cannot cursor paginate a union by "${column}": more than one of its selected columns may be named "${column}". Select it under a name no other column has.`)
   }
+  assertKnownPosition(outputs, column)
+  if (position === -1) return undefined
   return outputs.slice(0, position + 1).every(output => output.positioned) ? position : undefined
 }
 
@@ -56,6 +63,7 @@ function namedBranchColumn(branch: SelectQueryPlan, column: string): string {
 
 function positionedBranchColumn(branch: SelectQueryPlan, column: string, position: number, connectionName: string): string {
   const outputs = branchOutputs(branch, connectionName)
+  assertKnownPosition(outputs.slice(0, position + 1), column)
   if (!outputs.slice(0, position + 1).every(output => output.positioned)) return namedBranchColumn(branch, column)
   const output = outputs[position]
   if (!output?.column) {
@@ -72,6 +80,7 @@ export function unionCursorColumns(plan: SelectQueryPlan, columns: readonly stri
   const positions = columns.map(column => outputPosition(plan, column, connectionName))
   const branchColumns = (branch: SelectQueryPlan) => columns.map((column, index) => {
     const position = positions[index]
+    if (typeof position === 'undefined') assertKnownPosition(branchOutputs(branch, connectionName), column)
     return typeof position === 'undefined' ? namedBranchColumn(branch, column) : positionedBranchColumn(branch, column, position, connectionName)
   })
   for (const branch of unionBranches(plan)) branchColumns(branch)

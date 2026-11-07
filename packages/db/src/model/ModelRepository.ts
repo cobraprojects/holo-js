@@ -2892,8 +2892,7 @@ export class ModelRepository<
     const aliasFor = (repository: ModelRepository, reserved: number = 0) => bindsParent(repository.definition.table.tableName)
       ? this.selfRelationAlias(parentAlias, reserved)
       : undefined
-    const existenceQuery = (repository: ModelRepository, preferredAlias = aliasFor(repository)) => {
-      const constrained = this.applyRelationConstraint(relation, repository, constraint, preferredAlias).getTableQueryBuilder()
+    const prepareExistenceQuery = (constrained: TableQueryBuilder<TableDefinition, Record<string, unknown>>, preferredAlias?: string) => {
       const predicates = constrained.getPlan().predicates
       const query = predicates.some(predicate => predicate.boolean === 'or')
         ? constrained.withPredicates([{ kind: 'group', boolean: 'and', predicates }])
@@ -2908,6 +2907,10 @@ export class ModelRepository<
       for (let reserved = 2; taken.has(folded(unused)); reserved += 2) unused = this.selfRelationAlias(parentAlias, reserved)
       return requalifyTableSource(aliasTableSource(query, unused), current)
     }
+    const existenceQuery = (repository: ModelRepository, preferredAlias = aliasFor(repository)) => prepareExistenceQuery(
+      this.applyRelationConstraint(relation, repository, constraint, preferredAlias).getTableQueryBuilder(),
+      preferredAlias,
+    )
     const pivotQuery = <TQuery extends TableQueryBuilder<string | TableDefinition>>(query: TQuery) => bindsParent(query.getTableName())
       ? requalifyTableSource(aliasTableSource(query, this.selfRelationAlias(parentAlias, 1)))
       : query
@@ -2952,26 +2955,38 @@ export class ModelRepository<
       case 'hasManyThrough': {
         const through = this.resolveThroughRepository(relation.through)
         const related = this.resolveRelatedRepository(relation.related)
-        const throughTable = through.definition.table.tableName
-        const throughColumns = through.definition.table.columns
-        const relatedAlias = aliasFor(related)
+        const relatedQuery = existenceQuery(related)
         const throughAlias = aliasFor(through, 1)
-        const relatedQuery = existenceQuery(related, relatedAlias)
+        const throughQuery = prepareExistenceQuery(through.createQuery(true, true, false, new Set(), throughAlias).getTableQueryBuilder(), throughAlias)
+        let throughSource = throughQuery.getPlan().source.alias ?? through.definition.table.tableName.split('.').at(-1)!
+        const throughColumns = `${throughQuery.getPlan().source.alias ?? throughQuery.getTableName()}.*`
+        const queries = [relatedQuery, throughQuery]
+        const shadowsParent = queries.some(query => query.getPlan().joins.some(join => {
+          const binding = join.alias ?? join.table
+          return binding !== undefined && folded(binding) === folded(parentAlias ?? this.definition.table.tableName)
+        }))
+        let correlationAlias = parentAlias
+        if (shadowsParent) {
+          const taken = new Set(queries.flatMap(query => [query.getPlan().source.alias ?? query.getTableName(), ...nestedTableNames(query.getPlan())]).map(folded))
+          correlationAlias = this.selfRelationAlias(parentAlias, 2)
+          for (let reserved = 4; taken.has(folded(correlationAlias)); reserved += 2) correlationAlias = this.selfRelationAlias(parentAlias, reserved)
+        }
+        const parentKeyed = this.whereParentKey(throughQuery, through.definition.table, relation.firstKey, relation.localKey, correlationAlias, `${throughQuery.getPlan().source.alias ?? throughQuery.getTableName()}.${relation.firstKey}`)
         const relatedSource = relatedQuery.getPlan().source.alias ?? related.definition.table.tableName
-        const throughSource = throughAlias ?? throughTable
+        const relatedBindings = new Set([relatedSource, ...nestedTableNames(relatedQuery.getPlan())].map(folded))
+        for (let reserved = 1; relatedBindings.has(folded(throughSource)); reserved += 2) throughSource = this.selfRelationAlias(parentAlias, reserved)
         const joined = joinOnKeyColumns(
           relatedQuery,
-          throughTable,
+          parentKeyed.select(throughColumns as never),
           `${throughSource}.${relation.secondLocalKey}`,
           `${relatedSource}.${relation.secondKey}`,
-          { left: sourceKeyCast(ownEntry(throughColumns, relation.secondLocalKey), ownEntry(related.definition.table.columns, relation.secondKey)) },
-          throughAlias,
+          { left: sourceKeyCast(ownEntry(through.definition.table.columns, relation.secondLocalKey), ownEntry(related.definition.table.columns, relation.secondKey)) },
+          throughSource,
         )
 
-        const throughDeletedAt = through.getDeletedAtColumn()
-        const scopedJoin = throughDeletedAt === undefined ? joined : joined.whereNull(`${throughSource}.${throughDeletedAt}` as never)
-
-        return [this.whereParentKey(scopedJoin, through.definition.table, relation.firstKey, relation.localKey, parentAlias, `${throughSource}.${relation.firstKey}`)]
+        if (!shadowsParent) return [joined]
+        const parentQuery = aliasTableSource(this.createTableQuery(), correlationAlias!)
+        return [this.whereParentKey(parentQuery, this.definition.table, this.definition.primaryKey, this.definition.primaryKey, parentAlias, `${correlationAlias}.${this.definition.primaryKey}`).whereExists(joined)]
       }
       case 'belongsToMany': {
         const related = this.resolveRelatedRepository(relation.related)
