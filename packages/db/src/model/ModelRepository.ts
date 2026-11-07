@@ -119,6 +119,7 @@ function readsSQLiteDecimals(connection: DatabaseContext, table: string | TableD
 
 function relatedRowsArePatchable(related: ModelRepository): boolean {
   return !related.serializesBeyondRows()
+    && related.definition.with.length === 0
     && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
 }
 

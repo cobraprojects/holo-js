@@ -364,6 +364,26 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await expectFresh(false)
   })
 
+  it('keeps relations whose related model eager loads by default equal to a fresh read', async () => {
+    const { db, owners, items, tags, ownerTags } = await openFixture(variant)
+    const Owner = defineModel(owners, { timestamps: false, casts: variant.casts })
+    const EagerItem = defineModel(items, { timestamps: false, casts: variant.casts, with: ['owner'], relations: { owner: belongsTo(() => Owner, 'owner_id') } })
+    const EagerTag = defineModel(tags, { timestamps: false, casts: variant.casts, with: ['labelled'], relations: { labelled: belongsToMany(() => Owner, ownerTags, 'tag_id', 'owner_id') } })
+    const Eager = defineModel(owners, { timestamps: false, casts: variant.casts, relations: {
+      items: hasMany(() => EagerItem, 'owner_id'),
+      tags: belongsToMany(() => EagerTag, ownerTags, 'owner_id', 'tag_id').withPivot('pinned').orderByPivot('tag_id'),
+    } })
+    const expectFresh = await subscribeAll(variant, {
+      items: () => db.model(Eager).query().with('items', query => query.orderBy('id')).orderBy('id').getJson(),
+      tags: () => db.model(Eager).query().with('tags').orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(items).insert({ id: 13, owner_id: 2, ...rowValues(variant, 28) }))
+    await expectFresh(false)
+    await mutate(() => db.table(ownerTags).insert({ id: 4, owner_id: 2, tag_id: 2, pinned: true }))
+    await expectFresh(false)
+  })
+
   it('keeps eager-loaded belongsToMany rows equal to a fresh read', async () => {
     const { db, owners, tags, ownerTags, Parent } = await openFixture(variant)
     const expectFresh = await subscribeAll(variant, {
