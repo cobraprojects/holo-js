@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { column, defineGeneratedTable, defineModel } from '@holo-js/db'
+import { column, configureDB, createConnectionManager, defineGeneratedTable, defineModel } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -7,12 +7,17 @@ import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime
 
 describe.each(integrationDrivers(['postgres'] as const))('model aggregate unreadable values on %s', (driver) => {
   it.each([
-    ['timestamp', '280000-01-01 00:00:00', '2026-01-01 00:00:00', false],
-    ['bigint', '9007199254740993', '7', false],
-    ['timestamp', '280000-01-01 00:00:00', '2026-01-01 00:00:00', true],
-    ['bigint', '9007199254740993', '7', true],
-  ] as const)('surfaces fresh errors for %s value %s (safe: %s, grouped: %s)', async (kind, unreadable, readable, grouped) => {
-    const { db, schema } = await openDatabase(driver)
+    ['timestamp', '280000-01-01 00:00:00', '2026-01-01 00:00:00', false, false],
+    ['bigint', '9007199254740993', '7', false, false],
+    ['timestamp', '280000-01-01 00:00:00', '2026-01-01 00:00:00', true, false],
+    ['bigint', '9007199254740993', '7', true, false],
+    ['timestamp', '280000-01-01 00:00:00', '2026-01-01 00:00:00', false, true],
+  ] as const)('surfaces fresh errors for %s value %s (safe: %s, grouped: %s, untyped: %s)', async (kind, unreadable, readable, grouped, untyped) => {
+    const { db, schema } = await openDatabase(driver, { connectionName: 'unreadable' })
+    if (untyped) {
+      const { db: primary } = await openDatabase('sqlite', { connectionName: 'primary' })
+      configureDB(createConnectionManager({ defaultConnection: 'primary', connections: { primary, unreadable: db } }))
+    }
     onTestFinished(() => resetRealtimeRuntime())
     const name = `holo_unreadable_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     await schema.createTable(name, (table) => {
@@ -38,7 +43,7 @@ describe.each(integrationDrivers(['postgres'] as const))('model aggregate unread
       group_id: column.integer(),
       stored: kind === 'timestamp' ? column.timestamp() : column.bigInteger(),
     })
-    const Model = defineModel(table, { timestamps: false })
+    const Model = defineModel(untyped ? name : table, { timestamps: false, connectionName: db.getConnectionName() })
     await db.table(name).insert([
       { id: 1, score: 3, group_id: 1, stored: readable },
       { id: 2, score: 3, group_id: 2, stored: readable },

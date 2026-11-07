@@ -190,6 +190,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   readsWithoutRejectingValues(): boolean {
+    if (this.definition.untyped) return false
     const { casts, createdAtColumn, updatedAtColumn, deletedAtColumn, table } = this.definition
     const keys = new Set([...Object.keys(table.columns), ...Object.keys(casts), ...[createdAtColumn, updatedAtColumn, deletedAtColumn].filter(key => key !== undefined)])
     return [...keys].every((key) => {
