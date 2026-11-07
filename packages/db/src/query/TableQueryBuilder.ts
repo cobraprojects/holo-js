@@ -201,7 +201,7 @@ let keyedInsert: KeyedInsert
 type AnyTableQuery = TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>
 let keyColumnComparison: (query: AnyTableQuery, column: string, compareTo: string, casts: QueryKeyCasts) => AnyTableQuery
 let keyColumnSelection: (query: AnyTableQuery, column: string, casts: QueryKeyCasts) => AnyTableQuery
-let keyColumnJoin: (query: AnyTableQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string) => AnyTableQuery
+let keyColumnJoin: (query: AnyTableQuery, table: TableReference | TableQueryBuilder<TableDefinition, Record<string, unknown>>, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string) => AnyTableQuery
 let sourceAliasing: (query: AnyTableQuery, alias: string) => AnyTableQuery
 let sourceRequalifying: (query: AnyTableQuery, previousAlias?: string) => AnyTableQuery
 let connectionNameFolding: (query: AnyTableQuery) => ((name: string) => string) | undefined
@@ -223,7 +223,7 @@ export function selectKeyColumn<TQuery extends TableQueryBuilder<TableReference,
   return keyColumnSelection(query as unknown as AnyTableQuery, column, casts) as unknown as TQuery
 }
 
-export function joinOnKeyColumns<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string): TQuery {
+export function joinOnKeyColumns<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, table: TableReference | TableQueryBuilder<TableDefinition, Record<string, unknown>>, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string): TQuery {
   return keyColumnJoin(query as unknown as AnyTableQuery, table, leftColumn, rightColumn, casts, alias) as unknown as TQuery
 }
 
@@ -3035,7 +3035,7 @@ export class TableQueryBuilder<
     keyColumnSelection = (query, column, casts) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(casts.left ? { keyCast: casts.left } : {}), ...(casts.unknownKind ? { unknownKeyKind: casts.unknownKind } : {}) })]) })
     keyColumnJoin = (query, table, leftColumn, rightColumn, casts, alias) => query.clone(withJoin(query.plan, {
       type: 'inner',
-      ...resolveJoinTarget(table),
+      ...(table instanceof TableQueryBuilder ? { subquery: table.getPlan() } : resolveJoinTarget(table)),
       ...(alias === undefined ? {} : { alias }),
       leftColumn,
       operator: '=',
