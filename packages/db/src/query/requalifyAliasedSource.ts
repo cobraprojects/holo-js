@@ -48,11 +48,15 @@ interface Binding {
   readonly aliased: boolean
 }
 
-function bindingsOf(plan: SelectQueryPlan, includeSource = true): readonly Binding[] {
-  const source = plan.source.alias === undefined ? { name: plan.source.tableName, aliased: false } : { name: plan.source.alias, aliased: true }
-  const joins = plan.joins.flatMap((join): Binding[] => join.alias !== undefined
+function joinBindings(joins: readonly QueryJoinClause[]): readonly Binding[] {
+  return joins.flatMap((join): Binding[] => join.alias !== undefined
     ? [{ name: join.alias, aliased: true }]
     : join.table === undefined ? [] : [{ name: join.table, aliased: false }])
+}
+
+function bindingsOf(plan: SelectQueryPlan, includeSource = true): readonly Binding[] {
+  const source = plan.source.alias === undefined ? { name: plan.source.tableName, aliased: false } : { name: plan.source.alias, aliased: true }
+  const joins = joinBindings(plan.joins)
   return includeSource ? [source, ...joins] : joins
 }
 
@@ -114,11 +118,14 @@ function requalifyPlanBody(plan: SelectQueryPlan, target: Target, enclosing: rea
         return item
     }
   }
-  const join = (item: QueryJoinClause): QueryJoinClause => Object.freeze({
+  const ownSource = own.slice(0, own.length - joinBindings(plan.joins).length)
+  const join = (item: QueryJoinClause, index: number): QueryJoinClause => Object.freeze({
     ...item,
     ...(item.leftColumn === undefined ? {} : { leftColumn: column(item.leftColumn) }),
     ...(item.rightColumn === undefined ? {} : { rightColumn: column(item.rightColumn) }),
-    ...(item.subquery === undefined ? {} : { subquery: requalifyPlan(item.subquery, target, scope) }),
+    ...(item.subquery === undefined ? {} : {
+      subquery: requalifyPlan(item.subquery, target, item.lateral ? [...enclosing, ...ownSource, ...joinBindings(plan.joins.slice(0, index))] : enclosing),
+    }),
   })
   const orderBy = (item: QueryOrderBy): QueryOrderBy => item.kind === 'column' || item.kind === 'vector'
     ? Object.freeze({ ...item, column: column(item.column) })

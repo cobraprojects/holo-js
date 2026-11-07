@@ -265,6 +265,15 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     const postsTable = table.replace('sr_categories_', 'sr_posts_')
     const unrelated = await Category.whereHas('children', query => query.whereExists(DB.table(postsTable).where(`${schemaName}.${postsTable}.id`, 3))).orderBy('id').get() as unknown as Category[]
     expect(unrelated.map(id)).toEqual([1, 2])
+    const grantsTable = table.replace('sr_categories_', 'sr_grants_')
+    const derived = await Category.whereHas('children', query => query.whereExists(DB.table(postsTable).joinSub(
+      DB.table(grantsTable).select(`${grantsTable}.category_id`).whereColumn(`${grantsTable}.category_id`, '=', `${table}.id`),
+      table,
+      `${postsTable}.category_id`,
+      '=',
+      `${table}.category_id`,
+    ))).orderBy('id').get() as unknown as Category[]
+    expect(derived.map(id)).toEqual([1])
   })
 
   it('aliases a constraint that returns a fresh query on the same table', async () => {
