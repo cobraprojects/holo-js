@@ -28,7 +28,7 @@ import { normalizeDialectReadValue, isConvertedByModelReads, storesJson, storesT
 import { resolveModelRowKey } from './defineModelHelpers'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type QueryPredicateNode, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
-import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
+import { Entity, captureEntityWriteState, copyEntitySerializationOverrides, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
 import { assertAttributeNameAllowed, assertColumnWritable, canonicalStoredKey, ownEntry, type RejectedGeneratedColumns, snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet, type StoredKeyOptions } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
@@ -4009,6 +4009,7 @@ export class ModelRepository<
     for (const [name, value] of Object.entries(entity.getLoadedRelations())) {
       cloned.setRelation(name, value)
     }
+    copyEntitySerializationOverrides(cloned, entity)
     cloned.setRelation(relation.pivotAccessor, this.extractPivotAttributes(row, relation))
     return cloned
   }

@@ -68,4 +68,43 @@ describe('belongsToMany related casts', () => {
 
     expect(group?.labels[0]?.kind).toEqual({ id: 1, name: 'colour' })
   })
+
+  it('keeps per-instance visibility on belongsToMany rows', async () => {
+    const { db, schema } = await openDatabase('sqlite')
+    await schema.createTable('hidden_kinds', (table) => {
+      table.id()
+      table.string('name')
+    })
+    await schema.createTable('hidden_groups', (table) => {
+      table.id()
+    })
+    await schema.createTable('hidden_labels', (table) => {
+      table.id()
+      table.bigInteger('kind_id')
+    })
+    await schema.createTable('hidden_group_labels', (table) => {
+      table.id()
+      table.bigInteger('group_id')
+      table.bigInteger('label_id')
+    })
+    const kinds = defineGeneratedTable('hidden_kinds', { id: column.id(), name: column.string() })
+    const groups = defineGeneratedTable('hidden_groups', { id: column.id() })
+    const labels = defineGeneratedTable('hidden_labels', { id: column.id(), kind_id: column.bigInteger() })
+    const groupLabels = defineGeneratedTable('hidden_group_labels', { id: column.id(), group_id: column.bigInteger(), label_id: column.bigInteger() })
+    await db.table(kinds).insert({ id: 1, name: 'secret' })
+    await db.table(groups).insert({ id: 1 })
+    await db.table(labels).insert({ id: 1, kind_id: 1 })
+    await db.table(groupLabels).insert({ id: 1, group_id: 1, label_id: 1 })
+    const Kind = defineModel(kinds, { timestamps: false })
+    const Label = defineModel(labels, { timestamps: false, with: ['kind'], relations: { kind: belongsTo(() => Kind, 'kind_id') }, events: { retrieved: [(entity) => {
+      entity.makeHidden('kind')
+    }] } })
+    const Group = defineModel(groups, { timestamps: false, relations: { labels: belongsToMany(() => Label, groupLabels, 'group_id', 'label_id') } })
+
+    const [group] = await db.model(Group).query().with('labels').getJson() as unknown as { labels: Record<string, unknown>[] }[]
+    const [direct] = await db.model(Label).query().getJson() as unknown as Record<string, unknown>[]
+
+    expect(direct).not.toHaveProperty('kind')
+    expect(group?.labels[0]).not.toHaveProperty('kind')
+  })
 })

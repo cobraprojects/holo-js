@@ -62,6 +62,7 @@ type EntityRepositoryRuntime<TTable extends TableDefinition, TRelations extends 
 let readOriginalAttribute: (entity: EntityBase, key: string) => unknown
 let readWriteState: (entity: EntityBase) => EntityWriteState
 let applyWriteState: (entity: EntityBase, state: EntityWriteState) => void
+let copySerializationOverrides: (target: EntityBase, source: EntityBase) => void
 
 export interface EntityWriteState {
   readonly attributes: Record<string, unknown>
@@ -88,6 +89,12 @@ class EntityBase<
 
   static {
     readOriginalAttribute = (entity, key) => entity.#original[key]
+    copySerializationOverrides = (target, source) => {
+      target.#hiddenOverrides = new Set(source.#hiddenOverrides)
+      target.#visibleOverrides = new Set(source.#visibleOverrides)
+      target.#visibleOnly = source.#visibleOnly ? [...source.#visibleOnly] : null
+      target.#appendedOverrides = source.#appendedOverrides ? [...source.#appendedOverrides] : null
+    }
     readWriteState = entity => ({
       attributes: snapshotAttributes(entity.#attributes),
       original: snapshotAttributes(entity.#original),
@@ -1085,4 +1092,11 @@ export function restoreEntityWriteState<TTable extends TableDefinition, TRelatio
   state: EntityWriteState,
 ): void {
   applyWriteState(entity as unknown as EntityBase, state)
+}
+
+export function copyEntitySerializationOverrides<TTable extends TableDefinition, TRelations extends RelationMap>(
+  target: Entity<TTable, TRelations>,
+  source: Entity<TTable, TRelations>,
+): void {
+  copySerializationOverrides(target as unknown as EntityBase, source as unknown as EntityBase)
 }
