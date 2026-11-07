@@ -538,4 +538,19 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(upperCased.map(id).sort((left, right) => left - right)).toEqual([1, 2, 3])
     expect(constraintAliased.map(id).sort((left, right) => left - right)).toEqual([1, 2, 3])
   })
+
+  it('moves a constraint alias that hides the parent, ignoring case', async () => {
+    const { Category, table } = await openSelfFixtures(driver)
+    const postsTable = table.replace('sr_categories_', 'sr_posts_')
+    const sorted = (entities: Category[]) => entities.map(id).sort((left, right) => left - right)
+    const fromAlias = (alias: string) => (query: unknown) => (query as { from(source: string): unknown }).from(alias) as never
+
+    const nonSelf = await Category.whereHas('posts', fromAlias(`${postsTable} as ${table}`)).get() as unknown as Category[]
+    const parentAliased = await Category.query().from(`${table} as c`).whereHas('posts', fromAlias(`${postsTable} as c`)).get() as unknown as Category[]
+    const upperCased = await Category.whereHas('children', query => (query as unknown as { from(source: string): { where(column: string, value: unknown): unknown } }).from(`${table} as ${table}`).where(`${table.toUpperCase()}.id`, 2) as never).get() as unknown as Category[]
+
+    expect(sorted(nonSelf)).toEqual([1, 2, 3])
+    expect(sorted(parentAliased)).toEqual([1, 2, 3])
+    expect(sorted(upperCased)).toEqual([1])
+  })
 })

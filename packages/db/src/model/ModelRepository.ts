@@ -2779,14 +2779,16 @@ export class ModelRepository<
     const aliasFor = (repository: ModelRepository, reserved: number = 0) => bindsParent(repository.definition.table.tableName)
       ? this.selfRelationAlias(parentAlias, reserved)
       : undefined
-    const existenceQuery = (repository: ModelRepository, alias = aliasFor(repository)) => {
-      const constrained = this.applyRelationConstraint(relation, repository, constraint, alias).getTableQueryBuilder()
+    const existenceQuery = (repository: ModelRepository, preferredAlias = aliasFor(repository)) => {
+      const constrained = this.applyRelationConstraint(relation, repository, constraint, preferredAlias).getTableQueryBuilder()
       const predicates = constrained.getPlan().predicates
       const query = predicates.some(predicate => predicate.boolean === 'or')
         ? constrained.withPredicates([{ kind: 'group', boolean: 'and', predicates }])
         : constrained
-      if (alias === undefined) return query
       const current = query.getPlan().source.alias
+      const hidesParent = folded(current ?? query.getTableName()) === folded(parentAlias ?? this.definition.table.tableName)
+      const alias = preferredAlias ?? (hidesParent ? this.selfRelationAlias(parentAlias, 0) : undefined)
+      if (alias === undefined) return query
       const taken = new Set([...nestedTableNames(query.getPlan()), query.getTableName(), this.definition.table.tableName, ...(parentAlias === undefined ? [] : [parentAlias])].map(folded))
       if (current !== undefined && !taken.has(folded(current))) return requalifyTableSource(query, this.definition.table.tableName)
       let unused = alias
@@ -2840,7 +2842,7 @@ export class ModelRepository<
         const throughTable = through.definition.table.tableName
         const throughColumns = through.definition.table.columns
         const relatedAlias = aliasFor(related)
-        const throughAlias = aliasFor(through, relatedAlias === undefined ? 0 : 1)
+        const throughAlias = aliasFor(through, 1)
         const relatedQuery = existenceQuery(related, relatedAlias)
         const relatedSource = relatedQuery.getPlan().source.alias ?? related.definition.table.tableName
         const throughSource = throughAlias ?? throughTable

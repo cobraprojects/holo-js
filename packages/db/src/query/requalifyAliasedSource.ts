@@ -2,12 +2,12 @@ import type { QueryJoinClause, QueryOrderBy, QueryPredicateNode, QuerySelection,
 import { remapDeferredPredicateNormalization } from './deferredPredicateValues'
 
 function shortName(name: string): string {
-  return name.slice(name.lastIndexOf('.') + 1)
+  return name.slice(name.lastIndexOf('.') + 1).toLowerCase()
 }
 
 function schemaOf(name: string): string | undefined {
   const separator = name.lastIndexOf('.')
-  return separator < 0 ? undefined : name.slice(0, separator)
+  return separator < 0 ? undefined : name.slice(0, separator).toLowerCase()
 }
 
 function bindsTable(binding: string, tableName: string): boolean {
@@ -70,8 +70,9 @@ export function requalifyAliasedSource(plan: SelectQueryPlan, parentTableName: s
   const alias = plan.source.alias
   if (alias === undefined) return plan
   const tableName = plan.source.tableName
-  const names = parentTableName === tableName ? sameTable : spelledAlike
-  return requalifyPlanBody(plan, { names: qualifier => qualifier === previousAlias || names(qualifier, tableName), alias }, [], bindingsOf(plan, false))
+  const names = spelledAlike(parentTableName, tableName) ? sameTable : spelledAlike
+  const previous = previousAlias?.toLowerCase()
+  return requalifyPlanBody(plan, { names: qualifier => qualifier.toLowerCase() === previous || names(qualifier, tableName), alias }, [], bindingsOf(plan, false))
 }
 
 function requalifyPlanBody(plan: SelectQueryPlan, target: Target, enclosing: readonly Binding[], own: readonly Binding[]): SelectQueryPlan {
