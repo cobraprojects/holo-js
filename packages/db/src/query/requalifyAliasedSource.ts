@@ -1,4 +1,5 @@
 import type { QueryJoinClause, QueryOrderBy, QueryPredicateNode, QuerySelection, SelectQueryPlan } from './ast'
+import { CompilerError } from '../core/errors'
 import { remapDeferredPredicateNormalization } from './deferredPredicateValues'
 
 export type NameFolding = (name: string) => string
@@ -30,7 +31,19 @@ export function sameTable(left: string, right: string, fold: NameFolding = ignor
 
 interface Target {
   readonly names: (qualifier: string) => boolean
+  readonly captures: (binding: Binding, qualifier: string) => boolean
   readonly alias: string
+}
+
+const keepCase: NameFolding = name => name
+
+function decided(fold: NameFolding | undefined, qualifier: string, check: (fold: NameFolding) => boolean): boolean {
+  if (fold !== undefined) return check(fold)
+  const exact = check(keepCase)
+  if (exact !== check(ignoreCase)) {
+    throw new CompilerError(`Cannot tell which table "${qualifier}" names in a relation filter before Holo has read how this connection folds table names. Spell the table the way the model does.`)
+  }
+  return exact
 }
 
 interface Binding {
@@ -46,12 +59,12 @@ function bindingsOf(plan: SelectQueryPlan, includeSource = true): readonly Bindi
   return includeSource ? [source, ...joins] : joins
 }
 
-function captures(binding: Binding, qualifier: string): boolean {
-  if (!bindsTable(binding.name, qualifier)) return false
-  const qualifierSchema = schemaOf(qualifier, ignoreCase)
+function captures(binding: Binding, qualifier: string, fold: NameFolding): boolean {
+  if (!bindsTable(binding.name, qualifier, fold)) return false
+  const qualifierSchema = schemaOf(qualifier, fold)
   if (qualifierSchema === undefined) return true
   if (binding.aliased) return false
-  const bindingSchema = schemaOf(binding.name, ignoreCase)
+  const bindingSchema = schemaOf(binding.name, fold)
   return bindingSchema === undefined || bindingSchema === qualifierSchema
 }
 
@@ -62,7 +75,7 @@ function requalifyColumn(column: string, target: Target, scope: readonly Binding
   if (separator < 0) return column
 
   const qualifier = root.slice(0, separator)
-  if (!target.names(qualifier) || scope.some(binding => captures(binding, qualifier))) return column
+  if (!target.names(qualifier) || scope.some(binding => target.captures(binding, qualifier))) return column
   return `${target.alias}${column.slice(separator)}`
 }
 
@@ -70,13 +83,19 @@ function requalifyPlan(plan: SelectQueryPlan, target: Target, enclosing: readonl
   return requalifyPlanBody(plan, target, enclosing, bindingsOf(plan))
 }
 
-export function requalifyAliasedSource(plan: SelectQueryPlan, fold: NameFolding, parentTableName: string, previousAlias?: string): SelectQueryPlan {
+export function requalifyAliasedSource(plan: SelectQueryPlan, fold: NameFolding | undefined, parentTableName: string, previousAlias?: string): SelectQueryPlan {
   const alias = plan.source.alias
   if (alias === undefined) return plan
   const tableName = plan.source.tableName
-  const names = spelledAlike(parentTableName, tableName, fold) ? sameTable : spelledAlike
-  const previous = previousAlias === undefined ? undefined : fold(previousAlias)
-  return requalifyPlanBody(plan, { names: qualifier => fold(qualifier) === previous || names(qualifier, tableName, fold), alias }, [], bindingsOf(plan, false))
+  const names = (qualifier: string, folding: NameFolding) => {
+    const matches = spelledAlike(parentTableName, tableName, folding) ? sameTable : spelledAlike
+    return (previousAlias !== undefined && folding(qualifier) === folding(previousAlias)) || matches(qualifier, tableName, folding)
+  }
+  return requalifyPlanBody(plan, {
+    names: qualifier => decided(fold, qualifier, folding => names(qualifier, folding)),
+    captures: (binding, qualifier) => decided(fold, qualifier, folding => captures(binding, qualifier, folding)),
+    alias,
+  }, [], bindingsOf(plan, false))
 }
 
 function requalifyPlanBody(plan: SelectQueryPlan, target: Target, enclosing: readonly Binding[], own: readonly Binding[]): SelectQueryPlan {

@@ -204,7 +204,7 @@ let keyColumnSelection: (query: AnyTableQuery, column: string, casts: QueryKeyCa
 let keyColumnJoin: (query: AnyTableQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string) => AnyTableQuery
 let sourceAliasing: (query: AnyTableQuery, alias: string) => AnyTableQuery
 let sourceRequalifying: (query: AnyTableQuery, parentTableName: string, previousAlias?: string) => AnyTableQuery
-let connectionNameFolding: (query: AnyTableQuery) => (name: string) => string
+let connectionNameFolding: (query: AnyTableQuery) => ((name: string) => string) | undefined
 
 export function aliasTableSource<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, alias: string): TQuery {
   if (!/^[A-Z_]\w*$/i.test(alias)) throw new CompilerError(`Table alias "${alias}" must be a plain identifier.`)
@@ -3027,8 +3027,9 @@ export class TableQueryBuilder<
     sourceAliasing = (query, alias) => query.clone(withSource(query.plan, Object.freeze({ ...query.source, alias })))
     connectionNameFolding = (query) => {
       const connectionName = query.connection.getConnectionName()
-      const folding = rememberedTableNameFolding(connectionName) ?? createQueryCompiler(query.connection).tableNameFolding()
-      return name => applyTableNameFolding(folding, name)
+      const compiler = createQueryCompiler(query.connection)
+      const folding = rememberedTableNameFolding(connectionName) ?? (compiler.compileTableNameFoldingLookup() ? undefined : compiler.tableNameFolding())
+      return folding === undefined ? undefined : name => applyTableNameFolding(folding, name)
     }
     sourceRequalifying = (query, parentTableName, previousAlias) => query.clone(requalifyAliasedSource(query.plan, connectionNameFolding(query), parentTableName, previousAlias))
     keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)

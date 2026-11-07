@@ -583,4 +583,35 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
 
     expect(sameTenant.map(id)).toEqual([1])
   })
+
+  it.skipIf(driver !== 'postgres')('lets a nested query on a lowercase table refer back to a mixed-case self table on PostgreSQL', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const upper = `SR_Tree_${suffix}`
+    const lower = `sr_tree_${suffix}`
+    await schema.createTable(upper, (table) => {
+      table.integer('id').primaryKey()
+      table.integer('parent_id').nullable()
+    })
+    onTestFinished(() => schema.dropTable(upper))
+    await schema.createTable(lower, (table) => {
+      table.integer('id').primaryKey()
+      table.integer('category_id')
+    })
+    onTestFinished(() => schema.dropTable(lower))
+    const upperTable = defineGeneratedTable(upper, { id: column.integer().primaryKey(), parent_id: column.integer().nullable() })
+    const lowerTable = defineGeneratedTable(lower, { id: column.integer().primaryKey(), category_id: column.integer() })
+    await DB.table(upperTable).insert([{ id: 1, parent_id: null }, { id: 2, parent_id: 1 }])
+    await DB.table(lowerTable).insert([{ id: 10, category_id: 2 }])
+    const Node = defineModel(upperTable, { name: `CasedNode${suffix}`, timestamps: false })
+    const Tree = defineModel(upperTable, { name: `CasedTree${suffix}`, timestamps: false, relations: { children: hasMany(() => Node, 'parent_id') } })
+    const constraint = (query: { whereExists(subquery: unknown): unknown }) => query.whereExists(DB.table(lower).whereColumn(`${lower}.category_id`, '=', `${upper}.id`))
+
+    const loaded = await Tree.with('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const filtered = await Tree.whereHas('children', constraint as never).orderBy('id').get() as unknown as Category[]
+
+    expect(loaded.filter(entity => related(entity, 'children').length > 0).map(id)).toEqual([1])
+    expect(filtered.map(id)).toEqual([1])
+  })
 })
