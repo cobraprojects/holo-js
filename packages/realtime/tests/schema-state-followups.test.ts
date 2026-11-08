@@ -422,3 +422,139 @@ it('reports a rolled-back subscription table and retains its last successful sna
     await expect(db.table(table.tableName).get()).rejects.toThrow()
   } finally { unsubscribe() }
 })
+
+it('refreshes after a schema operation finishes logging beyond transaction commit', async () => {
+  const started = deferred()
+  const release = deferred()
+  let block = false
+  const { db, table } = await openDatabase('sqlite', {
+    logger: { onQuerySuccess: async entry => {
+      if (block && entry.source === 'schema:logger-barrier') {
+        started.resolve()
+        await release.promise
+      }
+    } },
+  })
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+  onTestFinished(() => resetRealtimeRuntime())
+  await db.table(table).insert({ id: 1, name: 'original' })
+  const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => db.table(table).pluck('name') }), undefined)
+  let ddl = Promise.resolve()
+  try {
+    block = true
+    await db.transaction(async tx => {
+      ddl = tx.executeSchemaStatement({ sql: `CREATE TEMPORARY TABLE ${table.tableName} (id INTEGER PRIMARY KEY, name TEXT)`, source: 'schema:logger-barrier' }).then(() => {})
+      await started.promise
+    })
+    expect(subscription.current.data).toEqual(['original'])
+    release.resolve()
+    await ddl
+    expect(subscription.current.data).toEqual([])
+  } finally { release.resolve(); await ddl; subscription.unsubscribe() }
+})
+
+it.runIf(integrationDrivers(['postgres']).length > 0)('refreshes detached DDL started after commit while the transaction scope tears down', async () => {
+  const teardown = deferred()
+  const release = deferred()
+  let armed = false
+  const { db, table } = await openDatabase('postgres', { wrapAdapter: adapter => new Proxy(adapter, {
+    get(target, key) {
+      if (key === 'runWithTransactionScope') return async <T>(callback: () => Promise<T>) => {
+        return target.runWithTransactionScope!(async () => {
+          const result = await callback()
+          if (armed) {
+            teardown.resolve()
+            await release.promise
+          }
+          return result
+        })
+      }
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) })
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+  onTestFinished(() => resetRealtimeRuntime())
+  await db.table(table).insert({ id: 1, name: 'original' })
+  const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => db.table(table.tableName.split('.').at(-1)!).pluck('name') }), undefined)
+  let ddl = Promise.resolve()
+  armed = true
+  const transaction = db.transaction(async () => {
+    ddl = (async () => {
+      await teardown.promise
+      await db.executeSchemaStatement({ sql: `CREATE TEMPORARY TABLE ${table.tableName.split('.').at(-1)!} (id INTEGER PRIMARY KEY, name TEXT)` })
+    })()
+  })
+  try {
+    await teardown.promise
+    await ddl
+    release.resolve()
+    await transaction
+    expect(subscription.current.data).toEqual([])
+    await db.table(table.tableName.split('.').at(-1)!).insert({ id: 2, name: 'replacement' })
+    expect(subscription.current.data).toEqual(['replacement'])
+  } finally { release.resolve(); await transaction; await ddl; subscription.unsubscribe() }
+})
+
+it.runIf(integrationDrivers(['postgres']).length > 0)('recovers after confirmed disconnect without letting an old result release new schema work', async () => {
+  const oldStarted = deferred()
+  const oldRelease = deferred()
+  const newStarted = deferred()
+  const newRelease = deferred()
+  const { db, table } = await openDatabase('postgres', { wrapAdapter: adapter => delayExecution(
+    delayExecution(adapter, 'TRUNCATE', oldStarted, oldRelease), 'disconnect_marker', newStarted, newRelease,
+  ) })
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+  onTestFinished(() => resetRealtimeRuntime())
+  await db.table(table).insert({ id: 1, name: 'original' })
+  const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => db.table(table).pluck('name') }), undefined)
+  let next = Promise.resolve()
+  try {
+    const old = db.executeSchemaStatement({ sql: `TRUNCATE TABLE ${table.tableName}` }, { timeoutMs: 20 })
+    await oldStarted.promise
+    await expect(old).rejects.toThrow(/timed out/)
+    expect(subscription.current.data).toEqual(['original'])
+    await db.disconnect()
+    expect(subscription.current.data).toEqual([])
+    next = db.executeSchemaStatement({ sql: `ALTER TABLE ${table.tableName} ADD COLUMN disconnect_marker INTEGER` }).then(() => {})
+    await newStarted.promise
+    oldRelease.resolve()
+    await db.table(table).insert({ id: 2, name: 'reconnected' })
+    expect(subscription.current.data).toEqual([])
+    newRelease.resolve()
+    await next
+    expect(subscription.current.data).toEqual(['reconnected'])
+  } finally { oldRelease.resolve(); newRelease.resolve(); await next; subscription.unsubscribe() }
+})
+
+it.runIf(integrationDrivers(['mysql']).length > 0)('ends a pinned session when disconnect confirms its native connection closed', async () => {
+  const { db, table, adapter } = await openDatabase('mysql')
+  await adapter.runWithTransactionScope!(async () => {
+    await db.table(table).get()
+    await db.disconnect()
+    await db.initialize()
+    await expect(db.table(table).get()).rejects.toMatchObject({ code: 'SESSION_ENDED' })
+  })
+  expect(await db.table(table).get()).toEqual([])
+})
+
+it.runIf(integrationDrivers(['postgres']).length > 0)('does not submit DDL held by a query logger after its session disconnects', async () => {
+  const started = deferred()
+  const release = deferred()
+  const { db, table, schema } = await openDatabase('postgres', {
+    logger: { onQueryStart: async entry => {
+      if (entry.source === 'schema:disconnected') {
+        started.resolve()
+        await release.promise
+      }
+    } },
+  })
+  const ddl = db.executeSchemaStatement({ sql: `ALTER TABLE ${table.tableName} ADD COLUMN disconnected_marker INTEGER`, source: 'schema:disconnected' })
+  await started.promise
+  try {
+    await db.disconnect()
+    release.resolve()
+    await expect(ddl).rejects.toMatchObject({ code: 'SESSION_ENDED' })
+    expect((await schema.getColumns(table.tableName)).map(column => column.name)).not.toContain('disconnected_marker')
+  } finally { release.resolve(); await ddl.catch(() => {}) }
+})

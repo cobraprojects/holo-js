@@ -9,6 +9,7 @@ type ReleasableClient = {
 
 type ScopedClient<TClient> = {
   client: TClient
+  session: object
   closed: boolean
   leases: number
   released: boolean
@@ -61,7 +62,7 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
     getStore: (): ScopedClient<TClient> | undefined => {
       const value = holders.getStore()?.get(this)
       const holder = value instanceof WeakRef ? value.deref() : value
-      if (value instanceof WeakRef && (!holder || holder.closed || holder.released)) throw new DatabaseError('The database session used by this subscription has ended.', 'SESSION_ENDED')
+      if ((holder && holder.session !== this.session) || (value instanceof WeakRef && (!holder || holder.closed || holder.released))) throw new DatabaseError('The database session used by this subscription has ended.', 'SESSION_ENDED')
       return holder as ScopedClient<TClient> | undefined
     },
     run: <T>(holder: ScopedClient<TClient>, callback: () => T): T => {
@@ -70,6 +71,7 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
       return holders.run(current, callback)
     },
   }
+  private session = {}
   private transactionClient?: TClient
 
   constructor(
@@ -97,7 +99,7 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
     }
 
     const client = await this.acquireClient()
-    const holder: ScopedClient<TClient> = { client, closed: false, leases: 0, released: false }
+    const holder: ScopedClient<TClient> = { client, session: this.session, closed: false, leases: 0, released: false }
     return this.scope.run(holder, async () => {
       try {
         return await callback()
@@ -135,6 +137,7 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
   }
 
   disconnect(): void {
+    this.session = {}
     const client = this.transactionClient
     this.transactionClient = undefined
     if (client) {

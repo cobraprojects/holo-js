@@ -52,6 +52,7 @@ type RuntimeState = {
   savepointCounter: number
   rootTransactionQueue: SerialQueue
   scheduler: QueryScheduler
+  schemaOperations: Set<SchemaOperation>
 }
 
 type ScopeState = {
@@ -131,7 +132,9 @@ let nextDatabaseContextId = 0
 
 const queryLoggerScope = new AsyncLocalStorage<true>()
 
-const schemaOperation = new AsyncLocalStorage<{ pending: number, settled: boolean, finished: boolean, transaction: TransactionFrame | undefined }>()
+type SchemaOperation = { pending: number, settled: boolean, finished: boolean, transaction: TransactionFrame | undefined, owner: RuntimeState, session: Set<SchemaOperation> }
+
+const schemaOperation = new AsyncLocalStorage<SchemaOperation>()
 
 export class DatabaseContext {
   static {
@@ -179,6 +182,7 @@ export class DatabaseContext {
     this._runtime = 'runtime' in options
       ? options.runtime
       : {
+          schemaOperations: new Set(),
           savepointCounter: 0,
           rootTransactionQueue: { tail: Promise.resolve() },
           scheduler: createAdapterQueryScheduler({
@@ -208,6 +212,14 @@ export class DatabaseContext {
     if (!this._adapter.isConnected()) return
     await this._adapter.disconnect()
     resetSessionUncertainty(getRootDatabaseContext(this))
+    const operations = this._runtime.schemaOperations
+    this._runtime.schemaOperations = new Set()
+    await Promise.all([...operations].map(operation => {
+      if (operation.transaction) this._closeRootTransaction(operation.transaction)
+      operation.pending = 0
+      operation.settled = true
+      return this._finishSchemaOperation(operation)
+    }))
   }
 
   isConnected(): boolean {
@@ -399,19 +411,28 @@ export class DatabaseContext {
       transaction.schemaChanged = true
       beginSchemaChange(getRootDatabaseContext(this).getContextId())
     }
-    const operation = { pending: 0, settled: false, finished: false, transaction }
+    const operation = { pending: 0, settled: false, finished: false, transaction, owner: this._runtime, session: this._runtime.schemaOperations }
     beginSchemaChange(getRootDatabaseContext(this).getContextId())
+    this._runtime.schemaOperations.add(operation)
     try {
       return await schemaOperation.run(operation, run)
     } finally {
-      operation.settled = true
-      advanceSchemaGeneration()
-      if (operation.pending === 0) {
-        operation.finished = true
-        endSchemaChange(getRootDatabaseContext(this).getContextId())
+      if (!operation.finished) {
+        operation.settled = true
+        advanceSchemaGeneration()
+        await this._finishSchemaOperation(operation)
+        if (!operation.finished && !transaction?.open) await invalidateDatabaseSchema(this)
       }
-      if (!transaction) await invalidateDatabaseSchema(this)
     }
+  }
+
+  private async _finishSchemaOperation(operation: SchemaOperation): Promise<void> {
+    if (!operation.settled || operation.pending !== 0 || operation.finished) return
+    operation.finished = true
+    operation.session.delete(operation)
+    endSchemaChange(getRootDatabaseContext(this).getContextId())
+    advanceSchemaGeneration()
+    if (!operation.transaction?.open) await schemaOperation.exit(() => invalidateDatabaseSchema(this))
   }
 
   async transaction<T>(
@@ -543,10 +564,7 @@ export class DatabaseContext {
         try {
           await this._callTransactionHook('rollback', rollbackAdapter)
         } finally {
-          if (frame.schemaChanged) {
-            advanceSchemaGeneration()
-            endSchemaChange(getRootDatabaseContext(this).getContextId())
-          }
+          this._closeRootTransaction(frame)
         }
         throw error
       }
@@ -559,10 +577,7 @@ export class DatabaseContext {
         runCommitFailureRestores(child)
         throw commitError
       } finally {
-        if (frame.schemaChanged) {
-          advanceSchemaGeneration()
-          endSchemaChange(getRootDatabaseContext(this).getContextId())
-        }
+        this._closeRootTransaction(frame)
       }
 
       return { value, transaction: child, entry }
@@ -594,6 +609,15 @@ export class DatabaseContext {
     frame.open = false
     discardCommitFailureRestores(committed.transaction)
     return committed
+  }
+
+  private _closeRootTransaction(frame: TransactionFrame): void {
+    if (!frame.open) return
+    frame.open = false
+    if (frame.schemaChanged) {
+      advanceSchemaGeneration()
+      endSchemaChange(getRootDatabaseContext(this).getContextId())
+    }
   }
 
   private _runInTransactionScope<T>(callback: () => Promise<T>): Promise<T> {
@@ -884,6 +908,9 @@ export class DatabaseContext {
     const restore = isPinnedRestoreStatement(options)
     if (pinned) assertPinnedStatementAllowed(pinned, restore)
     const submit = (): Promise<TResult> => {
+      const current = schemaOperation.getStore()
+      const operation = current?.owner === this._runtime ? current : undefined
+      if (operation && operation.session !== this._runtime.schemaOperations) throw new DatabaseError('The database session used by this schema operation has ended.', 'SESSION_ENDED')
       const leave = pinned ? enterPinnedStatement(pinned, restore) : undefined
       let pending: Promise<TResult>
       try {
@@ -892,16 +919,12 @@ export class DatabaseContext {
         leave?.()
         throw error
       }
-      const operation = schemaOperation.getStore()
-      if (operation) {
+      if (operation && !operation.finished) {
         operation.pending += 1
         void pending.finally(() => {
+          if (operation.finished) return
           operation.pending -= 1
-          if (!operation.settled || operation.pending !== 0 || operation.finished) return
-          operation.finished = true
-          endSchemaChange(getRootDatabaseContext(this).getContextId())
-          advanceSchemaGeneration()
-          if (!operation.transaction?.open) void invalidateDatabaseSchema(this).catch(error => reportError(error, { capability: 'db', operation: 'schema.lateSettlement' }))
+          void this._finishSchemaOperation(operation).catch(error => reportError(error, { capability: 'db', operation: 'schema.lateSettlement' }))
         }).catch(() => undefined)
       }
       return leave ? pending.finally(leave) : pending
