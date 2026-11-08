@@ -3652,7 +3652,7 @@ export class TableQueryBuilder<
       return
     }
     if (needsFullQueryRefresh(this.connection)) {
-      await invalidateQueryCacheDependencies(this.connection, [databaseSchemaDependency])
+      await invalidateQueryCacheDependencies(this.connection, [createTableCacheDependency(this.connection.getConnectionName(), this.source.tableName)])
       return
     }
 
@@ -3687,7 +3687,7 @@ export class TableQueryBuilder<
       return
     }
     if (needsFullQueryRefresh(this.connection)) {
-      await invalidateQueryCacheDependencies(this.connection, [databaseSchemaDependency])
+      await invalidateQueryCacheDependencies(this.connection, [createTableCacheDependency(this.connection.getConnectionName(), this.source.tableName)])
       return
     }
 
@@ -3769,7 +3769,7 @@ export class TableQueryBuilder<
       return
     }
     if (needsFullQueryRefresh(this.connection)) {
-      await invalidateQueryCacheDependencies(this.connection, [databaseSchemaDependency])
+      await invalidateQueryCacheDependencies(this.connection, [createTableCacheDependency(this.connection.getConnectionName(), this.source.tableName)])
       return
     }
 

@@ -4,7 +4,7 @@ import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import cache, { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
-import { createDatabase, createDialect, onDatabaseDependencyInvalidated, unsafeSql } from '../src'
+import { createDatabase, createDialect, onDatabaseDependencyInvalidated, queryCacheInternals, unsafeSql } from '../src'
 import { integrationDrivers, mysqlTestConnection, openDatabase, postgresTestConnection } from './support/database'
 
 for (const driver of ['postgres', 'mysql'] as const) {
@@ -73,4 +73,20 @@ it.runIf(integrationDrivers(['postgres']).length > 0)('does not retain an in-fli
   await schema.createTable(table.tableName, columns => { columns.integer('id').primaryKey(); columns.string('name') })
   await db.table(table.tableName).insert({ id: 2, name: 'new' })
   expect((await read()).map(row => row.name)).toEqual(['new'])
+})
+
+it('preserves committed remote table publications when local writes require full refresh', async () => {
+  const { db, table } = await openDatabase('sqlite', { security: { allowUnsafeRawSql: true } })
+  const dependencies: string[][] = []
+  const stop = queryCacheInternals.onDatabaseDependencyInvalidationPublished(event => { dependencies.push([...event.dependencies]) })
+  onTestFinished(stop)
+  await db.unsafeExecute(unsafeSql('CREATE TABLE audit_log (id INTEGER)'))
+  await db.table(table.tableName).insert({ id: 1, name: 'root' })
+  await db.transaction(async tx => { await tx.table(table.tableName).insert({ id: 2, name: 'committed' }) })
+  await expect(db.transaction(async tx => {
+    await tx.table(table.tableName).insert({ id: 3, name: 'rolled back' })
+    throw new Error('rollback')
+  })).rejects.toThrow('rollback')
+  expect(dependencies).toEqual([[`db:default:${table.tableName}`], [`db:default:${table.tableName}`]])
+  expect((await db.table(table.tableName).orderBy('id').get()).map(row => row.name)).toEqual(['root', 'committed'])
 })

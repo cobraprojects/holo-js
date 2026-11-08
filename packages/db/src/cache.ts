@@ -3270,10 +3270,12 @@ export async function invalidateQueryCacheDependencies(
   }
 
   const invalidate = async () => {
-    if (needsFullQueryRefresh(connection)) return invalidateDatabaseSchema(connection)
+    const fullRefresh = needsFullQueryRefresh(connection)
+    if (fullRefresh) startMutationPublicationEpoch()
+    const localDependencies = fullRefresh ? [databaseSchemaDependency] : dependencies
     const bridge = getDatabaseQueryCacheBridge()
     await evictThenNotify(
-      () => runQueryCacheOperation(() => bridge?.invalidateDependencies(dependencies)),
+      () => runQueryCacheOperation(() => bridge?.invalidateDependencies(localDependencies)),
       async () => {
         const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
         const hasLocalListeners = hasDatabaseDependencyInvalidationListeners()
@@ -3291,7 +3293,9 @@ export async function invalidateQueryCacheDependencies(
           }
         }
         if (hasLocalListeners) {
-          await notifyDatabaseDependencyInvalidationListeners(event)
+          await notifyDatabaseDependencyInvalidationListeners(fullRefresh
+            ? createDatabaseDependencyInvalidationEvent(connection, localDependencies, [])
+            : event)
         }
       },
     )

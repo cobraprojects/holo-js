@@ -1,7 +1,8 @@
+import { postgresDatabaseDriverFactory } from '../../db-postgres/src'
 import { expect, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
-import { unsafeSql } from '../../db/src'
-import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
+import { createDatabase, createDialect, onDatabaseDependencyInvalidated, unsafeSql } from '../../db/src'
+import { integrationDrivers, openDatabase, postgresTestConnection } from '../../db/tests/support/database'
 import { defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 
@@ -193,5 +194,32 @@ it('refreshes an initial snapshot read before its bare table was rebound', async
   try {
     await replacement
     expect(subscription.current.data).toEqual([])
+  } finally { subscription.unsubscribe() }
+})
+
+it.runIf(integrationDrivers(['postgres']).length > 0)('keeps factory-created PostgreSQL caching and table-scoped notifications', async () => {
+  const { table } = await openDatabase('postgres')
+  const connection = postgresTestConnection()
+  const adapter = postgresDatabaseDriverFactory.create({ ...connection, username: connection.user })
+  const queries: string[] = []
+  const db = createDatabase({ adapter, dialect: createDialect('postgres'), logger: { onQuerySuccess: entry => { queries.push(entry.source ?? '') } } })
+  onTestFinished(() => db.disconnect())
+  configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+  onTestFinished(() => resetCacheRuntime())
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+  onTestFinished(() => resetRealtimeRuntime())
+  for (let index = 0; index < 3; index += 1) expect(await db.table(table).cache(60).get()).toEqual([])
+  expect(queries.filter(source => source.startsWith('query:select:'))).toHaveLength(1)
+  const events: unknown[] = []
+  const stop = onDatabaseDependencyInvalidated(event => { events.push(event) })
+  onTestFinished(stop)
+  const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: async () => {
+    return db.table(table).orderBy('id').get()
+  } }), undefined)
+  try {
+    await db.table(table).insert({ id: 1, name: 'factory' })
+    expect(subscription.current.data.map(row => row.name)).toEqual(['factory'])
+    expect(events).toHaveLength(1)
+    expect(events[0]).toEqual(expect.objectContaining({ dependencies: expect.not.arrayContaining(['__holo_database_schema__']) }))
   } finally { subscription.unsubscribe() }
 })

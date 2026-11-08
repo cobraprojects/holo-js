@@ -182,6 +182,8 @@ function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefine
   return undefined
 }
 
+const managedAdapters = new WeakSet<object>()
+
 export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements DriverAdapter {
   readonly supportsConcurrentTransactionScopes: boolean
   private pool?: PostgresPoolLike
@@ -269,7 +271,7 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
   }
 
   get [holoRuntimeInternals.databaseSessionCacheEligibleKey](): boolean {
-    return this.managedPool && !this.transactionClients.current
+    return (this.managedPool || managedAdapters.has(this)) && !this.transactionClients.current
   }
 
   runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> {
@@ -411,7 +413,7 @@ export const postgresDatabaseDriverFactory: DatabaseDriverFactory = Object.freez
   driver: 'postgres',
   supportsConcurrentTransactionScopes: true,
   create(connection) {
-    return createPostgresAdapter({
+    const adapter = createPostgresAdapter({
       config: {
         connectionString: connection.url,
         host: connection.host,
@@ -427,5 +429,7 @@ export const postgresDatabaseDriverFactory: DatabaseDriverFactory = Object.freez
       },
       createPool: config => createHoloPool(config, connection.schema),
     })
+    managedAdapters.add(adapter)
+    return adapter
   },
 })
