@@ -2,7 +2,7 @@ import { createMySQLAdapter } from '../../db-mysql/src'
 import { createPostgresAdapter, postgresDatabaseDriverFactory } from '../../db-postgres/src'
 import { expect, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
-import { createDatabase, createDialect, onDatabaseDependencyInvalidated, unsafeSql } from '../../db/src'
+import { createDatabase, createDialect, createSchemaService, type DriverAdapter, onDatabaseDependencyInvalidated, unsafeSql } from '../../db/src'
 import { integrationDrivers, mysqlTestConnection, openDatabase, postgresTestConnection } from '../../db/tests/support/database'
 import { defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
@@ -294,3 +294,131 @@ for (const driver of ['postgres', 'mysql'] as const) {
     } finally { subscriptions.forEach(subscription => subscription.unsubscribe()) }
   })
 }
+
+it.runIf(integrationDrivers(['postgres']).length > 0)('isolates cached rows selected by a raw tenant setting under native RLS', async () => {
+  const { db: admin, table } = await openDatabase('postgres')
+  const role = `review7_${table.tableName.split('.').at(-1)!}`
+  await admin.executeCompiled({ sql: `CREATE ROLE ${role} LOGIN NOSUPERUSER NOBYPASSRLS` })
+  const connection = postgresTestConnection()
+  const adapter = postgresDatabaseDriverFactory.create({ ...connection, username: role, max: 1 })
+  const db = createDatabase({ adapter, dialect: createDialect('postgres'), security: { allowUnsafeRawSql: true } })
+  onTestFinished(async () => {
+    await db.disconnect()
+    await admin.executeCompiled({ sql: `DROP OWNED BY ${role}` })
+    await admin.executeCompiled({ sql: `DROP ROLE ${role}` })
+  })
+  await admin.table(table).insert([{ id: 1, name: 'tenant-a' }, { id: 2, name: 'tenant-b' }])
+  await admin.executeCompiled({ sql: `ALTER TABLE ${table.tableName} ENABLE ROW LEVEL SECURITY` })
+  await admin.executeCompiled({ sql: `CREATE POLICY tenant_context ON ${table.tableName} USING (name = current_setting('app.tenant_id', true))` })
+  await admin.executeCompiled({ sql: `GRANT SELECT ON ${table.tableName} TO ${role}` })
+  configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+  onTestFinished(() => resetCacheRuntime())
+  const read = () => db.table(table.tableName).cache(60).pluck('name')
+  await db.unsafeExecute(unsafeSql("SET app.tenant_id = 'tenant-a'"))
+  expect(await read()).toEqual(['tenant-a'])
+  await db.unsafeExecute(unsafeSql("SET app.tenant_id = 'tenant-b'"))
+  expect(await read()).toEqual(['tenant-b'])
+})
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>(done => { resolve = done })
+  return { promise, resolve }
+}
+
+function delayExecution(adapter: DriverAdapter, marker: string, started: ReturnType<typeof deferred>, release: ReturnType<typeof deferred>): DriverAdapter {
+  return new Proxy(adapter, {
+    get(target, key) {
+      if (key === 'execute') return async (...args: Parameters<DriverAdapter['execute']>) => {
+        const result = await target.execute(...args)
+        if (args[0].includes(marker)) { started.resolve(); await release.promise }
+        return result
+      }
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
+it('delivers writes on an independent database while another schema statement is pending', async () => {
+  const started = deferred()
+  const release = deferred()
+  const { db: first, table: firstTable } = await openDatabase('sqlite', { connectionName: 'review7-a', wrapAdapter: adapter => delayExecution(adapter, 'pending_marker', started, release) })
+  const { db, table } = await openDatabase('sqlite', { connectionName: 'review7-b' })
+  configureRealtimeRuntime({ db: () => first, loadAuthModule: async () => null })
+  onTestFinished(() => resetRealtimeRuntime())
+  const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => db.table(table).pluck('name') }), undefined)
+  const pending = first.executeSchemaStatement({ sql: `ALTER TABLE ${firstTable.tableName} ADD COLUMN pending_marker INTEGER` })
+  await started.promise
+  try {
+    await db.table(table).insert({ id: 1, name: 'independent' })
+    expect(subscription.current.data).toEqual(['independent'])
+  } finally { release.resolve(); await pending; subscription.unsubscribe() }
+})
+
+it.runIf(integrationDrivers(['mysql']).length > 0)('refreshes after transactional DDL settles later than transaction cleanup', async () => {
+  const started = deferred()
+  const release = deferred()
+  const { db, table } = await openDatabase('mysql', { wrapAdapter: adapter => delayExecution(adapter, 'TRUNCATE', started, release) })
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+  onTestFinished(() => resetRealtimeRuntime())
+  await db.table(table).insert({ id: 1, name: 'before' })
+  const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => db.table(table).pluck('name') }), undefined)
+  try {
+    const transaction = db.transaction(async tx => {
+      await tx.executeSchemaStatement({ sql: `TRUNCATE TABLE ${table.tableName}` }, { timeoutMs: 20 })
+    })
+    await started.promise
+    await expect(transaction).rejects.toThrow(/timed out/)
+    release.resolve()
+    await expect.poll(() => subscription.current.data).toEqual([])
+    expect(await db.table(table).pluck('name')).toEqual([])
+  } finally { release.resolve(); subscription.unsubscribe() }
+})
+
+it.runIf(integrationDrivers(['postgres']).length > 0)('reconciles a cache-ineligible mutation that overlaps the initial subscription read', async () => {
+  const { db, table, adapter } = await openDatabase('postgres')
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+  onTestFinished(() => resetRealtimeRuntime())
+  await adapter.runWithTransactionScope!(async () => {
+    const started = deferred()
+    const release = deferred()
+    let initial = true
+    const pending = subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: async () => {
+      const names = await db.table(table).pluck('name')
+      if (initial) { initial = false; started.resolve(); await release.promise }
+      return names
+    } }), undefined)
+    await started.promise
+    try { await db.table(table).insert({ id: 1, name: 'overlap' }) }
+    finally { release.resolve() }
+    const subscription = await pending
+    try { await expect.poll(() => subscription.current.data).toEqual(['overlap']) }
+    finally { subscription.unsubscribe() }
+  })
+})
+
+it('reports a rolled-back subscription table and retains its last successful snapshot', async () => {
+  const { db, table, schema } = await openDatabase('sqlite')
+  await schema.dropTable(table.tableName)
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+  onTestFinished(() => resetRealtimeRuntime())
+  const errors: unknown[] = []
+  let current: () => unknown[] = () => []
+  let unsubscribe = () => {}
+  const rollback = new Error('rollback subscription table')
+  try {
+    await expect(db.transaction(async tx => {
+      await createSchemaService(tx).createTable(table.tableName, columns => { columns.integer('id').primaryKey(); columns.string('name') })
+      await tx.table(table.tableName).insert({ id: 1, name: 'last successful' })
+      const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => db.table(table.tableName).pluck('name') }), undefined, { onError: error => { errors.push(error) } })
+      current = () => subscription.current.data
+      unsubscribe = () => subscription.unsubscribe()
+      expect(current()).toEqual(['last successful'])
+      throw rollback
+    })).rejects.toBe(rollback)
+    expect(errors).toEqual([expect.objectContaining({ code: 'DRIVER_QUERY_ERROR' })])
+    expect(current()).toEqual(['last successful'])
+    await expect(db.table(table.tableName).get()).rejects.toThrow()
+  } finally { unsubscribe() }
+})

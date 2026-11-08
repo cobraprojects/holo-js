@@ -1,3 +1,4 @@
+import { queryCacheInternals } from '@holo-js/db'
 import type { RealtimeContextRunner } from './execution-context'
 import type {
   RealtimeExecutionResult,
@@ -130,6 +131,7 @@ export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata
   version: number
   current?: RealtimeSubscriptionSnapshot<RealtimeResultFor<TDefinition>>
   refreshFailed?: boolean
+  refreshAfterInitialRead?: boolean
 }
 
 export type BackfillCache = QueryBackfillCache<ActiveQueryEntry<RealtimeQueryDefinitionMetadata>>
@@ -210,4 +212,12 @@ export function createDeferred<TValue>(): Deferred<TValue> {
     resolve,
     reject,
   }
+}
+
+export function hasPendingQuerySchemaChanges(entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>): boolean {
+  if (entry.contexts.size === 0) return queryCacheInternals.hasPendingSchemaChanges(entry.contextId)
+  for (const ids of entry.contexts.values()) {
+    for (const id of ids) if (queryCacheInternals.hasPendingSchemaChanges(id)) return true
+  }
+  return false
 }

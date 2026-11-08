@@ -131,7 +131,7 @@ let nextDatabaseContextId = 0
 
 const queryLoggerScope = new AsyncLocalStorage<true>()
 
-const schemaOperation = new AsyncLocalStorage<{ pending: number, settled: boolean, finished: boolean, transaction: boolean }>()
+const schemaOperation = new AsyncLocalStorage<{ pending: number, settled: boolean, finished: boolean, transaction: TransactionFrame | undefined }>()
 
 export class DatabaseContext {
   static {
@@ -397,10 +397,10 @@ export class DatabaseContext {
     const transaction = currentRootTransaction(this)
     if (transaction && !transaction.schemaChanged) {
       transaction.schemaChanged = true
-      beginSchemaChange()
+      beginSchemaChange(getRootDatabaseContext(this).getContextId())
     }
-    const operation = { pending: 0, settled: false, finished: false, transaction: !!transaction }
-    beginSchemaChange()
+    const operation = { pending: 0, settled: false, finished: false, transaction }
+    beginSchemaChange(getRootDatabaseContext(this).getContextId())
     try {
       return await schemaOperation.run(operation, run)
     } finally {
@@ -408,7 +408,7 @@ export class DatabaseContext {
       advanceSchemaGeneration()
       if (operation.pending === 0) {
         operation.finished = true
-        endSchemaChange()
+        endSchemaChange(getRootDatabaseContext(this).getContextId())
       }
       if (!transaction) await invalidateDatabaseSchema(this)
     }
@@ -545,7 +545,7 @@ export class DatabaseContext {
         } finally {
           if (frame.schemaChanged) {
             advanceSchemaGeneration()
-            endSchemaChange()
+            endSchemaChange(getRootDatabaseContext(this).getContextId())
           }
         }
         throw error
@@ -561,7 +561,7 @@ export class DatabaseContext {
       } finally {
         if (frame.schemaChanged) {
           advanceSchemaGeneration()
-          endSchemaChange()
+          endSchemaChange(getRootDatabaseContext(this).getContextId())
         }
       }
 
@@ -899,9 +899,9 @@ export class DatabaseContext {
           operation.pending -= 1
           if (!operation.settled || operation.pending !== 0 || operation.finished) return
           operation.finished = true
-          endSchemaChange()
+          endSchemaChange(getRootDatabaseContext(this).getContextId())
           advanceSchemaGeneration()
-          if (!operation.transaction) void invalidateDatabaseSchema(this).catch(error => reportError(error, { capability: 'db', operation: 'schema.lateSettlement' }))
+          if (!operation.transaction?.open) void invalidateDatabaseSchema(this).catch(error => reportError(error, { capability: 'db', operation: 'schema.lateSettlement' }))
         }).catch(() => undefined)
       }
       return leave ? pending.finally(leave) : pending

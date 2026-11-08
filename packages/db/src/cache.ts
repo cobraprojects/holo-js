@@ -1,6 +1,6 @@
 import type { DriverAdapter } from './core/types'
 import { currentRootTransaction } from './core/openTransactions'
-import { currentSchemaGeneration, hasPendingSchemaChanges, isSessionUncertain } from './core/schemaGeneration'
+import { advanceSchemaGeneration, currentSchemaGeneration, hasPendingSchemaChanges, isSessionUncertain } from './core/schemaGeneration'
 import { capturePooledDatabaseSessions, deferPooledDatabaseSessionRefresh, databaseSessionCacheEligibleKey } from './drivers/PooledTransactionClients'
 import { driverConnection } from './core/transactionScope'
 import { reportError } from '@holo-js/kernel/error-reporting'
@@ -1444,12 +1444,21 @@ function publishDatabaseDependencyInvalidation(
     })
 }
 
+function publishDatabaseInvalidationEvent(event: DatabaseDependencyInvalidationEventInternal): void {
+  const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
+  if (candidates.length === 0) return
+  const remote = serializeDatabaseDependencyInvalidation(event)
+  if (remote.dependencies.length === 0) return
+  rememberDatabaseInvalidationId(remote.id)
+  for (const candidate of candidates) publishDatabaseDependencyInvalidation(candidate.publisher, remote)
+}
+
 function serializeDatabaseDependencyInvalidation(
   event: DatabaseDependencyInvalidationEventInternal,
 ): RemoteDatabaseDependencyInvalidation {
   const tableDependencies = new Set<string>()
   for (const dependency of event.dependencies) {
-    const tableKey = parseDatabaseDependency(dependency)?.tableKey
+    const tableKey = dependency === databaseSchemaDependency ? dependency : parseDatabaseDependency(dependency)?.tableKey
     if (tableKey !== undefined) {
       tableDependencies.add(tableKey)
     }
@@ -1469,12 +1478,16 @@ async function receiveRemoteDatabaseDependencyInvalidation(
     return
   }
 
+  if (invalidation.dependencies.includes(databaseSchemaDependency)) advanceSchemaGeneration()
+
   if (hasDatabaseDependencyInvalidationListeners()) {
     recordRemoteMutationPublication(invalidation.dependencies)
   }
 
   await evictThenNotify(
-    () => getDatabaseQueryCacheBridge()?.invalidateDependencyTables?.(invalidation.dependencies),
+    () => invalidation.dependencies.includes(databaseSchemaDependency)
+      ? getDatabaseQueryCacheBridge()?.invalidateDependencies([databaseSchemaDependency])
+      : getDatabaseQueryCacheBridge()?.invalidateDependencyTables?.(invalidation.dependencies),
     () => notifyDatabaseDependencyInvalidationListeners(Object.freeze({
       connectionName: invalidation.connectionName,
       dependencies: invalidation.dependencies,
@@ -3239,22 +3252,26 @@ export function resolveQueryCacheDependencies(
 export const databaseSchemaDependency = '__holo_database_schema__'
 
 export function canUseQueryCache(connection: DatabaseContext): boolean {
-  if (hasPendingSchemaChanges() || isSessionUncertain(getRootDatabaseContext(connection)) || connection.isInTransaction()) return false
+  if (hasPendingSchemaChanges(getRootDatabaseContext(connection).getContextId()) || isSessionUncertain(getRootDatabaseContext(connection)) || connection.isInTransaction()) return false
   const adapter = driverConnection(connection.getAdapter()) as DriverAdapter & { readonly [databaseSessionCacheEligibleKey]?: boolean }
   return adapter[databaseSessionCacheEligibleKey] !== false
 }
 
 export function needsFullQueryRefresh(connection: DatabaseContext): boolean {
-  return hasPendingSchemaChanges() || isSessionUncertain(getRootDatabaseContext(connection))
+  return hasPendingSchemaChanges(getRootDatabaseContext(connection).getContextId()) || isSessionUncertain(getRootDatabaseContext(connection))
     || (!currentRootTransaction(connection) && !canUseQueryCache(connection))
 }
 
 export async function invalidateDatabaseSchema(connection: DatabaseContext): Promise<void> {
   startMutationPublicationEpoch()
   const bridge = getDatabaseQueryCacheBridge()
+  const event = createDatabaseDependencyInvalidationEvent(connection, [databaseSchemaDependency], [])
   await evictThenNotify(
     () => runQueryCacheOperation(() => bridge?.invalidateDependencies([databaseSchemaDependency])),
-    () => notifyDatabaseDependencyInvalidationListeners(createDatabaseDependencyInvalidationEvent(connection, [databaseSchemaDependency], [])),
+    async () => {
+      publishDatabaseInvalidationEvent(event)
+      await notifyDatabaseDependencyInvalidationListeners(event)
+    },
   )
 }
 
@@ -3285,13 +3302,7 @@ export async function invalidateQueryCacheDependencies(
 
         const unordered = hasLocalListeners && mutations.length > 0 && !recordDatabaseMutationPublication(mutations, publicationStartedAt)
         const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata, { startedAt: publicationStartedAt, unordered })
-        const remote = serializeDatabaseDependencyInvalidation(event)
-        if (candidates.length > 0 && remote.dependencies.length > 0) {
-          rememberDatabaseInvalidationId(remote.id)
-          for (const candidate of candidates) {
-            publishDatabaseDependencyInvalidation(candidate.publisher, remote)
-          }
-        }
+        publishDatabaseInvalidationEvent(event)
         if (hasLocalListeners) {
           await notifyDatabaseDependencyInvalidationListeners(fullRefresh
             ? createDatabaseDependencyInvalidationEvent(connection, localDependencies, [])

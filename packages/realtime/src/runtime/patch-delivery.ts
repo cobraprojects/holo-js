@@ -42,6 +42,7 @@ import {
 } from './result-patching'
 import {
   getRuntimeState,
+  hasPendingQuerySchemaChanges,
   type ActiveQueryEntry,
   type BackfillCache,
   type RealtimeSubscriptionPatchOperation,
@@ -124,7 +125,7 @@ export async function tryPatchQueryEntry(
     }
 
     const result = await tryPatchUnlessUnreadable(target, mutations, backfills)
-    if (queryCacheInternals.hasPendingSchemaChanges() || schemaGeneration !== queryCacheInternals.currentSchemaGeneration() || entry.version !== version || entry.readBoundary !== readBoundary || (entry.observationVersion ?? 0) !== observationVersion) {
+    if (hasPendingQuerySchemaChanges(entry) || schemaGeneration !== queryCacheInternals.currentSchemaGeneration() || entry.version !== version || entry.readBoundary !== readBoundary || (entry.observationVersion ?? 0) !== observationVersion) {
       return false
     }
 

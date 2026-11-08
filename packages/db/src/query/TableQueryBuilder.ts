@@ -398,7 +398,7 @@ export class TableQueryBuilder<
 
   private async prepareMutation(): Promise<void> {
     await this.bindGeneratedTable()
-    if (canUseQueryCache(this.connection) && (getDatabaseQueryCacheBridge() || hasDatabaseDependencyInvalidationListeners() || hasDatabaseDependencyInvalidationPublisher())) {
+    if (!currentRootTransaction(this.connection)?.schemaChanged && (getDatabaseQueryCacheBridge() || hasDatabaseDependencyInvalidationListeners() || hasDatabaseDependencyInvalidationPublisher())) {
       await resolveTableIdentity(this.connection, this.ownSource.tableName)
     }
   }

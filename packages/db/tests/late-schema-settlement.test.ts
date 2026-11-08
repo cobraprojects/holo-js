@@ -1,3 +1,9 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { Client } from 'pg'
 import { createConnection } from 'mysql2/promise'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
@@ -81,6 +87,7 @@ it('preserves committed remote table publications when local writes require full
   const stop = queryCacheInternals.onDatabaseDependencyInvalidationPublished(event => { dependencies.push([...event.dependencies]) })
   onTestFinished(stop)
   await db.unsafeExecute(unsafeSql('CREATE TABLE audit_log (id INTEGER)'))
+  dependencies.length = 0
   await db.table(table.tableName).insert({ id: 1, name: 'root' })
   await db.transaction(async tx => { await tx.table(table.tableName).insert({ id: 2, name: 'committed' }) })
   await expect(db.transaction(async tx => {
@@ -89,4 +96,46 @@ it('preserves committed remote table publications when local writes require full
   })).rejects.toThrow('rollback')
   expect(dependencies).toEqual([[`db:default:${table.tableName}`], [`db:default:${table.tableName}`]])
   expect((await db.table(table.tableName).orderBy('id').get()).map(row => row.name)).toEqual(['root', 'committed'])
+})
+
+it('expires cached rows when a remote worker publishes a raw schema change', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'holo-review7-'))
+  const filename = join(directory, 'database.sqlite')
+  const adapter = createSQLiteAdapter({ filename })
+  await adapter.ensureDatabaseExists()
+  const reader = createDatabase({ adapter, dialect: createDialect('sqlite') })
+  onTestFinished(async () => { await reader.disconnect(); await rm(directory, { recursive: true, force: true }) })
+  await reader.executeSchemaStatement({ sql: 'CREATE TABLE records (id INTEGER PRIMARY KEY, name TEXT)' })
+  configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+  onTestFinished(() => resetCacheRuntime())
+  await reader.table('records').insert({ id: 1, name: 'before' })
+  const read = () => reader.table('records').cache(60).pluck('name')
+  expect(await read()).toEqual(['before'])
+  const script = `
+    import { createDatabase, createDialect, queryCacheInternals, unsafeSql } from ${JSON.stringify(new URL('../src/index.ts', import.meta.url).href)}
+    import { createSQLiteAdapter } from ${JSON.stringify(new URL('../../db-sqlite/src/index.ts', import.meta.url).href)}
+    const adapter = createSQLiteAdapter({ filename: ${JSON.stringify(filename)} })
+    const db = createDatabase({ adapter, dialect: createDialect('sqlite'), security: { allowUnsafeRawSql: true } })
+    queryCacheInternals.onDatabaseDependencyInvalidationPublished(event => { process.stdout.write(JSON.stringify(event)) })
+    await db.unsafeExecute(unsafeSql('DROP TABLE records'))
+    await adapter.execute('CREATE TABLE records (id INTEGER PRIMARY KEY, name TEXT)')
+    await db.disconnect()
+  `
+  const { stdout } = await promisify(execFile)(process.execPath, ['--conditions=@holo-js/source', '--import', 'tsx', '--input-type=module', '-e', script])
+  const event = JSON.parse(stdout) as Parameters<typeof queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation>[0]
+  expect(event.dependencies).toEqual(['__holo_database_schema__'])
+  expect(await read()).toEqual(['before'])
+  await queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation(event)
+  expect(await read()).toEqual([])
+})
+
+it('invalidates a cached bare read after a transaction first writes its qualified spelling', async () => {
+  const { db, table } = await openDatabase('sqlite')
+  configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+  onTestFinished(() => resetCacheRuntime())
+  await db.table(table.tableName).insert({ id: 1, name: 'before' })
+  const read = () => db.table(table.tableName).cache(60).pluck('name')
+  expect(await read()).toEqual(['before'])
+  await db.transaction(async tx => { await tx.table(`main.${table.tableName}`).where('id', 1).update({ name: 'after' }) })
+  expect(await read()).toEqual(['after'])
 })

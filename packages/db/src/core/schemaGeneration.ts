@@ -8,20 +8,22 @@ export function advanceSchemaGeneration(): void {
   generation += 1
 }
 
-let pending = 0
+const pending = new Map<number, number>()
 const uncertain = new WeakSet<object>()
 
-export function beginSchemaChange(): void {
-  pending += 1
+export function beginSchemaChange(contextId: number): void {
+  pending.set(contextId, (pending.get(contextId) ?? 0) + 1)
   advanceSchemaGeneration()
 }
 
-export function endSchemaChange(): void {
-  pending -= 1
+export function endSchemaChange(contextId: number): void {
+  const remaining = (pending.get(contextId) ?? 0) - 1
+  if (remaining > 0) pending.set(contextId, remaining)
+  else pending.delete(contextId)
 }
 
-export function hasPendingSchemaChanges(): boolean {
-  return pending > 0
+export function hasPendingSchemaChanges(contextId: number): boolean {
+  return pending.has(contextId)
 }
 
 export function markSessionUncertain(owner: object): void {

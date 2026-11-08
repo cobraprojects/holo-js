@@ -22,6 +22,7 @@ import { createResultHash } from './result-hash'
 import {
   createDeferred,
   getRuntimeState,
+  hasPendingQuerySchemaChanges,
   type ActiveQueryEntry,
   type ActiveRefresh,
   type ActiveSubscription,
@@ -124,7 +125,7 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
     return
   }
 
-  if (queryCacheInternals.hasPendingSchemaChanges()) return
+  if (hasPendingQuerySchemaChanges(entry)) return
   const schemaGeneration = queryCacheInternals.currentSchemaGeneration()
   try {
     if (deferRefreshUntilSessionRelease(entry)) return
@@ -132,9 +133,9 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
       entry.definition,
       entry.args,
     ))
-    if (schemaGeneration !== queryCacheInternals.currentSchemaGeneration() || queryCacheInternals.hasPendingSchemaChanges()) {
+    if (schemaGeneration !== queryCacheInternals.currentSchemaGeneration() || hasPendingQuerySchemaChanges(entry)) {
       const refresh = getRuntimeState().refreshes.get(refreshKey)
-      if (refresh && !queryCacheInternals.hasPendingSchemaChanges()) refresh.pending = true
+      if (refresh && !hasPendingQuerySchemaChanges(entry)) refresh.pending = true
       return
     }
     entry.schemaGeneration = schemaGeneration
@@ -202,7 +203,7 @@ async function refreshInvalidatedQueryEntry(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   backfills: BackfillCache,
 ): Promise<void> {
-  if (queryCacheInternals.hasPendingSchemaChanges()) return
+  if (hasPendingQuerySchemaChanges(entry)) return
   if (entry.schemaGeneration !== queryCacheInternals.currentSchemaGeneration()) return scheduleRefreshKey(entry.refreshKey)
   try {
     if (deferRefreshUntilSessionRelease(entry)) return
@@ -509,7 +510,10 @@ export async function handleBatchedDatabaseInvalidation(
   event: DatabaseDependencyInvalidationEventWithMutations,
 ): Promise<void> {
   if (event.dependencies.includes(queryCacheInternals.databaseSchemaDependency)) {
-    if (!queryCacheInternals.hasPendingSchemaChanges()) await Promise.all([...getRuntimeState().queryEntries.values()].filter(entry => entry.current).map(entry => scheduleRefreshKey(entry.refreshKey)))
+    await Promise.all([...getRuntimeState().queryEntries.values()].map(entry => {
+      if (!entry.current) { entry.refreshAfterInitialRead = true; return }
+      return hasPendingQuerySchemaChanges(entry) ? undefined : scheduleRefreshKey(entry.refreshKey)
+    }))
     return
   }
   for (const dependency of event.dependencies) {

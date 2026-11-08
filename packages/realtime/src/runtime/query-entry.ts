@@ -93,7 +93,7 @@ export async function createQueryEntry<TDefinition extends RealtimeQueryDefiniti
       result.snapshot.data,
     )
     addQueryEntryDependencies(entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)
-    if (hasTableInvalidationSince(generationsAtStart, entry.dependencies) || schemaGeneration !== queryCacheInternals.currentSchemaGeneration()) {
+    if (entry.refreshAfterInitialRead || hasTableInvalidationSince(generationsAtStart, entry.dependencies) || schemaGeneration !== queryCacheInternals.currentSchemaGeneration()) {
       requestInitialRefresh(refreshKey)
     }
     addQueryEntryInvalidationIndexes(entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)
