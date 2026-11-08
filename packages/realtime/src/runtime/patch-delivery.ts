@@ -85,6 +85,7 @@ export async function tryPatchQueryEntry(
   let patchedBelongsToHydrationKeys: Set<string> | undefined
   let handledUnchangedPatch = false
   const version = entry.version
+  const schemaGeneration = queryCacheInternals.currentSchemaGeneration()
   let readBoundary = entry.readBoundary
   let observationVersion = entry.observationVersion ?? 0
   const markBackfilledRead = () => {
@@ -123,7 +124,7 @@ export async function tryPatchQueryEntry(
     }
 
     const result = await tryPatchUnlessUnreadable(target, mutations, backfills)
-    if (entry.version !== version || entry.readBoundary !== readBoundary || (entry.observationVersion ?? 0) !== observationVersion) {
+    if (queryCacheInternals.hasPendingSchemaChanges() || schemaGeneration !== queryCacheInternals.currentSchemaGeneration() || entry.version !== version || entry.readBoundary !== readBoundary || (entry.observationVersion ?? 0) !== observationVersion) {
       return false
     }
 

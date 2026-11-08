@@ -124,11 +124,19 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
     return
   }
 
+  if (queryCacheInternals.hasPendingSchemaChanges()) return
+  const schemaGeneration = queryCacheInternals.currentSchemaGeneration()
   try {
     const result = await entry.runWithContext(async () => await executeRealtimeQueryInternal(
       entry.definition,
       entry.args,
     ))
+    if (schemaGeneration !== queryCacheInternals.currentSchemaGeneration() || queryCacheInternals.hasPendingSchemaChanges()) {
+      const refresh = getRuntimeState().refreshes.get(refreshKey)
+      if (refresh && !queryCacheInternals.hasPendingSchemaChanges()) refresh.pending = true
+      return
+    }
+    entry.schemaGeneration = schemaGeneration
     entry.readBoundary = queryCacheInternals.markMutationPublicationBoundary()
     entry.contexts = new Map(result.contexts)
     const delivery = {
@@ -183,6 +191,8 @@ async function refreshInvalidatedQueryEntry(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   backfills: BackfillCache,
 ): Promise<void> {
+  if (queryCacheInternals.hasPendingSchemaChanges()) return
+  if (entry.schemaGeneration !== queryCacheInternals.currentSchemaGeneration()) return scheduleRefreshKey(entry.refreshKey)
   if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills))) {
     return
   }
@@ -482,6 +492,10 @@ async function flushInvalidationBatch(batch: PendingInvalidationBatch): Promise<
 export async function handleBatchedDatabaseInvalidation(
   event: DatabaseDependencyInvalidationEventWithMutations,
 ): Promise<void> {
+  if (event.dependencies.includes(queryCacheInternals.databaseSchemaDependency)) {
+    if (!queryCacheInternals.hasPendingSchemaChanges()) await Promise.all([...getRuntimeState().queryEntries.values()].filter(entry => entry.current).map(entry => scheduleRefreshKey(entry.refreshKey)))
+    return
+  }
   for (const dependency of event.dependencies) {
     const tableKey = parseDatabaseDependency(dependency)?.tableKey
     if (tableKey !== undefined) {

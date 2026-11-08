@@ -1,3 +1,5 @@
+import { invalidateDatabaseSchema } from '../cache'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { getRootDatabaseContext, registerDatabaseContext } from './contextOwnership'
 import { createFactoryService, type FactoryService } from '../factories/FactoryService'
@@ -15,7 +17,7 @@ import { createCapabilities } from './capabilities'
 import { markGenuineDatabaseContext } from './genuineContexts'
 import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
-import { advanceSchemaGeneration } from './schemaGeneration'
+import { advanceSchemaGeneration, beginSchemaChange, endSchemaChange, markSessionUncertain, resetSessionUncertainty } from './schemaGeneration'
 import { isSchemaPreservingRawStatement } from './rawStatementEffects'
 import { currentRootTransaction, runInRootTransaction, type TransactionFrame } from './openTransactions'
 import { registerTransactionScopeEntry } from './transactionScope'
@@ -129,6 +131,8 @@ let nextDatabaseContextId = 0
 
 const queryLoggerScope = new AsyncLocalStorage<true>()
 
+const schemaOperation = new AsyncLocalStorage<{ pending: number, settled: boolean, finished: boolean, transaction: boolean }>()
+
 export class DatabaseContext {
   static {
     registerTransactionScopeEntry((context, callback) => context._runInTransactionScope(callback))
@@ -203,6 +207,7 @@ export class DatabaseContext {
 
     if (!this._adapter.isConnected()) return
     await this._adapter.disconnect()
+    resetSessionUncertainty(getRootDatabaseContext(this))
   }
 
   isConnected(): boolean {
@@ -383,18 +388,29 @@ export class DatabaseContext {
   }
 
   private _runRawStatement<T>(statement: UnsafeStatement, run: () => Promise<T>): Promise<T> {
-    return isSchemaPreservingRawStatement(statement.sql) ? run() : this._runSchemaChange(run)
+    if (isSchemaPreservingRawStatement(statement.sql)) return run()
+    markSessionUncertain(getRootDatabaseContext(this))
+    return this._runSchemaChange(run)
   }
 
   private async _runSchemaChange<T>(run: () => Promise<T>): Promise<T> {
     const transaction = currentRootTransaction(this)
-    if (transaction) {
+    if (transaction && !transaction.schemaChanged) {
       transaction.schemaChanged = true
+      beginSchemaChange()
     }
+    const operation = { pending: 0, settled: false, finished: false, transaction: !!transaction }
+    beginSchemaChange()
     try {
-      return await run()
+      return await schemaOperation.run(operation, run)
     } finally {
+      operation.settled = true
       advanceSchemaGeneration()
+      if (operation.pending === 0) {
+        operation.finished = true
+        endSchemaChange()
+      }
+      if (!transaction) await invalidateDatabaseSchema(this)
     }
   }
 
@@ -471,6 +487,7 @@ export class DatabaseContext {
         continue
       }
 
+      if (committed.transaction._transactionFrame?.schemaChanged) await invalidateDatabaseSchema(this)
       await committed.transaction._runAfterCommitCallbacks()
       await this._logger?.onTransactionCommit?.(committed.entry)
       return committed.value
@@ -526,7 +543,10 @@ export class DatabaseContext {
         try {
           await this._callTransactionHook('rollback', rollbackAdapter)
         } finally {
-          if (frame.schemaChanged) advanceSchemaGeneration()
+          if (frame.schemaChanged) {
+            advanceSchemaGeneration()
+            endSchemaChange()
+          }
         }
         throw error
       }
@@ -539,7 +559,10 @@ export class DatabaseContext {
         runCommitFailureRestores(child)
         throw commitError
       } finally {
-        if (frame.schemaChanged) advanceSchemaGeneration()
+        if (frame.schemaChanged) {
+          advanceSchemaGeneration()
+          endSchemaChange()
+        }
       }
 
       return { value, transaction: child, entry }
@@ -555,6 +578,7 @@ export class DatabaseContext {
       committed = await (pinned ? runPinnedTransaction(pinned, attempt) : attempt())
     } catch (error) {
       frame.open = false
+      if (frame.schemaChanged) await invalidateDatabaseSchema(this)
       if (transaction) {
         discardCommitFailureRestores(transaction)
       }
@@ -867,6 +891,18 @@ export class DatabaseContext {
       } catch (error) {
         leave?.()
         throw error
+      }
+      const operation = schemaOperation.getStore()
+      if (operation) {
+        operation.pending += 1
+        void pending.finally(() => {
+          operation.pending -= 1
+          if (!operation.settled || operation.pending !== 0 || operation.finished) return
+          operation.finished = true
+          endSchemaChange()
+          advanceSchemaGeneration()
+          if (!operation.transaction) void invalidateDatabaseSchema(this).catch(error => reportError(error, { capability: 'db', operation: 'schema.lateSettlement' }))
+        }).catch(() => undefined)
       }
       return leave ? pending.finally(leave) : pending
     }

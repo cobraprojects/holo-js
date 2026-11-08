@@ -69,6 +69,10 @@ await cache.forget('posts.published')
 
 Use a different `key` for each distinct query. Two queries with the same key share one cache entry.
 
+Query caching bypasses shared reads and writes inside transactions and explicit PostgreSQL/MySQL connection scopes. It also bypasses them for injected clients, pools or pool factories, and after Holo observes raw SQL that may change session or schema resolution. That last restriction lasts until disconnect; ordinary reads and framework introspection keep caching enabled on default managed pools. These conservative paths run the query normally, including when a custom cache key is supplied.
+
+Holo-observed schema changes clear query-cache entries, including custom keys with explicit invalidation lists, and refresh existing realtime queries. Timed-out DDL clears them again when the underlying driver operation settles. SQL executed outside Holo does not provide this signal.
+
 ## Automatic invalidation
 
 For most queries, Holo records which table a cached result depends on. When you insert, update, upsert, increment, or delete rows in that table through Holo's query builder or models, it clears the matching entries. Inside a [transaction](/database/transactions), it waits until the transaction commits.

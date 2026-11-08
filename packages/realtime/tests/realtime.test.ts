@@ -2598,7 +2598,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('falls back to a row replace patch when update shape changes without rerunning the query handler', async () => {
+  it('refreshes once after a schema change then patches the changed row shape', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     }))
@@ -2635,18 +2635,14 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual([{ id: 1, title: 'First' }])
+    expect(queryRuns).toBe(2)
+    expect(snapshots).toEqual([{ id: 1, title: 'First' }, { id: 1, metadata: null, title: 'First' }])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
       {
         op: 'replace',
-        path: [],
-        value: {
-          id: 1,
-          metadata: 'visible',
-          title: 'First',
-        },
+        path: ['metadata'],
+        value: 'visible',
       },
     ])
   })

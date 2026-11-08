@@ -1,3 +1,8 @@
+import type { DriverAdapter } from './core/types'
+import { currentRootTransaction } from './core/openTransactions'
+import { currentSchemaGeneration, hasPendingSchemaChanges, isSessionUncertain } from './core/schemaGeneration'
+import { capturePooledDatabaseSessions, databaseSessionCacheEligibleKey } from './drivers/PooledTransactionClients'
+import { driverConnection } from './core/transactionScope'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { getRootDatabaseContext } from './core/contextOwnership'
 import { createHash, randomUUID } from 'node:crypto'
@@ -3231,6 +3236,28 @@ export function resolveQueryCacheDependencies(
   return inferAutomaticQueryCacheDependencies(plan, connectionName, textMatching)
 }
 
+export const databaseSchemaDependency = '__holo_database_schema__'
+
+export function canUseQueryCache(connection: DatabaseContext): boolean {
+  if (hasPendingSchemaChanges() || isSessionUncertain(getRootDatabaseContext(connection)) || connection.isInTransaction()) return false
+  const adapter = driverConnection(connection.getAdapter()) as DriverAdapter & { readonly [databaseSessionCacheEligibleKey]?: boolean }
+  return adapter[databaseSessionCacheEligibleKey] !== false
+}
+
+export function needsFullQueryRefresh(connection: DatabaseContext): boolean {
+  return hasPendingSchemaChanges() || isSessionUncertain(getRootDatabaseContext(connection))
+    || (!currentRootTransaction(connection) && !canUseQueryCache(connection))
+}
+
+export async function invalidateDatabaseSchema(connection: DatabaseContext): Promise<void> {
+  startMutationPublicationEpoch()
+  const bridge = getDatabaseQueryCacheBridge()
+  await evictThenNotify(
+    () => runQueryCacheOperation(() => bridge?.invalidateDependencies([databaseSchemaDependency])),
+    () => notifyDatabaseDependencyInvalidationListeners(createDatabaseDependencyInvalidationEvent(connection, [databaseSchemaDependency], [])),
+  )
+}
+
 export async function invalidateQueryCacheDependencies(
   connection: DatabaseContext,
   dependencies: readonly string[],
@@ -3243,6 +3270,7 @@ export async function invalidateQueryCacheDependencies(
   }
 
   const invalidate = async () => {
+    if (needsFullQueryRefresh(connection)) return invalidateDatabaseSchema(connection)
     const bridge = getDatabaseQueryCacheBridge()
     await evictThenNotify(
       () => runQueryCacheOperation(() => bridge?.invalidateDependencies(dependencies)),
@@ -3278,6 +3306,11 @@ export async function invalidateQueryCacheDependencies(
 }
 
 export const queryCacheInternals = {
+  capturePooledDatabaseSessions,
+  currentSchemaGeneration,
+  hasPendingSchemaChanges,
+  databaseSchemaDependency,
+  canUseQueryCache,
   hasObservedResultChanged,
   beginMutationPublication,
   getRootDatabaseContext,

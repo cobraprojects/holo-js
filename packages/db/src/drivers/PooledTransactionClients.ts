@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { DatabaseError } from '../core/errors'
 
 class TransactionError extends Error {}
 
@@ -13,8 +14,37 @@ type ScopedClient<TClient> = {
   released: boolean
 }
 
+export const databaseSessionCacheEligibleKey: unique symbol = Symbol('databaseSessionCacheEligibleKey')
+const holders = new AsyncLocalStorage<ReadonlyMap<object, ScopedClient<ReleasableClient> | WeakRef<ScopedClient<ReleasableClient>>>>()
+
+export function capturePooledDatabaseSessions(): <T>(callback: () => T) => T {
+  const captured = new Map<object, WeakRef<ScopedClient<ReleasableClient>>>()
+  for (const [owner, value] of holders.getStore() ?? []) {
+    const holder = value instanceof WeakRef ? value.deref() : value
+    if (holder && !holder.closed && !holder.released) captured.set(owner, new WeakRef(holder))
+  }
+  return callback => {
+    for (const reference of captured.values()) {
+      if (reference.deref()?.closed !== false) throw new DatabaseError('The database session used by this subscription has ended.', 'SESSION_ENDED')
+    }
+    return holders.run(captured, callback)
+  }
+}
+
 export class PooledTransactionClients<TClient extends ReleasableClient> {
-  private readonly scope = new AsyncLocalStorage<ScopedClient<TClient>>()
+  private readonly scope = {
+    getStore: (): ScopedClient<TClient> | undefined => {
+      const value = holders.getStore()?.get(this)
+      const holder = value instanceof WeakRef ? value.deref() : value
+      if (value instanceof WeakRef && (!holder || holder.closed || holder.released)) throw new DatabaseError('The database session used by this subscription has ended.', 'SESSION_ENDED')
+      return holder as ScopedClient<TClient> | undefined
+    },
+    run: <T>(holder: ScopedClient<TClient>, callback: () => T): T => {
+      const current = new Map(holders.getStore())
+      current.set(this, holder)
+      return holders.run(current, callback)
+    },
+  }
   private transactionClient?: TClient
 
   constructor(

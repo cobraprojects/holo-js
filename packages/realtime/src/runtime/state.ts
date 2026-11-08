@@ -123,6 +123,7 @@ export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata
   observationVersion?: number
   queries: DatabaseQueryObservation[]
   readBoundary?: number
+  schemaGeneration?: number
   resultHash: string
   resultHashDirty: boolean
   tableDependencies: readonly string[]
