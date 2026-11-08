@@ -263,8 +263,10 @@ export class MySQLAdapter<TConfig extends PoolOptions = PoolOptions> implements 
   private readonly config: TConfig
   private connected: boolean
   private readonly transactionClients
+  private readonly managedPool: boolean
 
   constructor(options: MySQLAdapterOptions<TConfig> = {}) {
+    this.managedPool = !options.client && !options.pool && !options.createPool
     this.supportsConcurrentTransactionScopes = !options.client
     this.directClient = options.client as MySQLClientLike | undefined
     this.pool = options.pool
@@ -326,6 +328,10 @@ export class MySQLAdapter<TConfig extends PoolOptions = PoolOptions> implements 
 
   isConnected(): boolean {
     return this.connected
+  }
+
+  get [holoRuntimeInternals.databaseSessionCacheEligibleKey](): boolean {
+    return this.managedPool && !this.transactionClients.current
   }
 
   runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> {

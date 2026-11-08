@@ -71,9 +71,11 @@ export async function createQueryEntry<TDefinition extends RealtimeQueryDefiniti
   }
   state.queryEntries.set(refreshKey, entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)
 
+  const schemaGeneration = queryCacheInternals.currentSchemaGeneration()
   const generationsAtStart = snapshotTableInvalidationGenerations()
   try {
     const result = await executeInitialQuery(definition, args, undefined)
+    entry.schemaGeneration = schemaGeneration
     entry.readBoundary = queryCacheInternals.markMutationPublicationBoundary()
     const auth = await captureAuthContext(state.bindings)
     entry.runWithContext = createExecutionContext(database, auth)
@@ -91,7 +93,7 @@ export async function createQueryEntry<TDefinition extends RealtimeQueryDefiniti
       result.snapshot.data,
     )
     addQueryEntryDependencies(entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)
-    if (hasTableInvalidationSince(generationsAtStart, entry.dependencies)) {
+    if (entry.refreshAfterInitialRead || hasTableInvalidationSince(generationsAtStart, entry.dependencies) || schemaGeneration !== queryCacheInternals.currentSchemaGeneration()) {
       requestInitialRefresh(refreshKey)
     }
     addQueryEntryInvalidationIndexes(entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)

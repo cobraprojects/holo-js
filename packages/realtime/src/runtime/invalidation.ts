@@ -22,6 +22,7 @@ import { createResultHash } from './result-hash'
 import {
   createDeferred,
   getRuntimeState,
+  hasPendingQuerySchemaChanges,
   type ActiveQueryEntry,
   type ActiveRefresh,
   type ActiveSubscription,
@@ -124,11 +125,20 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
     return
   }
 
+  if (hasPendingQuerySchemaChanges(entry)) return
+  const schemaGeneration = queryCacheInternals.currentSchemaGeneration()
   try {
+    if (deferRefreshUntilSessionRelease(entry)) return
     const result = await entry.runWithContext(async () => await executeRealtimeQueryInternal(
       entry.definition,
       entry.args,
     ))
+    if (schemaGeneration !== queryCacheInternals.currentSchemaGeneration() || hasPendingQuerySchemaChanges(entry)) {
+      const refresh = getRuntimeState().refreshes.get(refreshKey)
+      if (refresh && !hasPendingQuerySchemaChanges(entry)) refresh.pending = true
+      return
+    }
+    entry.schemaGeneration = schemaGeneration
     entry.readBoundary = queryCacheInternals.markMutationPublicationBoundary()
     entry.contexts = new Map(result.contexts)
     const delivery = {
@@ -179,11 +189,28 @@ export function scheduleSubscriptionRefresh(
   return scheduleRefreshKey(subscription.refreshKey)
 }
 
+function deferRefreshUntilSessionRelease(entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>): boolean {
+  return queryCacheInternals.deferPooledDatabaseSessionRefresh(entry.runWithContext, async () => {
+    try {
+      await scheduleRefreshKey(entry.refreshKey)
+    } catch (error) {
+      reportError(error, { capability: 'realtime', operation: 'subscription.refresh' })
+    }
+  })
+}
+
 async function refreshInvalidatedQueryEntry(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   backfills: BackfillCache,
 ): Promise<void> {
-  if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills))) {
+  if (hasPendingQuerySchemaChanges(entry)) return
+  if (entry.schemaGeneration !== queryCacheInternals.currentSchemaGeneration()) return scheduleRefreshKey(entry.refreshKey)
+  try {
+    if (deferRefreshUntilSessionRelease(entry)) return
+    if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills))) return
+  } catch (error) {
+    entry.refreshFailed = true
+    await deliverRefreshError(entry, error)
     return
   }
 
@@ -482,6 +509,13 @@ async function flushInvalidationBatch(batch: PendingInvalidationBatch): Promise<
 export async function handleBatchedDatabaseInvalidation(
   event: DatabaseDependencyInvalidationEventWithMutations,
 ): Promise<void> {
+  if (event.dependencies.includes(queryCacheInternals.databaseSchemaDependency)) {
+    await Promise.all([...getRuntimeState().queryEntries.values()].map(entry => {
+      if (!entry.current) { entry.refreshAfterInitialRead = true; return }
+      return hasPendingQuerySchemaChanges(entry) ? undefined : scheduleRefreshKey(entry.refreshKey)
+    }))
+    return
+  }
   for (const dependency of event.dependencies) {
     const tableKey = parseDatabaseDependency(dependency)?.tableKey
     if (tableKey !== undefined) {

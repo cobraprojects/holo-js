@@ -217,7 +217,7 @@ describe.each(integrationDrivers(['sqlite'] as const))('%s cached reads after th
     expect(notifiedInside).toEqual([])
   })
 
-  it('does not notify invalidation listeners when an unrelated schema change leaves a table identity unchanged', async () => {
+  it('notifies once for a schema change while unchanged tables retain their rows', async () => {
     const { schema, table } = await openDatabase(driver)
     useMemoryCache()
     const { bare, qualified } = tableSpellings(driver, table.tableName)
@@ -233,7 +233,7 @@ describe.each(integrationDrivers(['sqlite'] as const))('%s cached reads after th
 
     expect(await cachedNames(bare)).toEqual(['first'])
     expect(await cachedNames(qualified)).toEqual(['first'])
-    expect(notified).toEqual([])
+    expect(notified).toEqual([expect.objectContaining({ dependencies: ['__holo_database_schema__'], mutations: [] })])
   })
 
   it('reads a model defined by the qualified name from that table after a temp table shadows the bare name', async () => {
@@ -272,13 +272,17 @@ describe.each(integrationDrivers(['sqlite'] as const))('%s cached reads after th
     const { bare, qualified } = tableSpellings(driver, table.tableName)
     await DB.table(qualified).insert({ id: 1, name: 'old', active: false })
     expect(await cachedNames(qualified)).toEqual(['old'])
-    await db.unsafeExecute(unsafeSql(`DROP TABLE "${bare}"`))
-    await db.unsafeExecute(unsafeSql(`CREATE TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`))
+    await db.executeSchemaStatement({ sql: `DROP TABLE "${bare}"`, source: 'schema' })
+    await db.executeSchemaStatement({ sql: `CREATE TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`, source: 'schema' })
 
     failLookup = true
     await expect(cachedNames(qualified)).rejects.toThrow('lookup failed')
 
     expect(await cachedNames(qualified)).toEqual([])
+    await db.unsafeExecute(unsafeSql(`CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`))
+    failLookup = true
+    expect(await cachedNames(bare)).toEqual([])
+    expect(failLookup).toBe(true)
   })
 
   it('stops serving cached bare reads to concurrent readers once a temp table shadows the bare name', async () => {

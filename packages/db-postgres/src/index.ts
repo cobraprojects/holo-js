@@ -182,6 +182,8 @@ function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefine
   return undefined
 }
 
+const managedAdapters = new WeakSet<object>()
+
 export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements DriverAdapter {
   readonly supportsConcurrentTransactionScopes: boolean
   private pool?: PostgresPoolLike
@@ -190,8 +192,10 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
   private readonly config?: TConfig
   private connected: boolean
   private readonly transactionClients
+  private readonly managedPool: boolean
 
   constructor(options: PostgresAdapterOptions<TConfig> = {}) {
+    this.managedPool = !options.client && !options.pool && !options.createPool
     this.supportsConcurrentTransactionScopes = !options.client
     this.directClient = options.client
     this.pool = options.pool
@@ -264,6 +268,10 @@ export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements
       bindings: [tableName.split('.').map(quoteDatabaseIdentifier).join('.')],
       source: 'schema',
     }
+  }
+
+  get [holoRuntimeInternals.databaseSessionCacheEligibleKey](): boolean {
+    return (this.managedPool || managedAdapters.has(this)) && !this.transactionClients.current
   }
 
   runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> {
@@ -405,7 +413,7 @@ export const postgresDatabaseDriverFactory: DatabaseDriverFactory = Object.freez
   driver: 'postgres',
   supportsConcurrentTransactionScopes: true,
   create(connection) {
-    return createPostgresAdapter({
+    const adapter = createPostgresAdapter({
       config: {
         connectionString: connection.url,
         host: connection.host,
@@ -421,5 +429,7 @@ export const postgresDatabaseDriverFactory: DatabaseDriverFactory = Object.freez
       },
       createPool: config => createHoloPool(config, connection.schema),
     })
+    managedAdapters.add(adapter)
+    return adapter
   },
 })

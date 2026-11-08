@@ -10,6 +10,9 @@ import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
   getDatabaseQueryCacheBridge,
+  canUseQueryCache,
+  needsFullQueryRefresh,
+  databaseSchemaDependency,
   hasActiveDatabaseDependencyCollector,
   hasDatabaseDependencyInvalidationListeners,
   hasDatabaseDependencyInvalidationPublisher,
@@ -395,7 +398,7 @@ export class TableQueryBuilder<
 
   private async prepareMutation(): Promise<void> {
     await this.bindGeneratedTable()
-    if (getDatabaseQueryCacheBridge() || hasDatabaseDependencyInvalidationListeners() || hasDatabaseDependencyInvalidationPublisher()) {
+    if (!currentRootTransaction(this.connection)?.schemaChanged && (getDatabaseQueryCacheBridge() || hasDatabaseDependencyInvalidationListeners() || hasDatabaseDependencyInvalidationPublisher())) {
       await resolveTableIdentity(this.connection, this.ownSource.tableName)
     }
   }
@@ -2123,7 +2126,7 @@ export class TableQueryBuilder<
     const statement = compileStatement()
     const cacheConfig = this.queryCacheConfig
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
-    if (activeDependencyCollector || (cacheConfig && !this.plan.lockMode)) {
+    if (activeDependencyCollector || (canUseQueryCache(this.connection) && cacheConfig && !this.plan.lockMode)) {
       await resolvePlanTableIdentities(this.connection, this.plan)
       for (const dependency of cacheConfig?.invalidate ?? []) {
         if (!dependency.startsWith('db:')) await resolveTableIdentity(this.connection, dependency)
@@ -2136,7 +2139,7 @@ export class TableQueryBuilder<
           this.plan,
           this.connection.getConnectionName(),
           cacheConfig?.invalidate,
-          cacheConfig?.invalidate?.length ? false : await this.resolveQueryTextMatching(),
+          !canUseQueryCache(this.connection) || cacheConfig?.invalidate?.length ? false : await this.resolveQueryTextMatching(),
     )
     const observationDependencies = activeDependencyCollector && !this.plan.lockMode
       ? dependencies ?? inferDatabaseQueryObservationDependencies(this.plan, this.connection.getConnectionName())
@@ -2146,7 +2149,7 @@ export class TableQueryBuilder<
       : createDatabaseQueryFallbackObservation
     recordDatabaseQueryDependencies(observationDependencies)
     const expired = cacheConfig?.ttl instanceof Date && cacheConfig.ttl.getTime() <= Date.now()
-    if (!cacheConfig || this.plan.lockMode || expired || currentRootTransaction(this.connection)?.schemaChanged) {
+    if (!cacheConfig || this.plan.lockMode || expired || !canUseQueryCache(this.connection) || currentRootTransaction(this.connection)?.schemaChanged) {
       const rows = this.convertRows(convertColumns, await this.queryRows<TRow>(statement))
       await this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
@@ -2174,7 +2177,7 @@ export class TableQueryBuilder<
         () => runSource(() => this.queryRows<TRow>(statement)),
         {
           driver: cacheConfig.driver,
-          dependencies,
+          dependencies: [...dependencies ?? [], databaseSchemaDependency],
         },
       )))
       await this.recordCollectedQueryObservation(
@@ -2197,7 +2200,7 @@ export class TableQueryBuilder<
       () => runSource(() => this.queryRows<TRow>(statement)),
       {
         driver: cacheConfig.driver,
-        dependencies,
+        dependencies: [...dependencies ?? [], databaseSchemaDependency],
       },
     )))
     await this.recordCollectedQueryObservation(
@@ -3648,6 +3651,10 @@ export class TableQueryBuilder<
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
       return
     }
+    if (needsFullQueryRefresh(this.connection)) {
+      await invalidateQueryCacheDependencies(this.connection, [createTableCacheDependency(this.connection.getConnectionName(), this.source.tableName)])
+      return
+    }
 
     const connectionName = this.connection.getConnectionName()
     await invalidateQueryCacheDependencies(
@@ -3677,6 +3684,10 @@ export class TableQueryBuilder<
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
+      return
+    }
+    if (needsFullQueryRefresh(this.connection)) {
+      await invalidateQueryCacheDependencies(this.connection, [createTableCacheDependency(this.connection.getConnectionName(), this.source.tableName)])
       return
     }
 
@@ -3755,6 +3766,10 @@ export class TableQueryBuilder<
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
+      return
+    }
+    if (needsFullQueryRefresh(this.connection)) {
+      await invalidateQueryCacheDependencies(this.connection, [createTableCacheDependency(this.connection.getConnectionName(), this.source.tableName)])
       return
     }
 

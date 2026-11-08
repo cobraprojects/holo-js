@@ -11,5 +11,6 @@ export function getExecutionDatabase(): DatabaseContext | undefined {
 
 export function createExecutionContext(database: DatabaseContext, auth?: RealtimeContextRunner): RealtimeContextRunner {
   const root = queryCacheInternals.getRootDatabaseContext(database)
-  return callback => databases.run(root, () => auth ? auth(callback) : callback())
+  const session = queryCacheInternals.capturePooledDatabaseSessions()
+  return callback => session(() => databases.run(root, () => auth ? auth(callback) : callback()))
 }

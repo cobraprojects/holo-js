@@ -1,5 +1,5 @@
 import { reportError } from '@holo-js/kernel/error-reporting'
-import { PooledTransactionClients } from './drivers/PooledTransactionClients'
+import { capturePooledDatabaseSessions, databaseSessionCacheEligibleKey, PooledTransactionClients } from './drivers/PooledTransactionClients'
 import { getApplicationTimezone } from './applicationTimezone'
 import { SERVER_WALL_CLOCK_AMBIGUITY, formatWallClockSeconds, formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from './applicationTime'
 import { SQLITE_WALL_CLOCK_FUNCTION, formatSQLiteDateTime, formatSQLiteWallClock, parseSQLiteDateTime } from './sqliteDateTime'
@@ -412,6 +412,8 @@ export const holoRuntimeInternals = Object.freeze({
   useGeneratedSchemaConnection,
   getQueryBounds,
   PooledTransactionClients,
+  capturePooledDatabaseSessions,
+  databaseSessionCacheEligibleKey,
   whereColumnNotExpiredByDatabaseClock,
   addSelectFractionalCount,
   addSelectDateExtrema,
