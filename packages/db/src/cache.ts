@@ -1,7 +1,7 @@
 import type { DriverAdapter } from './core/types'
 import { currentRootTransaction } from './core/openTransactions'
 import { currentSchemaGeneration, hasPendingSchemaChanges, isSessionUncertain } from './core/schemaGeneration'
-import { capturePooledDatabaseSessions, databaseSessionCacheEligibleKey } from './drivers/PooledTransactionClients'
+import { capturePooledDatabaseSessions, deferPooledDatabaseSessionRefresh, databaseSessionCacheEligibleKey } from './drivers/PooledTransactionClients'
 import { driverConnection } from './core/transactionScope'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { getRootDatabaseContext } from './core/contextOwnership'
@@ -3310,6 +3310,7 @@ export async function invalidateQueryCacheDependencies(
 }
 
 export const queryCacheInternals = {
+  deferPooledDatabaseSessionRefresh,
   capturePooledDatabaseSessions,
   currentSchemaGeneration,
   hasPendingSchemaChanges,

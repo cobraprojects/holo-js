@@ -127,6 +127,7 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
   if (queryCacheInternals.hasPendingSchemaChanges()) return
   const schemaGeneration = queryCacheInternals.currentSchemaGeneration()
   try {
+    if (deferRefreshUntilSessionRelease(entry)) return
     const result = await entry.runWithContext(async () => await executeRealtimeQueryInternal(
       entry.definition,
       entry.args,
@@ -187,13 +188,28 @@ export function scheduleSubscriptionRefresh(
   return scheduleRefreshKey(subscription.refreshKey)
 }
 
+function deferRefreshUntilSessionRelease(entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>): boolean {
+  return queryCacheInternals.deferPooledDatabaseSessionRefresh(entry.runWithContext, async () => {
+    try {
+      await scheduleRefreshKey(entry.refreshKey)
+    } catch (error) {
+      reportError(error, { capability: 'realtime', operation: 'subscription.refresh' })
+    }
+  })
+}
+
 async function refreshInvalidatedQueryEntry(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   backfills: BackfillCache,
 ): Promise<void> {
   if (queryCacheInternals.hasPendingSchemaChanges()) return
   if (entry.schemaGeneration !== queryCacheInternals.currentSchemaGeneration()) return scheduleRefreshKey(entry.refreshKey)
-  if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills))) {
+  try {
+    if (deferRefreshUntilSessionRelease(entry)) return
+    if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills))) return
+  } catch (error) {
+    entry.refreshFailed = true
+    await deliverRefreshError(entry, error)
     return
   }
 

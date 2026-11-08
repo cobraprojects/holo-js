@@ -2126,7 +2126,7 @@ export class TableQueryBuilder<
     const statement = compileStatement()
     const cacheConfig = this.queryCacheConfig
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
-    if (canUseQueryCache(this.connection) && (activeDependencyCollector || (cacheConfig && !this.plan.lockMode))) {
+    if (activeDependencyCollector || (canUseQueryCache(this.connection) && cacheConfig && !this.plan.lockMode)) {
       await resolvePlanTableIdentities(this.connection, this.plan)
       for (const dependency of cacheConfig?.invalidate ?? []) {
         if (!dependency.startsWith('db:')) await resolveTableIdentity(this.connection, dependency)

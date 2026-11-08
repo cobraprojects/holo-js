@@ -12,6 +12,7 @@ type ScopedClient<TClient> = {
   closed: boolean
   leases: number
   released: boolean
+  afterRelease?: Array<() => Promise<void>>
 }
 
 export const databaseSessionCacheEligibleKey: unique symbol = Symbol('databaseSessionCacheEligibleKey')
@@ -29,6 +30,30 @@ export function capturePooledDatabaseSessions(): <T>(callback: () => T) => T {
     }
     return holders.run(captured, callback)
   }
+}
+
+export function deferPooledDatabaseSessionRefresh(runWithContext: <T>(callback: () => T) => T, refresh: () => Promise<void>): boolean {
+  const blocked = new Map<object, ScopedClient<ReleasableClient>>()
+  for (const [owner, value] of holders.getStore() ?? []) {
+    const holder = value instanceof WeakRef ? value.deref() : value
+    if (holder && !holder.closed && !holder.released) blocked.set(owner, holder)
+  }
+  if (blocked.size === 0) return false
+  runWithContext(() => {
+    for (const owner of blocked.keys()) {
+      const value = holders.getStore()?.get(owner)
+      const holder = value instanceof WeakRef ? value.deref() : value
+      if (holder && !holder.closed && !holder.released) blocked.delete(owner)
+    }
+  })
+  if (blocked.size === 0) return false
+  let remaining = blocked.size
+  const released = async () => {
+    remaining -= 1
+    if (remaining === 0) await refresh()
+  }
+  for (const holder of blocked.values()) (holder.afterRelease ??= []).push(released)
+  return true
 }
 
 export class PooledTransactionClients<TClient extends ReleasableClient> {
@@ -67,7 +92,7 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
         return await callback()
       } finally {
         scoped.leases -= 1
-        this.releaseWhenIdle(scoped)
+        await this.releaseWhenIdle(scoped)
       }
     }
 
@@ -78,7 +103,7 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
         return await callback()
       } finally {
         holder.closed = true
-        this.releaseWhenIdle(holder)
+        await this.releaseWhenIdle(holder)
       }
     })
   }
@@ -117,10 +142,13 @@ export class PooledTransactionClients<TClient extends ReleasableClient> {
     }
   }
 
-  private releaseWhenIdle(scoped: ScopedClient<TClient>): void {
+  private async releaseWhenIdle(scoped: ScopedClient<TClient>): Promise<void> {
     if (scoped.closed && scoped.leases === 0 && !scoped.released) {
       scoped.released = true
       this.releaseClient(scoped.client)
+      const callbacks = scoped.afterRelease ?? []
+      scoped.afterRelease = undefined
+      await Promise.all(callbacks.map(callback => callback()))
     }
   }
 

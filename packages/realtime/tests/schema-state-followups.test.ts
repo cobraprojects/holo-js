@@ -1,8 +1,9 @@
-import { postgresDatabaseDriverFactory } from '../../db-postgres/src'
+import { createMySQLAdapter } from '../../db-mysql/src'
+import { createPostgresAdapter, postgresDatabaseDriverFactory } from '../../db-postgres/src'
 import { expect, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { createDatabase, createDialect, onDatabaseDependencyInvalidated, unsafeSql } from '../../db/src'
-import { integrationDrivers, openDatabase, postgresTestConnection } from '../../db/tests/support/database'
+import { integrationDrivers, mysqlTestConnection, openDatabase, postgresTestConnection } from '../../db/tests/support/database'
 import { defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 
@@ -223,3 +224,73 @@ it.runIf(integrationDrivers(['postgres']).length > 0)('keeps factory-created Pos
     expect(events[0]).toEqual(expect.objectContaining({ dependencies: expect.not.arrayContaining(['__holo_database_schema__']) }))
   } finally { subscription.unsubscribe() }
 })
+
+for (const driver of ['postgres', 'mysql'] as const) {
+  it.runIf(integrationDrivers([driver]).length > 0)(`${driver} releases a sole scoped client before refreshing an ordinary subscriber after DDL`, async () => {
+    const { table } = await openDatabase(driver)
+    const adapter = driver === 'postgres'
+      ? createPostgresAdapter({ config: { ...postgresTestConnection(), max: 1 } })
+      : createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 1 } })
+    const db = createDatabase({ adapter, dialect: createDialect(driver) })
+    onTestFinished(() => db.disconnect())
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    onTestFinished(() => resetRealtimeRuntime())
+    await db.table(table).insert({ id: 1, name: 'ordinary' })
+    let runs = 0
+    const errors: unknown[] = []
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: async () => {
+      runs += 1
+      return db.table(table).select('id', 'name').orderBy('id').get()
+    } }), undefined, { onError: error => { errors.push(error) } })
+    let release!: () => void
+    const cleanup = new Promise<void>(resolve => { release = resolve })
+    let returned = false
+    let runsWhenReturned = 0
+    let ddl: Promise<unknown> | undefined
+    const qualified = table.tableName.split('.').map(part => driver === 'postgres' ? `"${part}"` : `\`${part}\``).join('.')
+    const scopeError = new Error('scope exit')
+    const scope = adapter.runWithTransactionScope(async () => {
+      ddl = db.executeSchemaStatement({ sql: `ALTER TABLE ${qualified} ADD COLUMN refresh_marker INTEGER`, source: 'schema' }).then(() => {
+        runsWhenReturned = runs
+        returned = true
+      })
+      await Promise.race([ddl, cleanup])
+      throw scopeError
+    }).catch(error => { expect(error).toBe(scopeError) })
+    try {
+      await expect.poll(() => returned).toBe(true)
+      await scope
+      expect(runsWhenReturned).toBe(1)
+      expect(runs).toBe(2)
+      expect(errors).toEqual([])
+      expect(subscription.current.data.map(row => row.name)).toEqual(['ordinary'])
+    } finally {
+      release()
+      await scope
+      await ddl
+      subscription.unsubscribe()
+    }
+  })
+
+  it.runIf(integrationDrivers([driver]).length > 0)(`${driver} delivers SESSION_ENDED once on a normal mutation after an untainted subscriber scope ends`, async () => {
+    const { db, table, adapter } = await openDatabase(driver)
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    onTestFinished(() => resetRealtimeRuntime())
+    await db.table(table).insert({ id: 1, name: 'first' })
+    const qualifiedErrors: unknown[] = []
+    const bareErrors: unknown[] = []
+    const subscribe = (name: string, errors: unknown[]) => subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => db.table(name).orderBy('id').get() }), undefined, { onError: error => { errors.push(error) } })
+    const subscriptions = await adapter.runWithTransactionScope!(async () => [
+      await subscribe(table.tableName, qualifiedErrors),
+      await subscribe(table.tableName.split('.').at(-1)!, bareErrors),
+    ])
+    try {
+      await db.table(table).insert({ id: 2, name: 'second' })
+      expect([qualifiedErrors, bareErrors]).toEqual([
+        [expect.objectContaining({ code: 'SESSION_ENDED' })],
+        [expect.objectContaining({ code: 'SESSION_ENDED' })],
+      ])
+      expect(subscriptions.map(subscription => subscription.current.data.map(row => row.name))).toEqual([['first'], ['first']])
+    } finally { subscriptions.forEach(subscription => subscription.unsubscribe()) }
+  })
+}
