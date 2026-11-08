@@ -53,6 +53,7 @@ type RuntimeState = {
   rootTransactionQueue: SerialQueue
   scheduler: QueryScheduler
   schemaOperations: Set<SchemaOperation>
+  schemaTransactions: Set<TransactionFrame>
 }
 
 type ScopeState = {
@@ -183,6 +184,7 @@ export class DatabaseContext {
       ? options.runtime
       : {
           schemaOperations: new Set(),
+          schemaTransactions: new Set(),
           savepointCounter: 0,
           rootTransactionQueue: { tail: Promise.resolve() },
           scheduler: createAdapterQueryScheduler({
@@ -212,14 +214,16 @@ export class DatabaseContext {
     if (!this._adapter.isConnected()) return
     await this._adapter.disconnect()
     resetSessionUncertainty(getRootDatabaseContext(this))
-    const operations = this._runtime.schemaOperations
+    const transactions = [...this._runtime.schemaTransactions]
+    for (const transaction of transactions) this._closeRootTransaction(transaction)
+    const operations = [...this._runtime.schemaOperations]
     this._runtime.schemaOperations = new Set()
-    await Promise.all([...operations].map(operation => {
-      if (operation.transaction) this._closeRootTransaction(operation.transaction)
+    await Promise.all(operations.map(operation => {
       operation.pending = 0
       operation.settled = true
       return this._finishSchemaOperation(operation)
     }))
+    if (transactions.length > 0 && operations.length === 0) await invalidateDatabaseSchema(this)
   }
 
   isConnected(): boolean {
@@ -409,6 +413,7 @@ export class DatabaseContext {
     const transaction = currentRootTransaction(this)
     if (transaction && !transaction.schemaChanged) {
       transaction.schemaChanged = true
+      this._runtime.schemaTransactions.add(transaction)
       beginSchemaChange(getRootDatabaseContext(this).getContextId())
     }
     const operation = { pending: 0, settled: false, finished: false, transaction, owner: this._runtime, session: this._runtime.schemaOperations }
@@ -614,6 +619,7 @@ export class DatabaseContext {
   private _closeRootTransaction(frame: TransactionFrame): void {
     if (!frame.open) return
     frame.open = false
+    this._runtime.schemaTransactions.delete(frame)
     if (frame.schemaChanged) {
       advanceSchemaGeneration()
       endSchemaChange(getRootDatabaseContext(this).getContextId())

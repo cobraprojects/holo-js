@@ -558,3 +558,48 @@ it.runIf(integrationDrivers(['postgres']).length > 0)('does not submit DDL held 
     expect((await schema.getColumns(table.tableName)).map(column => column.name)).not.toContain('disconnected_marker')
   } finally { release.resolve(); await ddl.catch(() => {}) }
 })
+
+it.runIf(integrationDrivers(['mysql']).length > 0)('releases completed schema transaction state on disconnect before its old callback returns', async () => {
+  const callbackWaiting = deferred()
+  const callbackRelease = deferred()
+  const nextStarted = deferred()
+  const nextRelease = deferred()
+  const queries: string[] = []
+  const { db, table } = await openDatabase('mysql', {
+    wrapAdapter: adapter => delayExecution(adapter, 'pending_frame_marker', nextStarted, nextRelease),
+    logger: { onQuerySuccess: entry => { queries.push(entry.source ?? '') } },
+  })
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+  configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+  onTestFinished(() => { resetRealtimeRuntime(); resetCacheRuntime() })
+  await db.table(table).insert({ id: 1, name: 'original' })
+  const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => db.table(table).orderBy('id').pluck('name') }), undefined)
+  const old = db.transaction(async tx => {
+    await tx.executeSchemaStatement({ sql: `CREATE TEMPORARY TABLE completed_frame (id INTEGER)` })
+    callbackWaiting.resolve()
+    await callbackRelease.promise
+  }).catch(error => error)
+  let next = Promise.resolve()
+  try {
+    await callbackWaiting.promise
+    await db.disconnect()
+    await db.initialize()
+    await db.table(table).insert({ id: 2, name: 'reconnected' })
+    expect(subscription.current.data).toEqual(['original', 'reconnected'])
+    const read = () => db.table(table).orderBy('id').cache(60).pluck('name')
+    expect(await read()).toEqual(['original', 'reconnected'])
+    queries.length = 0
+    expect(await read()).toEqual(['original', 'reconnected'])
+    expect(queries).toEqual([])
+    next = db.executeSchemaStatement({ sql: `ALTER TABLE ${table.tableName} ADD COLUMN pending_frame_marker INTEGER` }).then(() => {})
+    await nextStarted.promise
+    callbackRelease.resolve()
+    expect(await old).toMatchObject({ code: 'SESSION_ENDED' })
+    await db.table(table).insert({ id: 3, name: 'pending' })
+    expect(await read()).toEqual(['original', 'reconnected', 'pending'])
+    expect(subscription.current.data).toEqual(['original', 'reconnected'])
+    nextRelease.resolve()
+    await next
+    expect(subscription.current.data).toEqual(['original', 'reconnected', 'pending'])
+  } finally { callbackRelease.resolve(); nextRelease.resolve(); await old; await next; subscription.unsubscribe() }
+})
