@@ -338,6 +338,7 @@ it.each([
   ['1600 by 200 nested repeated values with two changes', 1600, 200, 'middle-and-tail'],
   ['4000 empty records with one 4000-key endpoint', 4000, 4000, 'head-record'],
   ['1200-level chain with equal siblings', 1, 1200, 'chain'],
+  ['8000 records with two changed fields', 8000, 1, 'bulk-record'],
 ] as const)('refreshes %s and yields after a change', async (_label, rowCount, columnCount, change) => {
   const { db, table } = await openDatabase('sqlite')
   onTestFinished(resetRealtimeRuntime)
@@ -353,6 +354,7 @@ it.each([
   const handler = async () => {
     const rows = await db.table(table.tableName).orderBy('id').get()
     if (change === 'chain') return makeChain(rows[0]?.name)
+    if (change === 'bulk-record') return rows.map(row => ({ id: row.id, a: row.name, b: row.name }))
     return rows.map(row => change === 'head-record'
       ? row.name === 'Closed' ? recordValue : {}
       : columnCount === 1 ? row.name : Array.from({ length: columnCount }, (_, index) => index === columnCount - 1 ? row.name : 'Open'))
@@ -374,10 +376,10 @@ it.each([
     onError: error => { errors.push(error) },
   }
   const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
-  const initial = Array.from({ length: rowCount }, () => change === 'head-record' || change === 'chain' ? {} : columnCount === 1 ? 'Open' : Array.from({ length: columnCount }, () => 'Open'))
+  const initial = Array.from({ length: rowCount }, (_, index) => change === 'bulk-record' ? { id: index + 1, a: 'Open', b: 'Open' } : change === 'head-record' || change === 'chain' ? {} : columnCount === 1 ? 'Open' : Array.from({ length: columnCount }, () => 'Open'))
   if (change === 'chain') expect(JSON.stringify(deliveries)).toBe(JSON.stringify([makeChain('Open')]))
   else expect(deliveries).toEqual([initial])
-  const changedIds = change === 'middle-and-tail' ? [rowCount / 2, rowCount] : [change === 'head-record' ? 1 : rowCount]
+  const changedIds = change === 'bulk-record' ? Array.from({ length: rowCount }, (_, index) => index + 1) : change === 'middle-and-tail' ? [rowCount / 2, rowCount] : [change === 'head-record' ? 1 : rowCount]
   await executeRealtimeMutation(defineRealtimeMutation({
     access: 'public',
     handler: () => db.table(table.tableName).whereIn('id', changedIds).update({ name: 'Closed' }),
@@ -392,7 +394,7 @@ it.each([
     expect(JSON.stringify(deliveries.at(-1))).toBe(expected)
   } else {
     expect(fresh).toEqual(initial.map((value, index) => changedIds.includes(index + 1)
-      ? change === 'head-record' ? recordValue : columnCount === 1 ? 'Closed' : [...Array.from({ length: columnCount - 1 }, () => 'Open'), 'Closed']
+      ? change === 'bulk-record' ? { id: index + 1, a: 'Closed', b: 'Closed' } : change === 'head-record' ? recordValue : columnCount === 1 ? 'Closed' : [...Array.from({ length: columnCount - 1 }, () => 'Open'), 'Closed']
       : value))
     expect(subscription.current.data).toEqual(fresh)
     expect(deliveries.at(-1)).toEqual(fresh)

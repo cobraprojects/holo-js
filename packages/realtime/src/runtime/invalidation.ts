@@ -40,6 +40,8 @@ import type {
   RealtimeQueryDefinitionMetadata,
 } from '../contracts'
 
+const MAX_REFRESH_PATCH_OPERATIONS = 64
+
 export function ensureDatabaseSubscription(): void {
   const state = getRuntimeState()
   if (state.unsubscribeFromDatabase) return
@@ -174,7 +176,7 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
           const patchOperations = current
             ? createReplacePatchOperations([], current.data, result.data, entry.queries[0]?.primaryKey ?? 'id', true)
             : undefined
-          const patch = patchOperations?.some(operation => 'valueKind' in operation && operation.path.length > 0)
+          const patch = (patchOperations?.length ?? 0) > MAX_REFRESH_PATCH_OPERATIONS || patchOperations?.some(operation => 'valueKind' in operation && operation.path.length > 0)
             ? undefined
             : parseWireSnapshotPatch({ operations: patchOperations, version: entry.version + 1 })
           const data = current && patch ? applyWireSnapshotPatch(current, patch).data : result.data
