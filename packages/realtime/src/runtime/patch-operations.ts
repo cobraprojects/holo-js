@@ -25,6 +25,8 @@ export {
   compactPatchOperations,
 } from './patch-operation-compaction'
 
+const MAX_DEEP_PATCH_PATH_LENGTH = 16
+
 export function createReplacePatchOperations(
   path: readonly RealtimePatchPathSegment[],
   previousValue: unknown,
@@ -46,7 +48,7 @@ export function createReplacePatchOperations(
     return arrayMoveOperations
   }
 
-  const arrayWindowSlideOperations = createArrayWindowSlidePatchOperations(path, previousValue, nextValue)
+  const arrayWindowSlideOperations = createArrayWindowSlidePatchOperations(path, previousValue, nextValue, primaryKey)
   if (arrayWindowSlideOperations) {
     return arrayWindowSlideOperations
   }
@@ -101,12 +103,18 @@ function createArrayWindowSlidePatchOperations(
   path: readonly RealtimePatchPathSegment[],
   previousValue: unknown,
   nextValue: unknown,
+  primaryKey: string,
 ): readonly RealtimeSubscriptionPatchOperation[] | undefined {
   if (!Array.isArray(previousValue) || !Array.isArray(nextValue) || previousValue.length !== nextValue.length) {
     return undefined
   }
 
-  const appendedCount = readWindowAppendedRowCount(previousValue, nextValue)
+  for (const endpoint of [previousValue[0], nextValue[0]]) {
+    if (endpoint !== null && typeof endpoint === 'object'
+      && (!isRecord(endpoint) || !Object.prototype.propertyIsEnumerable.call(endpoint, primaryKey) || endpoint[primaryKey] === undefined)) return undefined
+  }
+
+  const appendedCount = readWindowAppendedRowCount(previousValue, nextValue, primaryKey)
   if (typeof appendedCount === 'number') {
     return Object.freeze([
       createSplicePatchOperation(path, 0, appendedCount, Object.freeze([])),
@@ -114,7 +122,7 @@ function createArrayWindowSlidePatchOperations(
     ])
   }
 
-  const prependedCount = readWindowPrependedRowCount(previousValue, nextValue)
+  const prependedCount = readWindowPrependedRowCount(previousValue, nextValue, primaryKey)
   if (typeof prependedCount === 'number') {
     return Object.freeze([
       createSplicePatchOperation(path, 0, 0, nextValue.slice(0, prependedCount)),
@@ -128,9 +136,10 @@ function createArrayWindowSlidePatchOperations(
 function readWindowAppendedRowCount(
   previousValue: readonly unknown[],
   nextValue: readonly unknown[],
+  primaryKey: string,
 ): number | undefined {
   for (let count = 1; count < previousValue.length; count += 1) {
-    if (areEquivalentArrayItems(previousValue[count], nextValue[0])) {
+    if (previousValue[count] === nextValue[0] || hasSameDefinedRecordIdentity(previousValue[count], nextValue[0], primaryKey)) {
       return arraysMatchByIdentity(previousValue, count, nextValue, 0, previousValue.length - count) ? count : undefined
     }
   }
@@ -141,9 +150,10 @@ function readWindowAppendedRowCount(
 function readWindowPrependedRowCount(
   previousValue: readonly unknown[],
   nextValue: readonly unknown[],
+  primaryKey: string,
 ): number | undefined {
   for (let count = 1; count < previousValue.length; count += 1) {
-    if (areEquivalentArrayItems(previousValue[0], nextValue[count])) {
+    if (previousValue[0] === nextValue[count] || hasSameDefinedRecordIdentity(previousValue[0], nextValue[count], primaryKey)) {
       return arraysMatchByIdentity(previousValue, 0, nextValue, count, previousValue.length - count) ? count : undefined
     }
   }
@@ -395,7 +405,7 @@ function createRecordFieldReplacePatchOperations(
   }
 
   const changedKeys = Object.keys(fields)
-  if (deep && changedKeys.some(key => Array.isArray(previousValue[key]) && Array.isArray(nextValue[key]) || isRecord(previousValue[key]) && isRecord(nextValue[key]))) {
+  if (deep && path.length < MAX_DEEP_PATCH_PATH_LENGTH && changedKeys.some(key => Array.isArray(previousValue[key]) && Array.isArray(nextValue[key]) || isRecord(previousValue[key]) && isRecord(nextValue[key]))) {
     return Object.freeze(changedKeys.flatMap(key => createReplacePatchOperations([...path, key], previousValue[key], nextValue[key], primaryKey, true)))
   }
   if (changedKeys.length === 1) {

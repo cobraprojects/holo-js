@@ -333,17 +333,30 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
 }
 
 it.each([
-  ['800 repeated primitive values', 800, 1, false],
-  ['100 by 200 nested repeated values', 100, 200, false],
-  ['1600 by 200 nested repeated values with two changes', 1600, 200, true],
-] as const)('refreshes %s and yields after a tail change', async (_label, rowCount, columnCount, changeMiddle) => {
+  ['800 repeated primitive values', 800, 1, 'tail'],
+  ['100 by 200 nested repeated values', 100, 200, 'tail'],
+  ['1600 by 200 nested repeated values with two changes', 1600, 200, 'middle-and-tail'],
+  ['4000 empty records with one 4000-key endpoint', 4000, 4000, 'head-record'],
+  ['1200-level chain with equal siblings', 1, 1200, 'chain'],
+] as const)('refreshes %s and yields after a change', async (_label, rowCount, columnCount, change) => {
   const { db, table } = await openDatabase('sqlite')
   onTestFinished(resetRealtimeRuntime)
   await db.table(table.tableName).insert(Array.from({ length: rowCount }, (_, index) => ({ id: index + 1, name: 'Open' })))
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
-  const handler = async () => (await db.table(table.tableName).orderBy('id').get()).map(row => columnCount === 1
-    ? row.name
-    : Array.from({ length: columnCount }, (_, index) => index === columnCount - 1 ? row.name : 'Open'))
+  const recordValue = change === 'head-record' ? Object.fromEntries<number>(Array.from({ length: columnCount }, (_, index) => [`field_${index}`, index] as const)) : {}
+  type ChainValue = { value: unknown } | { same: string, next: ChainValue }
+  const makeChain = (value: unknown): ChainValue => {
+    let node: ChainValue = { value }
+    for (let depth = 0; depth < columnCount; depth += 1) node = { same: 'Open', next: node }
+    return node
+  }
+  const handler = async () => {
+    const rows = await db.table(table.tableName).orderBy('id').get()
+    if (change === 'chain') return makeChain(rows[0]?.name)
+    return rows.map(row => change === 'head-record'
+      ? row.name === 'Closed' ? recordValue : {}
+      : columnCount === 1 ? row.name : Array.from({ length: columnCount }, (_, index) => index === columnCount - 1 ? row.name : 'Open'))
+  }
   const sockets = installFakeRealtimeBroadcast()
   const transport = createBroadcastRealtimeTransport()
   const deliveries: unknown[] = []
@@ -361,19 +374,27 @@ it.each([
     onError: error => { errors.push(error) },
   }
   const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
-  const initial = Array.from({ length: rowCount }, () => columnCount === 1 ? 'Open' : Array.from({ length: columnCount }, () => 'Open'))
-  expect(deliveries).toEqual([initial])
-  const changedIds = changeMiddle ? [rowCount / 2, rowCount] : [rowCount]
+  const initial = Array.from({ length: rowCount }, () => change === 'head-record' || change === 'chain' ? {} : columnCount === 1 ? 'Open' : Array.from({ length: columnCount }, () => 'Open'))
+  if (change === 'chain') expect(JSON.stringify(deliveries)).toBe(JSON.stringify([makeChain('Open')]))
+  else expect(deliveries).toEqual([initial])
+  const changedIds = change === 'middle-and-tail' ? [rowCount / 2, rowCount] : [change === 'head-record' ? 1 : rowCount]
   await executeRealtimeMutation(defineRealtimeMutation({
     access: 'public',
     handler: () => db.table(table.tableName).whereIn('id', changedIds).update({ name: 'Closed' }),
   }))
   await new Promise(resolve => setTimeout(resolve, 0))
   const fresh = await handler()
-  expect(fresh).toEqual(initial.map((value, index) => changedIds.includes(index + 1)
-    ? columnCount === 1 ? 'Closed' : [...Array.from({ length: columnCount - 1 }, () => 'Open'), 'Closed']
-    : value))
   expect(errors).toEqual([])
-  expect(subscription.current.data).toEqual(fresh)
-  expect(deliveries.at(-1)).toEqual(fresh)
+  if (change === 'chain') {
+    const expected = JSON.stringify(makeChain('Closed'))
+    expect(JSON.stringify(fresh)).toBe(expected)
+    expect(JSON.stringify(subscription.current.data)).toBe(expected)
+    expect(JSON.stringify(deliveries.at(-1))).toBe(expected)
+  } else {
+    expect(fresh).toEqual(initial.map((value, index) => changedIds.includes(index + 1)
+      ? change === 'head-record' ? recordValue : columnCount === 1 ? 'Closed' : [...Array.from({ length: columnCount - 1 }, () => 'Open'), 'Closed']
+      : value))
+    expect(subscription.current.data).toEqual(fresh)
+    expect(deliveries.at(-1)).toEqual(fresh)
+  }
 })
