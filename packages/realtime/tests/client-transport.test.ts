@@ -332,12 +332,17 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
   })
 }
 
-it('refreshes 800 repeated primitive values and yields after a tail change', async () => {
+it.each([
+  ['800 repeated primitive values', 800, 1],
+  ['100 by 200 nested repeated values', 100, 200],
+] as const)('refreshes %s and yields after a tail change', async (_label, rowCount, columnCount) => {
   const { db, table } = await openDatabase('sqlite')
   onTestFinished(resetRealtimeRuntime)
-  await db.table(table.tableName).insert(Array.from({ length: 800 }, (_, index) => ({ id: index + 1, name: 'Open' })))
+  await db.table(table.tableName).insert(Array.from({ length: rowCount }, (_, index) => ({ id: index + 1, name: 'Open' })))
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
-  const handler = async () => (await db.table(table.tableName).orderBy('id').get()).map(row => row.name)
+  const handler = async () => (await db.table(table.tableName).orderBy('id').get()).map(row => columnCount === 1
+    ? row.name
+    : Array.from({ length: columnCount }, (_, index) => index === columnCount - 1 ? row.name : 'Open'))
   const sockets = installFakeRealtimeBroadcast()
   const transport = createBroadcastRealtimeTransport()
   const deliveries: unknown[] = []
@@ -355,14 +360,15 @@ it('refreshes 800 repeated primitive values and yields after a tail change', asy
     onError: error => { errors.push(error) },
   }
   const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
-  expect(deliveries).toEqual([Array.from({ length: 800 }, () => 'Open')])
+  const initial = Array.from({ length: rowCount }, () => columnCount === 1 ? 'Open' : Array.from({ length: columnCount }, () => 'Open'))
+  expect(deliveries).toEqual([initial])
   await executeRealtimeMutation(defineRealtimeMutation({
     access: 'public',
-    handler: () => db.table(table.tableName).where('id', 800).update({ name: 'Closed' }),
+    handler: () => db.table(table.tableName).where('id', rowCount).update({ name: 'Closed' }),
   }))
   await new Promise(resolve => setTimeout(resolve, 0))
   const fresh = await handler()
-  expect(fresh).toEqual([...Array.from({ length: 799 }, () => 'Open'), 'Closed'])
+  expect(fresh).toEqual([...initial.slice(0, -1), columnCount === 1 ? 'Closed' : [...Array.from({ length: columnCount - 1 }, () => 'Open'), 'Closed']])
   expect(errors).toEqual([])
   expect(subscription.current.data).toEqual(fresh)
   expect(deliveries.at(-1)).toEqual(fresh)
