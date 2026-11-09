@@ -331,3 +331,39 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
     expect(deliveries).toEqual([initial, fresh])
   })
 }
+
+it('refreshes 800 repeated primitive values and yields after a tail change', async () => {
+  const { db, table } = await openDatabase('sqlite')
+  onTestFinished(resetRealtimeRuntime)
+  await db.table(table.tableName).insert(Array.from({ length: 800 }, (_, index) => ({ id: index + 1, name: 'Open' })))
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+  const handler = async () => (await db.table(table.tableName).orderBy('id').get()).map(row => row.name)
+  const sockets = installFakeRealtimeBroadcast()
+  const transport = createBroadcastRealtimeTransport()
+  const deliveries: unknown[] = []
+  const errors: unknown[] = []
+  const leave = transport.subscribe('records.repeated', {}, snapshot => deliveries.push(snapshot.data), error => errors.push(error))
+  onTestFinished(leave)
+  await expect.poll(() => sockets.length).toBe(1)
+  const socket = sockets[0]!
+  socket.open()
+  await expect.poll(() => socket.frames.length).toBe(1)
+  const { id } = socket.frames[0]!.data as { id: string }
+  const options: InternalRealtimeSubscribeOptions<Awaited<ReturnType<typeof handler>>> = {
+    onData: snapshot => socket.receive('holo:realtime:snapshot', { id, snapshot }),
+    onPatch: patch => socket.receive('holo:realtime:patch', { id, patch }),
+    onError: error => { errors.push(error) },
+  }
+  const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
+  expect(deliveries).toEqual([Array.from({ length: 800 }, () => 'Open')])
+  await executeRealtimeMutation(defineRealtimeMutation({
+    access: 'public',
+    handler: () => db.table(table.tableName).where('id', 800).update({ name: 'Closed' }),
+  }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const fresh = await handler()
+  expect(fresh).toEqual([...Array.from({ length: 799 }, () => 'Open'), 'Closed'])
+  expect(errors).toEqual([])
+  expect(subscription.current.data).toEqual(fresh)
+  expect(deliveries.at(-1)).toEqual(fresh)
+})

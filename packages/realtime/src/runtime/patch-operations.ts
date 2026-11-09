@@ -25,6 +25,8 @@ export {
   compactPatchOperations,
 } from './patch-operation-compaction'
 
+const ARRAY_MOVE_SEARCH_WORK_BUDGET = 1_000_000
+
 export function createReplacePatchOperations(
   path: readonly RealtimePatchPathSegment[],
   previousValue: unknown,
@@ -205,13 +207,16 @@ function findSingleArrayMove(
   nextValue: readonly unknown[],
   primaryKey: string,
 ): { readonly from: number, readonly to: number } | undefined {
+  let remainingWork = ARRAY_MOVE_SEARCH_WORK_BUDGET
   for (let from = 0; from < previousValue.length; from += 1) {
     const candidate = previousValue[from]
     for (let to = 0; to < nextValue.length; to += 1) {
+      if (--remainingWork < 0) return undefined
       if (!areSameArrayMoveItem(candidate, nextValue[to], primaryKey) || from === to) {
         continue
       }
 
+      if ((remainingWork -= previousValue.length) < 0) return undefined
       if (arraysMatchAfterMove(previousValue, nextValue, from, to)) {
         return { from, to }
       }
