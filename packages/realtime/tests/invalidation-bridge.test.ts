@@ -5,7 +5,7 @@ import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/k
 import { cacheQueryBridgeInternals, configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { query } from '../src'
 import { resetRemoteRefreshSchedule } from '../src/runtime/invalidation'
-import { configureRealtimeRuntime, executeRealtimeQuery, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
+import { configureRealtimeRuntime, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
 
 async function waitForTimerScheduledAfter(previousCount: number, signal: AbortSignal): Promise<void> {
@@ -561,16 +561,34 @@ it('releases refresh capacity before delivery and error callbacks write and awai
   await adapter.execute('CREATE TABLE callback_records (id INTEGER PRIMARY KEY, score INTEGER)')
   await adapter.execute('INSERT INTO callback_records VALUES (1, 10)')
   await adapter.execute('CREATE TABLE authorization_log (id INTEGER PRIMARY KEY)')
+  await adapter.execute('CREATE TABLE leaf_records (id INTEGER PRIMARY KEY, score INTEGER)')
+  await adapter.execute('INSERT INTO leaf_records VALUES (1, 10)')
   const callbacksReady = createGate()
+  const audit = await subscribeRealtimeQuery(query({
+    access: 'public',
+    handler: async () => await db.table('authorization_log').whereInSub('id', db.table('authorization_log').select('id')).orderBy('id').get(),
+  }))
   let refreshing = false
   let callbackCount = 0
   let failures = 0
+  const callbackFreshness: boolean[] = []
+  const downstreamFreshness: boolean[] = []
+  const leaf = await subscribeRealtimeQuery(query({
+    access: 'public',
+    handler: async () => await db.table('leaf_records').whereInSub('id', db.table('leaf_records').select('id')).get(),
+  }))
   const targets = []
   for (let index = 0; index < 4; index += 1) {
     targets.push(await subscribeRealtimeQuery(query({
       access: 'public',
       handler: async () => await db.table('callback_records').whereInSub('id', db.table('callback_records').select('id')).get(),
-    })))
+    }), {}, {
+      onData: async () => {
+        if (!refreshing) return
+        await db.table('leaf_records').where('id', 1).update({ score: 99 })
+        downstreamFreshness.push(leaf.current.data[0]?.score === 99)
+      },
+    }))
   }
   const writeFromCallback = async () => {
     if (!refreshing) return
@@ -578,6 +596,7 @@ it('releases refresh capacity before delivery and error callbacks write and awai
     if (callbackCount === 4) callbacksReady.open()
     await callbacksReady.promise
     await db.table('callback_records').where('id', 1).update({ score: 99 })
+    callbackFreshness.push(leaf.current.data[0]?.score === 99)
   }
   for (let index = 0; index < 4; index += 1) {
     await subscribeRealtimeQuery(query({
@@ -608,8 +627,9 @@ it('releases refresh capacity before delivery and error callbacks write and awai
   await realtimeServerInternals.createRealtimeDatabaseInvalidationBridge().receive(remoteInvalidation(['db:main:records']))
   expect(callbackCount).toBe(4)
   expect(failures).toBe(2)
-  const audit = await executeRealtimeQuery(query({ access: 'public', handler: async () => await db.table('authorization_log').orderBy('id').get() }))
-  expect(audit.data).toEqual([{ id: 0 }, { id: 1 }, { id: 2 }, { id: 3 }])
+  expect(callbackFreshness).toEqual([true, true, true, true])
+  expect(downstreamFreshness).toEqual([true, true, true, true])
+  await expect.poll(() => audit.current.data).toEqual([{ id: 0 }, { id: 1 }, { id: 2 }, { id: 3 }])
   for (const target of targets) expect(target.current.data).toEqual([{ id: 1, score: 99 }])
 }, 10_000)
 

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { onDatabaseDependencyInvalidated, queryCacheInternals } from '@holo-js/db'
 import {
@@ -133,16 +134,18 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
     if (deferRefreshUntilSessionRelease(entry)) return
     if (!await acquireRefreshSlot()) return
     let result: Awaited<ReturnType<typeof executeRealtimeQueryInternal>>
+    const execution = { generation, active: true }
     try {
       if (!isCurrent()) return
       if (queuedRemoteRefreshKeys.delete(refreshKey)) remoteRefreshLastRunAt.set(refreshKey, Date.now())
-      result = await entry.runWithContext(async () => await executeRealtimeQueryInternal(
+      result = await refreshExecution.run(execution, () => entry.runWithContext(async () => await executeRealtimeQueryInternal(
         entry.definition,
         entry.args,
         undefined,
         () => { if (!isCurrent()) throw new Error('Realtime refresh is no longer active.') },
-      ))
+      )))
     } finally {
+      execution.active = false
       releaseRefreshSlot(generation)
     }
     if (!isCurrent()) return
@@ -193,7 +196,7 @@ function scheduleRefreshKey(refreshKey: string): Promise<void> {
     return Promise.resolve()
   }
 
-  refresh.running = drainRefresh(refreshKey, refresh)
+  refresh.running = refreshExecution.exit(() => drainRefresh(refreshKey, refresh))
   return refresh.running
 }
 
@@ -296,6 +299,7 @@ async function refreshParsedInvalidations(events: readonly ParsedInvalidationEve
   })])
 }
 
+const refreshExecution = new AsyncLocalStorage<{ readonly generation: number, active: boolean }>()
 const REFRESH_CONCURRENCY = 4
 const REMOTE_REFRESH_MIN_INTERVAL_MS = 100
 let activeRefreshes = 0
@@ -513,7 +517,22 @@ async function flushInvalidationBatch(batch: PendingInvalidationBatch): Promise<
   }
 }
 
-export async function handleBatchedDatabaseInvalidation(
+export function handleBatchedDatabaseInvalidation(
+  event: DatabaseDependencyInvalidationEventWithMutations,
+): Promise<void> {
+  const execution = refreshExecution.getStore()
+  const reentrant = execution?.active && execution.generation === refreshGeneration && activeRefreshes === REFRESH_CONCURRENCY
+  return refreshExecution.exit(() => {
+    const pending = enqueueDatabaseInvalidation(event)
+    if (!reentrant) return pending
+    void pending.catch((error: unknown) => {
+      reportError(error, { capability: 'realtime', operation: 'subscription.refresh' })
+    })
+    return Promise.resolve()
+  })
+}
+
+async function enqueueDatabaseInvalidation(
   event: DatabaseDependencyInvalidationEventWithMutations,
 ): Promise<void> {
   if (event.dependencies.includes(queryCacheInternals.databaseSchemaDependency)) {
