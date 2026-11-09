@@ -193,7 +193,7 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
       }
     })
   } catch (error) {
-    await fail(error)
+    await entry.runWithContext.runWithAuth(() => fail(error))
   }
 }
 
@@ -253,8 +253,10 @@ async function refreshInvalidatedQueryEntry(
     if (deferRefreshUntilSessionRelease(entry)) return
     if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills))) return
   } catch (error) {
-    entry.refreshFailed = true
-    await deliverRefreshError(entry, error)
+    await entry.runWithContext.runWithAuth(async () => {
+      entry.refreshFailed = true
+      await deliverRefreshError(entry, error)
+    })
     return
   }
 

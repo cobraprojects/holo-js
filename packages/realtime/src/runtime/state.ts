@@ -1,5 +1,5 @@
 import { queryCacheInternals } from '@holo-js/db'
-import type { RealtimeContextRunner } from './execution-context'
+import type { createExecutionContext } from './execution-context'
 import type {
   RealtimeExecutionResult,
   RealtimeArgsFor,
@@ -111,7 +111,7 @@ export type InternalRealtimeSubscribeOptions<TResult> = RealtimeSubscribeOptions
 }
 
 export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata> = {
-  runWithContext: RealtimeContextRunner
+  runWithContext: ReturnType<typeof createExecutionContext>
   readonly contextId: number
   contexts: Map<string, ReadonlySet<number>>
   readonly args: RealtimeArgsFor<TDefinition>

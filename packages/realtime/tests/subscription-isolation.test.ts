@@ -1,11 +1,15 @@
+import { randomUUID } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, onTestFinished } from 'vitest'
 import { authRuntimeInternals, createAsyncAuthContext, getAuthRuntime, resetAuthRuntime, type AuthRuntimeContext } from '@holo-js/auth'
 import { DB, configureDB, createConnectionManager, createDatabase, createDialect, resetDB, type DatabaseContext } from '@holo-js/db'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
 import { createRequestAwareAuthContext } from '../../core/src/portable/authRequestContext'
 import { createNativeAuthPersistence } from '../../auth/tests/support/native-persistence'
 import { createNativeSessionStore } from '../../auth/tests/support/native-session'
+import { createPostgresAdapter } from '../../db-postgres/src'
+import { createMySQLAdapter } from '../../db-mysql/src'
+import { integrationDrivers, postgresTestConnection, mysqlTestConnection } from '../../../tests/support/real-database'
 import { createNativeRelationalAdapter } from './helpers/native-fixture'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, executeRealtimeQuery, RealtimeUnauthorizedError, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
@@ -291,6 +295,63 @@ it.each(['data', 'error'] as const)('delivers native handler %s in the subscribi
   expect(subscription.current.data).toEqual([{ id: 20, name: channel === 'error' ? 'Ben' : 'Updated Ben' }])
   expect(errors).toHaveLength(channel === 'error' ? 1 : 0)
   expect(principals).toEqual([20, 20])
+})
+
+it.each(integrationDrivers(['postgres', 'mysql'] as const))('delivers ended %s session entry errors in the subscribing user context', async driver => {
+  const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
+  const persistence = await configureAuthenticatedSubscriptions(context)
+  const adapter = driver === 'postgres'
+    ? createPostgresAdapter({ config: { ...postgresTestConnection(), max: 1 } })
+    : createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 1 } })
+  const tableName = `entry_error_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+  const db = createDatabase({ adapter, dialect: createDialect(driver), connectionName: 'events' })
+  await adapter.initialize()
+  onTestFinished(async () => {
+    resetRealtimeRuntime()
+    await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
+    await adapter.disconnect()
+  })
+  await adapter.execute(`CREATE TABLE ${tableName} (id INTEGER PRIMARY KEY, name VARCHAR(64))`)
+  await db.table(tableName).insert({ id: 1, name: 'Before' })
+  configureRealtimeRuntime({ db: () => db })
+  const principals: Array<string | number | undefined> = []
+  const errors: unknown[] = []
+  const callbackRows: unknown[] = []
+  const callbackErrors: unknown[] = []
+  let authorizations = 0
+  let handlerCalls = 0
+  const definition = defineRealtimeQuery({
+    access: { require: 'authenticated', authorize: () => { authorizations += 1; return true } },
+    handler: async ({ db }) => { handlerCalls += 1; return await db.table(tableName).select('id', 'name').get() },
+  })
+  const subscription = await context.run(async () => {
+    await getAuthRuntime().guard('web').loginUsingId(20)
+    return await adapter.runWithTransactionScope(() => subscribeRealtimeQuery(definition, {}, {
+      onData: async () => { principals.push((await getAuthRuntime().guard('web').user())?.id) },
+      onError: async error => {
+        errors.push(error)
+        await persistence.db.transaction(async () => {
+          const principal = (await getAuthRuntime().guard('web').user())?.id
+          principals.push(principal)
+          callbackRows.push(await persistence.db.table('users').where('id', principal ?? 0).select('id', 'name').first())
+          await persistence.db.table('users').where('id', principal ?? 0).update({ name: 'Callback' })
+        }).catch(error => { callbackErrors.push(error) })
+      },
+    }))
+  })
+  await context.run(async () => {
+    await getAuthRuntime().guard('web').loginUsingId(10)
+    await db.table(tableName).where('id', 1).update({ name: 'After' })
+  })
+  expect(errors).toEqual([expect.objectContaining({ code: 'SESSION_ENDED' })])
+  expect(subscription.current.data).toEqual([{ id: 1, name: 'Before' }])
+  expect(await db.table(tableName).select('id', 'name').get()).toEqual([{ id: 1, name: 'After' }])
+  expect(authorizations).toBe(1)
+  expect(handlerCalls).toBe(1)
+  if (callbackErrors.length > 0) throw callbackErrors[0]
+  expect(principals).toEqual([20, 20])
+  expect(callbackRows).toEqual([{ id: 20, name: 'Ben' }])
+  expect(await persistence.db.table('users').select('id', 'name').orderBy('id').get()).toEqual([{ id: 10, name: 'Ava' }, { id: 20, name: 'Callback' }])
 })
 
 it('bounds captured authorization and handlers while keeping identical subscriptions independent for each principal', async () => {
