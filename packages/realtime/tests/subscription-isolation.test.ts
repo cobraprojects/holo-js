@@ -8,7 +8,7 @@ import { createNativeAuthPersistence } from '../../auth/tests/support/native-per
 import { createNativeSessionStore } from '../../auth/tests/support/native-session'
 import { createNativeRelationalAdapter } from './helpers/native-fixture'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
-import { configureRealtimeRuntime, executeRealtimeMutation, RealtimeUnauthorizedError, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
+import { configureRealtimeRuntime, executeRealtimeMutation, executeRealtimeQuery, RealtimeUnauthorizedError, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 
 afterEach(() => {
   resetRealtimeRuntime()
@@ -292,3 +292,67 @@ it.each(['data', 'error'] as const)('delivers native handler %s in the subscribi
   expect(errors).toHaveLength(channel === 'error' ? 1 : 0)
   expect(principals).toEqual([20, 20])
 })
+
+it('bounds captured authorization and handlers while keeping identical subscriptions independent for each principal', async () => {
+  const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
+  const persistence = await configureAuthenticatedSubscriptions(context)
+  let refreshing = false
+  let active = 0
+  let peak = 0
+  let release: () => void = () => undefined
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const authorized: Array<string | number | undefined> = []
+  const handled: Array<string | number | undefined> = []
+  const query = defineRealtimeQuery({
+    access: {
+      require: 'authenticated',
+      authorize: async ({ auth }) => {
+        if (refreshing) {
+          active += 1
+          peak = Math.max(peak, active)
+          authorized.push(auth?.user.id)
+          await gate
+        }
+        return true
+      },
+    },
+    handler: async ({ auth, db }) => {
+      try {
+        if (refreshing) handled.push(auth.user.id)
+        return await db.table('users').where('id', auth.user.id)
+          .whereInSub('id', db.table('users').select('id')).select('id', 'name').get()
+      } finally {
+        if (refreshing) active -= 1
+      }
+    },
+  })
+  const subscribeAs = async (id: number, count: number) => await context.run(async () => {
+    await getAuthRuntime().guard('web').loginUsingId(id)
+    const subscriptions = []
+    for (let index = 0; index < count; index += 1) subscriptions.push(await subscribeRealtimeQuery(query))
+    return subscriptions
+  })
+  const first = await subscribeAs(10, 6)
+  const second = await subscribeAs(20, 2)
+  refreshing = true
+  const write = persistence.db.table('users').update({ name: 'Updated' })
+  try {
+    await expect.poll(() => authorized.length).toBeGreaterThanOrEqual(4)
+    expect(peak).toBe(4)
+  } finally {
+    release()
+    await write
+  }
+  expect(peak).toBe(4)
+  expect(authorized.filter(id => id === 10)).toHaveLength(6)
+  expect(authorized.filter(id => id === 20)).toHaveLength(2)
+  expect(handled).toEqual(authorized)
+  refreshing = false
+  for (const [id, subscriptions] of [[10, first], [20, second]] as const) {
+    const fresh = await context.run(async () => {
+      await getAuthRuntime().guard('web').loginUsingId(id)
+      return await executeRealtimeQuery(query)
+    })
+    for (const subscription of subscriptions) expect(subscription.current.data).toEqual(fresh.data)
+  }
+}, 30_000)

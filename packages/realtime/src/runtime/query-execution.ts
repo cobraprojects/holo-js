@@ -43,11 +43,13 @@ export async function executeRealtimeQueryInternal<TDefinition extends RealtimeQ
   definition: TDefinition,
   input = {} as RealtimeArgsFor<TDefinition>,
   options?: RealtimeExecutionOptions,
+  beforeHandler?: () => void,
 ): Promise<InternalRealtimeExecutionResult<RealtimeResultFor<TDefinition>> & { readonly contexts: ReadonlyMap<string, ReadonlySet<number>> }> {
   return await runWithExecutionOptions(getRuntimeState().bindings, options, async () => {
     const db = getRealtimeDatabaseContext()
     const args = await resolveArgs(definition, input)
     const auth = await authorize(getRuntimeState().bindings, definition.access, args, db)
+    beforeHandler?.()
     const result = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
       return await definition.handler({
         args,

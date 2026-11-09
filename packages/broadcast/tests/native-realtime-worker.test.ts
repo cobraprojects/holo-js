@@ -5,10 +5,11 @@ import { expect, it, onTestFinished } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { normalizeBroadcastConfig, startBroadcastWorker } from '../src'
 import { executeRealtimeMutation, executeRealtimeQuery, RealtimeError, RealtimeForbiddenError, subscribeRealtimeQuery } from '../../realtime/src/server'
-import { mutation, query } from '../../realtime/src'
+import { mutation, query, type RealtimeSubscriptionSnapshot } from '../../realtime/src'
+import { realtimeClientInternals } from '../../realtime/src/client'
 import { openRealtimeDatabase } from '../../realtime/tests/helpers/native-database'
 
-type Packet = { event: string; data: { id?: string; message?: string; kind?: string; name?: string; status?: number; snapshot?: { data: { records: Array<{ id: number; score: number }> } }; result?: { data: { updated: number } } } }
+type Packet = { event: string; data: { id?: string; message?: string; kind?: string; name?: string; status?: number; snapshot?: RealtimeSubscriptionSnapshot<{ records: Array<{ id: number; score: number }> }>; patch?: unknown; result?: { data: { updated: number } } } }
 
 async function startWorker(realtime: NonNullable<Parameters<typeof startBroadcastWorker>[0]['realtime']>) {
   const reservation = createServer()
@@ -32,14 +33,26 @@ async function startWorker(realtime: NonNullable<Parameters<typeof startBroadcas
   const socket = new WebSocket(`ws://${worker.host}:${worker.port}/app/key`)
   onTestFinished(() => socket.terminate())
   const packets: Packet[] = []
+  const snapshots = new Map<string, NonNullable<Packet['data']['snapshot']>>()
   socket.on('message', data => {
-    const packet = JSON.parse(data.toString())
-    packets.push({ ...packet, data: typeof packet.data === 'string' ? JSON.parse(packet.data) : packet.data })
+    const frame = JSON.parse(data.toString()) as { event: string, data: string | Packet['data'] }
+    const packet: Packet = { ...frame, data: typeof frame.data === 'string' ? JSON.parse(frame.data) : frame.data }
+    packets.push(packet)
+    const id = packet.data.id
+    if (!id) return
+    if (packet.event === 'holo:realtime:snapshot' && packet.data.snapshot) {
+      snapshots.set(id, packet.data.snapshot)
+    } else if (packet.event === 'holo:realtime:patch') {
+      const patch = realtimeClientInternals.parseWireSnapshotPatch(packet.data.patch)
+      const current = snapshots.get(id)
+      if (!patch || !current) throw new Error('Expected a valid subscription patch after its snapshot')
+      snapshots.set(id, realtimeClientInternals.applyWireSnapshotPatch(current, patch))
+    }
   })
   await once(socket, 'open')
   await expect.poll(() => packets.some(packet => packet.event === 'pusher:connection_established')).toBe(true)
   return {
-    socket, packets,
+    socket, packets, snapshots,
     baseUrl: `http://${worker.host}:${worker.port}`,
     send(id: string, action: string) {
       socket.send(JSON.stringify({ event: 'holo:realtime', data: { id, action, name: action === 'mutation' ? 'records.rename' : 'records.list', args: {} } }))
@@ -144,4 +157,53 @@ it('reports internal realtime failures with a generic message while keeping auth
   expect(reports.map(report => report.error)).toEqual([upstreamFailure, failure, outage])
   expect(new Set(reports.map(report => report.context.operation))).toEqual(new Set(['worker.realtime']))
   expect(worker.socket.readyState).toBe(WebSocket.OPEN)
+})
+
+it('bounds native socket subscription refreshes with the same budget as local subscriptions', async () => {
+  const { db } = await openRealtimeDatabase()
+  let refreshing = false
+  let active = 0
+  let peak = 0
+  let release: () => void = () => undefined
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const records = query({
+    name: 'records.list',
+    access: 'public',
+    handler: async () => {
+      if (refreshing) {
+        active += 1
+        peak = Math.max(peak, active)
+        await gate
+      }
+      try {
+        return { records: await db.table('records').whereInSub('id', db.table('records').select('id')).orderBy('id').get() }
+      } finally {
+        if (refreshing) active -= 1
+      }
+    },
+  })
+  const worker = await startWorker({
+    query: async () => await executeRealtimeQuery(records),
+    mutate: async () => { throw new Error('No mutation is registered') },
+    subscribe: async (_name, _args, options) => await subscribeRealtimeQuery(records, {}, options),
+  })
+  const local = await subscribeRealtimeQuery(records)
+  for (let index = 0; index < 7; index += 1) worker.send(`bounded.${index}`, 'subscribe')
+  await expect.poll(() => worker.packets.filter(packet => packet.data.id?.startsWith('bounded.') && packet.data.snapshot).length).toBe(7)
+  refreshing = true
+  const write = db.table('records').where('id', 1).update({ score: 77 })
+  try {
+    await expect.poll(() => active).toBeGreaterThanOrEqual(4)
+    expect(peak).toBe(4)
+  } finally {
+    release()
+    await write
+  }
+  expect(peak).toBe(4)
+  refreshing = false
+  const fresh = await executeRealtimeQuery(records)
+  expect(local.current.data).toEqual(fresh.data)
+  for (let index = 0; index < 7; index += 1) {
+    await expect.poll(() => worker.snapshots.get(`bounded.${index}`)?.data).toEqual(fresh.data)
+  }
 })
