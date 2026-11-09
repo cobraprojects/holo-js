@@ -333,9 +333,10 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
 }
 
 it.each([
-  ['800 repeated primitive values', 800, 1],
-  ['100 by 200 nested repeated values', 100, 200],
-] as const)('refreshes %s and yields after a tail change', async (_label, rowCount, columnCount) => {
+  ['800 repeated primitive values', 800, 1, false],
+  ['100 by 200 nested repeated values', 100, 200, false],
+  ['1600 by 200 nested repeated values with two changes', 1600, 200, true],
+] as const)('refreshes %s and yields after a tail change', async (_label, rowCount, columnCount, changeMiddle) => {
   const { db, table } = await openDatabase('sqlite')
   onTestFinished(resetRealtimeRuntime)
   await db.table(table.tableName).insert(Array.from({ length: rowCount }, (_, index) => ({ id: index + 1, name: 'Open' })))
@@ -362,13 +363,16 @@ it.each([
   const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
   const initial = Array.from({ length: rowCount }, () => columnCount === 1 ? 'Open' : Array.from({ length: columnCount }, () => 'Open'))
   expect(deliveries).toEqual([initial])
+  const changedIds = changeMiddle ? [rowCount / 2, rowCount] : [rowCount]
   await executeRealtimeMutation(defineRealtimeMutation({
     access: 'public',
-    handler: () => db.table(table.tableName).where('id', rowCount).update({ name: 'Closed' }),
+    handler: () => db.table(table.tableName).whereIn('id', changedIds).update({ name: 'Closed' }),
   }))
   await new Promise(resolve => setTimeout(resolve, 0))
   const fresh = await handler()
-  expect(fresh).toEqual([...initial.slice(0, -1), columnCount === 1 ? 'Closed' : [...Array.from({ length: columnCount - 1 }, () => 'Open'), 'Closed']])
+  expect(fresh).toEqual(initial.map((value, index) => changedIds.includes(index + 1)
+    ? columnCount === 1 ? 'Closed' : [...Array.from({ length: columnCount - 1 }, () => 'Open'), 'Closed']
+    : value))
   expect(errors).toEqual([])
   expect(subscription.current.data).toEqual(fresh)
   expect(deliveries.at(-1)).toEqual(fresh)

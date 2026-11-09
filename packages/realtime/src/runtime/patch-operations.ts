@@ -130,8 +130,8 @@ function readWindowAppendedRowCount(
   nextValue: readonly unknown[],
 ): number | undefined {
   for (let count = 1; count < previousValue.length; count += 1) {
-    if (arraysMatchByIdentity(previousValue, count, nextValue, 0, previousValue.length - count)) {
-      return count
+    if (areEquivalentArrayItems(previousValue[count], nextValue[0])) {
+      return arraysMatchByIdentity(previousValue, count, nextValue, 0, previousValue.length - count) ? count : undefined
     }
   }
 
@@ -143,8 +143,8 @@ function readWindowPrependedRowCount(
   nextValue: readonly unknown[],
 ): number | undefined {
   for (let count = 1; count < previousValue.length; count += 1) {
-    if (arraysMatchByIdentity(previousValue, 0, nextValue, count, previousValue.length - count)) {
-      return count
+    if (areEquivalentArrayItems(previousValue[0], nextValue[count])) {
+      return arraysMatchByIdentity(previousValue, 0, nextValue, count, previousValue.length - count) ? count : undefined
     }
   }
 
