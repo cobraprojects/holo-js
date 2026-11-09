@@ -4946,7 +4946,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures patch delivery across many identical subscriptions without rerunning the query', async () => {
+  it('measures patch delivery across many identical subscriptions with fresh handler results', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -5670,7 +5670,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table having grouped count patch transport without rerunning the query', async () => {
+  it('measures table having grouped count patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -5735,7 +5735,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table redundant having grouped count patch transport without rerunning the query', async () => {
+  it('measures table redundant having grouped count patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -5801,7 +5801,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table grouped count patch transport without rerunning the query', async () => {
+  it('measures table grouped count patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -5867,7 +5867,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table grouped sum patch transport without rerunning the query', async () => {
+  it('measures table grouped sum patch transport with fresh handler results', async () => {
     const rows = createAggregatePatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -5937,7 +5937,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table having grouped sum patch transport without rerunning or backfilling', async () => {
+  it('measures table having grouped sum patch transport with fresh handler results', async () => {
     const rows = createAggregatePatchBenchmarkRows()
     rows.push({
       id: patchRowCount + 1,
@@ -6190,7 +6190,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table having grouped min and max patch transport without rerunning or backfilling', async () => {
+  it('measures table having grouped min and max patch transport with fresh handler results', async () => {
     const rows = createAggregatePatchBenchmarkRows()
     rows.push({
       id: patchRowCount + 1,
@@ -6295,7 +6295,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table having grouped max runner-up patch transport without rerunning or backfilling', async () => {
+  it('measures table having grouped max runner-up patch transport with fresh handler results', async () => {
     const rows = createAggregatePatchBenchmarkRows()
     const adapter = new BenchmarkModelAdapter(rows)
     const db = createDatabase({
@@ -6368,7 +6368,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table grouped max patch transport without rerunning the query', async () => {
+  it('measures table grouped max patch transport with fresh handler results', async () => {
     const rows = createAggregatePatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -6430,7 +6430,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table grouped max backfill transport without rerunning the query', async () => {
+  it('measures table grouped max backfill transport with fresh handler results', async () => {
     const rows = createAggregatePatchBenchmarkRows()
     const adapter = new BenchmarkModelAdapter(rows)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -6647,7 +6647,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures bounded row backfill for unknown updates without rerunning the query', async () => {
+  it('measures bounded row backfill for unknown updates with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const adapter = new BenchmarkModelAdapter(rows)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -6867,7 +6867,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures selected row partial-row patch transport without rerunning the query', async () => {
+  it('measures selected row partial-row patch transport with fresh handler results', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -7459,7 +7459,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures observed selected offset-window patch transport without rerunning the query', async () => {
+  it('measures observed selected offset-window patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const adapter = new BenchmarkModelAdapter(rows)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -7542,7 +7542,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures paginated wrapper data patch transport without rerunning the query', async () => {
+  it('measures paginated wrapper data patch transport with fresh handler results', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -7607,7 +7607,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures paginated wrapper bounded backfill for unknown updates without rerunning the query', async () => {
+  it('measures paginated wrapper bounded backfill for unknown updates with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const adapter = new BenchmarkModelAdapter(rows)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -7682,7 +7682,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures filtered paginated count backfill for unknown updates without rerunning the query', async () => {
+  it('measures filtered paginated count backfill for unknown updates with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const adapter = new BenchmarkModelAdapter(rows)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -7925,7 +7925,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures filtered simple-paginated count backfill for unknown updates without rerunning the query', async () => {
+  it('measures filtered simple-paginated count backfill for unknown updates with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const adapter = new BenchmarkModelAdapter(rows)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -8003,7 +8003,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures paginated wrapper insert patch transport without rerunning the query', async () => {
+  it('measures paginated wrapper insert patch transport with fresh handler results', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -8083,7 +8083,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures paginated wrapper delete patch transport without rerunning the query', async () => {
+  it('measures paginated wrapper delete patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -8164,7 +8164,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures paginated offset-window delete patch transport without rerunning the query', async () => {
+  it('measures paginated offset-window delete patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -8245,7 +8245,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures paginated offset-window insert patch transport without rerunning the query', async () => {
+  it('measures paginated offset-window insert patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -8331,7 +8331,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures cursor-paginated wrapper insert patch transport without rerunning the query', async () => {
+  it('measures cursor-paginated wrapper insert patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
@@ -8477,7 +8477,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures cursor-paginated wrapper delete patch transport without rerunning the query', async () => {
+  it('measures cursor-paginated wrapper delete patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
@@ -8560,7 +8560,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model cursor-paginated JSON insert patch transport without rerunning the query', async () => {
+  it('measures model cursor-paginated JSON insert patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
@@ -8646,7 +8646,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model cursor-paginated JSON delete patch transport without rerunning the query', async () => {
+  it('measures model cursor-paginated JSON delete patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
@@ -8734,7 +8734,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model cursor-paginated entity insert patch transport without rerunning the query', async () => {
+  it('measures model cursor-paginated entity insert patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
@@ -8820,7 +8820,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model cursor-paginated entity delete patch transport without rerunning the query', async () => {
+  it('measures model cursor-paginated entity delete patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
@@ -8908,7 +8908,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated JSON patch transport without rerunning the query', async () => {
+  it('measures model paginated JSON patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -9048,7 +9048,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated JSON insert patch transport without rerunning the query', async () => {
+  it('measures model paginated JSON insert patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -9133,7 +9133,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated JSON delete patch transport without rerunning the query', async () => {
+  it('measures model paginated JSON delete patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -9218,7 +9218,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated JSON offset-window delete patch transport without rerunning the query', async () => {
+  it('measures model paginated JSON offset-window delete patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -9303,7 +9303,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated JSON offset-window insert patch transport without rerunning the query', async () => {
+  it('measures model paginated JSON offset-window insert patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -9393,7 +9393,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model simple-paginated JSON insert patch transport without rerunning the query', async () => {
+  it('measures model simple-paginated JSON insert patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -9469,7 +9469,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model simple-paginated JSON delete patch transport without rerunning the query', async () => {
+  it('measures model simple-paginated JSON delete patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -9548,7 +9548,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model simple-paginated JSON offset-window delete patch transport without rerunning the query', async () => {
+  it('measures model simple-paginated JSON offset-window delete patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -9627,7 +9627,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model simple-paginated JSON offset-window insert patch transport without rerunning the query', async () => {
+  it('measures model simple-paginated JSON offset-window insert patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -9708,7 +9708,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated entity patch transport without rerunning the query', async () => {
+  it('measures model paginated entity patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -9774,7 +9774,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model where-in insert patch transport without rerunning the query', async () => {
+  it('measures model where-in insert patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -9891,7 +9891,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated entity delete patch transport without rerunning the query', async () => {
+  it('measures model paginated entity delete patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -9976,7 +9976,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated offset-window entity delete patch transport without rerunning the query', async () => {
+  it('measures model paginated offset-window entity delete patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10061,7 +10061,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated offset-window entity insert patch transport without rerunning the query', async () => {
+  it('measures model paginated offset-window entity insert patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10151,7 +10151,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model simple-paginated offset-window entity delete patch transport without rerunning the query', async () => {
+  it('measures model simple-paginated offset-window entity delete patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10230,7 +10230,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model simple-paginated offset-window entity insert patch transport without rerunning the query', async () => {
+  it('measures model simple-paginated offset-window entity insert patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10311,7 +10311,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table sole record patch transport without rerunning the query', async () => {
+  it('measures table sole record patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10375,7 +10375,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table first record patch transport without rerunning the query', async () => {
+  it('measures table first record patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10439,7 +10439,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table first record partial-row patch transport without rerunning the query', async () => {
+  it('measures table first record partial-row patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10572,7 +10572,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table scalar value patch transport without rerunning the query', async () => {
+  it('measures table scalar value patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10636,7 +10636,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table scalar value patch transport from partial mutation rows without rerunning the query', async () => {
+  it('measures table scalar value patch transport from partial mutation rows with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10700,7 +10700,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table scalar value irrelevant update silence without rerunning the query', async () => {
+  it('measures table scalar value irrelevant update silence with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10951,7 +10951,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model scalar value patch transport without rerunning the query', async () => {
+  it('measures model scalar value patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -11015,7 +11015,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table pluck scalar-list patch transport without rerunning the query', async () => {
+  it('measures table pluck scalar-list patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -11079,7 +11079,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table pluck scalar-list irrelevant update silence without rerunning the query', async () => {
+  it('measures table pluck scalar-list irrelevant update silence with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -11130,7 +11130,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table pluck scalar-list splice transport without rerunning the query', async () => {
+  it('measures table pluck scalar-list splice transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -11193,7 +11193,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model pluck scalar-list patch transport without rerunning the query', async () => {
+  it('measures model pluck scalar-list patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -11257,7 +11257,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model pluck scalar-list irrelevant update silence without rerunning the query', async () => {
+  it('measures model pluck scalar-list irrelevant update silence with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -11308,7 +11308,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model pluck scalar-list splice transport without rerunning the query', async () => {
+  it('measures model pluck scalar-list splice transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -11371,7 +11371,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table exists patch transport without rerunning the query', async () => {
+  it('measures table exists patch transport with fresh handler results', async () => {
     const rows: BenchmarkPostRow[] = []
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -11508,7 +11508,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table doesntExist patch transport without rerunning the query', async () => {
+  it('measures table doesntExist patch transport with fresh handler results', async () => {
     const rows: BenchmarkPostRow[] = []
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -11645,7 +11645,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model exists patch transport without rerunning the query', async () => {
+  it('measures model exists patch transport with fresh handler results', async () => {
     const rows: BenchmarkPostRow[] = []
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -11782,7 +11782,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model doesntExist patch transport without rerunning the query', async () => {
+  it('measures model doesntExist patch transport with fresh handler results', async () => {
     const rows: BenchmarkPostRow[] = []
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -11919,7 +11919,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model first record patch transport without rerunning the query', async () => {
+  it('measures model first record patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -11983,7 +11983,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model firstJson record patch transport without rerunning the query', async () => {
+  it('measures model firstJson record patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -12047,7 +12047,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model sole record patch transport without rerunning the query', async () => {
+  it('measures model sole record patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -12111,7 +12111,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model soleJson record patch transport without rerunning the query', async () => {
+  it('measures model soleJson record patch transport with fresh handler results', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -12645,7 +12645,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures stable wrapper upsert patch delivery without rerunning the query', async () => {
+  it('measures stable wrapper upsert patch delivery with fresh handler results', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -12723,7 +12723,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures multi-row stable wrapper upsert patch delivery without rerunning the query', async () => {
+  it('measures multi-row stable wrapper upsert patch delivery with fresh handler results', async () => {
     configureRealtimeRuntime({
       db: createBenchmarkDatabaseContext,
       loadAuthModule: async () => null,
@@ -13232,7 +13232,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model aggregate unknown update shared backfill without rerunning the query', async () => {
+  it('measures model aggregate unknown update shared backfill with fresh handler results', async () => {
     const rows = createAggregatePatchBenchmarkRows()
     const adapter = new BenchmarkModelAdapter(rows)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -13404,7 +13404,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model aggregate extreme runner-up patch transport without rerunning or backfilling', async () => {
+  it('measures model aggregate extreme runner-up patch transport with fresh handler results', async () => {
     const rows = createAggregatePatchBenchmarkRows()
     const adapter = new BenchmarkModelAdapter(rows)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -14777,7 +14777,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated relation aggregate delete patch transport without rerunning or backfilling', async () => {
+  it('measures model paginated relation aggregate delete patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -14862,7 +14862,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model has-many relation patch transport without rerunning the query', async () => {
+  it('measures model has-many relation patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -14947,7 +14947,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model has-many relation delete patch transport without rerunning the query', async () => {
+  it('measures model has-many relation delete patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -15031,7 +15031,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model has-one relation delete patch transport without rerunning the query', async () => {
+  it('measures model has-one relation delete patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -15113,7 +15113,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model has-one relation parent key move patch transport without rerunning the query', async () => {
+  it('measures model has-one relation parent key move patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     tables.posts.splice(middleRowId, 1)
     const adapter = new BenchmarkModelAdapter(tables)
@@ -15209,7 +15209,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures constrained model has-one relation parent key move patch transport without rerunning the query', async () => {
+  it('measures constrained model has-one relation parent key move patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const previousRow = tables.posts[middleRowId - 1]
     if (!previousRow || typeof previousRow.author_id !== 'number') {
@@ -15316,7 +15316,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures range-constrained model has-one relation parent key move patch transport without rerunning the query', async () => {
+  it('measures range-constrained model has-one relation parent key move patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const previousRow = tables.posts[middleRowId - 1]
     if (!previousRow || typeof previousRow.author_id !== 'number') {
@@ -15416,7 +15416,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures not-in constrained model has-one relation parent key move patch transport without rerunning the query', async () => {
+  it('measures not-in constrained model has-one relation parent key move patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const previousRow = tables.posts[middleRowId - 1]
     if (!previousRow || typeof previousRow.author_id !== 'number') {
@@ -15523,7 +15523,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model has-many eager parent insert patch transport without rerunning the query', async () => {
+  it('measures model has-many eager parent insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -15788,7 +15788,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model has-one eager parent insert patch transport without rerunning the query', async () => {
+  it('measures model has-one eager parent insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -16107,7 +16107,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures ordered model has-many eager parent insert patch transport without rerunning the query', async () => {
+  it('measures ordered model has-many eager parent insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const insertedAuthor = {
       id: patchRowCount + 1,
@@ -16202,7 +16202,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures ordered model has-one eager parent insert patch transport without rerunning the query', async () => {
+  it('measures ordered model has-one eager parent insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const insertedAuthor = {
       id: patchRowCount + 1,
@@ -16297,7 +16297,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures constrained model has-many eager parent insert patch transport without rerunning the query', async () => {
+  it('measures constrained model has-many eager parent insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const insertedAuthor = {
       id: patchRowCount + 1,
@@ -16399,7 +16399,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures constrained model has-one eager parent insert patch transport without rerunning the query', async () => {
+  it('measures constrained model has-one eager parent insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const insertedAuthor = {
       id: patchRowCount + 1,
@@ -16501,7 +16501,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model belongs-to relation update patch transport without rerunning the query', async () => {
+  it('measures model belongs-to relation update patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -16587,7 +16587,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model belongs-to parent key swap patch transport without rerunning the query', async () => {
+  it('measures model belongs-to parent key swap patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
@@ -16683,7 +16683,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model belongs-to parent key null swap patch transport without rerunning the query', async () => {
+  it('measures model belongs-to parent key null swap patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -16772,7 +16772,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model belongs-to eager parent insert patch transport without rerunning the query', async () => {
+  it('measures model belongs-to eager parent insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -16967,7 +16967,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated belongs-to eager parent insert patch transport without rerunning the query', async () => {
+  it('measures model paginated belongs-to eager parent insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -17075,7 +17075,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated belongs-to eager delete backfill patch transport without rerunning the query', async () => {
+  it('measures model paginated belongs-to eager delete backfill patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -17179,7 +17179,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model paginated offset-window belongs-to eager delete backfill patch transport without rerunning the query', async () => {
+  it('measures model paginated offset-window belongs-to eager delete backfill patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -17283,7 +17283,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model simple-paginated belongs-to eager delete backfill patch transport without rerunning the query', async () => {
+  it('measures model simple-paginated belongs-to eager delete backfill patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -17378,7 +17378,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model simple-paginated belongs-to eager parent insert patch transport without rerunning the query', async () => {
+  it('measures model simple-paginated belongs-to eager parent insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -17474,7 +17474,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model cursor-paginated belongs-to eager parent insert patch transport without rerunning the query', async () => {
+  it('measures model cursor-paginated belongs-to eager parent insert patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
@@ -17582,7 +17582,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model cursor-paginated belongs-to eager delete backfill patch transport without rerunning the query', async () => {
+  it('measures model cursor-paginated belongs-to eager delete backfill patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
@@ -17689,7 +17689,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures ordered model has-many relation insert patch transport without rerunning the query', async () => {
+  it('measures ordered model has-many relation insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -17772,7 +17772,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures constrained model has-many relation insert patch transport without rerunning the query', async () => {
+  it('measures constrained model has-many relation insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -17855,7 +17855,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures not-equal constrained model has-many relation insert patch transport without rerunning the query', async () => {
+  it('measures not-equal constrained model has-many relation insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -17938,7 +17938,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures in-constrained model has-many relation insert patch transport without rerunning the query', async () => {
+  it('measures in-constrained model has-many relation insert patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
@@ -18021,7 +18021,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures ordered model has-many relation parent key move patch transport without rerunning the query', async () => {
+  it('measures ordered model has-many relation parent key move patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     tables.posts.splice(middleRowId, 1)
     const adapter = new BenchmarkModelAdapter(tables)
@@ -18121,7 +18121,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures constrained model has-many relation parent key move patch transport without rerunning the query', async () => {
+  it('measures constrained model has-many relation parent key move patch transport with fresh handler results', async () => {
     const tables = createRelationAggregateBenchmarkTables()
     const previousRow = tables.posts[middleRowId - 1]
     if (!previousRow || typeof previousRow.author_id !== 'number') {
@@ -18306,7 +18306,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model belongs-to-many relation attach patch transport without rerunning the query', async () => {
+  it('measures model belongs-to-many relation attach patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const tables = createBelongsToManyBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
@@ -18404,7 +18404,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model belongs-to-many pivot update patch transport without rerunning the query', async () => {
+  it('measures model belongs-to-many pivot update patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const tables = createBelongsToManyBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
@@ -18498,7 +18498,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model belongs-to-many pivot order update move patch transport without rerunning the query', async () => {
+  it('measures model belongs-to-many pivot order update move patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const tables = createBelongsToManyBenchmarkTables()
     const secondTag: BenchmarkTagRow = {
@@ -18612,7 +18612,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model belongs-to-many related row update patch transport without rerunning the query', async () => {
+  it('measures model belongs-to-many related row update patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const tables = createBelongsToManyBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
@@ -18701,7 +18701,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model belongs-to-many related row delete patch transport without rerunning the query', async () => {
+  it('measures model belongs-to-many related row delete patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const tables = createBelongsToManyBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)
@@ -18785,7 +18785,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures model belongs-to-many relation detach patch transport without rerunning the query', async () => {
+  it('measures model belongs-to-many relation detach patch transport with fresh handler results', async () => {
     let observedWireData: unknown
     const tables = createBelongsToManyBenchmarkTables()
     const adapter = new BenchmarkModelAdapter(tables)

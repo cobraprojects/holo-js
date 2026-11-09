@@ -1023,7 +1023,7 @@ describe('@holo-js/realtime', () => {
     expect(secondSnapshotOnlySnapshots).toEqual([1, 2])
   })
 
-  it('patches having grouped count rows across mixed subscribers without rerunning the query handler', async () => {
+  it('patches having grouped count rows across mixed subscribers with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
@@ -1110,7 +1110,7 @@ describe('@holo-js/realtime', () => {
     expect(patches).toHaveLength(1)
   })
 
-  it('patches hidden having grouped count rows without rerunning or backfilling', async () => {
+  it('patches hidden having grouped count rows with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
@@ -1190,7 +1190,7 @@ describe('@holo-js/realtime', () => {
     expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(false)
   })
 
-  it('patches redundant having grouped count rows without rerunning the query handler', async () => {
+  it('patches redundant having grouped count rows with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
@@ -1268,7 +1268,7 @@ describe('@holo-js/realtime', () => {
     expect(patches).toHaveLength(1)
   })
 
-  it('patches grouped count rows without rerunning the query handler', async () => {
+  it('patches grouped count rows with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
@@ -1346,7 +1346,7 @@ describe('@holo-js/realtime', () => {
     expect(patches).toHaveLength(1)
   })
 
-  it('patches grouped sum rows without rerunning the query handler', async () => {
+  it('patches grouped sum rows with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
@@ -1424,7 +1424,7 @@ describe('@holo-js/realtime', () => {
     expect(patches).toHaveLength(1)
   })
 
-  it('patches hidden having grouped sum rows without rerunning or backfilling', async () => {
+  it('patches hidden having grouped sum rows with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
@@ -1505,7 +1505,7 @@ describe('@holo-js/realtime', () => {
     expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(false)
   })
 
-  it('patches hidden having grouped average rows from a backfill without rerunning on SQLite', async () => {
+  it('patches hidden having grouped average rows from a backfill with fresh handler results on SQLite', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
@@ -1586,7 +1586,7 @@ describe('@holo-js/realtime', () => {
     expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(false)
   })
 
-  it('patches observed grouped average rows from a backfill without rerunning on SQLite', async () => {
+  it('patches observed grouped average rows from a backfill with fresh handler results on SQLite', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
@@ -1664,7 +1664,7 @@ describe('@holo-js/realtime', () => {
     expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(false)
   })
 
-  it('patches grouped max rows without rerunning the query handler', async () => {
+  it('patches grouped max rows with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
@@ -1742,7 +1742,7 @@ describe('@holo-js/realtime', () => {
     expect(patches).toHaveLength(1)
   })
 
-  it('backfills grouped max rows without rerunning the query handler', async () => {
+  it('backfills grouped max rows with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 13, title: 'First' },
@@ -1820,7 +1820,7 @@ describe('@holo-js/realtime', () => {
     expect(patches).toHaveLength(1)
   })
 
-  it('patches hidden having grouped min and max rows without rerunning or backfilling', async () => {
+  it('patches hidden having grouped min and max rows with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
@@ -1940,7 +1940,7 @@ describe('@holo-js/realtime', () => {
     expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(false)
   })
 
-  it('patches having grouped max runner-up rows without rerunning or backfilling', async () => {
+  it('patches having grouped max runner-up rows with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
@@ -2296,7 +2296,7 @@ describe('@holo-js/realtime', () => {
     expect(fallbackSubscription.current.data).toEqual({ id: 1, title: 'Updated' })
   })
 
-  it('updates snapshot-only subscribers from patched canonical data without rerunning the handler', async () => {
+  it('updates snapshot-only subscribers from patched canonical data with fresh handler results', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     }))
@@ -2494,7 +2494,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('delivers a merge patch for wide stable row updates without rerunning the query handler', async () => {
+  it('delivers a merge patch for wide stable row updates with fresh handler results', async () => {
     const initialPost = {
       id: 1,
       title: 'First',
@@ -2620,7 +2620,7 @@ describe('@holo-js/realtime', () => {
     ]])
   })
 
-  it('patches subscribed sole query records without rerunning the handler', async () => {
+  it('patches subscribed sole query records with fresh handler results', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First', views: 1 }],
     }))
@@ -2714,7 +2714,7 @@ describe('@holo-js/realtime', () => {
     ], [])
   })
 
-  it('patches subscribed exact value queries without rerunning the handler until the row is deleted', async () => {
+  it('patches subscribed exact value queries with fresh handler results until the row is deleted', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First', views: 1 }],
     }))
@@ -2762,7 +2762,7 @@ describe('@holo-js/realtime', () => {
     expectWireHistory(snapshots, patches, ['First', 'Updated', undefined], [])
   })
 
-  it('keeps subscribed exact value queries silent for irrelevant updates without rerunning the handler', async () => {
+  it('keeps subscribed exact value queries silent for irrelevant updates with fresh handler results', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First', views: 1 }],
     }))
@@ -2843,7 +2843,7 @@ describe('@holo-js/realtime', () => {
     expectWireHistory(snapshots, patches, ['First', undefined], [])
   })
 
-  it('patches subscribed pluck queries without rerunning the handler', async () => {
+  it('patches subscribed pluck queries with fresh handler results', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
@@ -2895,7 +2895,7 @@ describe('@holo-js/realtime', () => {
     }])
   })
 
-  it('keeps subscribed pluck queries silent for irrelevant updates without rerunning the handler', async () => {
+  it('keeps subscribed pluck queries silent for irrelevant updates with fresh handler results', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First', views: 1 },
@@ -2942,7 +2942,7 @@ describe('@holo-js/realtime', () => {
     expect(patches).toEqual([])
   })
 
-  it('delivers compact splice patches for pluck inserts and deletes without rerunning the handler', async () => {
+  it('delivers compact splice patches for pluck inserts and deletes with fresh handler results', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
@@ -3071,7 +3071,7 @@ describe('@holo-js/realtime', () => {
     }])
   })
 
-  it('delivers compact move patches for ordered pluck updates without rerunning the handler', async () => {
+  it('delivers compact move patches for ordered pluck updates with fresh handler results', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [
         { id: 1, priority: 10, title: 'First' },
@@ -3127,7 +3127,7 @@ describe('@holo-js/realtime', () => {
     }])
   })
 
-  it('patches subscribed exists queries without rerunning the handler', async () => {
+  it('patches subscribed exists queries with fresh handler results', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [{ id: 1, author_id: 1, title: 'First' }],
     }))
@@ -3233,7 +3233,7 @@ describe('@holo-js/realtime', () => {
     }])
   })
 
-  it('patches subscribed doesntExist queries without rerunning the handler', async () => {
+  it('patches subscribed doesntExist queries with fresh handler results', async () => {
     const db = await createContext(await createNativeRelationalAdapter({
       posts: [],
     }, {"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}}))
@@ -3699,7 +3699,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches selected subscriptions from returning update rows without rerunning the query handler', async () => {
+  it('patches selected subscriptions from returning update rows with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, body: 'Hidden', title: 'First' },
@@ -4163,7 +4163,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches nested selected rows for stable returning upserts without rerunning the handler', async () => {
+  it('patches nested selected rows for stable returning upserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, body: 'Hidden', title: 'First' },
@@ -4236,7 +4236,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches nested rows for multi-row stable returning upserts without rerunning the handler', async () => {
+  it('patches nested rows for multi-row stable returning upserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
@@ -4821,7 +4821,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('backfills offset ordered windows without rerunning the query handler', async () => {
+  it('backfills offset ordered windows with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
@@ -5040,7 +5040,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('backfills limited ordered rows for unknown updates without rerunning the handler', async () => {
+  it('backfills limited ordered rows for unknown updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 20, title: 'First' },
@@ -5260,7 +5260,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches committed write bursts without rerunning supported query handlers', async () => {
+  it('patches committed write bursts with fresh handler results supported query handlers', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [{ id: 1, author_id: 1, title: 'First' }],
     })
@@ -5332,7 +5332,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('delivers compact splice patches for ordered row deletes without rerunning handlers', async () => {
+  it('delivers compact splice patches for ordered row deletes with fresh handler results handlers', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
@@ -5392,7 +5392,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('delivers compact splice patches for ordered middle inserts without rerunning handlers', async () => {
+  it('delivers compact splice patches for ordered middle inserts with fresh handler results handlers', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
@@ -5570,7 +5570,7 @@ describe('@holo-js/realtime', () => {
     expect(reports).toHaveLength(2)
   })
 
-  it('patches ordered belongs-to-many relation queries when related rows are attached without rerunning the handler', async () => {
+  it('patches ordered belongs-to-many relation queries when related rows are attached with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -5683,7 +5683,7 @@ describe('@holo-js/realtime', () => {
     ]])
   })
 
-  it('patches ordered belongs-to-many relation queries when related rows update without rerunning the handler', async () => {
+  it('patches ordered belongs-to-many relation queries when related rows update with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -5798,7 +5798,7 @@ describe('@holo-js/realtime', () => {
       ]])
   })
 
-  it('patches ordered belongs-to-many relation queries when pivot rows update without rerunning the handler', async () => {
+  it('patches ordered belongs-to-many relation queries when pivot rows update with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -5905,7 +5905,7 @@ describe('@holo-js/realtime', () => {
     ]])
   })
 
-  it('delivers compact move patches for ordered belongs-to-many relation pivot updates without rerunning the handler', async () => {
+  it('delivers compact move patches for ordered belongs-to-many relation pivot updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -6030,7 +6030,7 @@ describe('@holo-js/realtime', () => {
     ]])
   })
 
-  it('patches ordered belongs-to-many relation queries when related rows delete without rerunning the handler', async () => {
+  it('patches ordered belongs-to-many relation queries when related rows delete with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -6143,7 +6143,7 @@ describe('@holo-js/realtime', () => {
     ]])
   })
 
-  it('patches ordered belongs-to-many relation queries when related rows are detached without rerunning the handler', async () => {
+  it('patches ordered belongs-to-many relation queries when related rows are detached with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -6256,7 +6256,7 @@ describe('@holo-js/realtime', () => {
     ]])
   })
 
-  it('patches subscribed has-many relation queries after stable related row updates without rerunning the handler', async () => {
+  it('patches subscribed has-many relation queries after stable related row updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -6343,7 +6343,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed has-many relation queries after related row deletes without rerunning the handler', async () => {
+  it('patches subscribed has-many relation queries after related row deletes with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -6434,7 +6434,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed has-one relation inserts without rerunning the handler', async () => {
+  it('patches subscribed has-one relation inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -6517,7 +6517,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed has-one relation deletes to null without rerunning the handler', async () => {
+  it('patches subscribed has-one relation deletes to null with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -6602,7 +6602,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed has-one relation parent key moves without rerunning the handler', async () => {
+  it('patches subscribed has-one relation parent key moves with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -6698,7 +6698,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches constrained has-one relation parent key moves without rerunning the handler', async () => {
+  it('patches constrained has-one relation parent key moves with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -6800,7 +6800,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches range-constrained has-one relation parent key moves without rerunning the handler', async () => {
+  it('patches range-constrained has-one relation parent key moves with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -6903,7 +6903,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches not-in constrained has-one relation parent key moves without rerunning the handler', async () => {
+  it('patches not-in constrained has-one relation parent key moves with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -7005,7 +7005,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed has-one eager parent inserts without rerunning the handler', async () => {
+  it('patches subscribed has-one eager parent inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -7115,7 +7115,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches ordered has-one eager parent inserts without rerunning the handler', async () => {
+  it('patches ordered has-one eager parent inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -7202,7 +7202,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches constrained has-one eager parent inserts without rerunning the handler', async () => {
+  it('patches constrained has-one eager parent inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -7290,7 +7290,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed belongs-to relation updates without rerunning the handler', async () => {
+  it('patches subscribed belongs-to relation updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -7376,7 +7376,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed belongs-to relation inserts without rerunning the handler', async () => {
+  it('patches subscribed belongs-to relation inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [],
       posts: [
@@ -7460,7 +7460,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed belongs-to relation deletes to null without rerunning the handler', async () => {
+  it('patches subscribed belongs-to relation deletes to null with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -7546,7 +7546,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed belongs-to relation swaps after parent foreign key updates without rerunning the handler', async () => {
+  it('patches subscribed belongs-to relation swaps after parent foreign key updates with fresh handler results', async () => {
     let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       authors: [
@@ -7639,7 +7639,7 @@ describe('@holo-js/realtime', () => {
     ], observedWireData)
   })
 
-  it('patches subscribed belongs-to relation swaps to null after parent foreign key updates without rerunning the handler', async () => {
+  it('patches subscribed belongs-to relation swaps to null after parent foreign key updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -7728,7 +7728,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed belongs-to relation swaps to missing related rows without rerunning the handler', async () => {
+  it('patches subscribed belongs-to relation swaps to missing related rows with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -7817,7 +7817,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed belongs-to eager parent inserts without rerunning the handler', async () => {
+  it('patches subscribed belongs-to eager parent inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -7906,7 +7906,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed belongs-to eager parent inserts with missing related rows to null without rerunning the handler', async () => {
+  it('patches subscribed belongs-to eager parent inserts with missing related rows to null with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [],
       posts: [
@@ -7992,7 +7992,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed belongs-to eager firstJson inserts without rerunning the handler', async () => {
+  it('patches subscribed belongs-to eager firstJson inserts with fresh handler results', async () => {
     let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       authors: [
@@ -8080,7 +8080,7 @@ describe('@holo-js/realtime', () => {
     ], observedWireData)
   })
 
-  it('patches subscribed belongs-to eager paginated inserts without rerunning the handler', async () => {
+  it('patches subscribed belongs-to eager paginated inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -8189,7 +8189,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches ordered has-many relation inserts without rerunning the handler', async () => {
+  it('patches ordered has-many relation inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -8287,7 +8287,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches constrained has-many relation inserts without rerunning the handler', async () => {
+  it('patches constrained has-many relation inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -8385,7 +8385,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches not-equal constrained has-many relation inserts without rerunning the handler', async () => {
+  it('patches not-equal constrained has-many relation inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -8484,7 +8484,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches in-constrained has-many relation inserts without rerunning the handler', async () => {
+  it('patches in-constrained has-many relation inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -8582,7 +8582,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed has-many eager parent inserts without rerunning the handler', async () => {
+  it('patches subscribed has-many eager parent inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -8791,7 +8791,7 @@ describe('@holo-js/realtime', () => {
     expect(mutationQueries.filter(sql => sql.startsWith('UPDATE '))).toHaveLength(1)
   })
 
-  it('patches ordered has-many eager parent inserts without rerunning the handler', async () => {
+  it('patches ordered has-many eager parent inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -8881,7 +8881,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches constrained has-many eager parent inserts without rerunning the handler', async () => {
+  it('patches constrained has-many eager parent inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -8972,7 +8972,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches ordered has-many relation parent key moves without rerunning the handler', async () => {
+  it('patches ordered has-many relation parent key moves with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -9084,7 +9084,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches constrained has-many relation parent key moves without rerunning the handler', async () => {
+  it('patches constrained has-many relation parent key moves with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -9303,7 +9303,7 @@ describe('@holo-js/realtime', () => {
     expectWireHistory(secondSnapshots, secondPatches, expectedSnapshots, [])
   })
 
-  it('patches subscribed paginated queries after inserts change the current window without rerunning the handler', async () => {
+  it('patches subscribed paginated queries after inserts change the current window with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -9413,7 +9413,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed simple-paginated queries after inserts change the current window without rerunning the handler', async () => {
+  it('patches subscribed simple-paginated queries after inserts change the current window with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -9515,7 +9515,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed paginated queries after deletes shrink the current window without rerunning the handler', async () => {
+  it('patches subscribed paginated queries after deletes shrink the current window with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -9626,7 +9626,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed simple-paginated queries after deletes shrink the current window without rerunning the handler', async () => {
+  it('patches subscribed simple-paginated queries after deletes shrink the current window with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -9729,7 +9729,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed paginated offset-window queries after earlier-page deletes without rerunning the handler', async () => {
+  it('patches subscribed paginated offset-window queries after earlier-page deletes with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -9842,7 +9842,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed belongs-to eager simple-paginated inserts without rerunning the handler', async () => {
+  it('patches subscribed belongs-to eager simple-paginated inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -9971,7 +9971,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed belongs-to eager paginated offset-window delete backfills without rerunning the handler', async () => {
+  it('patches subscribed belongs-to eager paginated offset-window delete backfills with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -10114,7 +10114,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed simple-paginated offset-window queries after earlier-page deletes without rerunning the handler', async () => {
+  it('patches subscribed simple-paginated offset-window queries after earlier-page deletes with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -10219,7 +10219,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed paginated offset-window queries after earlier-page inserts without rerunning the handler', async () => {
+  it('patches subscribed paginated offset-window queries after earlier-page inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -10328,7 +10328,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed simple-paginated offset-window queries after earlier-page inserts without rerunning the handler', async () => {
+  it('patches subscribed simple-paginated offset-window queries after earlier-page inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -10428,7 +10428,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed paginated query data after stable row updates without rerunning the handler', async () => {
+  it('patches subscribed paginated query data after stable row updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -10525,7 +10525,7 @@ describe('@holo-js/realtime', () => {
     expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
   })
 
-  it('backfills subscribed paginated query data for unknown updates without rerunning the handler', async () => {
+  it('backfills subscribed paginated query data for unknown updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -10606,7 +10606,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('backfills filtered paginated metadata for unknown updates without rerunning the handler', async () => {
+  it('backfills filtered paginated metadata for unknown updates with fresh handler results', async () => {
     let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
@@ -10708,7 +10708,7 @@ describe('@holo-js/realtime', () => {
     ], observedWireData)
   })
 
-  it('backfills filtered simple-paginated metadata for unknown updates without rerunning the handler', async () => {
+  it('backfills filtered simple-paginated metadata for unknown updates with fresh handler results', async () => {
     let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
@@ -11031,7 +11031,7 @@ describe('@holo-js/realtime', () => {
 ])
   })
 
-  it('patches subscribed model paginated JSON data after stable row updates without rerunning the handler', async () => {
+  it('patches subscribed model paginated JSON data after stable row updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -11132,7 +11132,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model paginated JSON data after deletes shrink the current window without rerunning the handler', async () => {
+  it('patches subscribed model paginated JSON data after deletes shrink the current window with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -11252,7 +11252,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model paginated JSON offset windows after earlier-page deletes without rerunning the handler', async () => {
+  it('patches subscribed model paginated JSON offset windows after earlier-page deletes with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -11374,7 +11374,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model paginated JSON offset windows after earlier-page inserts without rerunning the handler', async () => {
+  it('patches subscribed model paginated JSON offset windows after earlier-page inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -11492,7 +11492,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model collections after stable row updates without rerunning the handler', async () => {
+  it('patches subscribed model collections after stable row updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -11569,7 +11569,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model relation aggregate loads without rerunning the handler', async () => {
+  it('patches subscribed model relation aggregate loads with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -11658,7 +11658,7 @@ describe('@holo-js/realtime', () => {
     ]])
   })
 
-  it('patches subscribed model paginated relation aggregate loads without rerunning the handler', async () => {
+  it('patches subscribed model paginated relation aggregate loads with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -11761,7 +11761,7 @@ describe('@holo-js/realtime', () => {
     expect(adapter.queries.filter(query => query.sql.startsWith('SELECT COUNT(*) AS "__holo_count"'))).toHaveLength(2)
   })
 
-  it('patches subscribed model paginated numeric relation aggregate loads without rerunning the handler', async () => {
+  it('patches subscribed model paginated numeric relation aggregate loads with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -12567,7 +12567,7 @@ describe('@holo-js/realtime', () => {
     expect(adapter.queries.filter(query => query.sql.includes('__holo_count'))).toHaveLength(0)
   })
 
-  it('patches subscribed model count and existence queries without rerunning handlers', async () => {
+  it('patches subscribed model count and existence queries with fresh handler results handlers', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [],
     }, {"posts":{"id":"INTEGER","author_id":"INTEGER","title":"TEXT"}})
@@ -12720,7 +12720,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model aggregate queries without rerunning handlers', async () => {
+  it('patches subscribed model aggregate queries with fresh handler results handlers', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
@@ -13024,7 +13024,7 @@ describe('@holo-js/realtime', () => {
     expect(adapter.queries.filter(query => query.sql.includes('__holo_count'))).toHaveLength(0)
   })
 
-  it('patches subscribed model value queries without rerunning the handler until the row is deleted', async () => {
+  it('patches subscribed model value queries with fresh handler results until the row is deleted', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [{ id: 1, title: 'First' }],
     })
@@ -13081,7 +13081,7 @@ describe('@holo-js/realtime', () => {
     expectWireHistory(snapshots, patches, ['First', 'Updated', undefined], [])
   })
 
-  it('patches subscribed model pluck queries without rerunning the handler', async () => {
+  it('patches subscribed model pluck queries with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, title: 'First' },
@@ -13144,7 +13144,7 @@ describe('@holo-js/realtime', () => {
     }])
   })
 
-  it('patches subscribed model single-record results after stable row updates without rerunning handlers', async () => {
+  it('patches subscribed model single-record results after stable row updates with fresh handler results handlers', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -13332,7 +13332,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model paginated data after stable row updates without rerunning the handler', async () => {
+  it('patches subscribed model paginated data after stable row updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -13433,7 +13433,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model paginated data and metadata after inserts without rerunning the handler', async () => {
+  it('patches subscribed model paginated data and metadata after inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -13548,7 +13548,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model paginated data after deletes shrink the current window without rerunning the handler', async () => {
+  it('patches subscribed model paginated data after deletes shrink the current window with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -13664,7 +13664,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model paginated offset windows after earlier-page deletes without rerunning the handler', async () => {
+  it('patches subscribed model paginated offset windows after earlier-page deletes with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -13782,7 +13782,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model paginated offset windows after earlier-page inserts without rerunning the handler', async () => {
+  it('patches subscribed model paginated offset windows after earlier-page inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -13896,7 +13896,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model simple-paginated data and metadata after inserts without rerunning the handler', async () => {
+  it('patches subscribed model simple-paginated data and metadata after inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -14003,7 +14003,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model simple-paginated data after deletes shrink the current window without rerunning the handler', async () => {
+  it('patches subscribed model simple-paginated data after deletes shrink the current window with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -14111,7 +14111,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model simple-paginated offset windows after earlier-page deletes without rerunning the handler', async () => {
+  it('patches subscribed model simple-paginated offset windows after earlier-page deletes with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -14221,7 +14221,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model simple-paginated offset windows after earlier-page inserts without rerunning the handler', async () => {
+  it('patches subscribed model simple-paginated offset windows after earlier-page inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -14326,7 +14326,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model simple-paginated data after stable row updates without rerunning the handler', async () => {
+  it('patches subscribed model simple-paginated data after stable row updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -14423,7 +14423,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model cursor-paginated data after stable row updates without rerunning the handler', async () => {
+  it('patches subscribed model cursor-paginated data after stable row updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -14518,7 +14518,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches first-page model cursor-paginated data and next cursor after inserts without rerunning the handler', async () => {
+  it('patches first-page model cursor-paginated data and next cursor after inserts with fresh handler results', async () => {
     let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
@@ -14625,7 +14625,7 @@ describe('@holo-js/realtime', () => {
     ], observedWireData)
   })
 
-  it('patches first-page model cursor-paginated data and next cursor after deletes without rerunning the handler', async () => {
+  it('patches first-page model cursor-paginated data and next cursor after deletes with fresh handler results', async () => {
     let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
@@ -14730,7 +14730,7 @@ describe('@holo-js/realtime', () => {
     ], observedWireData)
   })
 
-  it('patches subscribed model JSON collections after stable row updates without rerunning the handler', async () => {
+  it('patches subscribed model JSON collections after stable row updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -14807,7 +14807,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model simple-paginated JSON data after stable row updates without rerunning the handler', async () => {
+  it('patches subscribed model simple-paginated JSON data after stable row updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -14904,7 +14904,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model simple-paginated JSON data after deletes shrink the current window without rerunning the handler', async () => {
+  it('patches subscribed model simple-paginated JSON data after deletes shrink the current window with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -15016,7 +15016,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model simple-paginated JSON offset windows after earlier-page deletes without rerunning the handler', async () => {
+  it('patches subscribed model simple-paginated JSON offset windows after earlier-page deletes with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -15130,7 +15130,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model simple-paginated JSON offset windows after earlier-page inserts without rerunning the handler', async () => {
+  it('patches subscribed model simple-paginated JSON offset windows after earlier-page inserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -15239,7 +15239,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed model cursor-paginated JSON data after stable row updates without rerunning the handler', async () => {
+  it('patches subscribed model cursor-paginated JSON data after stable row updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -15334,7 +15334,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed belongs-to eager paginated delete backfills without rerunning the handler', async () => {
+  it('patches subscribed belongs-to eager paginated delete backfills with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -15452,7 +15452,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches subscribed belongs-to eager simple-paginated delete backfills without rerunning the handler', async () => {
+  it('patches subscribed belongs-to eager simple-paginated delete backfills with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -15564,7 +15564,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches first-page model cursor-paginated JSON belongs-to inserts without rerunning the handler', async () => {
+  it('patches first-page model cursor-paginated JSON belongs-to inserts with fresh handler results', async () => {
     let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       authors: [
@@ -15693,7 +15693,7 @@ describe('@holo-js/realtime', () => {
     ], observedWireData)
   })
 
-  it('patches first-page model cursor-paginated JSON belongs-to delete backfills without rerunning the handler', async () => {
+  it('patches first-page model cursor-paginated JSON belongs-to delete backfills with fresh handler results', async () => {
     let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       authors: [
@@ -15821,7 +15821,7 @@ describe('@holo-js/realtime', () => {
     ], observedWireData)
   })
 
-  it('patches first-page model cursor-paginated JSON data and next cursor after deletes without rerunning the handler', async () => {
+  it('patches first-page model cursor-paginated JSON data and next cursor after deletes with fresh handler results', async () => {
     let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
@@ -15991,7 +15991,7 @@ describe('@holo-js/realtime', () => {
     }
   })
 
-  it('patches first-page cursor-paginated query data and next cursor after inserts without rerunning the handler', async () => {
+  it('patches first-page cursor-paginated query data and next cursor after inserts with fresh handler results', async () => {
     let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
@@ -16093,7 +16093,7 @@ describe('@holo-js/realtime', () => {
     ], observedWireData)
   })
 
-  it('patches first-page cursor-paginated query data and next cursor after deletes without rerunning the handler', async () => {
+  it('patches first-page cursor-paginated query data and next cursor after deletes with fresh handler results', async () => {
     let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
@@ -16193,7 +16193,7 @@ describe('@holo-js/realtime', () => {
     ], observedWireData)
   })
 
-  it('patches subscribed cursor-paginated query data after stable row updates without rerunning the handler', async () => {
+  it('patches subscribed cursor-paginated query data after stable row updates with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -16350,7 +16350,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('delivers compact aggregate patches without rerunning the query handler', async () => {
+  it('delivers compact aggregate patches with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
@@ -16568,7 +16568,7 @@ describe('@holo-js/realtime', () => {
     expect(snapshots).toEqual([6, 7])
   })
 
-  it('patches subscribed constrained average aggregates when rows leave the predicate without rerunning the handler', async () => {
+  it('patches subscribed constrained average aggregates when rows leave the predicate with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', user_id: 1, views: 5 },
@@ -16807,7 +16807,7 @@ describe('@holo-js/realtime', () => {
     expect(adapter.queries.filter(query => query.sql === postsViewsAggregateBackfillSql)).toHaveLength(0)
   })
 
-  it('patches subscribed extreme aggregate runner-up values without rerunning or backfilling', async () => {
+  it('patches subscribed extreme aggregate runner-up values with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
@@ -17138,7 +17138,7 @@ describe('@holo-js/realtime', () => {
     expect(adapter.queries.filter(query => query.sql === postsViewsAggregateBackfillSql)).toHaveLength(0)
   })
 
-  it('patches all subscribed aggregate kinds for returning upserts without rerunning the query handler', async () => {
+  it('patches all subscribed aggregate kinds for returning upserts with fresh handler results', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First', views: 5 },
