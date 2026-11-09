@@ -145,3 +145,52 @@ it('reports internal realtime failures with a generic message while keeping auth
   expect(new Set(reports.map(report => report.context.operation))).toEqual(new Set(['worker.realtime']))
   expect(worker.socket.readyState).toBe(WebSocket.OPEN)
 })
+
+it('bounds native socket subscription refreshes with the same budget as local subscriptions', async () => {
+  const { db } = await openRealtimeDatabase()
+  let refreshing = false
+  let active = 0
+  let peak = 0
+  let release: () => void = () => undefined
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const records = query({
+    name: 'records.list',
+    access: 'public',
+    handler: async () => {
+      if (refreshing) {
+        active += 1
+        peak = Math.max(peak, active)
+        await gate
+      }
+      try {
+        return { records: await db.table('records').whereInSub('id', db.table('records').select('id')).orderBy('id').get() }
+      } finally {
+        if (refreshing) active -= 1
+      }
+    },
+  })
+  const worker = await startWorker({
+    query: async () => await executeRealtimeQuery(records),
+    mutate: async () => { throw new Error('No mutation is registered') },
+    subscribe: async (_name, _args, options) => await subscribeRealtimeQuery(records, {}, options),
+  })
+  const local = await subscribeRealtimeQuery(records)
+  for (let index = 0; index < 7; index += 1) worker.send(`bounded.${index}`, 'subscribe')
+  await expect.poll(() => worker.packets.filter(packet => packet.data.id?.startsWith('bounded.') && packet.data.snapshot).length).toBe(7)
+  refreshing = true
+  const write = db.table('records').where('id', 1).update({ score: 77 })
+  try {
+    await expect.poll(() => active).toBeGreaterThanOrEqual(4)
+    expect(peak).toBe(4)
+  } finally {
+    release()
+    await write
+  }
+  expect(peak).toBe(4)
+  refreshing = false
+  const fresh = await executeRealtimeQuery(records)
+  expect(local.current.data).toEqual(fresh.data)
+  for (let index = 0; index < 7; index += 1) {
+    await expect.poll(() => worker.packets.filter(packet => packet.data.id === `bounded.${index}` && packet.data.snapshot).at(-1)?.data.snapshot?.data).toEqual(fresh.data)
+  }
+})
