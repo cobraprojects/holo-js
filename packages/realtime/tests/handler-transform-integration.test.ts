@@ -96,6 +96,30 @@ const transforms: ReadonlyArray<readonly [string, (db: Database, tableName: stri
 ]
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a handler that transforms its query result on %s', (driver) => {
+  it('refreshes valid Date results after a subscriber changes the previous Date getter', async () => {
+    const { db, tableName } = await createPosts(driver)
+    const handler = async () => {
+      const total = (await db.table(tableName).count()) * 2
+      return { stamp: new Date(1_700_000_000_000 + total), total }
+    }
+    const deliveries: Awaited<ReturnType<typeof handler>>[] = []
+    const errors: unknown[] = []
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+      onData: snapshot => { deliveries.push(snapshot.data) },
+      onError: error => { errors.push(error) },
+    })
+    Object.defineProperty(subscription.current.data.stamp, 'getTime', { get() { throw new Error('Subscriber Date getter') } })
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table(tableName).insert({ id: 3, title: 'Third' }),
+    }))
+    const fresh = await handler()
+    expect(errors).toEqual([])
+    expect(deliveries.map(data => data.total)).toEqual([4, 6])
+    expect(subscription.current.data).toEqual(fresh)
+    expect(deliveries.at(-1)).toEqual(fresh)
+  })
+
   it('preserves an undefined array item when native ordering moves it', async () => {
     const { db, tableName } = await createPosts(driver)
     const handler = async () => (await db.table(tableName).orderBy('title').get() as Post[]).map(post => post.id === 1 ? undefined : post.title)

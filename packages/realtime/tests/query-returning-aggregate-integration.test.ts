@@ -32,8 +32,8 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
     expect(subscription.current.data).toEqual([{ group_id: 1, total: 20 }, { group_id: 2, total: 50 }])
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(table.tableName).where('id', 10).decrement('score', 5, { id: 1 }) }))
     expect(subscription.current.data).toEqual([{ group_id: 1, total: 15 }, { group_id: 2, total: 50 }])
+    expect(handlerRuns).toBe(5)
     await Promise.all([21, 24].map(score => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(table.tableName).where('id', 1).update({ score }) }))))
     expect(subscription.current.data).toEqual(await db.table(table.tableName).select('group_id').addSelectSum('total', 'score').groupBy('group_id').orderBy('group_id').get())
-    expect(handlerRuns).toBe(6)
   })
 }

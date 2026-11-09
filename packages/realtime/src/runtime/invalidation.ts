@@ -149,19 +149,23 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
         entry.schemaGeneration = schemaGeneration
         entry.readBoundary = queryCacheInternals.markMutationPublicationBoundary()
         entry.contexts = new Map(result.contexts)
-        const current = entry.current
-        const patchOperations = current
-          ? createReplacePatchOperations([], current.data, result.data, entry.queries[0]?.primaryKey ?? 'id', true)
-          : undefined
-        const patch = parseWireSnapshotPatch({ operations: patchOperations, version: entry.version + 1 })
-        const data = current && patch ? applyWireSnapshotPatch(current, patch).data : result.data
         const resultHash = createResultHash(result.data)
-        const canPatch = patch && createResultHash(data) === resultHash
-        const delivery = {
-          patchOperations: canPatch ? patchOperations : undefined,
-          result: canPatch ? { ...result, data } : result,
-          resultHash,
-        } satisfies RefreshDelivery<typeof entry.definition>
+        let delivery: RefreshDelivery<typeof entry.definition> = { result, resultHash }
+        try {
+          const current = entry.current
+          const patchOperations = current
+            ? createReplacePatchOperations([], current.data, result.data, entry.queries[0]?.primaryKey ?? 'id', true)
+            : undefined
+          const patch = patchOperations?.some(operation => 'valueKind' in operation && operation.path.length > 0)
+            ? undefined
+            : parseWireSnapshotPatch({ operations: patchOperations, version: entry.version + 1 })
+          const data = current && patch ? applyWireSnapshotPatch(current, patch).data : result.data
+          if (patch && createResultHash(data) === resultHash) {
+            delivery = { patchOperations, result: { ...result, data }, resultHash }
+          }
+        } catch {
+          delivery = { result, resultHash }
+        }
         entry.refreshFailed = false
         await deliverRefreshData(entry, delivery)
       } catch (error) {

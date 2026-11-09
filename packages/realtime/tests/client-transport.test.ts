@@ -244,6 +244,45 @@ describe('@holo-js/realtime broadcast client transport', () => {
 })
 
 for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
+  it(`keeps native ${driver} undefined array results consistent with JSON browser snapshots`, async () => {
+    const { db, table } = await openDatabase(driver)
+    onTestFinished(resetRealtimeRuntime)
+    await db.table(table.tableName).insert([{ id: 1, name: 'First' }, { id: 2, name: 'Second' }])
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const handler = async () => (await db.table(table.tableName).orderBy('id').get()).map(row => row.name === 'Missing' ? undefined : row.name)
+    const sockets = installFakeRealtimeBroadcast()
+    const transport = createBroadcastRealtimeTransport()
+    const deliveries: unknown[] = []
+    const nativeResults: Awaited<ReturnType<typeof handler>>[] = []
+    const errors: unknown[] = []
+    const leave = transport.subscribe('records.transformed', {}, snapshot => deliveries.push(snapshot.data), error => errors.push(error))
+    onTestFinished(leave)
+    await expect.poll(() => sockets.length).toBe(1)
+    const socket = sockets[0]!
+    socket.open()
+    await expect.poll(() => socket.frames.length).toBe(1)
+    const { id } = socket.frames[0]!.data as { id: string }
+    const options: InternalRealtimeSubscribeOptions<Awaited<ReturnType<typeof handler>>> = {
+      onData: snapshot => {
+        nativeResults.push(snapshot.data)
+        socket.receive('holo:realtime:snapshot', { id, snapshot })
+      },
+      onPatch: patch => socket.receive('holo:realtime:patch', { id, patch }),
+      onError: error => { errors.push(error) },
+    }
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table(table.tableName).where('id', 1).update({ name: 'Missing' }),
+    }))
+    const fresh = await handler()
+    expect(fresh).toEqual([undefined, 'Second'])
+    expect(errors).toEqual([])
+    expect(subscription.current.data).toEqual(fresh)
+    expect(deliveries).toEqual([['First', 'Second'], [null, 'Second']])
+    expect(nativeResults.at(-1)).toEqual(fresh)
+  })
+
   it.each(['__proto__', 'constructor', 'prototype'])(`delivers native ${driver} transformed own %s properties through the browser transport`, async key => {
     const { db, table } = await openDatabase(driver)
     onTestFinished(resetRealtimeRuntime)
