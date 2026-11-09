@@ -18,7 +18,7 @@ import {
 } from './delivery'
 import { tryPatchQueryEntry } from './patch-delivery'
 import { createReplacePatchOperations } from './patch-operations'
-import { applyWireSnapshotPatch } from '../client/patching'
+import { applyWireSnapshotPatch, parseWireSnapshotPatch } from '../client/patching'
 import { executeRealtimeQueryInternal } from './query-execution'
 import { createResultHash } from './result-hash'
 import {
@@ -153,13 +153,14 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
         const patchOperations = current
           ? createReplacePatchOperations([], current.data, result.data, entry.queries[0]?.primaryKey ?? 'id', true)
           : undefined
-        const data = current && patchOperations
-          ? applyWireSnapshotPatch(current, { operations: patchOperations, version: entry.version + 1 }).data
-          : result.data
+        const patch = parseWireSnapshotPatch({ operations: patchOperations, version: entry.version + 1 })
+        const data = current && patch ? applyWireSnapshotPatch(current, patch).data : result.data
+        const resultHash = createResultHash(result.data)
+        const canPatch = patch && createResultHash(data) === resultHash
         const delivery = {
-          patchOperations,
-          result: { ...result, data },
-          resultHash: createResultHash(data),
+          patchOperations: canPatch ? patchOperations : undefined,
+          result: canPatch ? { ...result, data } : result,
+          resultHash,
         } satisfies RefreshDelivery<typeof entry.definition>
         entry.refreshFailed = false
         await deliverRefreshData(entry, delivery)

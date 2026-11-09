@@ -96,6 +96,25 @@ const transforms: ReadonlyArray<readonly [string, (db: Database, tableName: stri
 ]
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a handler that transforms its query result on %s', (driver) => {
+  it('preserves an undefined array item when native ordering moves it', async () => {
+    const { db, tableName } = await createPosts(driver)
+    const handler = async () => (await db.table(tableName).orderBy('title').get() as Post[]).map(post => post.id === 1 ? undefined : post.title)
+    const deliveries: unknown[] = []
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+      onData: snapshot => { deliveries.push(snapshot.data) },
+      onError: error => { throw error },
+    })
+    expect(deliveries).toEqual([[undefined, 'Second']])
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table(tableName).where('id', 1).update({ title: 'Third' }),
+    }))
+    const fresh = await handler()
+    expect(fresh).toEqual(['Second', undefined])
+    expect(subscription.current.data).toEqual(fresh)
+    expect(deliveries).toEqual([[undefined, 'Second'], fresh])
+  })
+
   it.each(transforms)('keeps %s equal to a fresh handler run', async (_label, transform) => {
     const { db, tableName } = await createPosts(driver)
     const subscription = await subscribeRealtimeQuery(

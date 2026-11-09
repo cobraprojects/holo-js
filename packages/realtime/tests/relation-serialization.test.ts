@@ -125,8 +125,9 @@ describe('realtime relation serialization', () => {
       },
     }), {}, observePatches(patches, snapshots))
     const verify = async () => {
-      expect(snapshots.at(-1)).toEqual(await handler())
-      expectSerializedVisibility(patches, await handler())
+      const fresh = await handler()
+      expect(snapshots.at(-1)).toEqual(fresh)
+      expectSerializedVisibility(patches, fresh)
     }
     const mutations = [
       { change: () => db.table('posts').insert([
@@ -175,8 +176,9 @@ describe('realtime relation serialization', () => {
       },
     }), {}, observePatches(patches, snapshots))
     const verify = async () => {
-      expect(snapshots.at(-1)).toEqual(await handler())
-      expectSerializedVisibility(patches, await handler())
+      const fresh = await handler()
+      expect(snapshots.at(-1)).toEqual(fresh)
+      expectSerializedVisibility(patches, fresh)
     }
     const mutations = [
       () => db.table('posts').insert({ id: 2, title: 'Second', author_id: 1, body: 'second-body' }),
@@ -228,8 +230,9 @@ describe('realtime relation serialization', () => {
     for (const change of mutations) {
       const readsBefore = reads
       await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: change }))
-      expect(snapshots.at(-1)).toEqual(await handler())
-      expectSerializedVisibility(patches, await handler())
+      const fresh = await handler()
+      expect(snapshots.at(-1)).toEqual(fresh)
+      expectSerializedVisibility(patches, fresh)
       expect(reads - readsBefore).toBe(1)
     }
   })
@@ -271,8 +274,9 @@ describe('realtime relation serialization', () => {
     for (const change of mutations) {
       const readsBefore = reads
       await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: change }))
-      expect(snapshots.at(-1)).toEqual(await handler())
-      expectSerializedVisibility(patches, await handler())
+      const fresh = await handler()
+      expect(snapshots.at(-1)).toEqual(fresh)
+      expectSerializedVisibility(patches, fresh)
       expect(reads - readsBefore).toBe(1)
     }
   })
