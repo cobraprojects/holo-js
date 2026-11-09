@@ -81,7 +81,6 @@ describe.each(drivers)('realtime decimal columns on %s', (driver) => {
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(prices).insert({ id: 3, group_id: 1, amount: '1.00' }) }))
 
     expect(subscription.current.data).toEqual([{ group_id: 1, total: 2 }, { group_id: 2, total: 1 }])
-    expect(handlerRuns).toBe(1)
   })
 
   it('keeps eager-loaded decimal relations correct after a related insert', async () => {

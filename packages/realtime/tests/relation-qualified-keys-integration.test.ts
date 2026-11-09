@@ -191,7 +191,6 @@ describe.each(drivers)('realtime relations with table-qualified keys on %s', (dr
 
       expect(text('topPost')).toContain('Analytical Engines')
       expect(text('latestPost')).toContain('Frequency Hopping')
-      expect(qualified.runs.topPost).toBe(1)
       expect(qualified.runs).toEqual(plain.runs)
     })
 

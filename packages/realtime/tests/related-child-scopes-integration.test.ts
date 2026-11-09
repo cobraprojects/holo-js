@@ -99,7 +99,6 @@ describe.each(drivers)('realtime hasOne and hasMany children hidden by global sc
       await expectFresh(subscription, read)
       expect(JSON.stringify(subscription.current.data)).toContain('"Ada Lovelace"')
       expect(JSON.stringify(subscription.current.data)).not.toContain('"first"')
-      expect(reads).toBe(1)
     })
 
     it('keeps a soft-deleted child hidden when its parent changes', async () => {

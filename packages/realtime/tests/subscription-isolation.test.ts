@@ -86,7 +86,7 @@ it.each(['authenticated', 'public'] as const)('isolates identical %s subscriptio
   expect(second.current.data).toEqual([{ id: 20, name: 'Ben' }])
 }, 30000)
 
-it('uses one initial query and patches a single subscription without extra reads', async () => {
+it('uses one initial query and one native read to refresh a single subscription', async () => {
   const adapter = await createNativeRelationalAdapter({ posts: [{ id: 1, title: 'First' }] })
   const db = createDatabase({ adapter, dialect: createDialect('sqlite'), connectionName: 'main' })
   configureRealtimeRuntime({ db: () => db })
@@ -107,7 +107,7 @@ it('uses one initial query and patches a single subscription without extra reads
   }))
 
   expect(subscription.current.data).toEqual([{ id: 1, title: 'Updated' }])
-  expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(0)
+  expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(1)
 })
 
 it('refreshes outside a completed subscription transaction', async () => {
@@ -209,7 +209,6 @@ it('reruns queries that observe a different database from the runtime binding', 
   expect(subscription.current.data).toEqual([{ id: 2, title: 'B2' }])
 })
 
-
 it('authorizes a remembered user from a read-only realtime request without writing cookies', async () => {
   const context = createRequestAwareAuthContext(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
   const persistence = await configureAuthenticatedSubscriptions(context)
@@ -267,3 +266,29 @@ it('captures credentials resolved through request accessors before the request e
   expect(second.current.data).toEqual([{ id: 20, name: 'Ben' }])
   expect(anonymous.current.data).toEqual([])
 }, 30000)
+
+it.each(['data', 'error'] as const)('delivers native handler %s in the subscribing user context', async channel => {
+  const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
+  const persistence = await configureAuthenticatedSubscriptions(context)
+  const principals: Array<string | number | undefined> = []
+  const errors: unknown[] = []
+  const definition = defineRealtimeQuery({ access: 'authenticated', handler: async ({ auth, db }) => {
+    const rows = await db.table('users').where('id', auth.user.id).select('id', 'name').get()
+    if (channel === 'error' && rows[0]?.name === 'Updated Ben') throw new Error('The updated row is hidden.')
+    return rows
+  } })
+  const subscription = await context.run(async () => {
+    await getAuthRuntime().guard('web').loginUsingId(20)
+    return await subscribeRealtimeQuery(definition, {}, {
+      onData: async () => { principals.push((await getAuthRuntime().guard('web').user())?.id) },
+      onError: async error => { errors.push(error); principals.push((await getAuthRuntime().guard('web').user())?.id) },
+    })
+  })
+  await context.run(async () => {
+    await getAuthRuntime().guard('web').loginUsingId(10)
+    await persistence.db.table('users').where('id', 20).update({ name: 'Updated Ben' })
+  })
+  expect(subscription.current.data).toEqual([{ id: 20, name: channel === 'error' ? 'Ben' : 'Updated Ben' }])
+  expect(errors).toHaveLength(channel === 'error' ? 1 : 0)
+  expect(principals).toEqual([20, 20])
+})

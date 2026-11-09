@@ -26,7 +26,8 @@ function createAdapter(driver: TestDriver): DriverAdapter {
 async function createPosts(driver: TestDriver) {
   const adapter = createAdapter(driver)
   const tableName = `posts_${randomUUID().replaceAll('-', '').slice(0, 12)}`
-  const db = createDatabase({ adapter, dialect: createDialect(driver), connectionName: 'main' })
+  let queryReads = 0
+  const db = createDatabase({ adapter, dialect: createDialect(driver), connectionName: 'main', security: { debugSqlInLogs: true }, logger: { onQuerySuccess: event => { if (event.kind === 'query' && event.sql?.startsWith('SELECT ') && [tableName, ...extraTables].some(table => event.sql!.includes(table))) queryReads += 1 } } })
   const extraTables: string[] = []
   await adapter.initialize()
   onTestFinished(async () => {
@@ -43,10 +44,25 @@ async function createPosts(driver: TestDriver) {
   await adapter.execute(`INSERT INTO ${tableName} (id, title) VALUES (1, 'First'), (2, 'Second')`)
   configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
-  return { adapter, db, extraTables, tableName }
+  return { adapter, db, extraTables, tableName, queryReads: () => queryReads }
 }
 
 const transforms: ReadonlyArray<readonly [string, (db: Database, tableName: string) => Promise<unknown>]> = [
+  ['derived total beside get()', async (db, tableName) => {
+    const posts = await db.table(tableName).select('id', 'title').orderBy('id').get()
+    return { posts, total: posts.length }
+  }],
+  ['count() clamped at its initial value', async (db, tableName) => Math.max(await db.table(tableName).count(), 2)],
+  ['count() doubled from zero', async (db, tableName) => (await db.table(tableName).where('id', '>', 2).count()) * 2],
+  ['first() conditionally returned by content', async (db, tableName) => {
+    const post = await db.table(tableName).select('id', 'title').orderBy('id').first() as Post | undefined
+    return post?.title === 'First' ? post : null
+  }],
+  ['get() filtered in place without initially removing rows', async (db, tableName) => {
+    const posts = await db.table(tableName).select('id', 'title').orderBy('id').get() as Post[]
+    posts.splice(0, posts.length, ...posts.filter(post => post.id !== 3))
+    return posts
+  }],
   ['first() ?? null', async (db, tableName) => (await db.table(tableName).select('id', 'title').orderBy('id').first()) ?? null],
   ['find() ?? null', async (db, tableName) => (await db.table(tableName).select('id', 'title').find(1)) ?? null],
   ['nested first() ?? null', async (db, tableName) => ({ post: (await db.table(tableName).select('id', 'title').orderBy('id').first()) ?? null })],
@@ -173,6 +189,11 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('an 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a handler that changes a model collection on %s', (driver) => {
   const createPostModel = (tableName: string) => defineModel(defineGeneratedTable(tableName, { id: column.integer().primaryKey(), title: column.string() }), { timestamps: false, fillable: ['title'] })
   const readers: ReadonlyArray<readonly [string, (database: Database, Post: ReturnType<typeof createPostModel>) => Promise<unknown>]> = [
+    ['assigns a custom toJSON redaction', async (database, Post) => {
+      const posts = await database.model(Post).query().orderBy('id').get()
+      for (const post of posts) Object.defineProperty(post, 'toJSON', { value: () => ({ id: post.id }), configurable: true })
+      return posts
+    }],
     ['deletes a column from toJSON() rows', async (database, Post) => {
       const posts = (await database.model(Post).query().orderBy('id').get()).toJSON() as Array<Partial<Post>>
       for (const post of posts) delete post.title
@@ -272,6 +293,64 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a l
     await mutate(db => db.table(commentsTable).insert({ id: 3, post_id: 3, body: 'On third' }))
     await expectFresh()
     await mutate(db => db.table(commentsTable).where('id', 1).update({ body: 'Edited' }))
+    await expectFresh()
+    await mutate(db => db.table(postsTable).where('id', 2).delete())
+    await expectFresh()
+  })
+})
+
+async function createRelatedPosts(driver: TestDriver) {
+  const { adapter, db, extraTables, tableName: postsTable, queryReads } = await createPosts(driver)
+  const commentsTable = `comments_${postsTable.slice('posts_'.length)}`
+  extraTables.push(commentsTable)
+  await adapter.execute(`CREATE TABLE ${commentsTable} (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, body VARCHAR(64) NOT NULL)`)
+  await adapter.execute(`INSERT INTO ${commentsTable} (id, post_id, body) VALUES (1, 1, 'On first'), (2, 2, 'On second')`)
+  const commentTable = defineGeneratedTable(commentsTable, { id: column.integer().primaryKey(), post_id: column.integer(), body: column.string() })
+  const Comment = defineModel(commentTable, { timestamps: false })
+  const Post = defineModel(defineGeneratedTable(postsTable, { id: column.integer().primaryKey(), title: column.string() }), {
+    timestamps: false,
+    relations: { comments: hasMany(() => Comment, 'post_id') },
+  })
+  return { adapter, db, extraTables, Post, postsTable, commentsTable, commentTable, queryReads }
+}
+
+const relationTransforms: ReadonlyArray<readonly [string, (posts: Array<Record<string, unknown>>) => unknown]> = [
+  ['wrapped', posts => ({ posts, total: posts.length })],
+  ['filtered', posts => posts.filter(post => post.id !== 2)],
+  ['reversed', posts => posts.reverse()],
+]
+
+describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a handler that transforms related root results on %s', (driver) => {
+  it.each(relationTransforms)('keeps %s results equal to a fresh handler run after root and relation writes', async (_label, transform) => {
+    const { db, Post, postsTable, commentsTable, queryReads } = await createRelatedPosts(driver)
+    let handlerRuns = 0
+    const read = async (database: Database) => {
+      const before = queryReads()
+      const posts = await database.model(Post).query().with('comments').orderBy('id').get()
+      expect(queryReads() - before).toBe(2)
+      return transform(posts)
+    }
+    const subscription = await subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler: ({ db }) => { handlerRuns += 1; return read(db) } }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )
+    const mutate = async (mutation: (db: Database) => Promise<unknown>) => {
+      const before = handlerRuns
+      await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => mutation(db) }))
+      expect(handlerRuns).toBe(before + 1)
+    }
+    const expectFresh = async () => expect(JSON.parse(JSON.stringify(subscription.current.data))).toEqual(JSON.parse(JSON.stringify(await read(db))))
+    await expectFresh()
+    await mutate(db => db.table(commentsTable).where('id', 1).update({ body: 'Edited' }))
+    await expectFresh()
+    await mutate(db => db.table(commentsTable).insert({ id: 3, post_id: 1, body: 'New' }))
+    await expectFresh()
+    await mutate(db => db.table(commentsTable).where('id', 2).delete())
+    await expectFresh()
+    await mutate(db => db.table(postsTable).insert({ id: 3, title: 'Secret' }))
+    await expectFresh()
+    await mutate(db => db.table(postsTable).where('id', 1).update({ title: 'Changed' }))
     await expectFresh()
     await mutate(db => db.table(postsTable).where('id', 2).delete())
     await expectFresh()

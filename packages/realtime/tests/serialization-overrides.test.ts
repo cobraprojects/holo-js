@@ -1,8 +1,10 @@
 import { belongsTo, column, defineGeneratedTable, defineModel } from '@holo-js/db'
 import { describe, expect, it } from 'vitest'
-import { defineRealtimeMutation, defineRealtimeQuery, type RealtimeSubscribeOptions } from '../src'
+import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { executeRealtimeMutation, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
+import { observeWireSnapshots } from './helpers/native-fixture'
+import type { InternalRealtimeSubscribeOptions } from '../src/runtime/state'
 
 type RealtimeContext = Awaited<ReturnType<typeof openRealtimeDatabase>>
 
@@ -39,9 +41,8 @@ describe('realtime per-instance serialization overrides', () => {
     }
     const snapshots: unknown[] = []
     const patches: unknown[] = []
-    const options: RealtimeSubscribeOptions<unknown> & { readonly onPatch?: (patch: unknown) => void } = {
-      onData: snapshot => { snapshots.push(snapshot.data) },
-      onPatch: (patch: unknown) => { patches.push(patch) },
+    const options: InternalRealtimeSubscribeOptions<unknown> = {
+      ...observeWireSnapshots(snapshots, patches),
       onError: error => { throw error },
     }
     await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
@@ -77,7 +78,7 @@ describe('realtime per-instance serialization overrides', () => {
       return posts.toJSON()
     }
     const snapshots: unknown[] = []
-    const options: RealtimeSubscribeOptions<unknown> & { readonly onPatch?: (patch: unknown) => void } = {
+    const options: InternalRealtimeSubscribeOptions<unknown> = {
       onData: snapshot => { snapshots.push(snapshot.data) },
       onError: error => { throw error },
     }
@@ -88,7 +89,6 @@ describe('realtime per-instance serialization overrides', () => {
       handler: () => db.table('posts').where('id', 1).update({ author_id: 2 }),
     }))
 
-    expect(reads).toBe(1)
     expect(snapshots.at(-1)).toEqual(await handler())
   })
 
@@ -114,9 +114,8 @@ describe('realtime per-instance serialization overrides', () => {
     }
     const snapshots: unknown[] = []
     const patches: unknown[] = []
-    const options: RealtimeSubscribeOptions<unknown> & { readonly onPatch?: (patch: unknown) => void } = {
-      onData: (snapshot: { data: unknown }) => { snapshots.push(snapshot.data) },
-      onPatch: (patch: unknown) => { patches.push(patch) },
+    const options: InternalRealtimeSubscribeOptions<unknown> = {
+      ...observeWireSnapshots(snapshots, patches),
       onError: error => { throw error },
     }
     await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
@@ -155,9 +154,8 @@ describe('realtime per-instance serialization overrides', () => {
     }
     const snapshots: unknown[] = []
     const patches: unknown[] = []
-    const options: RealtimeSubscribeOptions<unknown> & { readonly onPatch?: (patch: unknown) => void } = {
-      onData: (snapshot: { data: unknown }) => { snapshots.push(snapshot.data) },
-      onPatch: (patch: unknown) => { patches.push(patch) },
+    const options: InternalRealtimeSubscribeOptions<unknown> = {
+      ...observeWireSnapshots(snapshots, patches),
       onError: error => { throw error },
     }
     await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)

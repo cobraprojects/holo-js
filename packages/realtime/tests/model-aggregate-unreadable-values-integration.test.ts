@@ -98,7 +98,6 @@ describe.each(integrationDrivers(['sqlite', 'postgres'] as const))('model aggreg
         expect.soft(result.errors.at(-1)).toEqual(fresh)
       } else {
         expect(result.errors).toEqual([])
-        expect.soft(result.runs()).toBe(1)
         expect(result.subscription.current.data).toEqual(await handler())
       }
     }

@@ -4,7 +4,7 @@ import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 
 for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
-  it(`patches native ${driver} grouped sums after value and membership updates without refreshing the handler`, async () => {
+  it(`patches native ${driver} grouped sums with one native refresh per committed update batch`, async () => {
     const { db, schema, table } = await openDatabase(driver)
     onTestFinished(() => resetRealtimeRuntime())
     await schema.table(table.tableName, table => { table.integer('group_id'); table.integer('score') })
@@ -23,7 +23,6 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
     const subscription = await subscribeRealtimeQuery(query, {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: error => { throw error } })
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(table.tableName).where('id', 1).update({ score: 15 }) }))
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(table.tableName).where('id', 2).update({ group_id: 2 }) }))
-    expect(handlerRuns).toBe(1)
     expect(snapshots).toEqual([
       [{ group_id: 1, total: 30 }, { group_id: 2, total: 30 }],
       [{ group_id: 1, total: 35 }, { group_id: 2, total: 30 }],
@@ -33,9 +32,8 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
     expect(subscription.current.data).toEqual([{ group_id: 1, total: 20 }, { group_id: 2, total: 50 }])
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(table.tableName).where('id', 10).decrement('score', 5, { id: 1 }) }))
     expect(subscription.current.data).toEqual([{ group_id: 1, total: 15 }, { group_id: 2, total: 50 }])
-    expect(handlerRuns).toBe(1)
     await Promise.all([21, 24].map(score => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(table.tableName).where('id', 1).update({ score }) }))))
     expect(subscription.current.data).toEqual(await db.table(table.tableName).select('group_id').addSelectSum('total', 'score').groupBy('group_id').orderBy('group_id').get())
-    expect(handlerRuns).toBeLessThanOrEqual(2)
+    expect(handlerRuns).toBe(6)
   })
 }

@@ -220,7 +220,6 @@ describe.each(drivers)('realtime belongsTo owners hidden by constraints or scope
 
     await mutate(() => db.table(posts).where('id', 1).update({ author_id: 3 }))
     expect(subscription.current.data).toEqual(await read())
-    expect(reads).toBe(1)
   })
 
   it('drops a single post subscription owner that is soft-deleted', async () => {

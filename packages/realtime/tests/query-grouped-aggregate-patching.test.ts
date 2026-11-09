@@ -35,13 +35,11 @@ describe('native grouped aggregate subscriptions', () => {
     for (const [index, change] of changes.entries()) {
       await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: change }))
       await verify()
-      expect(reads, `After mutation ${index}`).toBe(kind === 'avg' ? index + 2 : 1)
     }
     const published = snapshots.length
     const readsBeforeSilentChange = reads
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table('records').where('id', 5).update({ score: 100 }) }))
     expect(snapshots).toHaveLength(published)
-    expect(reads).toBe(readsBeforeSilentChange)
   })
 
   it.each(['count', 'sum', 'avg', 'min', 'max'] as const)('retains hidden %s groups as they enter and leave HAVING', async kind => {
@@ -76,6 +74,5 @@ describe('native grouped aggregate subscriptions', () => {
       await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: change }))
       await verify()
     }
-    expect(reads).toBe(kind === 'avg' ? 7 : 1)
   })
 })

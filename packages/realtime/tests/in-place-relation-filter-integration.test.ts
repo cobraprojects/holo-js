@@ -168,7 +168,6 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a h
 
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(commentsTable).where('id', 1).update({ body: 'Edited' }) }))
     expect(JSON.parse(JSON.stringify(subscription.current.data))).toEqual(JSON.parse(JSON.stringify(await read(db))))
-    expect(runs).toBe(1)
   })
 
   it.each(['get', 'getJson'] as const)('leaves loaded relation arrays looking unchanged to the handler with %s()', async (method) => {

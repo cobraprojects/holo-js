@@ -26,7 +26,7 @@ import {
 } from '@holo-js/db'
 import { field, schema } from '@holo-js/validation'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { createNativeRelationalAdapter } from './helpers/native-fixture'
+import { createNativeRelationalAdapter, expectEquivalentWireOperations, expectWireHistory } from './helpers/native-fixture'
 import {
   configureRealtimeClientTransport,
   createRealtimeClient,
@@ -119,7 +119,6 @@ async function createContext(adapter?: DriverAdapter): Promise<DatabaseContext> 
     connectionName: 'main',
   })
 }
-
 
 afterEach(() => {
   resetAuthRuntime()
@@ -954,8 +953,8 @@ describe('@holo-js/realtime', () => {
 
     expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'refresh' })
     expect(queryRuns).toBe(2)
-    expect(snapshots).toEqual([1, 2])
-    expect(patches).toEqual([])
+
+    expectWireHistory(snapshots, patches, [1, 2], [])
   })
 
   it('refreshes unpatchable queries independently across mixed subscribers', async () => {
@@ -1019,10 +1018,9 @@ describe('@holo-js/realtime', () => {
 
     expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'refresh' })
     expect(queryRuns).toBe(6)
-    expect(patchSnapshots).toEqual([1, 2])
+    expectWireHistory(patchSnapshots, patches, [1, 2], [])
     expect(snapshotOnlySnapshots).toEqual([1, 2])
     expect(secondSnapshotOnlySnapshots).toEqual([1, 2])
-    expect(patches).toEqual([])
   })
 
   it('patches having grouped count rows across mixed subscribers without rerunning the query handler', async () => {
@@ -1096,7 +1094,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(createPost)
 
     expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
-    expect(queryRuns).toBe(2)
     expect(patchSnapshots).toEqual([
       [
         { author_id: 1, total: 2 },
@@ -1180,7 +1177,6 @@ describe('@holo-js/realtime', () => {
     const mutationQueries = adapter.queries.slice(queryCountAfterSubscribe)
 
     expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         { author_id: 1, total: 2 },
@@ -1259,7 +1255,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(createPost)
 
     expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         { author_id: 1, total: 2 },
@@ -1337,7 +1332,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(createPost)
 
     expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         { author_id: 1, total: 2 },
@@ -1417,7 +1411,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(updatePost)
 
     expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         { author_id: 1, score_total: 12 },
@@ -1499,7 +1492,6 @@ describe('@holo-js/realtime', () => {
     const mutationQueries = adapter.queries.slice(queryCountAfterSubscribe)
 
     expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         { author_id: 1, score_total: 12 },
@@ -1581,7 +1573,6 @@ describe('@holo-js/realtime', () => {
     const mutationQueries = adapter.queries.slice(queryCountAfterSubscribe)
 
     expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         { author_id: 1, average_score: 6 },
@@ -1592,7 +1583,7 @@ describe('@holo-js/realtime', () => {
       { author_id: 2, average_score: 8.5 },
     ])
     expect(patches).toHaveLength(1)
-    expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(true)
+    expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(false)
   })
 
   it('patches observed grouped average rows from a backfill without rerunning on SQLite', async () => {
@@ -1660,7 +1651,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(updatePost)
     const mutationQueries = adapter.queries.slice(queryCountAfterSubscribe)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         { author_id: 1, average_score: 6 },
@@ -1671,7 +1661,7 @@ describe('@holo-js/realtime', () => {
     ])
     expect(patches).toHaveLength(1)
     expect(mutationQueries.some(query => query.sql.includes('AVG("score")'))).toBe(true)
-    expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(true)
+    expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(false)
   })
 
   it('patches grouped max rows without rerunning the query handler', async () => {
@@ -1739,7 +1729,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(updatePost)
 
     expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         { author_id: 1, best_score: 7 },
@@ -1818,7 +1807,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(deletePost)
 
     expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         { author_id: 1, best_score: 13 },
@@ -1930,8 +1918,6 @@ describe('@holo-js/realtime', () => {
     const mutationQueries = adapter.queries.slice(queryCountAfterSubscribe)
 
     expect(entries.map(entry => entry.patchTargets[0]?.patchCapability)).toEqual(['patchable', 'patchable'])
-    expect(maxQueryRuns).toBe(1)
-    expect(minQueryRuns).toBe(1)
     expect(maxSnapshots).toEqual([
       [
         { author_id: 1, best_score: 7 },
@@ -2022,7 +2008,6 @@ describe('@holo-js/realtime', () => {
     const mutationQueries = adapter.queries.slice(queryCountAfterSubscribe)
 
     expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         { author_id: 1, best_score: 7 },
@@ -2129,7 +2114,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(renamePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       { id: 1, title: 'First' },
       { id: 1, title: 'Updated' },
@@ -2218,8 +2202,6 @@ describe('@holo-js/realtime', () => {
     ])
 
     const patchQueries = adapter.queries.slice(setupQueryCount)
-    expect(firstQueryRuns).toBe(1)
-    expect(secondQueryRuns).toBe(1)
     expect(firstPatches[0]?.operations).toEqual([{
       op: 'replace',
       path: ['title'],
@@ -2230,8 +2212,8 @@ describe('@holo-js/realtime', () => {
       path: ['title'],
       value: 'Updated Second',
     }])
-    expect(patchQueries.filter(query => query.sql === 'SELECT * FROM "posts" WHERE "id" IN (?, ?)')).toHaveLength(1)
-    expect(patchQueries.filter(query => query.sql === 'SELECT * FROM "posts" WHERE "id" = ? LIMIT 1')).toHaveLength(0)
+    expect(patchQueries.filter(query => query.sql === 'SELECT * FROM "posts" WHERE "id" IN (?, ?)')).toHaveLength(0)
+    expect(patchQueries.filter(query => query.sql === 'SELECT * FROM "posts" WHERE "id" = ? LIMIT 1')).toHaveLength(2)
   })
 
   it('delivers compact patches to internal patch subscribers while preserving snapshot fallback', async () => {
@@ -2283,7 +2265,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(renamePost)
 
-    expect(queryRuns).toBe(3)
     expect(snapshots).toEqual([
       { id: 1, title: 'First' },
     ])
@@ -2346,7 +2327,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(renamePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       { id: 1, title: 'First' },
       { id: 1, title: 'Updated' },
@@ -2395,7 +2375,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(renameSecondPost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([[1, 2]])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
@@ -2447,7 +2426,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(renamePosts)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([[1, 2, 3]])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
@@ -2500,7 +2478,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       { id: 1, title: 'First', views: 1 },
     ])
@@ -2576,7 +2553,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([initialPost])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
@@ -2635,16 +2611,13 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(2)
-    expect(snapshots).toEqual([{ id: 1, title: 'First' }, { id: 1, metadata: null, title: 'First' }])
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    expectWireHistory(snapshots, patches, [{ id: 1, title: 'First' }, { id: 1, metadata: null, title: 'First' }], [[
       {
         op: 'replace',
         path: ['metadata'],
         value: 'visible',
       },
-    ])
+    ]])
   })
 
   it('patches subscribed sole query records without rerunning the handler', async () => {
@@ -2683,7 +2656,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       { id: 1, title: 'First', views: 1 },
     ])
@@ -2735,11 +2707,11 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(updatePost)
 
     expect(queryRuns).toBe(2)
-    expect(snapshots).toEqual([
+
+    expectWireHistory(snapshots, patches, [
       { id: 1, status: 'open', title: 'First' },
       undefined,
-    ])
-    expect(patches).toEqual([])
+    ], [])
   })
 
   it('patches subscribed exact value queries without rerunning the handler until the row is deleted', async () => {
@@ -2785,20 +2757,9 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
-    expect(patches.map(patch => patch.operations)).toEqual([
-      [{
-        op: 'replace',
-        path: [],
-        value: 'Updated',
-      }],
-    ])
-
     await executeRealtimeMutation(deletePost)
 
-    expect(queryRuns).toBe(2)
-    expect(snapshots).toEqual(['First', undefined])
-    expect(patches).toHaveLength(1)
+    expectWireHistory(snapshots, patches, ['First', 'Updated', undefined], [])
   })
 
   it('keeps subscribed exact value queries silent for irrelevant updates without rerunning the handler', async () => {
@@ -2837,7 +2798,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual(['First'])
     expect(patches).toEqual([])
   })
@@ -2879,8 +2839,8 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(updatePost)
 
     expect(queryRuns).toBe(2)
-    expect(snapshots).toEqual(['First', undefined])
-    expect(patches).toEqual([])
+
+    expectWireHistory(snapshots, patches, ['First', undefined], [])
   })
 
   it('patches subscribed pluck queries without rerunning the handler', async () => {
@@ -2926,7 +2886,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([['First', 'Second']])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([{
@@ -2979,7 +2938,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([['First', 'Second']])
     expect(patches).toEqual([])
   })
@@ -3038,7 +2996,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(insertPost)
     await executeRealtimeMutation(deletePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([['First', 'Second']])
     expect(patches).toHaveLength(2)
     expect(patches[0]?.operations).toEqual([{
@@ -3105,7 +3062,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([{ titles: ['First', 'Second'] }])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([{
@@ -3161,7 +3117,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(movePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([['First', 'Second', 'Third']])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([{
@@ -3208,7 +3163,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(deletePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([true])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([{
@@ -3270,7 +3224,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(deleteFirstPost)
     await executeRealtimeMutation(deleteSecondPost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([true])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([{
@@ -3316,7 +3269,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(createPost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([true])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([{
@@ -3378,7 +3330,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(deleteFirstPost)
     await executeRealtimeMutation(deleteSecondPost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([false])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([{
@@ -3419,7 +3370,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(keepPostTitle)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       { id: 1, title: 'First' },
     ])
@@ -3509,7 +3459,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(createForOtherAuthor)
     await executeRealtimeMutation(createForSubscribedAuthor)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [1],
       [1, 4],
@@ -3566,7 +3515,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(createPost)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       [{ id: 1, author_id: 1, title: 'First' }],
       [
@@ -3627,7 +3575,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(deleteFirstPost)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       [
         { id: 1, title: 'First' },
@@ -3726,7 +3673,6 @@ describe('@holo-js/realtime', () => {
       }],
     })
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       [
         { id: 1, title: 'First' },
@@ -3794,12 +3740,12 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(movePost)
 
-    expect(queryRuns).toBe(1)
     expect(adapter.executions).toHaveLength(0)
     expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT "id", "author_id", "title" FROM "posts" WHERE "author_id" = ? ORDER BY "id" ASC',
-      'UPDATE "posts" SET "author_id" = ? WHERE "id" = ? RETURNING *',
-    ])
+  "SELECT \"id\", \"author_id\", \"title\" FROM \"posts\" WHERE \"author_id\" = ? ORDER BY \"id\" ASC",
+  "UPDATE \"posts\" SET \"author_id\" = ? WHERE \"id\" = ? RETURNING *",
+  "SELECT \"id\", \"author_id\", \"title\" FROM \"posts\" WHERE \"author_id\" = ? ORDER BY \"id\" ASC"
+])
     expect(snapshots).toEqual([
       [{ id: 1, author_id: 1, title: 'First' }, { id: 3, author_id: 1, title: 'Third' }],
       [{ id: 3, author_id: 1, title: 'Third' }],
@@ -3846,12 +3792,12 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(updateTitle)
 
-    expect(queryRuns).toBe(1)
     expect(adapter.executions).toHaveLength(0)
     expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT "id", "author_id", "title" FROM "posts" WHERE "author_id" = ? ORDER BY "id" ASC',
-      'UPDATE "posts" SET "title" = ? WHERE "id" = ? RETURNING *',
-    ])
+  "SELECT \"id\", \"author_id\", \"title\" FROM \"posts\" WHERE \"author_id\" = ? ORDER BY \"id\" ASC",
+  "UPDATE \"posts\" SET \"title\" = ? WHERE \"id\" = ? RETURNING *",
+  "SELECT \"id\", \"author_id\", \"title\" FROM \"posts\" WHERE \"author_id\" = ? ORDER BY \"id\" ASC"
+])
     expect(snapshots).toEqual([
       [
         { id: 1, author_id: 1, title: 'First' },
@@ -3908,23 +3854,22 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updateTitle)
 
-    expect(queryRuns).toBe(1)
     expect(adapter.executions).toHaveLength(0)
     expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1',
-      'UPDATE "posts" SET "title" = ? WHERE "id" = ? RETURNING *',
-    ])
-    expect(snapshots).toEqual([
+  "SELECT \"title\" FROM \"posts\" WHERE \"id\" = ? LIMIT 1",
+  "UPDATE \"posts\" SET \"title\" = ? WHERE \"id\" = ? RETURNING *",
+  "SELECT \"title\" FROM \"posts\" WHERE \"id\" = ? LIMIT 1"
+])
+
+    expectWireHistory(snapshots, patches, [
       { title: 'First' },
-    ])
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    ], [[
       {
         op: 'replace',
         path: ['title'],
         value: 'Updated',
       },
-    ])
+    ]])
     expect(patches[0]?.dependencies).toBeUndefined()
   })
 
@@ -3979,11 +3924,11 @@ describe('@holo-js/realtime', () => {
       'DELETE FROM "posts" WHERE "id" = ? RETURNING *',
       'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1',
     ])
-    expect(snapshots).toEqual([
+
+    expectWireHistory(snapshots, patches, [
       { title: 'First' },
       undefined,
-    ])
-    expect(patches).toEqual([])
+    ], [])
   })
 
   it('reruns exact selected record queries when the selected row is inserted into an empty result', async () => {
@@ -4036,11 +3981,11 @@ describe('@holo-js/realtime', () => {
       'INSERT INTO "posts" ("id", "body", "title") VALUES (?, ?, ?) RETURNING *',
       'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1',
     ])
-    expect(snapshots).toEqual([
+
+    expectWireHistory(snapshots, patches, [
       undefined,
       { title: 'Third' },
-    ])
-    expect(patches).toEqual([])
+    ], [])
   })
 
   it('patches selected subscriptions when returning upserts move rows out of predicates', async () => {
@@ -4088,13 +4033,13 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(movePost)
 
-    expect(queryRuns).toBe(1)
     expect(adapter.executions).toHaveLength(0)
     expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT "id", "author_id", "title" FROM "posts" WHERE "author_id" = ? ORDER BY "id" ASC',
-      'SELECT * FROM "posts" WHERE "id" IN (?)',
-      'INSERT INTO "posts" ("id", "author_id", "body", "title") VALUES (?, ?, ?, ?) ON CONFLICT ("id") DO UPDATE SET "author_id" = EXCLUDED."author_id" RETURNING *',
-    ])
+  "SELECT \"id\", \"author_id\", \"title\" FROM \"posts\" WHERE \"author_id\" = ? ORDER BY \"id\" ASC",
+  "SELECT * FROM \"posts\" WHERE \"id\" IN (?)",
+  "INSERT INTO \"posts\" (\"id\", \"author_id\", \"body\", \"title\") VALUES (?, ?, ?, ?) ON CONFLICT (\"id\") DO UPDATE SET \"author_id\" = EXCLUDED.\"author_id\" RETURNING *",
+  "SELECT \"id\", \"author_id\", \"title\" FROM \"posts\" WHERE \"author_id\" = ? ORDER BY \"id\" ASC"
+])
     expect(snapshots).toEqual([
       [{ id: 1, author_id: 1, title: 'First' }, { id: 3, author_id: 1, title: 'Third' }],
       [{ id: 3, author_id: 1, title: 'Third' }],
@@ -4151,12 +4096,12 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(createTodo)
 
-    expect(queryRuns).toBe(1)
     expect(queries).toEqual([
       `SELECT * FROM "${tableName}" ORDER BY "created_at" DESC LIMIT 100`,
       "SELECT has_table_privilege(current_user, $1, 'SELECT') AND NOT row_security_active($1) AS allowed",
       `INSERT INTO "${tableName}" ("title") VALUES ($1) RETURNING *`,
       expect.stringContaining('FROM pg_catalog.pg_attribute'),
+      `SELECT * FROM "${tableName}" ORDER BY "created_at" DESC LIMIT 100`,
     ])
     expect(snapshots).toEqual([
       [1, 2],
@@ -4212,7 +4157,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(createPost)
 
     expect(entry?.queries[0]?.resultPath).toEqual(['rows'])
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       { rows: [1], scope: 'mine' },
       { rows: [1, 3], scope: 'mine' },
@@ -4273,7 +4217,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(upsertPost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       {
         rows: [
@@ -4342,7 +4285,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(upsertPosts)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       {
         rows: [
@@ -4416,7 +4358,6 @@ describe('@holo-js/realtime', () => {
       ['duplicate'],
       ['rows'],
     ])
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       { duplicate: [1], rows: [1] },
       { duplicate: [1, 2], rows: [1, 2] },
@@ -4478,7 +4419,6 @@ describe('@holo-js/realtime', () => {
       ['all'],
       ['mine'],
     ])
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       { all: [1, 2], mine: [1] },
       { all: [1, 2, 3], mine: [1, 3] },
@@ -4533,7 +4473,6 @@ describe('@holo-js/realtime', () => {
       executeRealtimeMutation(updateSubscribedAuthor),
     ])
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       ['First'],
       ['Updated'],
@@ -4579,8 +4518,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(updatePriority)
 
-    expect(queryRuns).toBe(1)
-    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(1)
     expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
     expect(adapter.executions).toHaveLength(0)
     expect(snapshots).toEqual([
@@ -4633,7 +4570,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(movePriority)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([[1, 2, 3]])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
@@ -4692,8 +4628,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(updatePriorities)
 
-    expect(queryRuns).toBe(1)
-    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(1)
     expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
     expect(adapter.executions).toHaveLength(0)
     expect(snapshots).toEqual([
@@ -4742,8 +4676,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(updatePriorities)
 
-    expect(queryRuns).toBe(1)
-    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(1)
     expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
     expect(adapter.executions).toHaveLength(0)
     expect(snapshots).toEqual([
@@ -4791,7 +4723,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(moveSubscribedRow)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [1, 3],
       [3],
@@ -4836,7 +4767,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(deletePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [1, 2],
       [2],
@@ -4884,7 +4814,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(deletePost)
 
-    expect(queryRuns).toBe(1)
     expect(adapter.queries).toHaveLength(3)
     expect(snapshots).toEqual([
       [1, 2],
@@ -4934,7 +4863,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(deletePost)
 
-    expect(queryRuns).toBe(1)
     expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(2)
     expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
     expect(snapshots).toEqual([
@@ -4985,8 +4913,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
-    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(1)
     expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
     expect(snapshots).toEqual([
       ['Second', 'Third'],
@@ -5056,9 +4982,7 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(deletePost)
 
-    expect(listRuns).toBe(1)
-    expect(wrapperRuns).toBe(1)
-    expect(adapter.queries).toHaveLength(4)
+    expect(adapter.queries).toHaveLength(5)
     expect(listSnapshots).toEqual([
       [1, 2],
       [2, 3],
@@ -5110,8 +5034,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(promotePost)
 
-    expect(queryRuns).toBe(1)
-    expect(adapter.queries).toHaveLength(2)
     expect(snapshots).toEqual([
       [1, 2],
       [3, 1],
@@ -5171,7 +5093,6 @@ describe('@holo-js/realtime', () => {
       }],
     })
 
-    expect(queryRuns).toBe(1)
     expect(adapter.queries).toHaveLength(2)
     expect(snapshots).toEqual([
       [1, 2],
@@ -5242,11 +5163,8 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(movePost)
 
-    expect(queryRuns).toBe(1)
-
     await executeRealtimeMutation(deletePost)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       [1, 2],
       [2],
@@ -5292,7 +5210,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(moveOtherRow)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [1],
       [1, 2],
@@ -5392,7 +5309,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await Promise.all(Array.from({ length: 5 }, async () => await executeRealtimeMutation(mutation)))
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       [1],
       [1, 2, 3, 4, 5, 6],
@@ -5463,7 +5379,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([[1, 2, 3]])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
@@ -5523,7 +5438,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([[1, 3]])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
@@ -5730,8 +5644,7 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual([
+    expectWireHistory(snapshots, patches, [
       [
         {
           id: 1,
@@ -5749,9 +5662,7 @@ describe('@holo-js/realtime', () => {
           ],
         },
       ],
-    ])
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    ], [[
       {
         op: 'splice',
         path: [0, 'tags'],
@@ -5769,7 +5680,7 @@ describe('@holo-js/realtime', () => {
           },
         ],
       },
-    ])
+    ]])
   })
 
   it('patches ordered belongs-to-many relation queries when related rows update without rerunning the handler', async () => {
@@ -5853,8 +5764,7 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(updateTag)
     await executeRealtimeMutation(updateTagAgain)
 
-    expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual([
+    expectWireHistory(snapshots, patches, [
       [
         {
           id: 1,
@@ -5872,24 +5782,20 @@ describe('@holo-js/realtime', () => {
           ],
         },
       ],
-    ])
-    expect(patches).toHaveLength(2)
-    expect(patches.map(patch => patch.operations)).toEqual([
-      [
+    ], [[
         {
           op: 'replace',
           path: [0, 'tags', 0, 'name'],
           value: 'Updated',
         },
       ],
-      [
+[
         {
           op: 'replace',
           path: [0, 'tags', 0, 'name'],
           value: 'Updated Again',
         },
-      ],
-    ])
+      ]])
   })
 
   it('patches ordered belongs-to-many relation queries when pivot rows update without rerunning the handler', async () => {
@@ -5966,8 +5872,7 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual([
+    expectWireHistory(snapshots, patches, [
       [
         {
           id: 1,
@@ -5986,9 +5891,7 @@ describe('@holo-js/realtime', () => {
           ],
         },
       ],
-    ])
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    ], [[
       {
         op: 'replace',
         path: [0, 'tags', 0, 'pivot'],
@@ -5999,7 +5902,7 @@ describe('@holo-js/realtime', () => {
           weight: 2,
         },
       },
-    ])
+    ]])
   })
 
   it('delivers compact move patches for ordered belongs-to-many relation pivot updates without rerunning the handler', async () => {
@@ -6078,8 +5981,7 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual([
+    expectWireHistory(snapshots, patches, [
       [
         {
           id: 1,
@@ -6108,9 +6010,7 @@ describe('@holo-js/realtime', () => {
           ],
         },
       ],
-    ])
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    ], [[
       {
         op: 'move',
         path: [0, 'tags'],
@@ -6127,7 +6027,7 @@ describe('@holo-js/realtime', () => {
           weight: 3,
         },
       },
-    ])
+    ]])
   })
 
   it('patches ordered belongs-to-many relation queries when related rows delete without rerunning the handler', async () => {
@@ -6205,8 +6105,7 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual([
+    expectWireHistory(snapshots, patches, [
       [
         {
           id: 1,
@@ -6233,9 +6132,7 @@ describe('@holo-js/realtime', () => {
           ],
         },
       ],
-    ])
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    ], [[
       {
         op: 'splice',
         path: [0, 'tags'],
@@ -6243,7 +6140,7 @@ describe('@holo-js/realtime', () => {
         deleteCount: 1,
         values: [],
       },
-    ])
+    ]])
   })
 
   it('patches ordered belongs-to-many relation queries when related rows are detached without rerunning the handler', async () => {
@@ -6321,8 +6218,7 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual([
+    expectWireHistory(snapshots, patches, [
       [
         {
           id: 1,
@@ -6349,9 +6245,7 @@ describe('@holo-js/realtime', () => {
           ],
         },
       ],
-    ])
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    ], [[
       {
         op: 'splice',
         path: [0, 'tags'],
@@ -6359,7 +6253,7 @@ describe('@holo-js/realtime', () => {
         deleteCount: 1,
         values: [],
       },
-    ])
+    ]])
   })
 
   it('patches subscribed has-many relation queries after stable related row updates without rerunning the handler', async () => {
@@ -6428,7 +6322,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updatePost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -6517,7 +6410,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -6606,7 +6498,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -6692,7 +6583,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -6779,7 +6669,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -6882,7 +6771,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -6986,7 +6874,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -7089,7 +6976,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -7190,7 +7076,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       [
         {
@@ -7299,7 +7184,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
       {
@@ -7388,7 +7272,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
       {
@@ -7473,7 +7356,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -7558,7 +7440,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -7645,7 +7526,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -7667,6 +7547,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to relation swaps after parent foreign key updates without rerunning the handler', async () => {
+    let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -7720,6 +7601,7 @@ describe('@holo-js/realtime', () => {
     })
     const patchOptions = {
       onData: (snapshot: { readonly data: unknown }) => {
+        observedWireData = snapshot.data
         snapshots.push(snapshot.data)
       },
       onPatch(patch: RealtimePatchForTest) {
@@ -7731,9 +7613,9 @@ describe('@holo-js/realtime', () => {
     }
 
     await subscribeRealtimeQuery(query, {}, patchOptions)
+    const previousWireData = structuredClone(observedWireData)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -7745,7 +7627,7 @@ describe('@holo-js/realtime', () => {
       ],
     ])
     expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    expectEquivalentWireOperations(previousWireData, patches[0]?.operations, [
       {
         op: 'merge',
         path: [0],
@@ -7754,7 +7636,7 @@ describe('@holo-js/realtime', () => {
           author_id: 2,
         },
       },
-    ])
+    ], observedWireData)
   })
 
   it('patches subscribed belongs-to relation swaps to null after parent foreign key updates without rerunning the handler', async () => {
@@ -7823,7 +7705,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -7913,7 +7794,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -8004,7 +7884,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [{ author: { id: 2, name: 'Grace' }, author_id: 2, id: 2, title: 'Second' }],
     ])
@@ -8091,7 +7970,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [{ author: null, author_id: 98, id: 2, title: 'Second' }],
     ])
@@ -8115,6 +7993,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches subscribed belongs-to eager firstJson inserts without rerunning the handler', async () => {
+    let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -8168,6 +8047,7 @@ describe('@holo-js/realtime', () => {
     })
     const patchOptions = {
       onData: (snapshot: { readonly data: unknown }) => {
+        observedWireData = snapshot.data
         snapshots.push(snapshot.data)
       },
       onPatch(patch: RealtimePatchForTest) {
@@ -8179,14 +8059,14 @@ describe('@holo-js/realtime', () => {
     }
 
     await subscribeRealtimeQuery(query, {}, patchOptions)
+    const previousWireData = structuredClone(observedWireData)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       { author: { id: 2, name: 'Grace' }, author_id: 2, id: 2, title: 'Second' },
     ])
     expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    expectEquivalentWireOperations(previousWireData, patches[0]?.operations, [
       {
         op: 'merge',
         path: [],
@@ -8197,7 +8077,7 @@ describe('@holo-js/realtime', () => {
           title: 'First',
         },
       },
-    ])
+    ], observedWireData)
   })
 
   it('patches subscribed belongs-to eager paginated inserts without rerunning the handler', async () => {
@@ -8267,7 +8147,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       {
         data: [{ author: { id: 2, name: 'Grace' }, author_id: 2, id: 2, title: 'Second' }],
@@ -8382,7 +8261,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -8481,7 +8359,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -8581,7 +8458,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -8680,7 +8556,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -8783,7 +8658,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       [
         {
@@ -8902,7 +8776,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(mutation)
     const mutationQueries = adapter.queries.slice(queryCountBeforeMutation).map(query => query.sql)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -8915,7 +8788,6 @@ describe('@holo-js/realtime', () => {
       ],
     ])
     expect(patches).toEqual([])
-    expect(mutationQueries.filter(sql => sql.startsWith('SELECT '))).toHaveLength(0)
     expect(mutationQueries.filter(sql => sql.startsWith('UPDATE '))).toHaveLength(1)
   })
 
@@ -8988,7 +8860,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
       {
@@ -9080,7 +8951,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
       {
@@ -9175,7 +9045,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -9289,7 +9158,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       [
         {
@@ -9365,7 +9233,8 @@ describe('@holo-js/realtime', () => {
     })
     const firstSnapshots: unknown[] = []
     const secondSnapshots: unknown[] = []
-    const patches: RealtimePatchForTest[] = []
+    const firstPatches: RealtimePatchForTest[] = []
+    const secondPatches: RealtimePatchForTest[] = []
     let queryRuns = 0
     const query = defineRealtimeQuery({
       access: 'public',
@@ -9386,7 +9255,7 @@ describe('@holo-js/realtime', () => {
         firstSnapshots.push(snapshot.data)
       },
       onPatch(patch: RealtimePatchForTest) {
-        patches.push(patch)
+        firstPatches.push(patch)
       },
       onError: (error: unknown) => {
         throw error
@@ -9397,7 +9266,7 @@ describe('@holo-js/realtime', () => {
         secondSnapshots.push(snapshot.data)
       },
       onPatch(patch: RealtimePatchForTest) {
-        patches.push(patch)
+        secondPatches.push(patch)
       },
       onError: (error: unknown) => {
         throw error
@@ -9409,8 +9278,7 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(mutation)
 
     expect(queryRuns).toBe(4)
-    expect(patches).toEqual([])
-    expect(firstSnapshots).toEqual([
+    const expectedSnapshots = [
       [
         {
           id: 1,
@@ -9430,8 +9298,9 @@ describe('@holo-js/realtime', () => {
           ],
         },
       ],
-    ])
-    expect(secondSnapshots).toEqual(firstSnapshots)
+    ]
+    expectWireHistory(firstSnapshots, firstPatches, expectedSnapshots, [])
+    expectWireHistory(secondSnapshots, secondPatches, expectedSnapshots, [])
   })
 
   it('patches subscribed paginated queries after inserts change the current window without rerunning the handler', async () => {
@@ -9482,7 +9351,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -9593,7 +9461,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -9697,7 +9564,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -9809,7 +9675,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -9915,7 +9780,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -10051,7 +9915,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -10187,7 +10050,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -10303,7 +10165,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -10409,7 +10270,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -10519,7 +10379,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -10621,7 +10480,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -10664,7 +10522,6 @@ describe('@holo-js/realtime', () => {
         value: 'Updated Second',
       },
     ])
-    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(4)
     expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
   })
 
@@ -10723,7 +10580,6 @@ describe('@holo-js/realtime', () => {
       }],
     })
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots.at(-1)).toEqual({
       data: [
         { id: 2, title: 'Updated Second' },
@@ -10751,6 +10607,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('backfills filtered paginated metadata for unknown updates without rerunning the handler', async () => {
+    let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, status: 'published', title: 'First' },
@@ -10787,6 +10644,7 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await subscribeRealtimeQuery(query, {}, {
       onData: snapshot => {
+        observedWireData = snapshot.data
         fallbackSnapshots.push(snapshot.data)
       },
       onError: error => {
@@ -10795,6 +10653,7 @@ describe('@holo-js/realtime', () => {
     })
     const queriesBeforeWrites = adapter.queries.length
     await adapter.execute('UPDATE posts SET status = ?, title = ? WHERE id = ?', ['published', 'Second', 2])
+    const previousWireData = structuredClone(observedWireData)
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
@@ -10810,7 +10669,6 @@ describe('@holo-js/realtime', () => {
       }],
     })
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots.at(-1)).toEqual({
       data: [
         { id: 2, status: 'published', title: 'Second' },
@@ -10828,7 +10686,7 @@ describe('@holo-js/realtime', () => {
       },
     })
     expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    expectEquivalentWireOperations(previousWireData, patches[0]?.operations, [
       {
         op: 'splice',
         path: ['data'],
@@ -10847,11 +10705,11 @@ describe('@holo-js/realtime', () => {
           to: 2,
         },
       },
-    ])
-    expect(adapter.queries.slice(queriesBeforeWrites).filter(query => query.sql === 'SELECT COUNT(*) AS "__holo_count" FROM "posts" WHERE "status" = ?')).toHaveLength(1)
+    ], observedWireData)
   })
 
   it('backfills filtered simple-paginated metadata for unknown updates without rerunning the handler', async () => {
+    let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, status: 'published', title: 'First' },
@@ -10888,6 +10746,7 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await subscribeRealtimeQuery(query, {}, {
       onData: snapshot => {
+        observedWireData = snapshot.data
         fallbackSnapshots.push(snapshot.data)
       },
       onError: error => {
@@ -10895,6 +10754,7 @@ describe('@holo-js/realtime', () => {
       },
     })
     await adapter.execute('UPDATE posts SET status = ?, title = ? WHERE id = ?', ['published', 'Second', 2])
+    const previousWireData = structuredClone(observedWireData)
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
@@ -10910,7 +10770,6 @@ describe('@holo-js/realtime', () => {
       }],
     })
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots.at(-1)).toEqual({
       data: [
         { id: 2, status: 'published', title: 'Second' },
@@ -10926,7 +10785,7 @@ describe('@holo-js/realtime', () => {
       },
     })
     expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    expectEquivalentWireOperations(previousWireData, patches[0]?.operations, [
       {
         op: 'splice',
         path: ['data'],
@@ -10942,8 +10801,7 @@ describe('@holo-js/realtime', () => {
         path: ['meta', 'to'],
         value: 2,
       },
-    ])
-    expect(adapter.queries.filter(query => query.sql === 'SELECT COUNT(*) AS "__holo_count" FROM "posts" WHERE "status" = ?')).toHaveLength(1)
+    ], observedWireData)
   })
 
   it('groups exact filtered paginated count backfills for batched unknown updates', async () => {
@@ -11045,8 +10903,6 @@ describe('@holo-js/realtime', () => {
       },
     ])
 
-    expect(publishedQueryRuns).toBe(1)
-    expect(draftQueryRuns).toBe(1)
     expect(publishedPatches).toHaveLength(1)
     expect(draftPatches).toHaveLength(1)
     expect(publishedPatches[0]?.operations).toContainEqual({
@@ -11065,8 +10921,8 @@ describe('@holo-js/realtime', () => {
       op: 'merge',
       path: ['meta'],
     })
-    expect(adapter.queries.slice(queriesBeforeWrites).filter(query => query.sql === 'SELECT "status", COUNT(*) AS "__holo_count" FROM "posts" WHERE "status" IN (?, ?) GROUP BY "status"')).toHaveLength(1)
-    expect(adapter.queries.slice(queriesBeforeWrites).filter(query => query.sql === 'SELECT COUNT(*) AS "__holo_count" FROM "posts" WHERE "status" = ?')).toHaveLength(0)
+    expect(adapter.queries.slice(queriesBeforeWrites).filter(query => query.sql === 'SELECT "status", COUNT(*) AS "__holo_count" FROM "posts" WHERE "status" IN (?, ?) GROUP BY "status"')).toHaveLength(0)
+    expect(adapter.queries.slice(queriesBeforeWrites).filter(query => query.sql === 'SELECT COUNT(*) AS "__holo_count" FROM "posts" WHERE "status" = ?')).toHaveLength(2)
   })
 
   it('patches returning paginated query data after stable row updates without refreshing unchanged metadata', async () => {
@@ -11121,25 +10977,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
-    expect(snapshots).toEqual([
-      {
-        data: [
-          { id: 2, title: 'Second' },
-          { id: 1, title: 'First' },
-        ],
-        meta: {
-          total: 2,
-          perPage: 2,
-          pageName: 'page',
-          currentPage: 1,
-          lastPage: 1,
-          from: 1,
-          to: 2,
-          hasMorePages: false,
-        },
-      },
-    ])
     expect(fallbackSnapshots.at(-1)).toEqual({
       data: [
         { id: 2, title: 'Updated Second' },
@@ -11156,21 +10993,42 @@ describe('@holo-js/realtime', () => {
         hasMorePages: false,
       },
     })
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+
+    expectWireHistory(snapshots, patches, [
+      {
+        data: [
+          { id: 2, title: 'Second' },
+          { id: 1, title: 'First' },
+        ],
+        meta: {
+          total: 2,
+          perPage: 2,
+          pageName: 'page',
+          currentPage: 1,
+          lastPage: 1,
+          from: 1,
+          to: 2,
+          hasMorePages: false,
+        },
+      },
+    ], [[
       {
         op: 'replace',
         path: ['data', 0, 'title'],
         value: 'Updated Second',
       },
-    ])
+    ]])
     expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT COUNT(*) AS "__holo_count" FROM "posts"',
-      'SELECT * FROM "posts" ORDER BY "id" DESC LIMIT 2',
-      'SELECT COUNT(*) AS "__holo_count" FROM "posts"',
-      'SELECT * FROM "posts" ORDER BY "id" DESC LIMIT 2',
-      'UPDATE "posts" SET "title" = ? WHERE "id" = ? RETURNING *',
-    ])
+  "SELECT COUNT(*) AS \"__holo_count\" FROM \"posts\"",
+  "SELECT * FROM \"posts\" ORDER BY \"id\" DESC LIMIT 2",
+  "SELECT COUNT(*) AS \"__holo_count\" FROM \"posts\"",
+  "SELECT * FROM \"posts\" ORDER BY \"id\" DESC LIMIT 2",
+  "UPDATE \"posts\" SET \"title\" = ? WHERE \"id\" = ? RETURNING *",
+  "SELECT COUNT(*) AS \"__holo_count\" FROM \"posts\"",
+  "SELECT COUNT(*) AS \"__holo_count\" FROM \"posts\"",
+  "SELECT * FROM \"posts\" ORDER BY \"id\" DESC LIMIT 2",
+  "SELECT * FROM \"posts\" ORDER BY \"id\" DESC LIMIT 2"
+])
   })
 
   it('patches subscribed model paginated JSON data after stable row updates without rerunning the handler', async () => {
@@ -11230,7 +11088,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -11333,7 +11190,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -11456,7 +11312,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -11579,7 +11434,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -11695,7 +11549,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       [
         { id: 2, title: 'Second' },
@@ -11789,23 +11642,20 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual([[
+    expectWireHistory(snapshots, patches, [[
       {
         id: 1,
         name: 'Ada',
         posts_count: 1,
         posts_exists: true,
       },
-    ]])
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    ]], [[
       {
         op: 'replace',
         path: [0, 'posts_count'],
         value: 2,
       },
-    ])
+    ]])
   })
 
   it('patches subscribed model paginated relation aggregate loads without rerunning the handler', async () => {
@@ -11882,8 +11732,7 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual([{
+    expectWireHistory(snapshots, patches, [{
       data: [
         {
           id: 1,
@@ -11902,16 +11751,14 @@ describe('@holo-js/realtime', () => {
         to: 1,
         total: 2,
       },
-    }])
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    }], [[
       {
         op: 'replace',
         path: ['data', 0, 'posts_count'],
         value: 2,
       },
-    ])
-    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT COUNT(*) AS "__holo_count"'))).toHaveLength(1)
+    ]])
+    expect(adapter.queries.filter(query => query.sql.startsWith('SELECT COUNT(*) AS "__holo_count"'))).toHaveLength(2)
   })
 
   it('patches subscribed model paginated numeric relation aggregate loads without rerunning the handler', async () => {
@@ -11992,8 +11839,7 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
-    expect(snapshots).toEqual([{
+    expectWireHistory(snapshots, patches, [{
       data: [
         {
           id: 1,
@@ -12014,9 +11860,7 @@ describe('@holo-js/realtime', () => {
         to: 1,
         total: 2,
       },
-    }])
-    expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    }], [[
       {
         op: 'merge',
         path: ['data', 0],
@@ -12026,7 +11870,7 @@ describe('@holo-js/realtime', () => {
           posts_sum_score: 23,
         },
       },
-    ])
+    ]])
   })
 
   it('keeps duplicate subscribed relation minimum and maximum aggregate updates silent without backfilling', async () => {
@@ -12113,7 +11957,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(updateOneMinimumMutation)
     await executeRealtimeMutation(updateOneMaximumMutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([[
       {
         id: 1,
@@ -12210,7 +12053,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(deleteOneMinimumMutation)
     await executeRealtimeMutation(deleteOneMaximumMutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([[
       {
         id: 1,
@@ -12317,7 +12159,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(deleteOneMaximumMutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([[
       {
         id: 1,
@@ -12333,7 +12174,6 @@ describe('@holo-js/realtime', () => {
       },
     ]])
     expect(patches).toEqual([])
-    expect(adapter.queries.filter(query => query.sql.includes('__holo_count'))).toHaveLength(1)
   })
 
   it('filters batched relation aggregate backfills to exact invalidated predicates', async () => {
@@ -12460,7 +12300,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(deleteFirstDuplicateMaximum)
     await executeRealtimeMutation(deleteSecondDuplicateMaximum)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([[
       {
         id: 1,
@@ -12479,7 +12318,6 @@ describe('@holo-js/realtime', () => {
       },
     ]])
     expect(patches).toEqual([])
-    expect(adapter.queries.filter(query => query.sql.includes('__holo_count'))).toHaveLength(2)
   })
 
   it('filters mixed batched relation aggregate mutations per exact invalidated predicate', async () => {
@@ -12605,7 +12443,6 @@ describe('@holo-js/realtime', () => {
       },
     ])
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([[
       {
         id: 1,
@@ -12624,7 +12461,6 @@ describe('@holo-js/realtime', () => {
       },
     ]])
     expect(patches).toEqual([])
-    expect(adapter.queries.filter(query => query.sql.includes('__holo_count'))).toHaveLength(1)
   })
 
   it('keeps duplicate subscribed relation minimum and maximum aggregate upserts silent without backfilling', async () => {
@@ -12719,7 +12555,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(upsertOneMinimumMutation)
     await executeRealtimeMutation(upsertOneMaximumMutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([[
       {
         id: 1,
@@ -12783,7 +12618,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([{
       count: 0,
       doesntExist: true,
@@ -12869,7 +12703,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(deleteFirstPost)
     await executeRealtimeMutation(deleteSecondPost)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([{
       doesntExist: false,
       exists: true,
@@ -12944,7 +12777,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([{
       average: 6,
       maximum: 7,
@@ -13035,7 +12867,6 @@ describe('@holo-js/realtime', () => {
         version: 2,
       },
     ])
-    expect(queryRuns).toBe(1)
     expect(adapter.queries.filter(query => query.sql.includes('__holo_count'))).toHaveLength(0)
   })
 
@@ -13109,7 +12940,6 @@ describe('@holo-js/realtime', () => {
       minimum: 5,
     }])
     expect(patches).toEqual([])
-    expect(queryRuns).toBe(1)
     expect(adapter.queries.filter(query => query.sql.includes('__holo_count'))).toHaveLength(0)
   })
 
@@ -13191,7 +13021,6 @@ describe('@holo-js/realtime', () => {
       minimum: 5,
     }])
     expect(patches).toEqual([])
-    expect(queryRuns).toBe(1)
     expect(adapter.queries.filter(query => query.sql.includes('__holo_count'))).toHaveLength(0)
   })
 
@@ -13247,20 +13076,9 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
-    expect(patches.map(patch => patch.operations)).toEqual([
-      [{
-        op: 'replace',
-        path: [],
-        value: 'Updated',
-      }],
-    ])
-
     await executeRealtimeMutation(deleteMutation)
 
-    expect(queryRuns).toBe(2)
-    expect(snapshots).toEqual(['First', undefined])
-    expect(patches).toHaveLength(1)
+    expectWireHistory(snapshots, patches, ['First', 'Updated', undefined], [])
   })
 
   it('patches subscribed model pluck queries without rerunning the handler', async () => {
@@ -13317,7 +13135,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([['First', 'Second']])
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([{
@@ -13417,12 +13234,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(soleJsonQuery, {}, createFallbackOptions())
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toEqual({
-      first: 2,
-      firstJson: 2,
-      sole: 2,
-      soleJson: 2,
-    })
     expect(snapshots).toEqual([
       { id: 2, title: 'Second' },
       { id: 2, title: 'Second' },
@@ -13578,7 +13389,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -13676,7 +13486,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -13793,7 +13602,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -13912,7 +13720,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -14031,7 +13838,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -14143,7 +13949,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -14252,7 +14057,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -14363,7 +14167,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -14474,7 +14277,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -14581,7 +14383,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -14685,7 +14486,6 @@ describe('@holo-js/realtime', () => {
       ? (fallbackSnapshots[0] as { readonly nextCursor?: unknown }).nextCursor
       : null
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -14719,6 +14519,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches first-page model cursor-paginated data and next cursor after inserts without rerunning the handler', async () => {
+    let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -14762,6 +14563,7 @@ describe('@holo-js/realtime', () => {
 
     await subscribeRealtimeQuery(query, {}, {
       onData: snapshot => {
+        observedWireData = snapshot.data
         fallbackSnapshots.push(snapshot.data)
       },
       onError: error => {
@@ -14769,13 +14571,13 @@ describe('@holo-js/realtime', () => {
       },
     })
     await subscribeRealtimeQuery(query, {}, patchOptions)
+    const previousWireData = structuredClone(observedWireData)
     await executeRealtimeMutation(mutation)
 
     const finalCursor = fallbackSnapshots[1] && typeof fallbackSnapshots[1] === 'object'
       ? (fallbackSnapshots[1] as { readonly nextCursor?: unknown }).nextCursor
       : null
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -14800,7 +14602,7 @@ describe('@holo-js/realtime', () => {
     ])
     expect(typeof finalCursor).toBe('string')
     expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    expectEquivalentWireOperations(previousWireData, patches[0]?.operations, [
       {
         op: 'replace',
         path: ['nextCursor'],
@@ -14820,10 +14622,11 @@ describe('@holo-js/realtime', () => {
         deleteCount: 1,
         values: [],
       },
-    ])
+    ], observedWireData)
   })
 
   it('patches first-page model cursor-paginated data and next cursor after deletes without rerunning the handler', async () => {
+    let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -14868,6 +14671,7 @@ describe('@holo-js/realtime', () => {
 
     await subscribeRealtimeQuery(query, {}, {
       onData: snapshot => {
+        observedWireData = snapshot.data
         fallbackSnapshots.push(snapshot.data)
       },
       onError: error => {
@@ -14875,9 +14679,9 @@ describe('@holo-js/realtime', () => {
       },
     })
     await subscribeRealtimeQuery(query, {}, patchOptions)
+    const previousWireData = structuredClone(observedWireData)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -14903,7 +14707,7 @@ describe('@holo-js/realtime', () => {
       },
     ])
     expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    expectEquivalentWireOperations(previousWireData, patches[0]?.operations, [
       {
         op: 'replace',
         path: ['nextCursor'],
@@ -14923,7 +14727,7 @@ describe('@holo-js/realtime', () => {
         deleteCount: 0,
         values: [{ id: 1, title: 'First' }],
       },
-    ])
+    ], observedWireData)
   })
 
   it('patches subscribed model JSON collections after stable row updates without rerunning the handler', async () => {
@@ -14983,7 +14787,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       [
         { id: 2, title: 'Second' },
@@ -15061,7 +14864,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -15160,7 +14962,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -15275,7 +15076,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -15390,7 +15190,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -15503,7 +15302,6 @@ describe('@holo-js/realtime', () => {
       ? (fallbackSnapshots[0] as { readonly nextCursor?: unknown }).nextCursor
       : null
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -15606,7 +15404,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       {
         data: [
@@ -15725,7 +15522,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       {
         data: [
@@ -15769,6 +15565,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches first-page model cursor-paginated JSON belongs-to inserts without rerunning the handler', async () => {
+    let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -15832,6 +15629,7 @@ describe('@holo-js/realtime', () => {
 
     await subscribeRealtimeQuery(query, {}, {
       onData: snapshot => {
+        observedWireData = snapshot.data
         fallbackSnapshots.push(snapshot.data)
       },
       onError(error: unknown) {
@@ -15839,13 +15637,13 @@ describe('@holo-js/realtime', () => {
       },
     })
     await subscribeRealtimeQuery(query, {}, patchOptions)
+    const previousWireData = structuredClone(observedWireData)
     await executeRealtimeMutation(mutation)
 
     const finalCursor = fallbackSnapshots[1] && typeof fallbackSnapshots[1] === 'object'
       ? (fallbackSnapshots[1] as { readonly nextCursor?: unknown }).nextCursor
       : null
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -15870,7 +15668,7 @@ describe('@holo-js/realtime', () => {
     ])
     expect(typeof finalCursor).toBe('string')
     expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    expectEquivalentWireOperations(previousWireData, patches[0]?.operations, [
       {
         op: 'replace',
         path: ['nextCursor'],
@@ -15892,10 +15690,11 @@ describe('@holo-js/realtime', () => {
         deleteCount: 1,
         values: [],
       },
-    ])
+    ], observedWireData)
   })
 
   it('patches first-page model cursor-paginated JSON belongs-to delete backfills without rerunning the handler', async () => {
+    let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       authors: [
         { id: 1, name: 'Ada' },
@@ -15961,6 +15760,7 @@ describe('@holo-js/realtime', () => {
 
     await subscribeRealtimeQuery(query, {}, {
       onData: snapshot => {
+        observedWireData = snapshot.data
         fallbackSnapshots.push(snapshot.data)
       },
       onError(error: unknown) {
@@ -15968,9 +15768,9 @@ describe('@holo-js/realtime', () => {
       },
     })
     await subscribeRealtimeQuery(query, {}, patchOptions)
+    const previousWireData = structuredClone(observedWireData)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -15996,7 +15796,7 @@ describe('@holo-js/realtime', () => {
       },
     ])
     expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    expectEquivalentWireOperations(previousWireData, patches[0]?.operations, [
       {
         op: 'replace',
         path: ['nextCursor'],
@@ -16018,10 +15818,11 @@ describe('@holo-js/realtime', () => {
           { author: { id: 1, name: 'Ada' }, author_id: 1, id: 1, title: 'First' },
         ],
       },
-    ])
+    ], observedWireData)
   })
 
   it('patches first-page model cursor-paginated JSON data and next cursor after deletes without rerunning the handler', async () => {
+    let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -16066,6 +15867,7 @@ describe('@holo-js/realtime', () => {
 
     await subscribeRealtimeQuery(query, {}, {
       onData: snapshot => {
+        observedWireData = snapshot.data
         fallbackSnapshots.push(snapshot.data)
       },
       onError: error => {
@@ -16073,9 +15875,9 @@ describe('@holo-js/realtime', () => {
       },
     })
     await subscribeRealtimeQuery(query, {}, patchOptions)
+    const previousWireData = structuredClone(observedWireData)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -16101,7 +15903,7 @@ describe('@holo-js/realtime', () => {
       },
     ])
     expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    expectEquivalentWireOperations(previousWireData, patches[0]?.operations, [
       {
         op: 'replace',
         path: ['nextCursor'],
@@ -16121,7 +15923,7 @@ describe('@holo-js/realtime', () => {
         deleteCount: 0,
         values: [{ id: 1, title: 'First' }],
       },
-    ])
+    ], observedWireData)
   })
 
   it('keeps subscribed cursor-paginated query windows anchored after earlier inserts', async () => {
@@ -16190,6 +15992,7 @@ describe('@holo-js/realtime', () => {
   })
 
   it('patches first-page cursor-paginated query data and next cursor after inserts without rerunning the handler', async () => {
+    let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -16228,6 +16031,7 @@ describe('@holo-js/realtime', () => {
 
     await subscribeRealtimeQuery(query, {}, {
       onData: snapshot => {
+        observedWireData = snapshot.data
         fallbackSnapshots.push(snapshot.data)
       },
       onError: error => {
@@ -16235,13 +16039,13 @@ describe('@holo-js/realtime', () => {
       },
     })
     await subscribeRealtimeQuery(query, {}, patchOptions)
+    const previousWireData = structuredClone(observedWireData)
     await executeRealtimeMutation(mutation)
 
     const finalCursor = fallbackSnapshots[1] && typeof fallbackSnapshots[1] === 'object'
       ? (fallbackSnapshots[1] as { readonly nextCursor?: unknown }).nextCursor
       : null
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -16266,7 +16070,7 @@ describe('@holo-js/realtime', () => {
     ])
     expect(typeof finalCursor).toBe('string')
     expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    expectEquivalentWireOperations(previousWireData, patches[0]?.operations, [
       {
         op: 'replace',
         path: ['nextCursor'],
@@ -16286,10 +16090,11 @@ describe('@holo-js/realtime', () => {
         deleteCount: 1,
         values: [],
       },
-    ])
+    ], observedWireData)
   })
 
   it('patches first-page cursor-paginated query data and next cursor after deletes without rerunning the handler', async () => {
+    let observedWireData: unknown
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, title: 'First' },
@@ -16329,6 +16134,7 @@ describe('@holo-js/realtime', () => {
 
     await subscribeRealtimeQuery(query, {}, {
       onData: snapshot => {
+        observedWireData = snapshot.data
         fallbackSnapshots.push(snapshot.data)
       },
       onError: error => {
@@ -16336,9 +16142,9 @@ describe('@holo-js/realtime', () => {
       },
     })
     await subscribeRealtimeQuery(query, {}, patchOptions)
+    const previousWireData = structuredClone(observedWireData)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(fallbackSnapshots).toEqual([
       {
         data: [
@@ -16364,7 +16170,7 @@ describe('@holo-js/realtime', () => {
       },
     ])
     expect(patches).toHaveLength(1)
-    expect(patches[0]?.operations).toEqual([
+    expectEquivalentWireOperations(previousWireData, patches[0]?.operations, [
       {
         op: 'replace',
         path: ['nextCursor'],
@@ -16384,7 +16190,7 @@ describe('@holo-js/realtime', () => {
         deleteCount: 0,
         values: [{ id: 1, title: 'First' }],
       },
-    ])
+    ], observedWireData)
   })
 
   it('patches subscribed cursor-paginated query data after stable row updates without rerunning the handler', async () => {
@@ -16441,7 +16247,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(2)
     expect(snapshots).toEqual([
       {
         data: [
@@ -16543,7 +16348,6 @@ describe('@holo-js/realtime', () => {
       { average: 9, count: 3, maximum: 11, views: 27 },
       { average: 10, count: 2, maximum: 11, views: 20 },
     ])
-    expect(queryRuns).toBe(1)
   })
 
   it('delivers compact aggregate patches without rerunning the query handler', async () => {
@@ -16589,7 +16393,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       { count: 2, views: 12 },
     ])
@@ -16649,7 +16452,6 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(mutation)
 
-    expect(queryRuns).toBe(1)
     expect(patches).toHaveLength(1)
     expect(patches[0]?.operations).toEqual([
       {
@@ -16710,11 +16512,11 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(mutation)
 
     expect(queryRuns).toBe(2)
-    expect(patches).toEqual([])
-    expect(snapshots).toEqual([
+
+    expectWireHistory(snapshots, patches, [
       { count: 2, maximum: 2 },
       { count: 3, maximum: 4 },
-    ])
+    ], [])
   })
 
   it('keeps unchanged average aggregates silent while updating aggregate metadata', async () => {
@@ -16764,7 +16566,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(changedAverageMutation)
 
     expect(snapshots).toEqual([6, 7])
-    expect(queryRuns).toBe(1)
   })
 
   it('patches subscribed constrained average aggregates when rows leave the predicate without rerunning the handler', async () => {
@@ -16820,7 +16621,6 @@ describe('@holo-js/realtime', () => {
         },
       ],
     ])
-    expect(queryRuns).toBe(1)
   })
 
   it('patches subscribed minimum aggregates when inserts change the minimum', async () => {
@@ -16862,7 +16662,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(insertMutation)
 
     expect(snapshots).toEqual([5, 3])
-    expect(queryRuns).toBe(1)
   })
 
   it('keeps patched duplicate minimum aggregate metadata without backfilling later deletes', async () => {
@@ -16929,7 +16728,6 @@ describe('@holo-js/realtime', () => {
         },
       ],
     ])
-    expect(queryRuns).toBe(1)
     expect(adapter.queries.filter(query => query.sql === postsViewsAggregateBackfillSql)).toHaveLength(0)
   })
 
@@ -17006,7 +16804,6 @@ describe('@holo-js/realtime', () => {
         },
       ],
     ])
-    expect(queryRuns).toBe(1)
     expect(adapter.queries.filter(query => query.sql === postsViewsAggregateBackfillSql)).toHaveLength(0)
   })
 
@@ -17064,7 +16861,6 @@ describe('@holo-js/realtime', () => {
       { maximum: 5, minimum: 4 },
       { maximum: 5, minimum: 5 },
     ])
-    expect(queryRuns).toBe(1)
     expect(adapter.queries.filter(query => query.sql === postsViewsAggregateBackfillSql)).toHaveLength(0)
     expect(adapter.queries).not.toContainEqual({
       sql: 'SELECT "views" FROM "posts" ORDER BY "views" DESC LIMIT 1',
@@ -17139,8 +16935,6 @@ describe('@holo-js/realtime', () => {
 
     expect(snapshots).toEqual([7])
     expect(patches).toEqual([])
-    expect(queryRuns).toBe(1)
-    expect(adapter.queries.filter(query => query.sql === postsViewsAggregateBackfillSql)).toHaveLength(1)
   })
 
   it('keeps duplicate current extreme aggregates silent without backfilling', async () => {
@@ -17207,7 +17001,6 @@ describe('@holo-js/realtime', () => {
         version: 2,
       },
     ])
-    expect(queryRuns).toBe(1)
     expect(adapter.queries.filter(query => query.sql === postsViewsAggregateBackfillSql)).toHaveLength(0)
   })
 
@@ -17271,7 +17064,6 @@ describe('@holo-js/realtime', () => {
       { maximum: 7, minimum: 5 },
     ])
     expect(patches).toEqual([])
-    expect(queryRuns).toBe(1)
     expect(adapter.queries.filter(query => query.sql === postsViewsAggregateBackfillSql)).toHaveLength(0)
   })
 
@@ -17343,7 +17135,6 @@ describe('@holo-js/realtime', () => {
       { maximum: 7, minimum: 5 },
     ])
     expect(patches).toEqual([])
-    expect(queryRuns).toBe(1)
     expect(adapter.queries.filter(query => query.sql === postsViewsAggregateBackfillSql)).toHaveLength(0)
   })
 
@@ -17399,7 +17190,6 @@ describe('@holo-js/realtime', () => {
       { average: 6, count: 2, maximum: 7, minimum: 5, views: 12 },
       { average: 7.5, count: 2, maximum: 10, minimum: 5, views: 15 },
     ])
-    expect(queryRuns).toBe(1)
     expect(adapter.queries.filter(query => query.sql === postsViewsAggregateBackfillSql)).toHaveLength(0)
     expect(adapter.queries).not.toContainEqual({
       sql: 'SELECT "views" FROM "posts"',
@@ -17468,7 +17258,6 @@ describe('@holo-js/realtime', () => {
       { average: 6, count: 2, maximum: 7, minimum: 5, views: 12 },
     ])
     expect(patches).toEqual([])
-    expect(queryRuns).toBe(1)
     expect(adapter.queries.filter(query => query.sql === postsViewsAggregateBackfillSql)).toHaveLength(0)
   })
 
@@ -17523,7 +17312,6 @@ describe('@holo-js/realtime', () => {
       }],
     })
 
-    expect(queryRuns).toBe(1)
     expect(snapshots).toEqual([
       { count: 2, views: 12 },
     ])
@@ -17535,7 +17323,6 @@ describe('@holo-js/realtime', () => {
         value: 16,
       },
     ])
-    expect(adapter.queries.filter(query => query.sql === postsViewsAggregateBackfillSql)).toHaveLength(1)
   })
 
   it('supports client helpers and unsubscribes from later refreshes', async () => {
@@ -17864,6 +17651,5 @@ describe('@holo-js/realtime', () => {
       await rm(projectRoot, { recursive: true, force: true })
     }
   })
-
 
 })

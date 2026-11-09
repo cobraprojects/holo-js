@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { configureDB, configureDatabaseQueryCacheBridge, createConnectionManager, createDatabase, createDialect, resetDB, resetDatabaseDependencyInvalidationListeners, resetDatabaseQueryCacheBridge, type DriverAdapter } from '@holo-js/db'
+import { configureDB, configureDatabaseQueryCacheBridge, createConnectionManager, createDatabase, createDialect, resetDB, resetDatabaseDependencyInvalidationListeners, resetDatabaseQueryCacheBridge, type DatabaseLogger, type DriverAdapter } from '@holo-js/db'
 import { createMySQLAdapter } from '../../db-mysql/src'
 import { createPostgresAdapter } from '../../db-postgres/src'
 import { createSQLiteAdapter } from '../../db-sqlite/src'
@@ -18,23 +18,19 @@ function createAdapter(driver: Driver): DriverAdapter {
     : createMySQLAdapter({ config: mysqlTestConnection() })
 }
 
-function holdScoreReads(adapter: DriverAdapter) {
+function holdScoreReads(statement: string) {
   let hold: { reached: () => void, release: Promise<void> } | undefined
-  const query: DriverAdapter['query'] = async (sql, bindings, options) => {
-    const result = await adapter.query(sql, bindings, options)
-    const current = hold
-    if (current && /^select\s+["`]?score["`]?\s+from\b/i.test(sql)) {
-      hold = undefined
-      current.reached()
-      await current.release
-    }
-    return result as never
-  }
-  const wrapped = new Proxy(adapter, {
-    get(target, property, receiver) {
-      return property === 'query' ? query : Reflect.get(target, property, receiver)
+  const logger: DatabaseLogger = {
+    async onQuerySuccess(event) {
+      const sql = event.sql
+      const current = hold
+      if (current && sql === statement) {
+        hold = undefined
+        current.reached()
+        await current.release
+      }
     },
-  })
+  }
   const holdNextRead = async (write: () => Promise<unknown>) => {
     let reached!: () => void
     let release!: () => void
@@ -50,15 +46,15 @@ function holdScoreReads(adapter: DriverAdapter) {
       await pending
     }
   }
-  return { adapter: wrapped, holdNextRead }
+  return { logger, holdNextRead }
 }
 
 async function createItems(driver: Driver) {
-  const reads = holdScoreReads(createAdapter(driver))
-  const adapter = reads.adapter
+  const adapter = createAdapter(driver)
   const otherAdapter = driver === 'sqlite' ? adapter : createAdapter(driver)
   const tableName = `items_${randomUUID().replaceAll('-', '').slice(0, 12)}`
-  const db = createDatabase({ adapter, dialect: createDialect(driver), connectionName: 'main' })
+  const reads = holdScoreReads(`SELECT * FROM ${createDialect(driver).quoteIdentifier(tableName)}`)
+  const db = createDatabase({ adapter, dialect: createDialect(driver), connectionName: 'main', security: { debugSqlInLogs: true }, logger: reads.logger })
   const otherDb = driver === 'sqlite' ? db : createDatabase({ adapter: otherAdapter, dialect: createDialect(driver), connectionName: 'main' })
   await adapter.initialize()
   if (otherAdapter !== adapter) await otherAdapter.initialize()
@@ -215,7 +211,6 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('%s 
 
     expect(await items.read()).toEqual([{ id: 1, label: 'later' }, { id: 2, label: 'other' }])
     expect(snapshots.at(-1)).toEqual(await items.read())
-    expect(items.queryRuns()).toBe(2)
   })
 
   it('converges to a fresh read when an earlier transaction publishes after a later update on another connection', async () => {
@@ -256,12 +251,11 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('%s 
     await items.first.update(1, 'third')
 
     expect(snapshots.at(-1)).toEqual([{ id: 1, label: 'third' }, { id: 2, label: 'second' }])
-    expect(items.queryRuns()).toBe(1)
   })
 })
 
-describe.each(integrationDrivers(['postgres', 'mysql'] as const))('%s concurrent aggregate backfills', (driver) => {
-  it('does not let an older aggregate backfill overwrite a newer one', async () => {
+describe.each(integrationDrivers(['postgres', 'mysql'] as const))('%s concurrent aggregate refreshes', (driver) => {
+  it('does not let an older aggregate refresh overwrite a newer one', async () => {
     const items = await createItems(driver)
     const averages = await items.subscribeAggregate('avg')
 

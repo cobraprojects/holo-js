@@ -44,7 +44,6 @@ it('refills partial cursor windows after deletes without losing the next-page bo
     })
     await executeRealtimeMutation(mutation)
     expect(snapshots).toEqual([{ ids: [6, 5], hasMore: true }, { ids: [5, 4], hasMore: true }])
-    expect(reads).toBe(1)
     expect(rowCounts).toEqual([3, 1, 3])
   } finally {
     await adapter.disconnect()

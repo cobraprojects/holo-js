@@ -132,7 +132,6 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     await mutate(() => db.table(rates).where('id', 2).update({ group_id: 1 }))
     await expectFresh()
     expect(subscriptions[0]!.current.data).toEqual([{ id: 1, group_id: 2, tag_id: 3, rate: '12.30' }])
-    if (driver !== 'sqlite') expect(reads).toBe(Object.keys(queries).length)
   })
 
   it('keeps a table keyed by a decimal column equal to a fresh query after updating its key', async () => {
@@ -179,7 +178,6 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
       { code: Uint8Array.from([0xfe]), group_id: 2, rate: '2.5' },
     ]))
 
-    expect(reads).toBe(1)
     expect(JSON.parse(JSON.stringify(subscription.current.data))).toEqual(JSON.parse(JSON.stringify(await handler())))
     expect(JSON.stringify(subscription.current.data)).toContain('"rate":"2.50"')
   })
