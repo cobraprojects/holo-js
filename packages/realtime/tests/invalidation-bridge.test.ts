@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto'
+import { createDatabase, createDialect } from '@holo-js/db'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { cacheQueryBridgeInternals, configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { query } from '../src'
 import { resetRemoteRefreshSchedule } from '../src/runtime/invalidation'
-import { configureRealtimeRuntime, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
+import { configureRealtimeRuntime, executeRealtimeQuery, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
 
 async function waitForTimerScheduledAfter(previousCount: number, signal: AbortSignal): Promise<void> {
@@ -500,4 +501,178 @@ it('does not run a remote refresh that a reset overtakes before the refresh resu
   } finally {
     vi.useRealTimers()
   }
+})
+
+it('shares refresh capacity between local writes and remote invalidations and skips queued unsubscribed entries', async () => {
+  const { adapter, db } = await openRealtimeDatabase()
+  await adapter.execute('CREATE TABLE remote_records (id INTEGER PRIMARY KEY, score INTEGER)')
+  await adapter.execute('INSERT INTO remote_records VALUES (1, 10)')
+  const gate = createGate()
+  let refreshing = false
+  let active = 0
+  let peak = 0
+  const starts: string[] = []
+  const subscribe = async (table: 'records' | 'remote_records', index: number) => await subscribeRealtimeQuery(query({
+    name: `${table}.shared.${index}`,
+    access: 'public',
+    handler: async () => {
+      if (refreshing) {
+        starts.push(`${table}.${index}`)
+        active += 1
+        peak = Math.max(peak, active)
+        await gate.promise
+      }
+      try {
+        return { records: await db.table(table).whereInSub('id', db.table(table).select('id')).orderBy('id').get() }
+      } finally {
+        if (refreshing) active -= 1
+      }
+    },
+  }))
+  const local = []
+  const remote = []
+  for (let index = 0; index < 4; index += 1) local.push(await subscribe('records', index))
+  for (let index = 0; index < 4; index += 1) remote.push(await subscribe('remote_records', index))
+  refreshing = true
+  const write = db.table('records').where('id', 1).update({ score: 77 })
+  await expect.poll(() => starts.length).toBe(4)
+  await adapter.execute('UPDATE remote_records SET score = 88')
+  const received = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+    .receive(remoteInvalidation(['db:main:remote_records']))
+  try {
+    await new Promise(resolve => setTimeout(resolve, 30))
+    remote[0]?.unsubscribe()
+    expect(peak).toBe(4)
+  } finally {
+    gate.open()
+    await Promise.all([write, received])
+  }
+  expect(peak).toBe(4)
+  expect(starts.filter(name => name.startsWith('remote_records.'))).toEqual(['remote_records.1', 'remote_records.2', 'remote_records.3'])
+  refreshing = false
+  const freshLocal = await db.table('records').orderBy('id').get()
+  const freshRemote = await db.table('remote_records').orderBy('id').get()
+  for (const subscription of local) expect(subscription.current.data.records).toEqual(freshLocal)
+  for (const subscription of remote.slice(1)) expect(subscription.current.data.records).toEqual(freshRemote)
+})
+
+it('releases refresh capacity before delivery and error callbacks write and await further refreshes', async () => {
+  const { adapter, db } = await openRealtimeDatabase()
+  await adapter.execute('CREATE TABLE callback_records (id INTEGER PRIMARY KEY, score INTEGER)')
+  await adapter.execute('INSERT INTO callback_records VALUES (1, 10)')
+  await adapter.execute('CREATE TABLE authorization_log (id INTEGER PRIMARY KEY)')
+  const callbacksReady = createGate()
+  let refreshing = false
+  let callbackCount = 0
+  let failures = 0
+  const targets = []
+  for (let index = 0; index < 4; index += 1) {
+    targets.push(await subscribeRealtimeQuery(query({
+      access: 'public',
+      handler: async () => await db.table('callback_records').whereInSub('id', db.table('callback_records').select('id')).get(),
+    })))
+  }
+  const writeFromCallback = async () => {
+    if (!refreshing) return
+    callbackCount += 1
+    if (callbackCount === 4) callbacksReady.open()
+    await callbacksReady.promise
+    await db.table('callback_records').where('id', 1).update({ score: 99 })
+  }
+  for (let index = 0; index < 4; index += 1) {
+    await subscribeRealtimeQuery(query({
+      access: {
+        require: 'public',
+        authorize: async () => {
+          if (refreshing) {
+            await db.table('authorization_log').insert({ id: index })
+            if (index === 0) throw new Error('Authorization failed')
+          }
+          return true
+        },
+      },
+      handler: async () => {
+        if (refreshing && index === 1) throw new Error('Handler failed')
+        return await db.table('records').whereInSub('id', db.table('records').select('id')).get()
+      },
+    }), {}, {
+      onData: writeFromCallback,
+      onError: async () => {
+        failures += 1
+        await writeFromCallback()
+      },
+    })
+  }
+  refreshing = true
+  await adapter.execute('UPDATE records SET score = 77 WHERE id = 1')
+  await realtimeServerInternals.createRealtimeDatabaseInvalidationBridge().receive(remoteInvalidation(['db:main:records']))
+  expect(callbackCount).toBe(4)
+  expect(failures).toBe(2)
+  const audit = await executeRealtimeQuery(query({ access: 'public', handler: async () => await db.table('authorization_log').orderBy('id').get() }))
+  expect(audit.data).toEqual([{ id: 0 }, { id: 1 }, { id: 2 }, { id: 3 }])
+  for (const target of targets) expect(target.current.data).toEqual([{ id: 1, score: 99 }])
+}, 10_000)
+
+it('does not enter a refresh handler after unsubscribe overtakes its authorization', async () => {
+  const { db } = await openRealtimeDatabase()
+  const authorizing = createGate()
+  const authorized = createGate()
+  let refreshing = false
+  let handled = 0
+  const subscription = await subscribeRealtimeQuery(query({
+    access: {
+      require: 'public',
+      authorize: async () => {
+        if (refreshing) {
+          authorizing.open()
+          await authorized.promise
+        }
+        return true
+      },
+    },
+    handler: async () => {
+      handled += 1
+      return await db.table('records').whereInSub('id', db.table('records').select('id')).get()
+    },
+  }))
+  refreshing = true
+  const received = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge().receive(remoteInvalidation(['db:main:records']))
+  await authorizing.promise
+  subscription.unsubscribe()
+  authorized.open()
+  await received
+  expect(handled).toBe(1)
+})
+
+it('refreshes every subscriber without overflowing a configured SQL scheduler queue', async () => {
+  const { adapter } = await openRealtimeDatabase()
+  const reads: string[] = []
+  const db = createDatabase({
+    adapter,
+    dialect: createDialect('sqlite'),
+    connectionName: 'main',
+    concurrency: { maxConcurrentQueries: 1, queueLimit: 3 },
+    security: { debugSqlInLogs: true },
+    logger: { onQuerySuccess: event => {
+      if (event.kind === 'query' && event.sql?.includes('(SELECT')) reads.push(event.sql)
+    } },
+  })
+  configureRealtimeRuntime({ db: () => db })
+  const errors: unknown[] = []
+  const records = query({
+    access: 'public',
+    handler: async () => await db.table('records').whereInSub('id', db.table('records').select('id')).orderBy('id').get(),
+  })
+  const subscriptions = []
+  for (let index = 0; index < 12; index += 1) {
+    subscriptions.push(await subscribeRealtimeQuery(records, {}, { onError: error => { errors.push(error) } }))
+  }
+  reads.length = 0
+
+  await db.table('records').where('id', 1).update({ score: 77 })
+
+  expect(errors).toEqual([])
+  expect(reads).toHaveLength(12)
+  const fresh = await db.table('records').orderBy('id').get()
+  for (const subscription of subscriptions) expect(subscription.current.data).toEqual(fresh)
 })
