@@ -388,10 +388,6 @@ export function readsAsSQLiteDecimal(dialect: SchemaDialectName, column: AnyColu
   return dialect === 'sqlite' && column.kind === 'decimal'
 }
 
-export function isStoredBoolean(value: unknown): boolean {
-  return value === 0 || value === 1 || value === 0n || value === 1n || value === '0' || value === '1'
-}
-
 export function readsAsCoercedBoolean(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
   return dialect !== 'postgres' && column.kind === 'boolean'
 }

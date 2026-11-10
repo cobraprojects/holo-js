@@ -183,21 +183,10 @@ export function readConvertedResultColumns(row: Record<string, unknown>, columns
 
 const CANONICAL_INTEGER_TEXT = /^(?:0|-?[1-9]\d*)$/
 
-function holdsIntegerValue(value: unknown): value is bigint | number | string {
-  return typeof value === 'bigint' || typeof value === 'number' || typeof value === 'string'
-}
-
 function readsCanonicalInteger(value: unknown): boolean {
   return (typeof value === 'bigint' && Number.isSafeInteger(Number(value)))
     || (typeof value === 'number' && Number.isSafeInteger(value))
     || (typeof value === 'string' && CANONICAL_INTEGER_TEXT.test(value) && Number.isSafeInteger(Number(value)))
-}
-
-export function holdsUnreadableInteger(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
-  return columnsOf(table).some(([key, definition]) => readsAsInteger(definition!)
-    && Object.hasOwn(row, key)
-    && holdsIntegerValue(row[key])
-    && !readsCanonicalInteger(row[key]))
 }
 
 function readCanonicalInteger(value: unknown): unknown {

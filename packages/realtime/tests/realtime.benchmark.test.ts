@@ -54,7 +54,6 @@ import {
 import {
   createSplicePatchOperation,
 } from '../src/runtime/patch-operations'
-import type { DatabaseMutationEvent as RuntimeDatabaseMutationEvent } from '../src/runtime/dependencies'
 
 type BenchmarkMetrics = {
   readonly durationMs: number
@@ -883,14 +882,7 @@ function createAuthorInsertInvalidation(row: BenchmarkAuthorRow): BenchmarkPatch
   return {
     connectionName,
     dependencies: [authorTableDependency()],
-    mutations: [{
-      connectionName,
-      kind: 'insert',
-      predicates: [],
-      rows: [row],
-      tableName: 'authors',
-      values: row,
-    }],
+    mutations: [{ kind: 'insert' }],
   }
 }
 
@@ -1152,25 +1144,7 @@ function createPatchUpdateInvalidation(row: BenchmarkPostRow, previousTitle: str
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: previousTitle,
-        user_id: row.user_id,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        title: row.title,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1181,21 +1155,7 @@ function createPatchScoreUpdateInvalidation(
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: {
-        score: row.score,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1203,20 +1163,7 @@ function createPatchTitleOnlyReturningUpdateInvalidation(row: BenchmarkPostRow):
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        title: row.title,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1224,16 +1171,7 @@ function createPatchUnknownUpdateInvalidation(row: BenchmarkPostRow): BenchmarkP
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      tableName,
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1241,12 +1179,7 @@ function createPatchUnknownInsertInvalidation(userId: number): BenchmarkPatchInv
   return {
     connectionName,
     dependencies: createInvalidationDependencies(userId),
-    mutations: [{
-      connectionName,
-      kind: 'insert',
-      predicates: [],
-      tableName,
-    }],
+    mutations: [{ kind: 'insert' }],
   }
 }
 
@@ -1254,26 +1187,7 @@ function createPatchMoveInvalidation(row: BenchmarkPostRow, previousPriority: nu
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        priority: previousPriority,
-        title: row.title,
-        user_id: row.user_id,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        priority: row.priority,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1290,24 +1204,7 @@ function createPatchPredicateOnlyUserUpdateInvalidation(
       exactUserPredicateDependency(previousUserId),
       exactUserPredicateDependency(row.user_id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: row.title,
-        user_id: previousUserId,
-      }],
-      tableName,
-      values: {
-        user_id: row.user_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1324,25 +1221,7 @@ function createPatchPredicateOnlyPriorityUserUpdateInvalidation(
       exactUserPredicateDependency(previousUserId),
       exactUserPredicateDependency(row.user_id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        priority: row.priority,
-        title: row.title,
-        user_id: previousUserId,
-      }],
-      tableName,
-      values: {
-        user_id: row.user_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1353,29 +1232,7 @@ function createWidePatchUpdateInvalidation(
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: {
-        field_1: row.field_1,
-        field_2: row.field_2,
-        field_3: row.field_3,
-        field_4: row.field_4,
-        field_5: row.field_5,
-        field_6: row.field_6,
-        field_7: row.field_7,
-        field_8: row.field_8,
-        field_9: row.field_9,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1412,14 +1269,7 @@ function createPatchInsertInvalidation(row: BenchmarkPostRow): BenchmarkPatchInv
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'insert',
-      predicates: [],
-      rows: [row],
-      tableName,
-      values: row,
-    }],
+    mutations: [{ kind: 'insert' }],
   }
 }
 
@@ -1430,15 +1280,7 @@ function createPatchUpsertInvalidation(
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'upsert',
-      predicates: [],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: row,
-    }],
+    mutations: [{ kind: 'upsert' }],
   }
 }
 
@@ -1450,15 +1292,7 @@ function createPatchMultiUpsertInvalidation(
   return {
     connectionName,
     dependencies: createInvalidationDependencies(firstRow?.user_id ?? 1),
-    mutations: [{
-      connectionName,
-      kind: 'upsert',
-      predicates: [],
-      previousRows,
-      rows,
-      tableName,
-      values: undefined,
-    }],
+    mutations: [{ kind: 'upsert' }],
   }
 }
 
@@ -1466,14 +1300,7 @@ function createRelationAggregateInsertInvalidation(row: BenchmarkPostRow & { rea
   return {
     connectionName,
     dependencies: createRelationAggregateInvalidationDependencies(row.author_id),
-    mutations: [{
-      connectionName,
-      kind: 'insert',
-      predicates: [],
-      rows: [row],
-      tableName,
-      values: row,
-    }],
+    mutations: [{ kind: 'insert' }],
   }
 }
 
@@ -1481,17 +1308,7 @@ function createRelationAggregateDeleteInvalidation(row: BenchmarkPostRow & { rea
   return {
     connectionName,
     dependencies: createRelationAggregateInvalidationDependencies(row.author_id),
-    mutations: [{
-      connectionName,
-      kind: 'delete',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      rows: [row],
-      tableName,
-    }],
+    mutations: [{ kind: 'delete' }],
   }
 }
 
@@ -1502,27 +1319,7 @@ function createRelationUpdateInvalidation(
   return {
     connectionName,
     dependencies: createRelationAggregateInvalidationDependencies(row.author_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        author_id: row.author_id,
-        id: row.id,
-        score: row.score,
-        title: previousTitle,
-        user_id: row.user_id,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        title: row.title,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1533,21 +1330,7 @@ function createRelationAggregateScoreUpdateInvalidation(
   return {
     connectionName,
     dependencies: createRelationAggregateInvalidationDependencies(row.author_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: {
-        score: row.score,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1557,16 +1340,7 @@ function createRelationAggregateUnknownUpdateInvalidation(
   return {
     connectionName,
     dependencies: createRelationAggregateInvalidationDependencies(row.author_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      tableName,
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1577,15 +1351,7 @@ function createRelationAggregateUpsertInvalidation(
   return {
     connectionName,
     dependencies: createRelationAggregateInvalidationDependencies(row.author_id),
-    mutations: [{
-      connectionName,
-      kind: 'upsert',
-      predicates: [],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: row,
-    }],
+    mutations: [{ kind: 'upsert' }],
   }
 }
 
@@ -1602,21 +1368,7 @@ function createRelationParentKeyMoveInvalidation(
       authorPredicateDependency(row.author_id),
       exactAuthorPredicateDependency(row.author_id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: {
-        author_id: row.author_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1627,21 +1379,7 @@ function createBelongsToParentKeyUpdateInvalidation(
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: {
-        author_id: row.author_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1652,21 +1390,7 @@ function createNullableBelongsToParentKeyUpdateInvalidation(
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: {
-        author_id: row.author_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1674,24 +1398,7 @@ function createAuthorUpdateInvalidation(row: BenchmarkAuthorRow, previousName: s
   return {
     connectionName,
     dependencies: createAuthorInvalidationDependencies(row.id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        name: previousName,
-      }],
-      rows: [row],
-      tableName: 'authors',
-      values: {
-        name: row.name,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1699,20 +1406,7 @@ function createAuthorHiddenUpdateInvalidation(row: BenchmarkAuthorRow): Benchmar
   return {
     connectionName,
     dependencies: createAuthorInvalidationDependencies(row.id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      rows: [row],
-      tableName: 'authors',
-      values: {
-        internal: 'new',
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1723,14 +1417,7 @@ function createBelongsToManyAttachInvalidation(row: BenchmarkPostTagRow): Benchm
       pivotTableDependency(),
       pivotPostPredicateDependency(row.postId),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'insert',
-      predicates: [],
-      rows: [row],
-      tableName: 'post_tags',
-      values: row,
-    }],
+    mutations: [{ kind: 'insert' }],
   }
 }
 
@@ -1741,24 +1428,7 @@ function createBelongsToManyPivotUpdateInvalidation(row: BenchmarkPostTagRow, pr
       pivotTableDependency(),
       pivotPostPredicateDependency(row.postId),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        ...row,
-        weight: previousWeight,
-      }],
-      rows: [row],
-      tableName: 'post_tags',
-      values: {
-        weight: row.weight,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1769,24 +1439,7 @@ function createBelongsToManyRelatedUpdateInvalidation(row: BenchmarkTagRow, prev
       tagTableDependency(),
       tagPredicateDependency(row.id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        name: previousName,
-      }],
-      rows: [row],
-      tableName: 'tags',
-      values: {
-        name: row.name,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1797,17 +1450,7 @@ function createBelongsToManyRelatedDeleteInvalidation(row: BenchmarkTagRow): Ben
       tagTableDependency(),
       tagPredicateDependency(row.id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'delete',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      rows: [row],
-      tableName: 'tags',
-    }],
+    mutations: [{ kind: 'delete' }],
   }
 }
 
@@ -1818,17 +1461,7 @@ function createBelongsToManyDetachInvalidation(row: BenchmarkPostTagRow): Benchm
       pivotTableDependency(),
       pivotPostPredicateDependency(row.postId),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'delete',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      rows: [row],
-      tableName: 'post_tags',
-    }],
+    mutations: [{ kind: 'delete' }],
   }
 }
 
@@ -1840,17 +1473,7 @@ function createPatchDeleteInvalidation(row: BenchmarkPostRow): BenchmarkPatchInv
       exactIdPredicateDependency(row.id),
       idRowDependency(row.id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'delete',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      rows: [row],
-      tableName,
-    }],
+    mutations: [{ kind: 'delete' }],
   }
 }
 
@@ -1861,25 +1484,7 @@ function createPatchUpdateIdInvalidation(row: BenchmarkPostRow, previousTitle: s
       tableDependency(),
       idRowDependency(row.id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: previousTitle,
-        user_id: row.user_id,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        title: row.title,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1890,28 +1495,7 @@ function createPatchPartialRowValueInvalidation(row: BenchmarkPostRow, previousT
       tableDependency(),
       idRowDependency(row.id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: previousTitle,
-        user_id: row.user_id,
-      }],
-      rows: [{
-        id: row.id,
-        user_id: row.user_id,
-      }],
-      tableName,
-      values: {
-        title: row.title,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1919,24 +1503,7 @@ function createPatchPreviousRowValueInvalidation(row: BenchmarkPostRow, previous
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: previousTitle,
-        user_id: row.user_id,
-      }],
-      tableName,
-      values: {
-        title: row.title,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1955,26 +1522,7 @@ function createPatchMoveUserValueInvalidation(
       exactUserPredicateDependency(previousUserId),
       exactUserPredicateDependency(row.user_id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: previousTitle,
-        user_id: previousUserId,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        title: row.title,
-        user_id: row.user_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1993,24 +1541,7 @@ function createPatchMoveUserPredicateOnlyValueInvalidation(
       exactUserPredicateDependency(previousUserId),
       exactUserPredicateDependency(row.user_id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: previousTitle,
-        user_id: previousUserId,
-      }],
-      tableName,
-      values: {
-        user_id: row.user_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -2028,26 +1559,7 @@ function createPatchMoveAggregateUserValueInvalidation(
       exactUserPredicateDependency(previousUserId),
       exactUserPredicateDependency(row.user_id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        score: row.score,
-        title: row.title,
-        user_id: previousUserId,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        user_id: row.user_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -2058,24 +1570,7 @@ function createPatchIrrelevantScalarUpdateInvalidation(row: BenchmarkPostRow): B
       tableDependency(),
       idRowDependency(row.id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [row],
-      rows: [{
-        ...row,
-        archived: true,
-      }],
-      tableName,
-      values: {
-        archived: true,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -5110,30 +4605,12 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       {
         connectionName,
         dependencies: [idRowDependency(pageSize / 2)],
-        mutations: [{
-          connectionName,
-          kind: 'update',
-          predicates: [{
-            column: 'id',
-            operator: '=',
-            value: pageSize / 2,
-          }],
-          tableName,
-        }],
+        mutations: [{ kind: 'update' }],
       },
       {
         connectionName,
         dependencies: [idRowDependency(pageSize * 1.5)],
-        mutations: [{
-          connectionName,
-          kind: 'update',
-          predicates: [{
-            column: 'id',
-            operator: '=',
-            value: pageSize * 1.5,
-          }],
-          tableName,
-        }],
+        mutations: [{ kind: 'update' }],
       },
     ])
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
