@@ -1,6 +1,6 @@
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
-import { DB, clearGeneratedTables, column, configureDatabaseQueryCacheBridge, queryCacheInternals, registerGeneratedTables, resetDatabaseQueryCacheBridge, type DatabaseDependencyInvalidationEvent } from '../src'
+import { DB, clearGeneratedTables, column, configureDatabaseQueryCacheBridge, onDatabaseDependencyInvalidated, resetDatabaseDependencyInvalidationListeners, registerGeneratedTables, resetDatabaseQueryCacheBridge, type DatabaseDependencyInvalidationEvent } from '../src'
 import type { DatabaseMutationEvent } from '../src/cache'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
@@ -11,7 +11,7 @@ async function openItems() {
     items: defineTable('items', { id: column.integer().primaryKey(), label: column.string() }),
   })
   onTestFinished(() => {
-    queryCacheInternals.resetDatabaseDependencyInvalidationListeners()
+    resetDatabaseDependencyInvalidationListeners()
     clearGeneratedTables()
     resetDatabaseQueryCacheBridge()
   })
@@ -27,7 +27,7 @@ describe('transaction invalidation delivery', () => {
   it('settles every listener delivery of a committed transaction before an after-commit callback runs', async () => {
     await openItems()
     const steps: string[] = []
-    queryCacheInternals.onDatabaseDependencyInvalidated(async () => {
+    onDatabaseDependencyInvalidated(async () => {
       steps.push('delivered')
       await pause(5)
       steps.push('settled')
@@ -58,7 +58,7 @@ describe('transaction invalidation delivery', () => {
         steps.push(`evicted ${current}`)
       },
     })
-    queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { readonly mutations?: readonly DatabaseMutationEvent[] }) => {
+    onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { readonly mutations?: readonly DatabaseMutationEvent[] }) => {
       steps.push(`notify ${event.mutations?.[0]?.values?.label}`)
     })
 
@@ -81,7 +81,7 @@ describe('transaction invalidation delivery', () => {
     const listenerError = new Error('listener failed')
     const steps: string[] = []
     let delivery = 0
-    queryCacheInternals.onDatabaseDependencyInvalidated(async () => {
+    onDatabaseDependencyInvalidated(async () => {
       const current = ++delivery
       await pause(current === 1 ? 0 : 20)
       if (current === 1) throw listenerError
@@ -102,7 +102,7 @@ describe('transaction invalidation delivery', () => {
   it('publishes nothing and runs no after-commit callbacks when the transaction rolls back', async () => {
     await openItems()
     const delivered: string[] = []
-    queryCacheInternals.onDatabaseDependencyInvalidated(() => { delivered.push('delivered') })
+    onDatabaseDependencyInvalidated(() => { delivered.push('delivered') })
     const steps: string[] = []
 
     await expect(DB.transaction(async (transaction) => {
