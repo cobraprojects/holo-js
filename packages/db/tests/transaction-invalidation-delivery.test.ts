@@ -1,7 +1,6 @@
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { DB, clearGeneratedTables, column, configureDatabaseQueryCacheBridge, onDatabaseDependencyInvalidated, resetDatabaseDependencyInvalidationListeners, registerGeneratedTables, resetDatabaseQueryCacheBridge, type DatabaseDependencyInvalidationEvent } from '../src'
-import type { DatabaseMutationEvent } from '../src/cache'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -58,8 +57,8 @@ describe('transaction invalidation delivery', () => {
         steps.push(`evicted ${current}`)
       },
     })
-    onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { readonly mutations?: readonly DatabaseMutationEvent[] }) => {
-      steps.push(`notify ${event.mutations?.[0]?.values?.label}`)
+    onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent) => {
+      steps.push(`notify ${event.dependencies.find(dependency => dependency.includes(':row:id:'))}`)
     })
 
     await DB.transaction(async (transaction) => {
@@ -70,7 +69,7 @@ describe('transaction invalidation delivery', () => {
       })
     })
 
-    expect(steps).toEqual(['evict 1', 'evicted 1', 'evict 2', 'evicted 2', 'notify first', 'notify second', 'after commit'])
+    expect(steps).toEqual(['evict 1', 'evicted 1', 'evict 2', 'evicted 2', 'notify db:default:items:row:id:1', 'notify db:default:items:row:id:2', 'after commit'])
   })
 
   it('reports a failing listener of a transaction write and still commits and runs after-commit callbacks', async () => {

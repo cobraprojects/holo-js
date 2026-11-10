@@ -182,19 +182,12 @@ describe('native database and cache integration', () => {
     expect(await region()).toEqual([])
   })
 
-  it('publishes concrete counter values for each changed row after commit', async () => {
-    const mutations: DatabaseMutationEvent[] = []
-    onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
-      mutations.push(...event.mutations ?? [])
-    })
+  it('invalidates cached counter values after commit', async () => {
+    onDatabaseDependencyInvalidated(() => {})
     expect(await DB.table(users).orderBy('id').cache(60).pluck('score')).toEqual([10, 20])
-    await DB.transaction(async tx => {
+    await DB.transaction(async (tx) => {
       await tx.table(users).increment('score', 5)
-      expect(mutations).toEqual([])
     })
-
-    expect(mutations.map(mutation => mutation.values?.score)).toEqual([15, 25])
-    expect(mutations.flatMap(mutation => mutation.rows ?? []).map(row => row.score)).toEqual([15, 25])
     expect(await DB.table(users).orderBy('id').cache(60).pluck('score')).toEqual([15, 25])
   })
 

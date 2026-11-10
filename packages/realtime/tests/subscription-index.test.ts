@@ -81,7 +81,6 @@ function createInvalidationEvent(overrides: Partial<ParsedInvalidationEvent> = {
     directDependencies: [tableKey],
     exactPredicates: new Map(),
     hasMutationDependency: false,
-    mutations: [],
     predicates: new Map(),
     tableDependencies: [],
     ...overrides,

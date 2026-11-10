@@ -12,11 +12,10 @@ import { createAfterCommitPublication } from './core/afterCommitPublications'
 import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
-import { coerceBoolean, isStoredBoolean, readsAsInteger } from './schema/normalization'
+import { readsAsInteger } from './schema/normalization'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { CaseInsensitiveColumns, TextColumnCollations } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySource, SelectQueryPlan } from './query/ast'
-import type { TableDefinition } from './schema/types'
 import { canonicalTableName } from './schema/tableIdentityRegistry'
 
 export type QueryCacheTtlInput = number | Date
@@ -112,15 +111,7 @@ export interface DatabaseQueryObservation {
 }
 
 export interface DatabaseMutationEvent {
-  readonly connectionName: string
-  readonly tableName: string
   readonly kind: 'insert' | 'update' | 'delete' | 'upsert'
-  readonly predicates: readonly DatabaseQueryPredicateObservation[]
-  readonly previousRows?: readonly Readonly<Record<string, unknown>>[]
-  readonly primaryKey?: string
-  readonly rows?: readonly Readonly<Record<string, unknown>>[]
-  readonly values?: Readonly<Record<string, unknown>>
-  readonly convertedColumns?: readonly string[]
 }
 
 type DatabaseDependencyPredicateMetadata = {
@@ -1527,61 +1518,6 @@ export function createDatabaseQueryFallbackObservation(
 ): DatabaseQueryObservation | undefined {
   if (dependencies.length === 0) return undefined
   return createDatabaseQueryObservationFromPlan(plan, connectionName, dependencies)
-}
-
-export function createDatabaseMutationEvent(
-  kind: DatabaseMutationEvent['kind'],
-  connectionName: string,
-  source: Pick<QuerySource, 'tableName' | 'table' | 'primaryKey'>,
-  predicates: readonly QueryPredicateNode[] = [],
-  values?: Readonly<Record<string, unknown>>,
-  rows?: readonly Readonly<Record<string, unknown>>[],
-  previousRows?: readonly Readonly<Record<string, unknown>>[],
-): DatabaseMutationEvent {
-  const table = source.table ?? getConnectionGeneratedTableDefinition(source.tableName, connectionName)
-  const convertedColumns = convertedBooleanColumns(table, [...rows ?? [], ...previousRows ?? [], ...values ? [values] : []])
-  return Object.freeze({
-    connectionName,
-    tableName: canonicalTableName(connectionName, source.tableName),
-    kind,
-    predicates: collectQueryPredicateObservations(predicates),
-    previousRows: previousRows ? readMutationRows(table, previousRows) : undefined,
-    primaryKey: resolveObservedRowKey(source, connectionName),
-    rows: rows ? readMutationRows(table, rows) : undefined,
-    values: values ? readStoredBooleans(table, values) : values,
-    ...convertedColumns.length > 0 ? { convertedColumns } : {},
-  })
-}
-
-function isDriverScalar(value: unknown): boolean {
-  return typeof value === 'number' || typeof value === 'bigint' || typeof value === 'string'
-}
-
-function isBooleanColumn(table: TableDefinition | undefined, column: string): boolean {
-  return table !== undefined && Object.hasOwn(table.columns, column) && table.columns[column]?.kind === 'boolean'
-}
-
-function convertedBooleanColumns(table: TableDefinition | undefined, records: readonly Readonly<Record<string, unknown>>[]): readonly string[] {
-  if (!table) return []
-  return Object.freeze(Object.keys(table.columns).filter(column => isBooleanColumn(table, column)
-    && records.some(record => Object.hasOwn(record, column) && isDriverScalar(record[column]))))
-}
-
-function readStoredBooleans(
-  table: TableDefinition | undefined,
-  row: Readonly<Record<string, unknown>>,
-): Readonly<Record<string, unknown>> {
-  if (!table) return row
-  const keys = Object.keys(row).filter(key => isBooleanColumn(table, key) && isStoredBoolean(row[key]))
-  if (keys.length === 0) return row
-  return Object.freeze({ ...row, ...Object.fromEntries(keys.map(key => [key, coerceBoolean(row[key])])) })
-}
-
-function readMutationRows(
-  table: TableDefinition | undefined,
-  rows: readonly Readonly<Record<string, unknown>>[],
-): readonly Readonly<Record<string, unknown>>[] {
-  return Object.freeze(rows.map(row => readStoredBooleans(table, row)))
 }
 
 export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): boolean {

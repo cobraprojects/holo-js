@@ -2,12 +2,11 @@ import { onDatabaseDependencyInvalidated, resetDatabaseDependencyInvalidationLis
 import { randomUUID } from 'node:crypto'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { column, createDatabase, createDialect, defineGeneratedTable, queryCacheInternals, type DatabaseDependencyInvalidationEvent } from '../src'
-import type { DatabaseMutationEvent } from '../src/cache'
+import { column, createDatabase, createDialect, defineGeneratedTable, queryCacheInternals } from '../src'
 import { mysqlIntegration, mysqlTestConnection, openDatabase } from './support/database'
 
 describe.runIf(mysqlIntegration)('MySQL inserts read back for realtime listeners', () => {
-  it('keep the inserted row and publish an insert without rows when the user cannot read the table back', async () => {
+  it('keep the inserted row when the user cannot read the table back', async () => {
     const { db, schema } = await openDatabase('mysql')
     const name = `holo_insert_only_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     await schema.createTable(name, (table) => {
@@ -25,16 +24,12 @@ describe.runIf(mysqlIntegration)('MySQL inserts read back for realtime listeners
     const writer = createDatabase({ adapter: createMySQLAdapter({ config: { ...connection, user, password } }), dialect: createDialect('mysql') })
     onTestFinished(() => writer.disconnect())
     const notes = defineGeneratedTable(name, { id: column.id(), name: column.string(), note: column.string().nullable() })
-    const mutations: DatabaseMutationEvent[] = []
     onTestFinished(() => resetDatabaseDependencyInvalidationListeners())
-    onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
-      mutations.push(...event.mutations ?? [])
-    })
+    onDatabaseDependencyInvalidated(() => {})
 
     await expect(writer.table(notes).insert({ id: 4, name: 'written' })).resolves.toMatchObject({ affectedRows: 1 })
 
     expect(await db.table(notes).get()).toEqual([{ id: 4, name: 'written', note: null }])
-    expect(mutations.map(mutation => [mutation.kind, mutation.rows])).toEqual([['insert', undefined]])
   })
 
   it('read back only the written rows of a table keyed by a composite key', async () => {
@@ -47,16 +42,12 @@ describe.runIf(mysqlIntegration)('MySQL inserts read back for realtime listeners
     onTestFinished(() => schema.dropTable(name))
     const pairs = defineGeneratedTable(name, { a: column.integer().primaryKey(), b: column.integer().primaryKey(), note: column.string().nullable() })
     await db.table(pairs).insert([{ a: 1, b: 2 }, { a: 2, b: 1 }])
-    const mutations: DatabaseMutationEvent[] = []
     onTestFinished(() => resetDatabaseDependencyInvalidationListeners())
-    onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
-      mutations.push(...event.mutations ?? [])
-    })
+    onDatabaseDependencyInvalidated(() => {})
     reads.length = 0
 
     await db.table(pairs).insert([{ a: 1, b: 1 }, { a: 2, b: 2 }])
 
     expect(reads).toEqual([2])
-    expect(mutations.map(mutation => mutation.rows)).toEqual([[{ a: 1, b: 1, note: null }, { a: 2, b: 2, note: null }]])
   })
 })

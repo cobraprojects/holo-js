@@ -1,15 +1,6 @@
 import type { DatabaseDependencyInvalidationEvent } from '@holo-js/db'
-import type { DatabaseQueryPredicateObservation } from './predicate-matching'
 export type DatabaseMutationEvent = {
-  readonly connectionName: string
-  readonly convertedColumns?: readonly string[]
   readonly kind: 'insert' | 'update' | 'delete' | 'upsert'
-  readonly predicates: readonly DatabaseQueryPredicateObservation[]
-  readonly previousRows?: readonly Readonly<Record<string, unknown>>[]
-  readonly primaryKey?: string
-  readonly rows?: readonly Readonly<Record<string, unknown>>[]
-  readonly tableName: string
-  readonly values?: Readonly<Record<string, unknown>>
 }
 
 export type DatabaseDependencyInvalidationEventWithMutations = DatabaseDependencyInvalidationEvent & {
@@ -49,7 +40,6 @@ export type ParsedInvalidationEvent = {
   readonly directDependencies: readonly string[]
   readonly exactPredicates: PredicateDependencyIndex
   readonly hasMutationDependency: boolean
-  readonly mutations: readonly DatabaseMutationEvent[]
   readonly predicates: PredicateDependencyIndex
   readonly tableDependencies: readonly string[]
 }
@@ -263,7 +253,6 @@ export function parseInvalidationEvent(event: DatabaseDependencyInvalidationEven
       directDependencies: metadata.directDependencies,
       exactPredicates: createPredicateDependencyIndex(metadata.exactPredicates),
       hasMutationDependency,
-      mutations,
       predicates: createPredicateDependencyIndex(metadata.predicates),
       tableDependencies: metadata.tableDependencies,
     }
@@ -332,7 +321,6 @@ export function parseInvalidationEvent(event: DatabaseDependencyInvalidationEven
     directDependencies: Object.freeze(directDependencies),
     exactPredicates,
     hasMutationDependency: mutationDependencyFound,
-    mutations,
     predicates,
     tableDependencies: Object.freeze(tableDependencies),
   }
