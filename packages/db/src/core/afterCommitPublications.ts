@@ -1,18 +1,15 @@
 import type { TransactionCallback } from './types'
 
-type AfterCommitPublication = {
-  readonly evict: () => Promise<void>
-  readonly notify: () => Promise<void>
-}
+type AfterCommitPublication = () => Promise<TransactionCallback>
 
 const publicationsByCallback = new WeakMap<TransactionCallback, AfterCommitPublication>()
 
-export function createAfterCommitPublication(publication: AfterCommitPublication): TransactionCallback {
+export function createAfterCommitPublication(evict: AfterCommitPublication): TransactionCallback {
   const callback = async (): Promise<void> => {
-    await publication.evict()
-    await publication.notify()
+    const notify = await evict()
+    await notify()
   }
-  publicationsByCallback.set(callback, publication)
+  publicationsByCallback.set(callback, evict)
   return callback
 }
 
@@ -25,8 +22,9 @@ export async function runAfterCommitCallbacks(callbacks: readonly TransactionCal
     else userCallbacks.push(callback)
   }
 
-  for (const publication of publications) await publication.evict()
-  const deliveries = await Promise.allSettled(publications.map(async publication => publication.notify()))
+  const notifications: TransactionCallback[] = []
+  for (const evict of publications) notifications.push(await evict())
+  const deliveries = await Promise.allSettled(notifications.map(async notify => notify()))
   for (const delivery of deliveries) {
     if (delivery.status === 'rejected') throw delivery.reason
   }

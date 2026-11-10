@@ -3287,21 +3287,18 @@ export async function invalidateQueryCacheDependencies(
     return
   }
 
-  let fullRefresh = false
-  let localDependencies: readonly string[] = dependencies
-  const invalidate = createAfterCommitPublication({
-    evict: async () => {
-      fullRefresh = needsFullQueryRefresh(connection)
-      if (fullRefresh) startMutationPublicationEpoch()
-      localDependencies = fullRefresh ? [databaseSchemaDependency] : dependencies
-      const bridge = getDatabaseQueryCacheBridge()
-      try {
-        await runQueryCacheOperation(() => bridge?.invalidateDependencies(localDependencies))
-      } catch (error) {
-        reportError(error, { capability: 'db', operation: 'cache.invalidateDependencies' })
-      }
-    },
-    notify: async () => {
+  const invalidate = createAfterCommitPublication(async () => {
+    const fullRefresh = needsFullQueryRefresh(connection)
+    if (fullRefresh) startMutationPublicationEpoch()
+    const localDependencies = fullRefresh ? [databaseSchemaDependency] : dependencies
+    const bridge = getDatabaseQueryCacheBridge()
+    try {
+      await runQueryCacheOperation(() => bridge?.invalidateDependencies(localDependencies))
+    } catch (error) {
+      reportError(error, { capability: 'db', operation: 'cache.invalidateDependencies' })
+    }
+
+    return async () => {
       const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
       const hasLocalListeners = hasDatabaseDependencyInvalidationListeners()
       if (candidates.length === 0 && !hasLocalListeners) {
@@ -3316,7 +3313,7 @@ export async function invalidateQueryCacheDependencies(
           ? createDatabaseDependencyInvalidationEvent(connection, localDependencies, [])
           : event)
       }
-    },
+    }
   })
   if (connection.getScope().kind === 'root') {
     await invalidate()
