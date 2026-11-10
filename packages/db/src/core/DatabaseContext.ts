@@ -301,14 +301,18 @@ export class DatabaseContext {
   }
 
   async invalidateTables(tables: readonly string[]): Promise<void> {
+    await invalidateQueryCacheDependencies(this, await this._tableInvalidationDependencies(tables))
+  }
+
+  private async _tableInvalidationDependencies(tables: readonly string[]): Promise<string[]> {
     const identities = new Set<string>()
     for (const table of new Set(tables)) {
       identities.add(await resolveTableIdentity(this, table))
     }
-    await invalidateQueryCacheDependencies(this, [...identities].flatMap(tableName => [
+    return [...identities].flatMap(tableName => [
       createTableCacheDependency(this._connectionName, tableName),
       createTableRowWildcardCacheDependency(this._connectionName, tableName),
-    ]))
+    ])
   }
 
   getLogger(): DatabaseLogger | undefined {
@@ -418,9 +422,10 @@ export class DatabaseContext {
 
   private async _runRawStatement<T>(statement: UnsafeStatement, run: () => Promise<T>): Promise<T> {
     if (isSchemaPreservingRawStatement(statement.sql, this._dialect.name)) {
-      const result = await run()
       const target = rawStatementWriteTarget(statement.sql, this._dialect.name)
-      if (target) await this.invalidateTables([target])
+      const dependencies = target ? await this._tableInvalidationDependencies([target]) : []
+      const result = await run()
+      if (target) await invalidateQueryCacheDependencies(this, dependencies)
       return result
     }
     markSessionUncertain(getRootDatabaseContext(this))

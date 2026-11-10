@@ -224,6 +224,28 @@ describe.each(modes)('raw write invalidation on $driver (returning: $returning)'
     await f.expectFresh()
   })
 
+  it.runIf(returning)('publishes unsafeQuery writes only after success and commit', async () => {
+    const f = await fixture()
+    const primed = await cache.get('raw.active')
+    await expect(f.db.unsafeQuery({
+      sql: `${f.sql.insert.replace("(2, 'inserted'", "(1, 'inserted'")} RETURNING id`,
+      bindings: f.bindings(true), unsafe: true,
+    })).rejects.toThrow()
+    const writeInTransaction = (rollback: boolean) => f.db.transaction(async tx => {
+      await tx.unsafeQuery({ sql: `${f.sql.update} RETURNING id`, bindings: f.bindings(false), unsafe: true })
+      expect(f.events).toEqual([])
+      expect(await cache.get('raw.active')).toEqual(primed)
+      expect(f.subscription.current.data).toEqual(f.initial)
+      if (rollback) throw new Error('rollback unsafeQuery write')
+    })
+    await expect(writeInTransaction(true)).rejects.toThrow('rollback unsafeQuery write')
+    expect(f.events).toEqual([])
+    await f.expectFresh()
+    await writeInTransaction(false)
+    expect(f.events).toHaveLength(1)
+    await f.expectFresh()
+  })
+
   it('uses the SQL target instead of the table scope or logging label', async () => {
     const f = await fixture()
     await f.db.table('unrelated_scope').unsafeExecute({ sql: f.sql.update, bindings: f.bindings(false), unsafe: true })

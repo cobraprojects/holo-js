@@ -766,3 +766,30 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
     })
   })
 }
+
+describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('%s raw write identity failures', driver => {
+  it.each(['unsafeExecute', 'unsafeQuery'] as const)('does not execute %s when table identity lookup fails', async method => {
+    let failLookup = false
+    const { db, table } = await openDatabase(driver, {
+      security,
+      wrapAdapter: adapter => new Proxy(adapter, {
+        get(target, property) {
+          if (property !== 'query' && property !== 'introspect') return Reflect.get(target, property, target)
+          const query = (target[property] ?? target.query).bind(target)
+          return async (...args: Parameters<typeof query>) => {
+            if (failLookup && args[0].includes('bare_schema')) throw new Error('identity lookup unavailable')
+            return query(...args)
+          }
+        },
+      }),
+    })
+    const { qualified } = tableSpellings(driver, table.tableName)
+    const sql = `INSERT INTO ${quotePath(driver, qualified)} (id, name) VALUES (1, 'inserted')${method === 'unsafeQuery' && driver !== 'mysql' ? ' RETURNING id' : ''}`
+
+    failLookup = true
+    await expect(db[method]({ sql, unsafe: true })).rejects.toThrow('identity lookup unavailable')
+    failLookup = false
+
+    expect(await db.table(table).pluck('id')).toEqual([])
+  })
+})
