@@ -5,7 +5,7 @@ import { getApplicationTimezone } from '../applicationTimezone'
 import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
-import type { QueryRawSelection } from './ast'
+import type { QueryRawSelection, QueryRelationKeysPredicate } from './ast'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -90,7 +90,7 @@ import {
 } from './ast'
 import type { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, PaginationOptions, SimplePaginatedResult } from './types'
-import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
+import type { AnyColumnDefinition, InferSelect, LogicalColumnKind, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { isAwaitingGeneratedTableIdentity, getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { unionCursorColumns } from './unionCursorColumns'
@@ -3581,6 +3581,37 @@ function internalSelectionContext(query: TableQueryBuilder<string, Record<string
     throw new SecurityError('Internal selections need a connection that Holo created.')
   }
   return { connection, append: (selection: QueryRawSelection) => append(selection) as TableQueryBuilder<string, Record<string, unknown>> }
+}
+
+const RELATION_KEY_VALUE_TYPES: Partial<Record<LogicalColumnKind, QueryRelationKeysPredicate['valueType']>> = {
+  integer: 'integer',
+  bigInteger: 'integer',
+  decimal: 'decimal',
+  real: 'real',
+  boolean: 'boolean',
+  blob: 'blob',
+  uuid: 'uuid',
+  date: 'date',
+  datetime: 'timestamp',
+  timestamp: 'timestamp',
+}
+
+export function whereRelationKeys<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(
+  query: TQuery,
+  column: string,
+  values: readonly unknown[],
+): TQuery {
+  const filtered = query.where(column, 'in', values)
+  if (values.length <= 256) return filtered as TQuery
+  const normalized = applyDeferredPredicateNormalizations(filtered.getPlan())
+  const predicate = normalized.predicates.at(-1)
+  if (predicate?.kind !== 'comparison' || !Array.isArray(predicate.value)) return filtered as TQuery
+  const name = column.slice(column.lastIndexOf('.') + 1)
+  const definition = query.getPlan().source.table?.columns[name]
+  const valueType = definition?.kind === 'id'
+    ? definition.idStrategy === 'autoIncrement' ? 'integer' : definition.idStrategy === 'uuid' ? 'uuid' : undefined
+    : definition ? RELATION_KEY_VALUE_TYPES[definition.kind] : undefined
+  return query.withPredicates([...query.getPlan().predicates, { kind: 'relation-keys', column, values: predicate.value, valueType }]) as TQuery
 }
 
 export function addSelectDateExtrema(

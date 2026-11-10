@@ -176,6 +176,7 @@ function requalifyPredicates(
       case 'json':
       case 'vector':
       case 'integer-in':
+      case 'relation-keys':
         return Object.freeze({ ...predicate, column: column(predicate.column) })
       case 'subquery':
         return Object.freeze({ ...predicate, column: column(predicate.column), subquery: requalifyPlan(predicate.subquery, target, scope) })

@@ -214,26 +214,3 @@ export function groupRelation(entities: readonly Entity[], column: string, optio
   }
   return grouped
 }
-
-export async function retrievePivotRelation(
-  parentKeys: readonly unknown[],
-  createPivotQuery: () => TableQueryBuilder<string | TableDefinition>,
-  parentColumn: string,
-  relatedColumn: string,
-  createRelatedQuery: () => ModelQueryBuilder,
-  relatedKey: string,
-  pivotSelection: readonly string[],
-  readPivotRows: (rows: readonly Record<string, unknown>[]) => Record<string, unknown>[],
-  keyDefinitions: { readonly parentKey?: AnyColumnDefinition, readonly relatedKey?: AnyColumnDefinition, readonly pivotParentKey?: AnyColumnDefinition, readonly pivotRelatedKey?: AnyColumnDefinition } = {},
-): Promise<{ rows: Record<string, unknown>[], related: StoredKeyMap<Entity> }> {
-  const pivotQuery = createPivotQuery()
-  const pivotParentKey = columnDefinition(pivotQuery, parentColumn) ?? keyDefinitions.pivotParentKey
-  const pivotKeys = keysForColumn(parentKeys, pivotParentKey ?? keyDefinitions.parentKey, pivotQuery.getConnection().getDriver())
-  const rows = await loadRelationKeyChunks(pivotKeys, false, async chunk => readPivotRows(await createPivotQuery()
-    .select(...pivotSelection)
-    .where(parentColumn, 'in', chunk)
-    .get<Record<string, unknown>>()))
-  const keys = distinctStoredKeys(rows.map(row => row[relatedColumn]).filter(value => value != null))
-  const { entities } = await retrieveRelation(keys, createRelatedQuery, relatedKey, keyDefinitions.relatedKey)
-  return { rows, related: indexRelation(entities, relatedKey, relationKeyOptions(keyDefinitions.relatedKey, columnDefinition(pivotQuery, relatedColumn) ?? keyDefinitions.pivotRelatedKey)) }
-}

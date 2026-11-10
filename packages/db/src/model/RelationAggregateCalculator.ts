@@ -11,7 +11,7 @@ export type RelationAggregateDefinition = {
 }
 
 export type RelationAggregateComputation = {
-  readonly value: number | null
+  readonly value: number | string | Date | null
 }
 
 export class RelationAggregateCalculator {
@@ -28,7 +28,7 @@ export class RelationAggregateCalculator {
     entities: readonly Entity[],
     column: string,
   ): RelationAggregateComputation {
-    const values = entities.map(entity => entity.toAttributes()[column as keyof ReturnType<typeof entity.toAttributes>])
+    const values = entities.map(entity => entity.toAttributes()[column as keyof ReturnType<typeof entity.toAttributes>]).filter(value => value != null)
     const numbers = values.map(value => this.requireNumericValue(value, kind, column))
 
     switch (kind) {

@@ -250,6 +250,18 @@ export interface QueryIntegerInPredicate {
   readonly values: readonly (number | bigint)[]
 }
 
+export interface QueryRelationKeysPredicate {
+  readonly kind: 'relation-keys'
+  readonly boolean?: 'and' | 'or'
+  readonly column: string
+  readonly values: readonly unknown[]
+  readonly valueType?: 'integer' | 'decimal' | 'real' | 'boolean' | 'blob' | 'uuid' | 'date' | 'timestamp'
+}
+
+export function serializeRelationKeys(values: readonly unknown[]): string {
+  return JSON.stringify(values.map(value => value instanceof Uint8Array ? Buffer.from(value).toString('hex') : value), (_key, value: unknown) => typeof value === 'bigint' ? value.toString() : value)
+}
+
 export function isInlineIntegerValue(value: unknown): value is number | bigint {
   return typeof value === 'bigint' || (typeof value === 'number' && Number.isSafeInteger(value))
 }
@@ -269,6 +281,7 @@ export type QueryPredicateNode
     | QuerySubqueryPredicate
     | QueryRawPredicate
     | QueryIntegerInPredicate
+    | QueryRelationKeysPredicate
 
 export type QueryOrderBy
   = | {
@@ -625,6 +638,26 @@ export function withGroupBy(
 }
 
 const oneOfManyAggregateMarker = Symbol('holo.oneOfManyAggregate')
+
+const scalarExtremum = Symbol('holo.scalarExtremum')
+const scalarSelections = Symbol('holo.scalarSelections')
+type ScalarExtremum = { readonly kind: 'min' | 'max', readonly column: string }
+
+export function withScalarExtremum(plan: SelectQueryPlan, extremum: ScalarExtremum | undefined): SelectQueryPlan {
+  return Object.freeze({ ...plan, [scalarExtremum]: extremum })
+}
+
+export function readScalarExtremum(plan: SelectQueryPlan): ScalarExtremum | undefined {
+  return (plan as SelectQueryPlan & { readonly [scalarExtremum]?: ScalarExtremum })[scalarExtremum]
+}
+
+export function withScalarSelections(plan: SelectQueryPlan): SelectQueryPlan {
+  return Object.freeze({ ...plan, [scalarSelections]: true })
+}
+
+export function hasScalarSelections(plan: SelectQueryPlan): boolean {
+  return (plan as SelectQueryPlan & { readonly [scalarSelections]?: boolean })[scalarSelections] === true
+}
 
 export function withOneOfManyAggregateMarker(plan: SelectQueryPlan): SelectQueryPlan {
   return Object.freeze({

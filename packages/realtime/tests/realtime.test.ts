@@ -17308,4 +17308,44 @@ describe('@holo-js/realtime', () => {
     }
   })
 
+  it('refreshes subscribed text relation extrema after a mutation', async () => {
+    const adapter = await createNativeRelationalAdapter({
+      authors: [{ id: 1, name: 'Ada' }],
+      posts: [
+        { id: 1, author_id: 1, title: '10' },
+        { id: 2, author_id: 1, title: '2' },
+      ],
+    })
+    const db = await createContext(adapter)
+    configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
+    configureRealtimeRuntime({ db: () => db })
+    const Post = defineModel(defineGeneratedTable('posts', {
+      id: column.id(), author_id: column.integer(), title: column.string(),
+    }))
+    const Author = defineModel(defineGeneratedTable('authors', { id: column.id(), name: column.string() }), {
+      relations: { posts: hasMany(() => Post, 'author_id') },
+    })
+    const snapshots: unknown[] = []
+    const query = defineRealtimeQuery({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        return context.model(Author).query().withMin('posts', 'title').withMax('posts', 'title').getJson()
+      },
+    })
+    const mutation = defineRealtimeMutation({
+      access: 'public',
+      handler: async ({ db: context }) => context.table('posts').where('id', 1).update({ title: 'Zulu' }),
+    })
+    const subscription = await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => { snapshots.push(snapshot.data) },
+      onError: error => { throw error },
+    })
+    onTestFinished(() => subscription.unsubscribe())
+    await executeRealtimeMutation(mutation)
+    expect(snapshots).toMatchObject([
+      [{ posts_min_title: '10', posts_max_title: '2' }],
+      [{ posts_min_title: '2', posts_max_title: 'Zulu' }],
+    ])
+  })
+
 })
