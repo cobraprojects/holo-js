@@ -5,67 +5,16 @@ import {
 import {
   addPathReplacementToPlan,
   createEmptyPathReplacementPlan,
-  createTwoPathReplacementPlan,
   replaceValueWithPlan,
 } from './result-replacement-plan'
 import {
-  applyTopLevelPathReplacement,
-  canReplaceTopLevelPath,
-  finishTopLevelPathReplacement,
-  type TopLevelReplacementResult,
-  type TopLevelReplacementState,
-} from './result-top-level-replacement'
-import {
   replaceValueAtPath,
 } from './result-value-replacement'
-
-export type PathValueReplacement = {
-  readonly path: readonly RealtimePatchPathSegment[]
-  readonly value: unknown
-}
 
 export type PathSpliceReplacement = {
   readonly index: number
   readonly deleteCount: number
   readonly values: readonly unknown[]
-}
-
-export function replaceTwoValuesAtPaths(
-  value: unknown,
-  firstPath: readonly RealtimePatchPathSegment[],
-  firstValue: unknown,
-  secondPath: readonly RealtimePatchPathSegment[],
-  secondValue: unknown,
-): unknown {
-  const topLevelReplacement = replaceTwoValuesAtTopLevelPaths(
-    value,
-    firstPath,
-    firstValue,
-    secondPath,
-    secondValue,
-  )
-  if (topLevelReplacement) {
-    return topLevelReplacement.value
-  }
-
-  const plan = createTwoPathReplacementPlan(firstPath, firstValue, secondPath, secondValue)
-  if (!plan) {
-    const nextValue = firstPath.length === 0
-      ? firstValue
-      : replaceValueAtPath(value, firstPath, firstValue)
-    return secondPath.length === 0
-      ? secondValue
-      : replaceValueAtPath(nextValue, secondPath, secondValue)
-  }
-
-  return replaceValueWithPlan(value, plan)
-}
-
-export function replaceValuesAtPaths(
-  value: unknown,
-  replacements: readonly PathValueReplacement[],
-): unknown {
-  return replaceValuesAtPathsUsing(value, replacements, replacement => replacement.value)
 }
 
 export function replaceValuesAtPathsUsing<TReplacement extends {
@@ -95,20 +44,6 @@ export function replaceValuesAtPathsUsing<TReplacement extends {
   }
 
   return replaceValueWithPlan(value, replacementPlan)
-}
-
-export function spliceValueAtPath(
-  value: unknown,
-  path: readonly RealtimePatchPathSegment[],
-  index: number,
-  deleteCount: number,
-  items: readonly unknown[],
-): unknown {
-  return spliceValuesAtPath(value, path, [{
-    index,
-    deleteCount,
-    values: items,
-  }])
 }
 
 export function spliceValuesAtPath(
@@ -169,29 +104,6 @@ function replaceValuesAtPathsSequentially<TReplacement extends {
   }
 
   return nextValue
-}
-
-function replaceTwoValuesAtTopLevelPaths(
-  value: unknown,
-  firstPath: readonly RealtimePatchPathSegment[],
-  firstValue: unknown,
-  secondPath: readonly RealtimePatchPathSegment[],
-  secondValue: unknown,
-): TopLevelReplacementResult | undefined {
-  if (!canReplaceTopLevelPath(firstPath) || !canReplaceTopLevelPath(secondPath)) {
-    return undefined
-  }
-
-  const state: TopLevelReplacementState = {}
-  if (!applyTopLevelPathReplacement(value, state, firstPath, firstValue)) {
-    return undefined
-  }
-
-  if (!applyTopLevelPathReplacement(value, state, secondPath, secondValue)) {
-    return undefined
-  }
-
-  return finishTopLevelPathReplacement(value, state)
 }
 
 function isEquivalentSplice(

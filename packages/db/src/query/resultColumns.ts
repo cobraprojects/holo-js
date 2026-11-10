@@ -1,4 +1,4 @@
-import { coerceBoolean, isStoredBoolean, parseInteger, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
+import { coerceBoolean, parseInteger, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { splitTablePath } from '../schema/identifiers'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -19,10 +19,6 @@ function readsIntegerText(value: unknown): value is bigint | string {
 
 function holdsInteger(value: unknown): boolean {
   return typeof value === 'number' || readsIntegerText(value)
-}
-
-export function failsIntegerRead(value: unknown): boolean {
-  return holdsInteger(value) && !Number.isSafeInteger(Number(value))
 }
 
 function readIntegerResult(value: unknown): unknown {
@@ -48,7 +44,7 @@ function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undef
   return tables
 }
 
-export function tableForQualifier(tables: ReadonlyMap<string, TableDefinition | undefined>, qualifier: string): TableDefinition | undefined {
+function tableForQualifier(tables: ReadonlyMap<string, TableDefinition | undefined>, qualifier: string): TableDefinition | undefined {
   if (tables.has(qualifier)) return tables.get(qualifier)
   const matches = [...tables.entries()].filter(([name]) => splitTablePath(name).schema !== undefined && splitTablePath(name).table === qualifier)
   return matches.length === 1 ? matches[0]![1] : undefined
@@ -185,19 +181,7 @@ export function readConvertedResultColumns(row: Record<string, unknown>, columns
   return values
 }
 
-export function hasUnstoredBoolean(rows: readonly Record<string, unknown>[], columns: ConvertedResultColumns): boolean {
-  const booleanKeys = [...columns].filter(([, read]) => read === coerceBoolean).map(([key]) => key)
-  return booleanKeys.length > 0 && rows.some(row => booleanKeys.some((key) => {
-    const value = row[key]
-    return value != null && typeof value !== 'boolean' && !isStoredBoolean(value)
-  }))
-}
-
 const CANONICAL_INTEGER_TEXT = /^(?:0|-?[1-9]\d*)$/
-
-function holdsIntegerValue(value: unknown): value is bigint | number | string {
-  return typeof value === 'bigint' || typeof value === 'number' || typeof value === 'string'
-}
 
 function readsCanonicalInteger(value: unknown): boolean {
   return (typeof value === 'bigint' && Number.isSafeInteger(Number(value)))
@@ -205,14 +189,7 @@ function readsCanonicalInteger(value: unknown): boolean {
     || (typeof value === 'string' && CANONICAL_INTEGER_TEXT.test(value) && Number.isSafeInteger(Number(value)))
 }
 
-export function holdsUnreadableInteger(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
-  return columnsOf(table).some(([key, definition]) => readsAsInteger(definition!)
-    && Object.hasOwn(row, key)
-    && holdsIntegerValue(row[key])
-    && !readsCanonicalInteger(row[key]))
-}
-
-export function readCanonicalInteger(value: unknown): unknown {
+function readCanonicalInteger(value: unknown): unknown {
   return readsCanonicalInteger(value) && typeof value !== 'number' ? Number(value) : value
 }
 

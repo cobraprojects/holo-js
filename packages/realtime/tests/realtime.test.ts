@@ -1,3 +1,4 @@
+import { hasDatabaseDependencyInvalidationListeners } from '../../db/src/cache'
 import { randomUUID } from 'node:crypto'
 import { createPostgresAdapter } from '../../db-postgres/src'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -48,11 +49,7 @@ import {
   resolveRealtimeDefinition,
   subscribeRealtimeQuery,
 } from '../src/server'
-import {
-  compactPatchOperations,
-  createSplicePatchOperation,
-} from '../src/runtime/patch-operations'
-import { collectRelevantMutationTargets } from '../src/runtime/query-relevant-mutations'
+import { createSplicePatchOperation } from '../src/runtime/patch-operations'
 import { authRuntimeInternals, createAsyncAuthContext, defineAuthConfig, getAuthRuntime, resetAuthRuntime } from '@holo-js/auth'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
 import { createNativeAuthPersistence } from '../../auth/tests/support/native-persistence'
@@ -62,8 +59,6 @@ import { recordDatabaseQueryObservation } from '../../db/src/cache'
 import type {
   RealtimeSubscribeOptions,
 } from '../src/index'
-import type { DatabaseMutationEvent } from '../src/runtime/dependencies'
-import type { BackfillCache, QueryPatchTarget } from '../src/runtime/query-state'
 
 const DATABASE_DEPENDENCY_METADATA_KEY = '__holoDatabaseDependencyMetadata__'
 
@@ -130,139 +125,6 @@ afterEach(() => {
 })
 
 describe('@holo-js/realtime', () => {
-  it('compacts adjacent boundary splice operations without expanding window slides', () => {
-    const firstInsertedRow = { id: 3, title: 'Third' }
-    const secondInsertedRow = { id: 4, title: 'Fourth' }
-    const windowBackfillRow = { id: 101, title: 'Backfill' }
-
-    expect(compactPatchOperations([
-      createSplicePatchOperation([], 2, 0, [firstInsertedRow]),
-      createSplicePatchOperation([], 3, 0, [secondInsertedRow]),
-      createSplicePatchOperation([], 4, 0, []),
-    ])).toEqual([{
-      op: 'splice',
-      path: [],
-      index: 2,
-      deleteCount: 0,
-      values: [firstInsertedRow, secondInsertedRow],
-    }])
-
-    expect(compactPatchOperations([
-      createSplicePatchOperation([], 0, 1, []),
-      createSplicePatchOperation([], 99, 0, [windowBackfillRow]),
-    ])).toEqual([
-      {
-        op: 'splice',
-        path: [],
-        index: 0,
-        deleteCount: 1,
-        values: [],
-      },
-      {
-        op: 'splice',
-        path: [],
-        index: 99,
-        deleteCount: 0,
-        values: [windowBackfillRow],
-      },
-    ])
-  })
-
-  it('filters relevant target mutations using returned mutation rows', () => {
-    const mutationIndexKey = 'main:posts'
-    const authorOneMutation = Object.freeze({
-      connectionName: 'main',
-      kind: 'upsert',
-      predicates: [],
-      previousRows: [{
-        author_id: 1,
-        id: 1,
-        score: 7,
-      }],
-      rows: [{
-        author_id: 1,
-        id: 1,
-        score: 6,
-      }],
-      tableName: 'posts',
-      values: {
-        author_id: 1,
-        id: 1,
-        score: 6,
-      },
-    } satisfies DatabaseMutationEvent)
-    const authorTwoMutation = Object.freeze({
-      connectionName: 'main',
-      kind: 'upsert',
-      predicates: [],
-      previousRows: [{
-        author_id: 2,
-        id: 2,
-        score: 11,
-      }],
-      rows: [{
-        author_id: 2,
-        id: 2,
-        score: 10,
-      }],
-      tableName: 'posts',
-      values: {
-        author_id: 2,
-        id: 2,
-        score: 10,
-      },
-    } satisfies DatabaseMutationEvent)
-    const target = Object.freeze({
-      currentValue: 11,
-      index: 0,
-      mutationIndexKey,
-      patchCapability: 'patchable',
-      query: Object.freeze({
-        aggregate: Object.freeze({
-          column: 'score',
-          kind: 'max',
-        }),
-        connectionName: 'main',
-        dependencies: [],
-        orderBy: [],
-        patchable: true,
-        predicates: [Object.freeze({
-          column: 'author_id',
-          operator: '=',
-          value: 2,
-        })],
-        tableName: 'posts',
-      }),
-      resultPath: [],
-      resultPathKey: '',
-      skipsPatching: false,
-    } satisfies QueryPatchTarget)
-    const backfills = {
-      aggregates: new Map(),
-      aggregateSql: new Map(),
-      entries: [],
-      mutationMetadata: new WeakMap(),
-      mutations: new Map([
-        [
-          mutationIndexKey,
-          Object.freeze([
-            authorOneMutation,
-            authorTwoMutation,
-          ]),
-        ],
-      ]),
-      paginationGroupedCounts: new Map(),
-      paginationCounts: new Map(),
-      rowGroups: new Map(),
-      rows: new Map(),
-    } satisfies BackfillCache
-
-    const targets = collectRelevantMutationTargets([target], backfills)
-
-    expect(targets).toHaveLength(1)
-    expect(targets[0]?.mutations).toEqual([authorTwoMutation])
-  })
-
   it('executes public queries with validated args and auto-generated names', async () => {
     const db = await createContext()
     configureRealtimeRuntime({
@@ -311,11 +173,9 @@ describe('@holo-js/realtime', () => {
     expect(entry?.queries).toEqual([expect.objectContaining({
       connectionName: 'main',
       tableName: 'posts',
-      limit: 5,
-      orderBy: [{ column: 'id', direction: 'desc' }],
-      patchable: true,
       predicates: [{ column: 'title', operator: '=', value: 'First' }],
     })])
+    expect(Object.keys(entry?.queries[0] ?? {}).sort()).toEqual(['connectionName', 'dependencies', 'predicates', 'primaryKey', 'tableName'])
     expect('queries' in subscription.current).toBe(false)
   })
 
@@ -472,13 +332,13 @@ describe('@holo-js/realtime', () => {
       },
     })
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
 
     await expect(executeRealtimeMutation(renamePost)).resolves.toMatchObject({
       data: { ok: true },
     })
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
     expect(realtimeRuntimeInternals.getRuntimeState().unsubscribeFromDatabase).toBeUndefined()
     expect(adapter.queries).toEqual([])
     expect(adapter.executions).toEqual([
@@ -513,7 +373,7 @@ describe('@holo-js/realtime', () => {
       dependencies: ['db:main:posts'],
     })
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
     expect(realtimeRuntimeInternals.getRuntimeState().unsubscribeFromDatabase).toBeUndefined()
 
     adapter.queries.length = 0
@@ -571,17 +431,17 @@ describe('@holo-js/realtime', () => {
     const firstSubscription = await subscribeRealtimeQuery(listPosts)
     const secondSubscription = await subscribeRealtimeQuery(listPosts)
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(true)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(true)
     expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(2)
 
     firstSubscription.unsubscribe()
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(true)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(true)
     expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(1)
 
     secondSubscription.unsubscribe()
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
     expect(realtimeRuntimeInternals.getRuntimeState().unsubscribeFromDatabase).toBeUndefined()
     expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(0)
 
@@ -617,7 +477,7 @@ describe('@holo-js/realtime', () => {
       },
     })).rejects.toThrow('Initial subscriber failed.')
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
     expect(realtimeRuntimeInternals.getRuntimeState().unsubscribeFromDatabase).toBeUndefined()
     expect(realtimeRuntimeInternals.getRuntimeState().subscriptions.size).toBe(0)
     expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(0)
@@ -951,7 +811,6 @@ describe('@holo-js/realtime', () => {
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
     await executeRealtimeMutation(createPost)
 
-    expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'refresh' })
     expect(queryRuns).toBe(2)
 
     expectWireHistory(snapshots, patches, [1, 2], [])
@@ -1016,7 +875,6 @@ describe('@holo-js/realtime', () => {
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
     await executeRealtimeMutation(createPost)
 
-    expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'refresh' })
     expect(queryRuns).toBe(6)
     expectWireHistory(patchSnapshots, patches, [1, 2], [])
     expect(snapshotOnlySnapshots).toEqual([1, 2])
@@ -1093,7 +951,6 @@ describe('@holo-js/realtime', () => {
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
     await executeRealtimeMutation(createPost)
 
-    expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
     expect(patchSnapshots).toEqual([
       [
         { author_id: 1, total: 2 },
@@ -1176,7 +1033,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(createPost)
     const mutationQueries = adapter.queries.slice(queryCountAfterSubscribe)
 
-    expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
     expect(snapshots).toEqual([
       [
         { author_id: 1, total: 2 },
@@ -1254,7 +1110,6 @@ describe('@holo-js/realtime', () => {
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
     await executeRealtimeMutation(createPost)
 
-    expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
     expect(snapshots).toEqual([
       [
         { author_id: 1, total: 2 },
@@ -1331,7 +1186,6 @@ describe('@holo-js/realtime', () => {
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
     await executeRealtimeMutation(createPost)
 
-    expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
     expect(snapshots).toEqual([
       [
         { author_id: 1, total: 2 },
@@ -1410,7 +1264,6 @@ describe('@holo-js/realtime', () => {
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
     await executeRealtimeMutation(updatePost)
 
-    expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
     expect(snapshots).toEqual([
       [
         { author_id: 1, score_total: 12 },
@@ -1491,7 +1344,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(createPost)
     const mutationQueries = adapter.queries.slice(queryCountAfterSubscribe)
 
-    expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
     expect(snapshots).toEqual([
       [
         { author_id: 1, score_total: 12 },
@@ -1572,7 +1424,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(createPost)
     const mutationQueries = adapter.queries.slice(queryCountAfterSubscribe)
 
-    expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
     expect(snapshots).toEqual([
       [
         { author_id: 1, average_score: 6 },
@@ -1728,7 +1579,6 @@ describe('@holo-js/realtime', () => {
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
     await executeRealtimeMutation(updatePost)
 
-    expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
     expect(snapshots).toEqual([
       [
         { author_id: 1, best_score: 7 },
@@ -1806,7 +1656,6 @@ describe('@holo-js/realtime', () => {
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
     await executeRealtimeMutation(deletePost)
 
-    expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
     expect(snapshots).toEqual([
       [
         { author_id: 1, best_score: 13 },
@@ -1917,7 +1766,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(createPost)
     const mutationQueries = adapter.queries.slice(queryCountAfterSubscribe)
 
-    expect(entries.map(entry => entry.patchTargets[0]?.patchCapability)).toEqual(['patchable', 'patchable'])
     expect(maxSnapshots).toEqual([
       [
         { author_id: 1, best_score: 7 },
@@ -2007,7 +1855,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(updatePost)
     const mutationQueries = adapter.queries.slice(queryCountAfterSubscribe)
 
-    expect(entry?.patchTargets[0]).toMatchObject({ patchCapability: 'patchable' })
     expect(snapshots).toEqual([
       [
         { author_id: 1, best_score: 7 },
@@ -2174,30 +2021,12 @@ describe('@holo-js/realtime', () => {
       {
         connectionName: 'main',
         dependencies: ['db:main:posts:row:id:1'],
-        mutations: [{
-          connectionName: 'main',
-          kind: 'update',
-          predicates: [{
-            column: 'id',
-            operator: '=',
-            value: 1,
-          }],
-          tableName: 'posts',
-        }],
+        mutations: [{ kind: 'update' }],
       },
       {
         connectionName: 'main',
         dependencies: ['db:main:posts:row:id:2'],
-        mutations: [{
-          connectionName: 'main',
-          kind: 'update',
-          predicates: [{
-            column: 'id',
-            operator: '=',
-            value: 2,
-          }],
-          tableName: 'posts',
-        }],
+        mutations: [{ kind: 'update' }],
       },
     ])
 
@@ -3661,16 +3490,7 @@ describe('@holo-js/realtime', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
-      mutations: [{
-        connectionName: 'main',
-        kind: 'update',
-        predicates: [{
-          column: 'id',
-          operator: '=',
-          value: 2,
-        }],
-        tableName: 'posts',
-      }],
+      mutations: [{ kind: 'update' }],
     })
 
     expect(snapshots).toEqual([
@@ -3740,12 +3560,10 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(movePost)
 
-    expect(adapter.executions).toHaveLength(0)
     expect(adapter.queries.map(query => query.sql)).toEqual([
-  "SELECT \"id\", \"author_id\", \"title\" FROM \"posts\" WHERE \"author_id\" = ? ORDER BY \"id\" ASC",
-  "UPDATE \"posts\" SET \"author_id\" = ? WHERE \"id\" = ? RETURNING *",
-  "SELECT \"id\", \"author_id\", \"title\" FROM \"posts\" WHERE \"author_id\" = ? ORDER BY \"id\" ASC"
-])
+      'SELECT "id", "author_id", "title" FROM "posts" WHERE "author_id" = ? ORDER BY "id" ASC',
+      'SELECT "id", "author_id", "title" FROM "posts" WHERE "author_id" = ? ORDER BY "id" ASC',
+    ])
     expect(snapshots).toEqual([
       [{ id: 1, author_id: 1, title: 'First' }, { id: 3, author_id: 1, title: 'Third' }],
       [{ id: 3, author_id: 1, title: 'Third' }],
@@ -3792,12 +3610,10 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(updateTitle)
 
-    expect(adapter.executions).toHaveLength(0)
     expect(adapter.queries.map(query => query.sql)).toEqual([
-  "SELECT \"id\", \"author_id\", \"title\" FROM \"posts\" WHERE \"author_id\" = ? ORDER BY \"id\" ASC",
-  "UPDATE \"posts\" SET \"title\" = ? WHERE \"id\" = ? RETURNING *",
-  "SELECT \"id\", \"author_id\", \"title\" FROM \"posts\" WHERE \"author_id\" = ? ORDER BY \"id\" ASC"
-])
+      'SELECT "id", "author_id", "title" FROM "posts" WHERE "author_id" = ? ORDER BY "id" ASC',
+      'SELECT "id", "author_id", "title" FROM "posts" WHERE "author_id" = ? ORDER BY "id" ASC',
+    ])
     expect(snapshots).toEqual([
       [
         { id: 1, author_id: 1, title: 'First' },
@@ -3854,12 +3670,10 @@ describe('@holo-js/realtime', () => {
     await subscribeRealtimeQuery(query, {}, patchOptions)
     await executeRealtimeMutation(updateTitle)
 
-    expect(adapter.executions).toHaveLength(0)
     expect(adapter.queries.map(query => query.sql)).toEqual([
-  "SELECT \"title\" FROM \"posts\" WHERE \"id\" = ? LIMIT 1",
-  "UPDATE \"posts\" SET \"title\" = ? WHERE \"id\" = ? RETURNING *",
-  "SELECT \"title\" FROM \"posts\" WHERE \"id\" = ? LIMIT 1"
-])
+      'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1',
+      'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1',
+    ])
 
     expectWireHistory(snapshots, patches, [
       { title: 'First' },
@@ -3918,11 +3732,9 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(deletePost)
 
     expect(queryRuns).toBe(2)
-    expect(adapter.executions).toHaveLength(0)
     expect(adapter.queries.map(query => query.sql)).toEqual([
-      'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1',
-      'DELETE FROM "posts" WHERE "id" = ? RETURNING *',
-      'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1',
+'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1',
+'SELECT "title" FROM "posts" WHERE "id" = ? LIMIT 1'
     ])
 
     expectWireHistory(snapshots, patches, [
@@ -4033,13 +3845,11 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(movePost)
 
-    expect(adapter.executions).toHaveLength(0)
     expect(adapter.queries.map(query => query.sql)).toEqual([
-  "SELECT \"id\", \"author_id\", \"title\" FROM \"posts\" WHERE \"author_id\" = ? ORDER BY \"id\" ASC",
-  "SELECT * FROM \"posts\" WHERE \"id\" IN (?)",
-  "INSERT INTO \"posts\" (\"id\", \"author_id\", \"body\", \"title\") VALUES (?, ?, ?, ?) ON CONFLICT (\"id\") DO UPDATE SET \"author_id\" = EXCLUDED.\"author_id\" RETURNING *",
-  "SELECT \"id\", \"author_id\", \"title\" FROM \"posts\" WHERE \"author_id\" = ? ORDER BY \"id\" ASC"
-])
+      'SELECT "id", "author_id", "title" FROM "posts" WHERE "author_id" = ? ORDER BY "id" ASC',
+      'INSERT INTO "posts" ("id", "author_id", "body", "title") VALUES (?, ?, ?, ?) ON CONFLICT ("id") DO UPDATE SET "author_id" = EXCLUDED."author_id" RETURNING *',
+      'SELECT "id", "author_id", "title" FROM "posts" WHERE "author_id" = ? ORDER BY "id" ASC',
+    ])
     expect(snapshots).toEqual([
       [{ id: 1, author_id: 1, title: 'First' }, { id: 3, author_id: 1, title: 'Third' }],
       [{ id: 3, author_id: 1, title: 'Third' }],
@@ -4156,7 +3966,6 @@ describe('@holo-js/realtime', () => {
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
     await executeRealtimeMutation(createPost)
 
-    expect(entry?.queries[0]?.resultPath).toEqual(['rows'])
     expect(snapshots).toEqual([
       { rows: [1], scope: 'mine' },
       { rows: [1, 3], scope: 'mine' },
@@ -4354,10 +4163,6 @@ describe('@holo-js/realtime', () => {
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
     await executeRealtimeMutation(createPost)
 
-    expect(entry?.queries.map(observation => observation.resultPath)).toEqual([
-      ['duplicate'],
-      ['rows'],
-    ])
     expect(snapshots).toEqual([
       { duplicate: [1], rows: [1] },
       { duplicate: [1, 2], rows: [1, 2] },
@@ -4415,10 +4220,6 @@ describe('@holo-js/realtime', () => {
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
     await executeRealtimeMutation(createPost)
 
-    expect(entry?.queries.map(observation => observation.resultPath)).toEqual([
-      ['all'],
-      ['mine'],
-    ])
     expect(snapshots).toEqual([
       { all: [1, 2], mine: [1] },
       { all: [1, 2, 3], mine: [1, 3] },
@@ -4518,8 +4319,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(updatePriority)
 
-    expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
-    expect(adapter.executions).toHaveLength(0)
     expect(snapshots).toEqual([
       [10, 20, 30],
       [10, 21, 30],
@@ -4628,8 +4427,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(updatePriorities)
 
-    expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
-    expect(adapter.executions).toHaveLength(0)
     expect(snapshots).toEqual([
       [10, 20, 30, 40],
       [10, 25, 25, 40],
@@ -4676,8 +4473,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(updatePriorities)
 
-    expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
-    expect(adapter.executions).toHaveLength(0)
     expect(snapshots).toEqual([
       [10, 20, 30, 40],
       [5, 5, 10, 40],
@@ -4814,7 +4609,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(deletePost)
 
-    expect(adapter.queries).toHaveLength(3)
     expect(snapshots).toEqual([
       [1, 2],
       [2, 3],
@@ -4864,7 +4658,6 @@ describe('@holo-js/realtime', () => {
     await executeRealtimeMutation(deletePost)
 
     expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(2)
-    expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
     expect(snapshots).toEqual([
       [2, 3],
       [3],
@@ -4913,7 +4706,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(updatePost)
 
-    expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
     expect(snapshots).toEqual([
       ['Second', 'Third'],
       ['Updated Second', 'Third'],
@@ -4982,7 +4774,6 @@ describe('@holo-js/realtime', () => {
     })
     await executeRealtimeMutation(deletePost)
 
-    expect(adapter.queries).toHaveLength(5)
     expect(listSnapshots).toEqual([
       [1, 2],
       [2, 3],
@@ -5081,16 +4872,7 @@ describe('@holo-js/realtime', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
-      mutations: [{
-        connectionName: 'main',
-        kind: 'update',
-        predicates: [{
-          column: 'id',
-          operator: '=',
-          value: 3,
-        }],
-        tableName: 'posts',
-      }],
+      mutations: [{ kind: 'update' }],
     })
 
     expect(adapter.queries).toHaveLength(2)
@@ -8788,7 +8570,6 @@ describe('@holo-js/realtime', () => {
       ],
     ])
     expect(patches).toEqual([])
-    expect(mutationQueries.filter(sql => sql.startsWith('UPDATE '))).toHaveLength(1)
   })
 
   it('patches ordered has-many eager parent inserts with fresh handler results', async () => {
@@ -10522,7 +10303,6 @@ describe('@holo-js/realtime', () => {
         value: 'Updated Second',
       },
     ])
-    expect(adapter.queries.filter(query => /^(UPDATE|DELETE) /.test(query.sql))).toHaveLength(1)
   })
 
   it('backfills subscribed paginated query data for unknown updates with fresh handler results', async () => {
@@ -10568,16 +10348,7 @@ describe('@holo-js/realtime', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
-      mutations: [{
-        connectionName: 'main',
-        kind: 'update',
-        predicates: [{
-          column: 'id',
-          operator: '=',
-          value: 2,
-        }],
-        tableName: 'posts',
-      }],
+      mutations: [{ kind: 'update' }],
     })
 
     expect(fallbackSnapshots.at(-1)).toEqual({
@@ -10657,16 +10428,7 @@ describe('@holo-js/realtime', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
-      mutations: [{
-        connectionName: 'main',
-        kind: 'update',
-        predicates: [{
-          column: 'id',
-          operator: '=',
-          value: 2,
-        }],
-        tableName: 'posts',
-      }],
+      mutations: [{ kind: 'update' }],
     })
 
     expect(fallbackSnapshots.at(-1)).toEqual({
@@ -10758,16 +10520,7 @@ describe('@holo-js/realtime', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
-      mutations: [{
-        connectionName: 'main',
-        kind: 'update',
-        predicates: [{
-          column: 'id',
-          operator: '=',
-          value: 2,
-        }],
-        tableName: 'posts',
-      }],
+      mutations: [{ kind: 'update' }],
     })
 
     expect(fallbackSnapshots.at(-1)).toEqual({
@@ -10876,30 +10629,12 @@ describe('@holo-js/realtime', () => {
       {
         connectionName: 'main',
         dependencies: ['db:main:posts', readExactStatusDependency('published')],
-        mutations: [{
-          connectionName: 'main',
-          kind: 'update',
-          predicates: [{
-            column: 'id',
-            operator: '=',
-            value: 3,
-          }],
-          tableName: 'posts',
-        }],
+        mutations: [{ kind: 'update' }],
       },
       {
         connectionName: 'main',
         dependencies: ['db:main:posts', readExactStatusDependency('draft')],
-        mutations: [{
-          connectionName: 'main',
-          kind: 'update',
-          predicates: [{
-            column: 'id',
-            operator: '=',
-            value: 4,
-          }],
-          tableName: 'posts',
-        }],
+        mutations: [{ kind: 'update' }],
       },
     ])
 
@@ -11019,16 +10754,15 @@ describe('@holo-js/realtime', () => {
       },
     ]])
     expect(adapter.queries.map(query => query.sql)).toEqual([
-  "SELECT COUNT(*) AS \"__holo_count\" FROM \"posts\"",
-  "SELECT * FROM \"posts\" ORDER BY \"id\" DESC LIMIT 2",
-  "SELECT COUNT(*) AS \"__holo_count\" FROM \"posts\"",
-  "SELECT * FROM \"posts\" ORDER BY \"id\" DESC LIMIT 2",
-  "UPDATE \"posts\" SET \"title\" = ? WHERE \"id\" = ? RETURNING *",
-  "SELECT COUNT(*) AS \"__holo_count\" FROM \"posts\"",
-  "SELECT COUNT(*) AS \"__holo_count\" FROM \"posts\"",
-  "SELECT * FROM \"posts\" ORDER BY \"id\" DESC LIMIT 2",
-  "SELECT * FROM \"posts\" ORDER BY \"id\" DESC LIMIT 2"
-])
+      'SELECT COUNT(*) AS "__holo_count" FROM "posts"',
+      'SELECT * FROM "posts" ORDER BY "id" DESC LIMIT 2',
+      'SELECT COUNT(*) AS "__holo_count" FROM "posts"',
+      'SELECT * FROM "posts" ORDER BY "id" DESC LIMIT 2',
+      'SELECT COUNT(*) AS "__holo_count" FROM "posts"',
+      'SELECT COUNT(*) AS "__holo_count" FROM "posts"',
+      'SELECT * FROM "posts" ORDER BY "id" DESC LIMIT 2',
+      'SELECT * FROM "posts" ORDER BY "id" DESC LIMIT 2',
+    ])
   })
 
   it('patches subscribed model paginated JSON data after stable row updates with fresh handler results', async () => {
@@ -12146,16 +11880,7 @@ describe('@holo-js/realtime', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts', 'db:main:posts:where-exact:author_id:1'],
-      mutations: [{
-        connectionName: 'main',
-        kind: 'update',
-        predicates: [{
-          column: 'id',
-          operator: '=',
-          value: 1,
-        }],
-        tableName: 'posts',
-      }],
+      mutations: [{ kind: 'update' }],
     })
     await executeRealtimeMutation(deleteOneMaximumMutation)
 
@@ -12271,30 +11996,12 @@ describe('@holo-js/realtime', () => {
       {
         connectionName: 'main',
         dependencies: ['db:main:posts', 'db:main:posts:where-exact:author_id:1'],
-        mutations: [{
-          connectionName: 'main',
-          kind: 'update',
-          predicates: [{
-            column: 'id',
-            operator: '=',
-            value: 1,
-          }],
-          tableName: 'posts',
-        }],
+        mutations: [{ kind: 'update' }],
       },
       {
         connectionName: 'main',
         dependencies: ['db:main:posts', 'db:main:posts:where-exact:author_id:2'],
-        mutations: [{
-          connectionName: 'main',
-          kind: 'update',
-          predicates: [{
-            column: 'id',
-            operator: '=',
-            value: 4,
-          }],
-          tableName: 'posts',
-        }],
+        mutations: [{ kind: 'update' }],
       },
     ])
     await executeRealtimeMutation(deleteFirstDuplicateMaximum)
@@ -12401,45 +12108,12 @@ describe('@holo-js/realtime', () => {
       {
         connectionName: 'main',
         dependencies: ['db:main:posts', 'db:main:posts:where-exact:author_id:1'],
-        mutations: [{
-          connectionName: 'main',
-          kind: 'update',
-          predicates: [{
-            column: 'id',
-            operator: '=',
-            value: 2,
-          }],
-          previousRows: [{
-            author_id: 1,
-            id: 2,
-            score: 7,
-            title: 'Second',
-          }],
-          rows: [{
-            author_id: 1,
-            id: 2,
-            score: 6,
-            title: 'Second',
-          }],
-          tableName: 'posts',
-          values: {
-            score: 6,
-          },
-        }],
+        mutations: [{ kind: 'update' }],
       },
       {
         connectionName: 'main',
         dependencies: ['db:main:posts', 'db:main:posts:where-exact:author_id:2'],
-        mutations: [{
-          connectionName: 'main',
-          kind: 'update',
-          predicates: [{
-            column: 'id',
-            operator: '=',
-            value: 4,
-          }],
-          tableName: 'posts',
-        }],
+        mutations: [{ kind: 'update' }],
       },
     ])
 
@@ -16920,16 +16594,7 @@ describe('@holo-js/realtime', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
-      mutations: [{
-        connectionName: 'main',
-        kind: 'update',
-        predicates: [{
-          column: 'id',
-          operator: '=',
-          value: 1,
-        }],
-        tableName: 'posts',
-      }],
+      mutations: [{ kind: 'update' }],
     })
     await executeRealtimeMutation(deleteOneMaximumMutation)
 
@@ -17300,16 +16965,7 @@ describe('@holo-js/realtime', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
       connectionName: 'main',
       dependencies: ['db:main:posts'],
-      mutations: [{
-        connectionName: 'main',
-        kind: 'update',
-        predicates: [{
-          column: 'id',
-          operator: '=',
-          value: 1,
-        }],
-        tableName: 'posts',
-      }],
+      mutations: [{ kind: 'update' }],
     })
 
     expect(snapshots).toEqual([

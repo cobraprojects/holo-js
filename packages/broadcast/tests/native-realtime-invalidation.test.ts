@@ -1,3 +1,4 @@
+import { hasDatabaseDependencyInvalidationPublisher, onDatabaseDependencyInvalidated } from '../../db/src/cache'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
@@ -241,7 +242,7 @@ it('does not refresh from its own write when the worker has an explicit node id 
     await sender.close()
   })
   const applied: unknown[] = []
-  onTestFinished(queryCacheInternals.onDatabaseDependencyInvalidated(event => { applied.push(event) }))
+  onTestFinished(onDatabaseDependencyInvalidated(event => { applied.push(event) }))
   await startScoresWorker(db, redisPort, { nodeId: 'worker-explicit' })
   const client = redis.clients[0]
   if (!client) throw new Error('No native Redis client available')
@@ -369,7 +370,7 @@ it('leaves no publisher registered and no Redis connection open when the worker 
     },
   })).rejects.toThrow()
 
-  expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(false)
+  expect(hasDatabaseDependencyInvalidationPublisher()).toBe(false)
   await expect.poll(connections).toBe(baseline)
   void db
 }, 30_000)
@@ -408,7 +409,7 @@ it('leaves no publisher registered and no Redis connection open when the Node we
     },
   })).rejects.toThrow('websocket server constructor failed')
 
-  expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(false)
+  expect(hasDatabaseDependencyInvalidationPublisher()).toBe(false)
   await expect.poll(connections).toBe(baseline)
   void db
 }, 30_000)
@@ -536,7 +537,7 @@ it('applies a write once in the process that made it, however many embedded work
   const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
   onTestFinished(unsubscribeSender)
   const applied: unknown[] = []
-  onTestFinished(queryCacheInternals.onDatabaseDependencyInvalidated(event => { applied.push(event) }))
+  onTestFinished(onDatabaseDependencyInvalidated(event => { applied.push(event) }))
   await startScoresWorker(db, redisPort, { nodeId: 'worker-a' })
   await startScoresWorker(db, redisPort, { nodeId: 'worker-b' })
 

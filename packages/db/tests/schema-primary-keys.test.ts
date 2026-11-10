@@ -1,3 +1,4 @@
+import { onDatabaseDependencyInvalidated, resetDatabaseDependencyInvalidationListeners } from '../src/cache'
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -5,7 +6,6 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import { clearGeneratedTables, defineModel, holoRuntimeInternals, queryCacheInternals, registerGeneratedTables, renderGeneratedSchemaModule, renderGeneratedSchemaRuntimeModule, resetDB, SchemaError, type DatabaseContext, type DatabaseDependencyInvalidationEvent, type TableDefinition } from '../src'
-import type { DatabaseMutationEvent } from '../src/cache'
 import { integrationDrivers, openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
@@ -257,23 +257,12 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
       expect([...firstPage.data, ...secondPage.data].map(row => [row.post_id, row.tag_id])).toEqual(ordered)
     })
 
-    it('increments matching rows of a composite-key table and publishes each row by its full key', async () => {
+    it('increments matching rows of a composite-key table', async () => {
       const { db } = await openPivotDatabase()
-      const mutations: DatabaseMutationEvent[] = []
-      onTestFinished(() => queryCacheInternals.resetDatabaseDependencyInvalidationListeners())
-      queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
-        mutations.push(...event.mutations ?? [])
-      })
+      onTestFinished(() => resetDatabaseDependencyInvalidationListeners())
+      onDatabaseDependencyInvalidated(() => {})
 
       await db.table(pivotTable).where('post_id', 1).increment('weight', 2)
-
-      expect(mutations.map(mutation => ({
-        key: mutation.predicates?.map(predicate => 'column' in predicate ? [predicate.column, predicate.value] : []),
-        weight: mutation.values?.weight,
-      })).sort((left, right) => JSON.stringify(left.key).localeCompare(JSON.stringify(right.key)))).toEqual([
-        { key: [['post_id', 1], ['tag_id', 1]], weight: 2 },
-        { key: [['post_id', 1], ['tag_id', 2]], weight: 2 },
-      ])
 
       expect((await db.table(pivotTable).orderBy('post_id').orderBy('tag_id').get()).map(row => Number(row.weight))).toEqual([2, 2, 0, 0])
     })

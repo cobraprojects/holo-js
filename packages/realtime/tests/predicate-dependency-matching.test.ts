@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   isQueryObservationContradictedByExactPredicates,
-  readExactPredicateValues,
 } from '../src/runtime/predicate-dependency-matching'
 import type { PredicateDependencyIndex } from '../src/runtime/dependencies'
 import type { DatabaseQueryObservation } from '../src/runtime/query-state'
@@ -10,8 +9,6 @@ function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): Databas
   return {
     connectionName: 'main',
     dependencies: ['db:main:posts'],
-    orderBy: [],
-    patchable: true,
     predicates: [],
     tableName: 'posts',
     ...overrides,
@@ -44,7 +41,6 @@ describe('@holo-js/realtime predicate dependency matching', () => {
     expect(isQueryObservationContradictedByExactPredicates(createQuery({
       predicates: [{ column: 'status', operator: '=', value: 1 }],
     }), exactPredicates)).toBe(false)
-    expect(readExactPredicateValues(exactPredicates, 'main', 'posts', 'status')).toBeUndefined()
   })
 
   it('detects contradicted exact predicate values and missing table metadata', () => {
@@ -75,26 +71,6 @@ describe('@holo-js/realtime predicate dependency matching', () => {
     }), exactPredicates)).toBe(false)
   })
 
-  it('reads exact predicate values when every dependency value is decodable', () => {
-    expect(readExactPredicateValues(
-      createExactPredicates('id', [
-        encodeDependencyValue(1),
-        encodeDependencyValue(2),
-      ]),
-      'main',
-      'posts',
-      'id',
-    )).toEqual([1, 2])
-    expect(readExactPredicateValues(
-      createExactPredicates('id', [
-        encodeDependencyValue(1),
-      ]),
-      'main',
-      'posts',
-      'missing',
-    )).toBeUndefined()
-  })
-
   it('matches BigInt predicates against exact dependency values by integer value', () => {
     const query = (value: bigint) => createQuery({ predicates: [{ column: 'n', operator: '=', value }] })
 
@@ -102,8 +78,5 @@ describe('@holo-js/realtime predicate dependency matching', () => {
     expect(isQueryObservationContradictedByExactPredicates(query(2n), createExactPredicates('n', ['1']))).toBe(true)
     expect(isQueryObservationContradictedByExactPredicates(query(9007199254740993n), createExactPredicates('n', ['9007199254740993']))).toBe(false)
     expect(isQueryObservationContradictedByExactPredicates(query(9007199254740992n), createExactPredicates('n', ['9007199254740993']))).toBe(false)
-    expect(readExactPredicateValues(createExactPredicates('n', ['9007199254740993']), 'main', 'posts', 'n')).toBeUndefined()
-    expect(readExactPredicateValues(createExactPredicates('n', [encodeURIComponent('[1,9007199254740993]')]), 'main', 'posts', 'n')).toBeUndefined()
-    expect(readExactPredicateValues(createExactPredicates('n', [encodeURIComponent('{"n":[9007199254740993]}')]), 'main', 'posts', 'n')).toBeUndefined()
   })
 })

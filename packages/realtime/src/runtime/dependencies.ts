@@ -1,29 +1,6 @@
-import { queryCacheInternals, type DatabaseDependencyInvalidationEvent } from '@holo-js/db'
-import {
-  type NO_EXACT_ID_PREDICATE,
-  readMutationExactIdPredicateValue,
-  readMutationFirstPredicate,
-  readMutationPredicateCount,
-  readMutationValueKeys,
-  type DatabaseQueryPredicateObservation,
-} from './predicate-matching'
-
+import type { DatabaseDependencyInvalidationEvent } from '@holo-js/db'
 export type DatabaseMutationEvent = {
-  readonly connectionName: string
-  readonly convertedColumns?: readonly string[]
-  readonly exactId?: unknown | typeof NO_EXACT_ID_PREDICATE
-  readonly firstPredicate?: DatabaseQueryPredicateObservation
   readonly kind: 'insert' | 'update' | 'delete' | 'upsert'
-  readonly predicateCount?: number
-  readonly predicates: readonly DatabaseQueryPredicateObservation[]
-  readonly previousRows?: readonly Readonly<Record<string, unknown>>[]
-  readonly primaryKey?: string
-  readonly publicationStartedAt?: number
-  readonly rows?: readonly Readonly<Record<string, unknown>>[]
-  readonly tableName: string
-  readonly unordered?: true
-  readonly values?: Readonly<Record<string, unknown>>
-  readonly valueKeys?: readonly string[]
 }
 
 export type DatabaseDependencyInvalidationEventWithMutations = DatabaseDependencyInvalidationEvent & {
@@ -47,9 +24,7 @@ export type DatabaseDependencyInvalidationMetadata = {
   readonly exactPredicates: readonly ParsedPredicateDependency[]
   readonly hasMutationDependency: boolean
   readonly predicates: readonly ParsedPredicateDependency[]
-  readonly publicationStartedAt?: number
   readonly tableDependencies: readonly string[]
-  readonly unordered?: true
 }
 
 export type DatabaseDependencyInvalidationEventWithMetadata = DatabaseDependencyInvalidationEvent & {
@@ -65,15 +40,11 @@ export type ParsedInvalidationEvent = {
   readonly directDependencies: readonly string[]
   readonly exactPredicates: PredicateDependencyIndex
   readonly hasMutationDependency: boolean
-  readonly mutations: readonly DatabaseMutationEvent[]
   readonly predicates: PredicateDependencyIndex
   readonly tableDependencies: readonly string[]
 }
 
-export type MutationIndex = Map<string, readonly DatabaseMutationEvent[]>
-
-export const EMPTY_DATABASE_MUTATIONS: readonly DatabaseMutationEvent[] = Object.freeze([])
-export const EMPTY_MUTATION_INDEX: MutationIndex = new Map()
+const EMPTY_DATABASE_MUTATIONS: readonly DatabaseMutationEvent[] = Object.freeze([])
 export const EMPTY_TABLE_DEPENDENCIES: readonly string[] = Object.freeze([])
 
 const DATABASE_DEPENDENCY_PREFIX = 'db:'
@@ -81,70 +52,6 @@ const DATABASE_DEPENDENCY_METADATA_KEY = '__holoDatabaseDependencyMetadata__'
 const MUTATION_DEPENDENCY_SUFFIX = 'mutation'
 const WHERE_DEPENDENCY_PREFIX = 'where:'
 const WHERE_EXACT_DEPENDENCY_PREFIX = 'where-exact:'
-
-export function createMutationIndexKey(connectionName: string, tableName: string): string {
-  return `${connectionName}:${queryCacheInternals.canonicalTableName(connectionName, tableName)}`
-}
-
-export function createMutationIndex(events: readonly ParsedInvalidationEvent[]): MutationIndex {
-  const mutations = new Map<string, DatabaseMutationEvent[]>()
-  for (const event of events) {
-    for (const mutation of event.mutations) {
-      const key = createMutationIndexKey(mutation.connectionName, mutation.tableName)
-      const indexedMutations = mutations.get(key)
-      if (indexedMutations) {
-        indexedMutations.push(mutation)
-        continue
-      }
-
-      mutations.set(key, [mutation])
-    }
-  }
-
-  if (mutations.size === 0) {
-    return EMPTY_MUTATION_INDEX
-  }
-
-  for (const indexedMutations of mutations.values()) {
-    Object.freeze(indexedMutations)
-  }
-
-  return mutations
-}
-
-export function createSingleEventMutationIndex(event: ParsedInvalidationEvent): MutationIndex {
-  const firstMutation = event.mutations[0]
-  if (!firstMutation) {
-    return EMPTY_MUTATION_INDEX
-  }
-
-  if (event.mutations.length === 1) {
-    return new Map([
-      [
-        createMutationIndexKey(firstMutation.connectionName, firstMutation.tableName),
-        Object.freeze([firstMutation]),
-      ],
-    ])
-  }
-
-  const mutations = new Map<string, DatabaseMutationEvent[]>()
-  for (const mutation of event.mutations) {
-    const key = createMutationIndexKey(mutation.connectionName, mutation.tableName)
-    const indexedMutations = mutations.get(key)
-    if (indexedMutations) {
-      indexedMutations.push(mutation)
-      continue
-    }
-
-    mutations.set(key, [mutation])
-  }
-
-  for (const indexedMutations of mutations.values()) {
-    Object.freeze(indexedMutations)
-  }
-
-  return mutations
-}
 
 export function parseDatabaseDependency(dependency: string): ParsedDatabaseDependency | undefined {
   if (!dependency.startsWith(DATABASE_DEPENDENCY_PREFIX)) {
@@ -334,34 +241,10 @@ export function readDatabaseDependencyInvalidationMetadata(
   return (event as DatabaseDependencyInvalidationEventWithMetadata)[DATABASE_DEPENDENCY_METADATA_KEY]
 }
 
-function bindMutationMetadata(
-  mutations: readonly DatabaseMutationEvent[],
-  metadata: DatabaseDependencyInvalidationMetadata | undefined,
-): readonly DatabaseMutationEvent[] {
-  if (mutations.length === 0) {
-    return EMPTY_DATABASE_MUTATIONS
-  }
-
-  const boundMutations: DatabaseMutationEvent[] = []
-  for (const mutation of mutations) {
-    boundMutations.push(Object.freeze({
-      ...mutation,
-      exactId: readMutationExactIdPredicateValue(mutation),
-      firstPredicate: readMutationFirstPredicate(mutation),
-      predicateCount: readMutationPredicateCount(mutation),
-      valueKeys: readMutationValueKeys(mutation),
-      ...(metadata?.publicationStartedAt === undefined ? {} : { publicationStartedAt: metadata.publicationStartedAt }),
-      ...(metadata?.unordered ? { unordered: true as const } : {}),
-    }))
-  }
-
-  return Object.freeze(boundMutations)
-}
-
 export function parseInvalidationEvent(event: DatabaseDependencyInvalidationEvent): ParsedInvalidationEvent {
   const eventWithMutations = event as DatabaseDependencyInvalidationEventWithMutations
   const metadata = readDatabaseDependencyInvalidationMetadata(event)
-  const mutations = bindMutationMetadata(eventWithMutations.mutations ?? EMPTY_DATABASE_MUTATIONS, metadata)
+  const mutations = eventWithMutations.mutations ?? EMPTY_DATABASE_MUTATIONS
   if (metadata) {
     const hasMutationDependency = metadata.hasMutationDependency || hasUpsertMutation(mutations)
     return {
@@ -370,7 +253,6 @@ export function parseInvalidationEvent(event: DatabaseDependencyInvalidationEven
       directDependencies: metadata.directDependencies,
       exactPredicates: createPredicateDependencyIndex(metadata.exactPredicates),
       hasMutationDependency,
-      mutations,
       predicates: createPredicateDependencyIndex(metadata.predicates),
       tableDependencies: metadata.tableDependencies,
     }
@@ -439,7 +321,6 @@ export function parseInvalidationEvent(event: DatabaseDependencyInvalidationEven
     directDependencies: Object.freeze(directDependencies),
     exactPredicates,
     hasMutationDependency: mutationDependencyFound,
-    mutations,
     predicates,
     tableDependencies: Object.freeze(tableDependencies),
   }

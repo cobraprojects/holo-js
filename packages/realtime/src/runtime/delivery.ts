@@ -4,9 +4,7 @@ import type {
   RealtimeResultFor,
   RealtimeSubscriptionSnapshot,
 } from '../contracts'
-import { updateQueryEntryObservedQueries } from './query-patching'
 import { createResultHash } from './result-hash'
-import { rebindBelongsToManyRelatedObservations, rebindBelongsToObservations, rebindRelatedHydrationObservations } from './query-hydration-observations'
 import {
   areDependencySetsEqual,
   arePredicateDependenciesEqual,
@@ -17,7 +15,6 @@ import {
 import { getRuntimeState } from './state'
 import type {
   ActiveQueryEntry,
-  InternalRealtimeExecutionResult,
   RealtimeSubscriptionPatch,
   RefreshDelivery,
 } from './state'
@@ -46,13 +43,7 @@ export async function deliverRefreshData<TDefinition extends RealtimeQueryDefini
       ensureRefreshDeliveryTableDependencies(delivery),
     )
   }
-  if (delivery.observedQueriesChanged !== false) {
-    updateQueryEntryObservedQueries(
-      entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
-      delivery.result.queries,
-      delivery.result.data,
-    )
-  }
+  entry.queries = [...delivery.result.queries]
 
   if (
     delivery.patchOperations?.length === 0
@@ -62,26 +53,14 @@ export async function deliverRefreshData<TDefinition extends RealtimeQueryDefini
     const currentHash = createResultHash(entry.current.data)
     if (currentHash === createResultHash(delivery.result.data)) {
       entry.resultHash = currentHash
-      entry.resultHashDirty = false
       return
     }
   }
 
-  if (delivery.resultHashDirty === true) {
-    entry.resultHashDirty = true
-  } else if (delivery.resultHash) {
-    const currentHash = entry.resultHashDirty && entry.current
-      ? createResultHash(entry.current.data)
-      : entry.resultHash
-    if (currentHash === delivery.resultHash && !dependenciesChanged) {
-      entry.resultHash = delivery.resultHash
-      entry.resultHashDirty = false
-      return
-    }
-
-    entry.resultHash = delivery.resultHash
-    entry.resultHashDirty = false
+  if (delivery.resultHash === entry.resultHash && !dependenciesChanged) {
+    return
   }
+  entry.resultHash = delivery.resultHash
 
   entry.version += 1
   entry.current = Object.freeze({
@@ -117,35 +96,6 @@ export async function deliverRefreshError(
   } catch (handlerError) {
     reportError(handlerError, { capability: 'realtime', operation: 'subscription.onError' })
   }
-}
-
-export async function deliverPatchedQueryData(
-  entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
-  data: unknown,
-  queries: InternalRealtimeExecutionResult<RealtimeResultFor<typeof entry.definition>>['queries'],
-  patchOperations: NonNullable<RefreshDelivery<typeof entry.definition>['patchOperations']>,
-): Promise<void> {
-  const reboundQueries = rebindBelongsToManyRelatedObservations(rebindRelatedHydrationObservations(rebindBelongsToObservations(queries, data), data), data)
-  let dependencies = entry.dependencies
-  if (reboundQueries !== queries) {
-    const previousQueryDependencies = new Set(entry.queries.flatMap(query => query.dependencies))
-    dependencies = Object.freeze([...new Set([
-      ...entry.dependencies.filter(dependency => !previousQueryDependencies.has(dependency)),
-      ...reboundQueries.flatMap(query => query.dependencies),
-    ])])
-  }
-  const result = Object.freeze({
-    name: entry.definition.name,
-    data: data as RealtimeResultFor<typeof entry.definition>,
-    dependencies,
-    queries: reboundQueries,
-  }) satisfies InternalRealtimeExecutionResult<RealtimeResultFor<typeof entry.definition>>
-  await deliverRefreshData(entry, {
-    observedQueriesChanged: reboundQueries !== queries,
-    patchOperations,
-    result,
-    resultHashDirty: true,
-  })
 }
 
 async function deliverQueryEntryData<TDefinition extends RealtimeQueryDefinitionMetadata>(

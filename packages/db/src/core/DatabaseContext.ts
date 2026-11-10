@@ -17,6 +17,7 @@ import { createCapabilities } from './capabilities'
 import { markGenuineDatabaseContext } from './genuineContexts'
 import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
+import { runAfterCommitCallbacks } from './afterCommitPublications'
 import { advanceSchemaGeneration, beginSchemaChange, endSchemaChange, markSessionUncertain, resetSessionUncertainty } from './schemaGeneration'
 import { isSchemaPreservingRawStatement } from './rawStatementEffects'
 import { currentRootTransaction, runInRootTransaction, type TransactionFrame } from './openTransactions'
@@ -832,9 +833,7 @@ export class DatabaseContext {
     }
 
     const callbackConnection = this._createCallbackConnection()
-    for (let callback = callbacks.shift(); callback; callback = callbacks.shift()) {
-      await this._runCallbackOn(callbackConnection, callback)
-    }
+    await this._runCallbackOn(callbackConnection, () => runAfterCommitCallbacks(callbacks.splice(0)))
   }
 
   private async _runAfterRollbackCallbacks(callbackConnection: DatabaseContext): Promise<void> {

@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import {
   clearGeneratedTables,
+  column,
+  defineGeneratedTable,
   defineModel,
   holoRuntimeInternals,
   registerGeneratedTables,
@@ -53,6 +55,46 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
   describe(`${driver} casts over the Generated schema`, () => {
     const castTable = `cast_types_${driver}`
     const legacyTable = `cast_types_legacy_${driver}`
+
+    it('applies a custom get cast exactly once per plucked row', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `plucked_casts_${driver}`
+      await schema.createTable(name, (table) => {
+        table.id()
+        table.string('body')
+      })
+      onTestFinished(() => schema.dropTable(name))
+      const notes = defineGeneratedTable(name, { id: column.id(), body: column.string() })
+      await db.table(notes).insert([{ id: 1, body: 'a' }, { id: 2, body: 'b' }])
+      let reads = 0
+      const Note = defineModel(notes, { timestamps: false, casts: { body: { get: (value) => {
+        reads += 1
+        return `cast:${String(value)}`
+      } } } })
+
+      expect(await db.model(Note).query().orderBy('id').pluck('body')).toEqual(['cast:a', 'cast:b'])
+      expect(reads).toBe(2)
+    })
+
+    it('reads JSON using the bound connection when the same model is used on different databases', async () => {
+      const sqlite = await openDatabase('sqlite')
+      const target = await openDatabase(driver)
+      const name = `bound_json_${driver}`
+      const notes = defineGeneratedTable(name, { id: column.id(), settings: column.json<string>() })
+      for (const { db, schema } of [sqlite, target]) {
+        await schema.createTable(name, (table) => {
+          table.id()
+          table.json('settings')
+        })
+        onTestFinished(() => schema.dropTable(name))
+        await db.table(notes).insert({ id: 1, settings: JSON.stringify('{"x":1}') })
+      }
+      const Note = defineModel(notes, { timestamps: false })
+
+      for (const { db } of [sqlite, target, sqlite]) {
+        expect((await db.model(Note).query().firstOrFail()).get('settings')).toBe('{"x":1}')
+      }
+    })
 
     async function openCastDatabase() {
       const { db, schema } = await openDatabase(driver)

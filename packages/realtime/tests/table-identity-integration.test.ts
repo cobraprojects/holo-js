@@ -2,7 +2,7 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, openDatabase, tableSpellings } from '../../db/tests/support/database'
 import { resolveTableIdentity } from '../../db/src/query/tableIdentity'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
-import { isQueryObservationContradictedByExactPredicates, readExactPredicateValues } from '../src/runtime/predicate-dependency-matching'
+import { isQueryObservationContradictedByExactPredicates } from '../src/runtime/predicate-dependency-matching'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 import type { TestDriver as Driver } from '../../../tests/support/real-database'
 
@@ -58,14 +58,13 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
 }
 
 describe('sqlite realtime predicate dependencies by table identity', () => {
-  it('reads the exact predicate dependencies of a qualified subscription from its canonical table key', async () => {
+  it('contradicts a qualified subscription by the exact predicate dependencies of its canonical table key', async () => {
     const { db, table } = await openDatabase('sqlite')
     const { bare, qualified } = tableSpellings('sqlite', table.tableName)
     await resolveTableIdentity(db, qualified)
     const exactPredicates = new Map([[`db:default:${bare}`, new Map([['id', new Set([encodeURIComponent('1')])]])]])
     const subscription = { connectionName: 'default', dependencies: [], orderBy: [], patchable: true, predicates: [{ column: 'id', operator: '=' as const, value: 2 }], tableName: qualified }
 
-    expect(readExactPredicateValues(exactPredicates, 'default', qualified, 'id')).toEqual([1])
     expect(isQueryObservationContradictedByExactPredicates(subscription, exactPredicates)).toBe(true)
   })
 })

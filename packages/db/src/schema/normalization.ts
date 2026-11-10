@@ -211,7 +211,6 @@ function postgresZonedText(parsed: ParsedInstant): string {
   return withPreciseFraction(formatWithOffset(parsed.instant, getApplicationTimezone()), parsed.fraction)
 }
 
-
 function parseInstant(value: unknown): ParsedInstant | undefined {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? undefined : { instant: value, fraction: undefined }
@@ -389,18 +388,8 @@ export function readsAsSQLiteDecimal(dialect: SchemaDialectName, column: AnyColu
   return dialect === 'sqlite' && column.kind === 'decimal'
 }
 
-export function isStoredBoolean(value: unknown): boolean {
-  return value === 0 || value === 1 || value === 0n || value === 1n || value === '0' || value === '1'
-}
-
 export function readsAsCoercedBoolean(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
   return dialect !== 'postgres' && column.kind === 'boolean'
-}
-
-const MODEL_CONVERTED_KINDS: ReadonlySet<string> = new Set(['json', 'date', 'datetime', 'timestamp', 'vector'])
-
-export function isConvertedByModelReads(column: AnyColumnDefinition): boolean {
-  return MODEL_CONVERTED_KINDS.has(column.kind)
 }
 
 export function normalizeDialectReadValue(

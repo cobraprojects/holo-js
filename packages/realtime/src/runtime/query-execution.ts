@@ -26,7 +26,6 @@ import {
   resolveArgs,
   runWithExecutionOptions,
 } from './execution'
-import { bindQueryObservationsToSerializedValue } from './result-bindings'
 import { createResultHash } from './result-hash'
 import {
   getRuntimeState,
@@ -34,9 +33,24 @@ import {
   type InitialQueryResult,
   type InternalRealtimeExecutionResult,
 } from './state'
+import type { DatabaseQueryObservation } from './query-state'
 
 export function getRealtimeDatabaseContext(): RealtimeDatabaseContext {
   return createRuntimeDatabaseContext(getRuntimeState().bindings)
+}
+
+function projectDatabaseQueryObservation(query: DatabaseQueryObservation): DatabaseQueryObservation {
+  return Object.freeze({
+    connectionName: query.connectionName,
+    dependencies: query.dependencies,
+    predicates: Object.freeze(query.predicates.map(predicate => Object.freeze({
+      column: predicate.column,
+      operator: predicate.operator,
+      value: predicate.value,
+    }))),
+    primaryKey: query.primaryKey,
+    tableName: query.tableName,
+  })
 }
 
 export async function executeRealtimeQueryInternal<TDefinition extends RealtimeQueryDefinitionMetadata>(
@@ -60,17 +74,11 @@ export async function executeRealtimeQueryInternal<TDefinition extends RealtimeQ
     }) as DatabaseDependencyCollectionWithQueries<unknown>
 
     const data = serializeModels(result.value) as RealtimeResultFor<TDefinition>
-    const queries = bindQueryObservationsToSerializedValue(
-      result.queries,
-      result.value,
-      data,
-    )
-
     return Object.freeze({
       name: definition.name,
       data,
       dependencies: result.dependencies,
-      queries,
+      queries: Object.freeze(result.queries.map(projectDatabaseQueryObservation)),
       contexts: result.contexts,
     })
   })

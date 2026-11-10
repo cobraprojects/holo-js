@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import v8 from 'node:v8'
+import vm from 'node:vm'
 import { clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, hasMany, hasManyThrough, resetDB, resetDatabaseDependencyInvalidationListeners, type DriverAdapter } from '@holo-js/db'
 import { createMySQLAdapter } from '../../db-mysql/src'
 import { createPostgresAdapter } from '../../db-postgres/src'
@@ -186,6 +188,52 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a h
     expect(subscription.current.data).toEqual(await transform(db))
     await mutate(db => db.table(tableName).insert({ id: 1, title: 'Again', subtitle: 'Sub' }))
     expect(subscription.current.data).toEqual(await transform(db))
+  })
+
+  it('re-runs an unbound count handler exactly once for a contradicted delete, and stays equal to a fresh run', async () => {
+    const { db, tableName } = await createPosts(driver)
+    let handlerRuns = 0
+    const handler = async () => {
+      handlerRuns += 1
+      return (await db.table(tableName).where('id', '>', 2).count()) * 2
+    }
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+      onData: () => {},
+      onError: (error) => { throw error },
+    })
+    const mutateOnce = async (mutation: (db: Database) => Promise<unknown>) => {
+      const before = handlerRuns
+      await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => mutation(db) }))
+      expect(handlerRuns - before).toBe(1)
+    }
+
+    await mutateOnce(db => db.table(tableName).insert({ id: 3, title: 'Third' }))
+    expect(subscription.current.data).toBe(2)
+    await mutateOnce(db => db.table(tableName).where('id', 1).delete())
+    expect(subscription.current.data).toBe(2)
+
+    expect(subscription.current.data).toEqual(await handler())
+  })
+
+  it('leaves an unbound count handler unrun for a contradicted insert, which exact invalidation rules out as on main, and stays equal to a fresh run', async () => {
+    const { db, tableName } = await createPosts(driver)
+    let handlerRuns = 0
+    const handler = async () => {
+      handlerRuns += 1
+      return (await db.table(tableName).where('id', '>', 2).count()) * 2
+    }
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+      onData: () => {},
+      onError: (error) => { throw error },
+    })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(tableName).insert({ id: 3, title: 'Third' }) }))
+    expect(handlerRuns).toBe(2)
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(tableName).insert({ id: 0, title: 'Zero' }) }))
+    expect(handlerRuns).toBe(2)
+    expect(subscription.current.data).toBe(2)
+
+    expect(subscription.current.data).toEqual(await handler())
   })
 })
 
@@ -399,3 +447,67 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a h
     await expectFresh()
   })
 })
+
+describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('an unbound count with an update outside its predicates on %s', (driver) => {
+  it('re-runs an unbound count handler exactly once for a contradicted update of other columns, and stays equal to a fresh run', async () => {
+    const { db, tableName } = await createPosts(driver)
+    let handlerRuns = 0
+    const handler = async () => {
+      handlerRuns += 1
+      return (await db.table(tableName).where('id', '>', 2).count()) * 2
+    }
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+      onData: () => {},
+      onError: (error) => { throw error },
+    })
+    const mutateOnce = async (mutation: (db: Database) => Promise<unknown>) => {
+      const before = handlerRuns
+      await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => mutation(db) }))
+      expect(handlerRuns - before).toBe(1)
+    }
+
+    await mutateOnce(db => db.table(tableName).insert({ id: 3, title: 'Third' }))
+    expect(subscription.current.data).toBe(2)
+    await mutateOnce(db => db.table(tableName).where('id', 1).update({ title: 'Renamed' }))
+    expect(subscription.current.data).toBe(2)
+
+    expect(subscription.current.data).toEqual(await handler())
+  })
+})
+
+function collectGarbage(): () => void {
+  v8.setFlagsFromString('--expose_gc')
+  return vm.runInNewContext('gc') as () => void
+}
+
+describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('an active subscription on %s', (driver) => {
+  it('keeps no reference to the rows its query read once the handler has returned', async () => {
+    const { db, tableName } = await createPosts(driver)
+    const rowRefs: WeakRef<object>[] = []
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({
+      access: 'public',
+      handler: async () => {
+        const posts = await db.table(tableName).select('id', 'title').orderBy('id').get() as Post[]
+        for (const post of posts) rowRefs.push(new WeakRef(post))
+        return posts.length
+      },
+    }), {}, {
+      onData: () => {},
+      onError: (error) => { throw error },
+    })
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: ({ db }) => db.table(tableName).insert({ id: 3, title: 'Third' }),
+    }))
+    expect(subscription.current.data).toBe(3)
+    expect(rowRefs.length).toBeGreaterThan(0)
+
+    const gc = collectGarbage()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await new Promise(resolve => setImmediate(resolve))
+      gc()
+    }
+    expect(rowRefs.filter(reference => reference.deref() !== undefined)).toEqual([])
+  })
+})
+

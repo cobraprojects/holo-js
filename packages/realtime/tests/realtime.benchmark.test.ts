@@ -1,6 +1,7 @@
+import { hasDatabaseDependencyInvalidationListeners } from '../../db/src/cache'
 import { applyWireSnapshotPatch } from '../src/client/patching'
 import { isRecord } from '../src/runtime/value'
-import { expectEquivalentWireOperations } from './helpers/native-fixture'
+import { createNativeRelationalAdapter, expectEquivalentWireOperations } from './helpers/native-fixture'
 import { performance } from 'node:perf_hooks'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -11,6 +12,7 @@ import {
   createCapabilities,
   createConnectionManager,
   createDatabase,
+  createDialect,
   defineGeneratedTable,
   defineModel,
   hasMany,
@@ -50,12 +52,8 @@ import {
   subscribeRealtimeQuery,
 } from '../src/server'
 import {
-  compactPatchOperations,
   createSplicePatchOperation,
 } from '../src/runtime/patch-operations'
-import { collectRelevantMutationTargets } from '../src/runtime/query-relevant-mutations'
-import type { DatabaseMutationEvent as RuntimeDatabaseMutationEvent } from '../src/runtime/dependencies'
-import type { BackfillCache, QueryPatchTarget } from '../src/runtime/query-state'
 
 type BenchmarkMetrics = {
   readonly durationMs: number
@@ -884,14 +882,7 @@ function createAuthorInsertInvalidation(row: BenchmarkAuthorRow): BenchmarkPatch
   return {
     connectionName,
     dependencies: [authorTableDependency()],
-    mutations: [{
-      connectionName,
-      kind: 'insert',
-      predicates: [],
-      rows: [row],
-      tableName: 'authors',
-      values: row,
-    }],
+    mutations: [{ kind: 'insert' }],
   }
 }
 
@@ -1000,13 +991,13 @@ function createAggregatePatchBenchmarkRows(): BenchmarkPostRow[] {
   }))
 }
 
-function createRelationAggregateBenchmarkTables(): { authors: BenchmarkAuthorRow[], posts: BenchmarkPostRow[] } {
+function createRelationAggregateBenchmarkTables(rowCount = patchRowCount): { authors: BenchmarkAuthorRow[], posts: BenchmarkPostRow[] } {
   return {
-    authors: Array.from({ length: patchRowCount }, (_, index) => ({
+    authors: Array.from({ length: rowCount }, (_, index) => ({
       id: index + 1,
       name: `Author ${index + 1}`,
     })),
-    posts: Array.from({ length: patchRowCount }, (_, index) => ({
+    posts: Array.from({ length: rowCount }, (_, index) => ({
       author_id: index + 1,
       id: index + 1,
       score: 10_000 + index + 1,
@@ -1041,87 +1032,24 @@ function createDuplicateRelationExtremeBenchmarkTables(): {
   }
 }
 
-function createBenchmarkRelationAggregatePatchTarget(authorId: number, index: number): QueryPatchTarget {
-  return Object.freeze({
-    currentValue: 10_000 + authorId,
-    index,
-    mutationIndexKey: `${connectionName}:${tableName}`,
-    patchCapability: 'patchable',
-    query: Object.freeze({
-      aggregate: Object.freeze({
-        column: 'score',
-        kind: 'max',
-      }),
-      connectionName,
-      dependencies: [],
-      orderBy: [],
-      patchable: true,
-      predicates: [Object.freeze({
-        column: 'author_id',
-        operator: '=',
-        value: authorId,
-      })],
-      tableName,
-    }),
-    resultPath: Object.freeze(['data', index, 'posts_max_score']),
-    resultPathKey: `data.${index}.posts_max_score`,
-    skipsPatching: false,
-  })
-}
-
-function createRuntimeRelationAggregateUpsertMutation(
-  authorId: number,
-  id: number,
-  previousScore: number,
-  score: number,
-): RuntimeDatabaseMutationEvent {
-  return Object.freeze({
-    connectionName,
-    kind: 'upsert',
-    predicates: [],
-    previousRows: [Object.freeze({
-      author_id: authorId,
-      id,
-      score: previousScore,
-      title: `Post ${id}`,
-      user_id: 1,
-    })],
-    rows: [Object.freeze({
-      author_id: authorId,
-      id,
-      score,
-      title: `Post ${id}`,
-      user_id: 1,
-    })],
-    tableName,
-    values: Object.freeze({
-      author_id: authorId,
-      id,
-      score,
-      title: `Post ${id}`,
-      user_id: 1,
-    }),
-  })
-}
-
-function createBelongsToManyBenchmarkTables(): {
+function createBelongsToManyBenchmarkTables(rowCount = patchRowCount): {
   post_tags: BenchmarkPostTagRow[]
   posts: BenchmarkPostRow[]
   tags: BenchmarkTagRow[]
 } {
   return {
-    posts: Array.from({ length: patchRowCount }, (_, index) => ({
+    posts: Array.from({ length: rowCount }, (_, index) => ({
       id: index + 1,
       title: `Post ${index + 1}`,
       user_id: 1,
     })),
-    post_tags: Array.from({ length: patchRowCount }, (_, index) => ({
+    post_tags: Array.from({ length: rowCount }, (_, index) => ({
       id: index + 1,
       postId: index + 1,
       tagId: index + 1,
       weight: index + 1,
     })),
-    tags: Array.from({ length: patchRowCount }, (_, index) => ({
+    tags: Array.from({ length: rowCount }, (_, index) => ({
       id: index + 1,
       name: `Tag ${index + 1}`,
     })),
@@ -1216,25 +1144,7 @@ function createPatchUpdateInvalidation(row: BenchmarkPostRow, previousTitle: str
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: previousTitle,
-        user_id: row.user_id,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        title: row.title,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1245,21 +1155,7 @@ function createPatchScoreUpdateInvalidation(
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: {
-        score: row.score,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1267,20 +1163,7 @@ function createPatchTitleOnlyReturningUpdateInvalidation(row: BenchmarkPostRow):
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        title: row.title,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1288,16 +1171,7 @@ function createPatchUnknownUpdateInvalidation(row: BenchmarkPostRow): BenchmarkP
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      tableName,
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1305,12 +1179,7 @@ function createPatchUnknownInsertInvalidation(userId: number): BenchmarkPatchInv
   return {
     connectionName,
     dependencies: createInvalidationDependencies(userId),
-    mutations: [{
-      connectionName,
-      kind: 'insert',
-      predicates: [],
-      tableName,
-    }],
+    mutations: [{ kind: 'insert' }],
   }
 }
 
@@ -1318,26 +1187,7 @@ function createPatchMoveInvalidation(row: BenchmarkPostRow, previousPriority: nu
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        priority: previousPriority,
-        title: row.title,
-        user_id: row.user_id,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        priority: row.priority,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1354,24 +1204,7 @@ function createPatchPredicateOnlyUserUpdateInvalidation(
       exactUserPredicateDependency(previousUserId),
       exactUserPredicateDependency(row.user_id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: row.title,
-        user_id: previousUserId,
-      }],
-      tableName,
-      values: {
-        user_id: row.user_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1388,25 +1221,7 @@ function createPatchPredicateOnlyPriorityUserUpdateInvalidation(
       exactUserPredicateDependency(previousUserId),
       exactUserPredicateDependency(row.user_id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        priority: row.priority,
-        title: row.title,
-        user_id: previousUserId,
-      }],
-      tableName,
-      values: {
-        user_id: row.user_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1417,29 +1232,7 @@ function createWidePatchUpdateInvalidation(
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: {
-        field_1: row.field_1,
-        field_2: row.field_2,
-        field_3: row.field_3,
-        field_4: row.field_4,
-        field_5: row.field_5,
-        field_6: row.field_6,
-        field_7: row.field_7,
-        field_8: row.field_8,
-        field_9: row.field_9,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1476,14 +1269,7 @@ function createPatchInsertInvalidation(row: BenchmarkPostRow): BenchmarkPatchInv
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'insert',
-      predicates: [],
-      rows: [row],
-      tableName,
-      values: row,
-    }],
+    mutations: [{ kind: 'insert' }],
   }
 }
 
@@ -1494,15 +1280,7 @@ function createPatchUpsertInvalidation(
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'upsert',
-      predicates: [],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: row,
-    }],
+    mutations: [{ kind: 'upsert' }],
   }
 }
 
@@ -1514,15 +1292,7 @@ function createPatchMultiUpsertInvalidation(
   return {
     connectionName,
     dependencies: createInvalidationDependencies(firstRow?.user_id ?? 1),
-    mutations: [{
-      connectionName,
-      kind: 'upsert',
-      predicates: [],
-      previousRows,
-      rows,
-      tableName,
-      values: undefined,
-    }],
+    mutations: [{ kind: 'upsert' }],
   }
 }
 
@@ -1530,14 +1300,7 @@ function createRelationAggregateInsertInvalidation(row: BenchmarkPostRow & { rea
   return {
     connectionName,
     dependencies: createRelationAggregateInvalidationDependencies(row.author_id),
-    mutations: [{
-      connectionName,
-      kind: 'insert',
-      predicates: [],
-      rows: [row],
-      tableName,
-      values: row,
-    }],
+    mutations: [{ kind: 'insert' }],
   }
 }
 
@@ -1545,17 +1308,7 @@ function createRelationAggregateDeleteInvalidation(row: BenchmarkPostRow & { rea
   return {
     connectionName,
     dependencies: createRelationAggregateInvalidationDependencies(row.author_id),
-    mutations: [{
-      connectionName,
-      kind: 'delete',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      rows: [row],
-      tableName,
-    }],
+    mutations: [{ kind: 'delete' }],
   }
 }
 
@@ -1566,27 +1319,7 @@ function createRelationUpdateInvalidation(
   return {
     connectionName,
     dependencies: createRelationAggregateInvalidationDependencies(row.author_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        author_id: row.author_id,
-        id: row.id,
-        score: row.score,
-        title: previousTitle,
-        user_id: row.user_id,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        title: row.title,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1597,21 +1330,7 @@ function createRelationAggregateScoreUpdateInvalidation(
   return {
     connectionName,
     dependencies: createRelationAggregateInvalidationDependencies(row.author_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: {
-        score: row.score,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1621,16 +1340,7 @@ function createRelationAggregateUnknownUpdateInvalidation(
   return {
     connectionName,
     dependencies: createRelationAggregateInvalidationDependencies(row.author_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      tableName,
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1641,15 +1351,7 @@ function createRelationAggregateUpsertInvalidation(
   return {
     connectionName,
     dependencies: createRelationAggregateInvalidationDependencies(row.author_id),
-    mutations: [{
-      connectionName,
-      kind: 'upsert',
-      predicates: [],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: row,
-    }],
+    mutations: [{ kind: 'upsert' }],
   }
 }
 
@@ -1666,21 +1368,7 @@ function createRelationParentKeyMoveInvalidation(
       authorPredicateDependency(row.author_id),
       exactAuthorPredicateDependency(row.author_id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: {
-        author_id: row.author_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1691,21 +1379,7 @@ function createBelongsToParentKeyUpdateInvalidation(
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: {
-        author_id: row.author_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1716,21 +1390,7 @@ function createNullableBelongsToParentKeyUpdateInvalidation(
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [previousRow],
-      rows: [row],
-      tableName,
-      values: {
-        author_id: row.author_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1738,24 +1398,7 @@ function createAuthorUpdateInvalidation(row: BenchmarkAuthorRow, previousName: s
   return {
     connectionName,
     dependencies: createAuthorInvalidationDependencies(row.id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        name: previousName,
-      }],
-      rows: [row],
-      tableName: 'authors',
-      values: {
-        name: row.name,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1763,20 +1406,7 @@ function createAuthorHiddenUpdateInvalidation(row: BenchmarkAuthorRow): Benchmar
   return {
     connectionName,
     dependencies: createAuthorInvalidationDependencies(row.id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      rows: [row],
-      tableName: 'authors',
-      values: {
-        internal: 'new',
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1787,14 +1417,7 @@ function createBelongsToManyAttachInvalidation(row: BenchmarkPostTagRow): Benchm
       pivotTableDependency(),
       pivotPostPredicateDependency(row.postId),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'insert',
-      predicates: [],
-      rows: [row],
-      tableName: 'post_tags',
-      values: row,
-    }],
+    mutations: [{ kind: 'insert' }],
   }
 }
 
@@ -1805,24 +1428,7 @@ function createBelongsToManyPivotUpdateInvalidation(row: BenchmarkPostTagRow, pr
       pivotTableDependency(),
       pivotPostPredicateDependency(row.postId),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        ...row,
-        weight: previousWeight,
-      }],
-      rows: [row],
-      tableName: 'post_tags',
-      values: {
-        weight: row.weight,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1833,24 +1439,7 @@ function createBelongsToManyRelatedUpdateInvalidation(row: BenchmarkTagRow, prev
       tagTableDependency(),
       tagPredicateDependency(row.id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        name: previousName,
-      }],
-      rows: [row],
-      tableName: 'tags',
-      values: {
-        name: row.name,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1861,17 +1450,7 @@ function createBelongsToManyRelatedDeleteInvalidation(row: BenchmarkTagRow): Ben
       tagTableDependency(),
       tagPredicateDependency(row.id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'delete',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      rows: [row],
-      tableName: 'tags',
-    }],
+    mutations: [{ kind: 'delete' }],
   }
 }
 
@@ -1882,17 +1461,7 @@ function createBelongsToManyDetachInvalidation(row: BenchmarkPostTagRow): Benchm
       pivotTableDependency(),
       pivotPostPredicateDependency(row.postId),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'delete',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      rows: [row],
-      tableName: 'post_tags',
-    }],
+    mutations: [{ kind: 'delete' }],
   }
 }
 
@@ -1904,17 +1473,7 @@ function createPatchDeleteInvalidation(row: BenchmarkPostRow): BenchmarkPatchInv
       exactIdPredicateDependency(row.id),
       idRowDependency(row.id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'delete',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      rows: [row],
-      tableName,
-    }],
+    mutations: [{ kind: 'delete' }],
   }
 }
 
@@ -1925,25 +1484,7 @@ function createPatchUpdateIdInvalidation(row: BenchmarkPostRow, previousTitle: s
       tableDependency(),
       idRowDependency(row.id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: previousTitle,
-        user_id: row.user_id,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        title: row.title,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1954,28 +1495,7 @@ function createPatchPartialRowValueInvalidation(row: BenchmarkPostRow, previousT
       tableDependency(),
       idRowDependency(row.id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: previousTitle,
-        user_id: row.user_id,
-      }],
-      rows: [{
-        id: row.id,
-        user_id: row.user_id,
-      }],
-      tableName,
-      values: {
-        title: row.title,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -1983,24 +1503,7 @@ function createPatchPreviousRowValueInvalidation(row: BenchmarkPostRow, previous
   return {
     connectionName,
     dependencies: createInvalidationDependencies(row.user_id),
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: previousTitle,
-        user_id: row.user_id,
-      }],
-      tableName,
-      values: {
-        title: row.title,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -2019,26 +1522,7 @@ function createPatchMoveUserValueInvalidation(
       exactUserPredicateDependency(previousUserId),
       exactUserPredicateDependency(row.user_id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: previousTitle,
-        user_id: previousUserId,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        title: row.title,
-        user_id: row.user_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -2057,24 +1541,7 @@ function createPatchMoveUserPredicateOnlyValueInvalidation(
       exactUserPredicateDependency(previousUserId),
       exactUserPredicateDependency(row.user_id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        title: previousTitle,
-        user_id: previousUserId,
-      }],
-      tableName,
-      values: {
-        user_id: row.user_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -2092,26 +1559,7 @@ function createPatchMoveAggregateUserValueInvalidation(
       exactUserPredicateDependency(previousUserId),
       exactUserPredicateDependency(row.user_id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [{
-        id: row.id,
-        score: row.score,
-        title: row.title,
-        user_id: previousUserId,
-      }],
-      rows: [row],
-      tableName,
-      values: {
-        user_id: row.user_id,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -2122,24 +1570,7 @@ function createPatchIrrelevantScalarUpdateInvalidation(row: BenchmarkPostRow): B
       tableDependency(),
       idRowDependency(row.id),
     ],
-    mutations: [{
-      connectionName,
-      kind: 'update',
-      predicates: [{
-        column: 'id',
-        operator: '=',
-        value: row.id,
-      }],
-      previousRows: [row],
-      rows: [{
-        ...row,
-        archived: true,
-      }],
-      tableName,
-      values: {
-        archived: true,
-      },
-    }],
+    mutations: [{ kind: 'update' }],
   }
 }
 
@@ -2162,15 +1593,11 @@ function createPatchBenchmarkQuery(counters: BenchmarkCounters, rows: readonly B
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -2199,15 +1626,11 @@ function createPredicateOnlyPatchBenchmarkQuery(counters: BenchmarkCounters, row
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: 'in',
           value: [1, 2],
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -2231,15 +1654,11 @@ function createWidePatchBenchmarkQuery(counters: BenchmarkCounters, rows: readon
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -2266,24 +1685,11 @@ function createSelectedPatchBenchmarkQuery(counters: BenchmarkCounters, rows: re
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [
-          {
-            column: 'id',
-            resultKey: 'id',
-          },
-          {
-            column: 'title',
-            resultKey: 'title',
-          },
-        ],
         tableName,
       })
 
@@ -2311,15 +1717,11 @@ function createOrderedPatchBenchmarkQuery(counters: BenchmarkCounters, rows: rea
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -2347,17 +1749,11 @@ function createOffsetOrderedPatchBenchmarkQuery(counters: BenchmarkCounters, row
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        limit: pageSize,
-        offset: pageSize,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -2395,38 +1791,21 @@ function createPaginatedPatchBenchmarkQuery(counters: BenchmarkCounters, rows: r
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        limit: pageSize,
-        offset: 0,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        pagination: {
-          currentPage: 1,
-          kind: 'standard',
-          pageName: 'page',
-          perPage: result.length,
-          total: rows.length,
-        },
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result: meta,
-        selections: [],
         tableName,
       })
 
@@ -2464,23 +1843,11 @@ function createPaginationMetaPredicateOnlyBenchmarkQuery(counters: BenchmarkCoun
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        pagination: {
-          currentPage: 1,
-          kind: 'standard',
-          pageName: 'page',
-          perPage,
-          total: totalRows,
-        },
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result: meta,
-        resultPath: Object.freeze(['meta']),
-        selections: [],
         tableName,
       })
 
@@ -2521,38 +1888,21 @@ function createPaginatedOffsetPatchBenchmarkQuery(counters: BenchmarkCounters, r
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        limit: perPage,
-        offset,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        pagination: {
-          currentPage,
-          kind: 'standard',
-          pageName: 'page',
-          perPage,
-          total: rows.length,
-        },
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result: meta,
-        selections: [],
         tableName,
       })
 
@@ -2596,46 +1946,22 @@ function createCursorPaginatedPatchBenchmarkQuery(counters: BenchmarkCounters, r
       recordDatabaseQueryDependencies(dependencies)
       recordDatabaseQueryObservation({
         connectionName,
-        cursorRowCount: rows.length,
-        cursorRows: observedRows,
         dependencies,
-        limit: pageSize,
-        offset: undefined,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        resultPath: Object.freeze(['data']),
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        pagination: {
-          cursorName: 'cursor',
-          hasMorePages: nextCursor !== null,
-          kind: 'cursor',
-          nextCursor,
-          perPage: pageSize,
-          prevCursor: null,
-          rows: observedRows,
-          rowCount: rows.length,
-        },
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result: nextCursor,
-        resultPath: Object.freeze(['nextCursor']),
-        selections: [],
         tableName,
       })
 
@@ -2676,25 +2002,11 @@ function createCursorPaginationPredicateOnlyBenchmarkQuery(counters: BenchmarkCo
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'priority', direction: 'asc' }],
-        pagination: {
-          cursorName: 'cursor',
-          hasMorePages: nextCursor !== null,
-          kind: 'cursor',
-          nextCursor,
-          perPage,
-          prevCursor: null,
-          rows: observedRows,
-          rowCount: rows.length,
-        },
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result: nextCursor,
-        selections: [],
         tableName,
       })
 
@@ -3892,15 +3204,11 @@ function createPriorityOrderedPatchBenchmarkQuery(counters: BenchmarkCounters, r
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'priority', direction: 'asc' }],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -3928,15 +3236,11 @@ function createWrapperPatchBenchmarkQuery(counters: BenchmarkCounters, rows: rea
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -3972,58 +3276,33 @@ function createAggregatePatchBenchmarkQuery(counters: BenchmarkCounters, rows: r
       }]
       recordDatabaseQueryDependencies(dependencies)
       recordDatabaseQueryObservation({
-        aggregate: { kind: 'count' },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: count,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
-        aggregate: { column: 'score', kind: 'sum' },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: scoreSum,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
-        aggregate: { absoluteSum: scoreSum, column: 'score', count, kind: 'avg', sum: scoreSum },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: scoreAverage,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
-        aggregate: { column: 'score', kind: 'min' },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: scoreMinimum,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
-        aggregate: { column: 'score', kind: 'max' },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: scoreMaximum,
-        selections: [],
         tableName,
       })
 
@@ -4057,25 +3336,15 @@ function createAmbiguousAggregatePatchBenchmarkQuery(counters: BenchmarkCounters
       }]
       recordDatabaseQueryDependencies(dependencies)
       recordDatabaseQueryObservation({
-        aggregate: { kind: 'count' },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: count,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
-        aggregate: { column: 'id', kind: 'max' },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: maximum,
-        selections: [],
         tableName,
       })
 
@@ -4725,15 +3994,11 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         recordDatabaseQueryObservation({
           connectionName,
           dependencies,
-          orderBy: [],
-          patchable: true,
           predicates: [{
             column: 'user_id',
             operator: '!=',
             value: 1,
           }],
-          result,
-          selections: [],
           tableName,
         })
 
@@ -4906,7 +4171,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(true)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(true)
     expect(counters.queryExecutions).toBe(1)
     expect(counters.emittedSnapshots).toBe(1)
 
@@ -4914,7 +4179,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     subscription.unsubscribe()
     const cleanupDurationMs = Number((performance.now() - cleanupStartedAt).toFixed(3))
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
     expect(realtimeRuntimeInternals.getRuntimeState().unsubscribeFromDatabase).toBeUndefined()
 
     adapter.queries.length = 0
@@ -5194,15 +4459,11 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         recordDatabaseQueryObservation({
           connectionName,
           dependencies,
-          orderBy: [],
-          patchable: false,
           predicates: [{
             column: 'user_id',
             operator: '=',
             value: 1,
           }],
-          result: result.rows,
-          selections: [],
           tableName,
         })
 
@@ -5344,30 +4605,12 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       {
         connectionName,
         dependencies: [idRowDependency(pageSize / 2)],
-        mutations: [{
-          connectionName,
-          kind: 'update',
-          predicates: [{
-            column: 'id',
-            operator: '=',
-            value: pageSize / 2,
-          }],
-          tableName,
-        }],
+        mutations: [{ kind: 'update' }],
       },
       {
         connectionName,
         dependencies: [idRowDependency(pageSize * 1.5)],
-        mutations: [{
-          connectionName,
-          kind: 'update',
-          predicates: [{
-            column: 'id',
-            operator: '=',
-            value: pageSize * 1.5,
-          }],
-          tableName,
-        }],
+        mutations: [{ kind: 'update' }],
       },
     ])
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
@@ -5422,15 +4665,11 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         recordDatabaseQueryObservation({
           connectionName,
           dependencies,
-          orderBy: [],
-          patchable: false,
           predicates: [{
             column: 'user_id',
             operator: '=',
             value: 1,
           }],
-          result: result.rows,
-          selections: [],
           tableName,
         })
 
@@ -5520,15 +4759,11 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         recordDatabaseQueryObservation({
           connectionName,
           dependencies,
-          orderBy: [],
-          patchable: false,
           predicates: [{
             column: 'user_id',
             operator: '=',
             value: 1,
           }],
-          result: result.rows,
-          selections: [],
           tableName,
         })
 
@@ -7100,18 +6335,10 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         recordDatabaseQueryObservation({
           connectionName,
           dependencies,
-          limit: 1,
-          orderBy: [],
-          patchable: true,
           predicates: [{
             column: 'id',
             operator: '=',
             value: middleRowId,
-          }],
-          result,
-          selections: [{
-            column: 'title',
-            resultKey: 'title',
           }],
           tableName,
         })
@@ -7156,7 +6383,6 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(entry?.queries[0]?.patchable).toBe(true)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialId).toBeUndefined()
@@ -7208,19 +6434,10 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         recordDatabaseQueryObservation({
           connectionName,
           dependencies,
-          limit: 1,
-          orderBy: [],
-          patchable: true,
           predicates: [{
             column: 'id',
             operator: '=',
             value: 700,
-          }],
-          result,
-          resultPath: [],
-          selections: [{
-            column: 'title',
-            resultKey: 'title',
           }],
           tableName,
         })
@@ -7285,7 +6502,6 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(entry?.queries[0]?.patchable).toBe(true)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount * 2)
     expect(observedInitialId).toBeUndefined()
@@ -7517,7 +6733,6 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, `Post ${pageSize * 1.5 + 1}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(entry?.queries[0]?.patchable).toBe(true)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialUserId).toBeUndefined()
@@ -12585,17 +11800,6 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
-    expect(entry?.queries.map(observation => observation.resultPath)).toEqual([
-      ['primary'],
-      ['secondary'],
-      ['tertiary'],
-    ])
-    expect(entry?.patchTargets.map(target => target.resultPath)).toEqual([
-      ['primary'],
-      ['secondary'],
-      ['tertiary'],
-    ])
-    expect(new Set(entry?.patchTargets.map(target => target.mutationIndexKey)).size).toBe(1)
 
     const patchStartedAt = performance.now()
     const patchedRow = {
@@ -14253,57 +13457,6 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         setupDurationMs,
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
-      },
-    })
-  })
-
-  it('measures returned-row relation aggregate target filtering before patching', () => {
-    const targetCount = 100
-    const targets = Object.freeze(Array.from({ length: targetCount }, (_, index) => {
-      return createBenchmarkRelationAggregatePatchTarget(index + 1, index)
-    }))
-    const authorFiftyMutation = createRuntimeRelationAggregateUpsertMutation(50, 1_050, 10_050, 10_049)
-    const authorFiftyOneMutation = createRuntimeRelationAggregateUpsertMutation(51, 1_051, 10_051, 10_050)
-    const backfills = {
-      aggregates: new Map(),
-      aggregateSql: new Map(),
-      entries: [],
-      mutationMetadata: new WeakMap(),
-      mutations: new Map([
-        [
-          `${connectionName}:${tableName}`,
-          Object.freeze([
-            authorFiftyMutation,
-            authorFiftyOneMutation,
-          ]),
-        ],
-      ]),
-      paginationGroupedCounts: new Map(),
-      paginationCounts: new Map(),
-      rowGroups: new Map(),
-      rows: new Map(),
-    } satisfies BackfillCache
-
-    const startedAt = performance.now()
-    const relevantTargets = collectRelevantMutationTargets(targets, backfills)
-    const durationMs = Number((performance.now() - startedAt).toFixed(3))
-    const retainedMutations = relevantTargets.reduce((count, target) => count + target.mutations.length, 0)
-
-    expect(relevantTargets).toHaveLength(2)
-    expect(retainedMutations).toBe(2)
-    expect(relevantTargets[0]?.target.query.predicates[0]?.value).toBe(50)
-    expect(relevantTargets[0]?.mutations).toEqual([authorFiftyMutation])
-    expect(relevantTargets[1]?.target.query.predicates[0]?.value).toBe(51)
-    expect(relevantTargets[1]?.mutations).toEqual([authorFiftyOneMutation])
-
-    reportBenchmark({
-      benchmark: '@holo-js/realtime returned-row relation aggregate target filtering',
-      metrics: {
-        durationMs,
-        inputMutations: 2,
-        relevantTargets: relevantTargets.length,
-        retainedMutations,
-        targetCount,
       },
     })
   })
@@ -18869,61 +18022,6 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures server patch operation coalescing for append bursts without expanding window slides', () => {
-    const burstRows = createPatchBenchmarkRows()
-    const burstOperations = burstRows.flatMap((row, index) => [
-      createSplicePatchOperation([], index, 0, [row]),
-      createSplicePatchOperation([], index + 1, 0, []),
-    ])
-    const rawBurstPatch = {
-      operations: burstOperations,
-      version: 1,
-    }
-    const compactStartedAt = performance.now()
-    const compactedBurstOperations = compactPatchOperations(burstOperations)
-    const compactDurationMs = Number((performance.now() - compactStartedAt).toFixed(3))
-    const compactedBurstPatch = {
-      operations: compactedBurstOperations,
-      version: 1,
-    }
-    const slideBackfillRow = createPatchBenchmarkRows()[pageSize]
-    if (!slideBackfillRow) {
-      throw new Error('Expected benchmark slide backfill row to exist.')
-    }
-
-    const slideOperations = [
-      createSplicePatchOperation([], 0, 1, []),
-      createSplicePatchOperation([], pageSize - 1, 0, [slideBackfillRow]),
-    ]
-    const compactedSlideOperations = compactPatchOperations(slideOperations)
-    const rawBurstBytes = jsonByteLength(rawBurstPatch)
-    const compactedBurstBytes = jsonByteLength(compactedBurstPatch)
-    const compactedOperation = compactedBurstOperations[0]
-
-    expect(compactedBurstOperations).toHaveLength(1)
-    expect(compactedOperation?.op).toBe('splice')
-    if (compactedOperation?.op !== 'splice') {
-      throw new Error('Expected compacted burst operation to be a splice.')
-    }
-    expect(compactedOperation.index).toBe(0)
-    expect(compactedOperation.deleteCount).toBe(0)
-    expect(compactedOperation.values).toHaveLength(patchRowCount)
-    expect(compactedSlideOperations).toEqual(slideOperations)
-    expect(compactedBurstBytes).toBeLessThan(rawBurstBytes)
-
-    reportBenchmark({
-      benchmark: '@holo-js/realtime server patch operation coalescing',
-      metrics: {
-        compactDurationMs,
-        compactedBurstBytes,
-        compactedBurstOperations: compactedBurstOperations.length,
-        rawBurstBytes,
-        rawBurstOperations: burstOperations.length,
-        slideOperations: compactedSlideOperations.length,
-      },
-    })
-  })
-
   it('measures client store patch application with structural sharing', () => {
     const store = realtimeClientInternals.createRealtimeQueryStore<readonly BenchmarkPostRow[]>(
       'benchmark.posts.clientPatchRows',
@@ -19590,5 +18688,281 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         preservedRows: pageSize - 1,
       },
     })
+  })
+})
+
+const refreshConcurrencyLimit = 4
+
+type BenchmarkStatement = { readonly sql: string, readonly bindings: readonly unknown[] }
+
+function createAlternatingOwnerPostRows(): BenchmarkPostRow[] {
+  return Array.from({ length: 6 }, (_, index) => ({
+    id: index + 1,
+    title: `Post ${index + 1}`,
+    user_id: index % 2 === 0 ? 1 : 2,
+  }))
+}
+
+async function commitBenchmarkWrites(
+  db: DatabaseContext,
+  adapter: { readonly queries: readonly BenchmarkStatement[] },
+  write: (transaction: DatabaseContext) => Promise<void>,
+): Promise<readonly BenchmarkStatement[]> {
+  let refreshStart = 0
+  await db.transaction(async (transaction) => {
+    await write(transaction)
+    refreshStart = adapter.queries.length
+  })
+
+  return adapter.queries.slice(refreshStart)
+}
+
+function createUserPostsCountedQuery(counters: BenchmarkCounters) {
+  return defineRealtimeQuery({
+    name: 'benchmark.posts.refreshCostByUser',
+    access: 'public',
+    handler: async ({ db: context }) => {
+      counters.queryExecutions += 1
+      return await context.table('posts').where('user_id', 1).orderBy('id').limit(pageSize).get()
+    },
+  })
+}
+
+describe('@holo-js/realtime refresh SQL cost', () => {
+  it('re-executes exactly one query when one relevant write refreshes a one-query handler', async () => {
+    const rows = createPatchBenchmarkRows()
+    const adapter = new BenchmarkModelAdapter(rows)
+    const db = createBenchmarkReturningDatabaseContext(adapter)
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const counters: BenchmarkCounters = { emittedSnapshots: 0, queryExecutions: 0 }
+    await subscribeRealtimeQuery(createUserPostsCountedQuery(counters), {}, {
+      onData: () => { counters.emittedSnapshots += 1 },
+    })
+
+    const refreshQueries = await commitBenchmarkWrites(db, adapter, async (transaction) => {
+      rows[0] = { ...rows[0]!, title: 'Updated 1' }
+      await transaction.table('posts').where('id', 1).update({ title: 'Updated 1' })
+    })
+
+    expect(refreshQueries).toEqual([{
+      sql: `SELECT * FROM "posts" WHERE "user_id" = ? ORDER BY "id" ASC LIMIT ${pageSize}`,
+      bindings: [1],
+    }])
+    expect(counters.queryExecutions).toBe(2)
+    expect(counters.emittedSnapshots).toBe(2)
+  })
+
+  it.each([5, 50])('refreshes a has-many with() handler with a fixed query count at %i authors', async (rowCount) => {
+    const tables = createRelationAggregateBenchmarkTables(rowCount)
+    const adapter = new BenchmarkModelAdapter(tables)
+    const db = createBenchmarkRelationDatabaseContext(adapter)
+    configureDB(createConnectionManager({
+      defaultConnection: connectionName,
+      connections: { [connectionName]: db },
+    }))
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const counters: BenchmarkCounters = { emittedSnapshots: 0, queryExecutions: 0 }
+    await subscribeRealtimeQuery(createModelHasManyRelationPatchBenchmarkQuery(counters), {}, {
+      onData: () => { counters.emittedSnapshots += 1 },
+    })
+    expect(adapter.queries).toHaveLength(2)
+
+    const refreshQueries = await commitBenchmarkWrites(db, adapter, async (transaction) => {
+      tables.posts[0] = { ...tables.posts[0]!, title: 'Updated 1' }
+      await transaction.table('posts').where('id', 1).update({ title: 'Updated 1' })
+    })
+
+    expect(refreshQueries.map(query => query.sql.match(/FROM "(\w+)"/)?.[1])).toEqual(['authors', 'posts'])
+    expect(counters.queryExecutions).toBe(2)
+  })
+
+  it.each([5, 50])('refreshes a belongs-to-many with() handler with a fixed query count at %i posts', async (rowCount) => {
+    const tables = createBelongsToManyBenchmarkTables(rowCount)
+    const adapter = new BenchmarkModelAdapter(tables)
+    const db = createBenchmarkRelationDatabaseContext(adapter)
+    configureDB(createConnectionManager({
+      defaultConnection: connectionName,
+      connections: { [connectionName]: db },
+    }))
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const counters: BenchmarkCounters = { emittedSnapshots: 0, queryExecutions: 0 }
+    await subscribeRealtimeQuery(createModelBelongsToManyRelationPatchBenchmarkQuery(counters), {}, {
+      onData: () => { counters.emittedSnapshots += 1 },
+    })
+
+    const refreshQueries = await commitBenchmarkWrites(db, adapter, async (transaction) => {
+      tables.posts[0] = { ...tables.posts[0]!, title: 'Updated 1' }
+      await transaction.table('posts').where('id', 1).update({ title: 'Updated 1' })
+    })
+
+    expect(refreshQueries.map(query => query.sql.match(/FROM "(\w+)"/)?.[1])).toEqual(['posts', 'post_tags', 'tags'])
+    expect(counters.queryExecutions).toBe(2)
+  })
+
+  it('refreshes N identical subscriptions with bounded concurrency and one handler run each', async () => {
+    const rows = createPatchBenchmarkRows()
+    const adapter = new BenchmarkModelAdapter(rows)
+    const db = createBenchmarkReturningDatabaseContext(adapter)
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const counters: BenchmarkCounters = { emittedSnapshots: 0, queryExecutions: 0 }
+    let holdRefreshes = false
+    let inFlightRefreshes = 0
+    let peakInFlightRefreshes = 0
+    let releaseRefreshes = (): void => {}
+    const refreshGate = new Promise<void>((resolve) => { releaseRefreshes = resolve })
+    let markSaturated = (): void => {}
+    const saturated = new Promise<void>((resolve) => { markSaturated = resolve })
+    const query = defineRealtimeQuery({
+      name: 'benchmark.posts.identicalRefreshCost',
+      access: 'public',
+      handler: async ({ db: context }) => {
+        counters.queryExecutions += 1
+        const result = await context.table('posts').where('user_id', 1).orderBy('id').limit(pageSize).get()
+        if (!holdRefreshes) return result
+
+        inFlightRefreshes += 1
+        peakInFlightRefreshes = Math.max(peakInFlightRefreshes, inFlightRefreshes)
+        if (inFlightRefreshes === refreshConcurrencyLimit) markSaturated()
+        await refreshGate
+        inFlightRefreshes -= 1
+        return result
+      },
+    })
+    const deliveries = Array<number>(subscriptionCount).fill(0)
+    for (let index = 0; index < subscriptionCount; index += 1) {
+      await subscribeRealtimeQuery(query, {}, { onData: () => { deliveries[index] = (deliveries[index] ?? 0) + 1 } })
+    }
+    expect(counters.queryExecutions).toBe(subscriptionCount)
+    adapter.queries.length = 0
+
+    holdRefreshes = true
+    const committed = commitBenchmarkWrites(db, adapter, async (transaction) => {
+      rows[0] = { ...rows[0]!, title: 'Updated 1' }
+      await transaction.table('posts').where('id', 1).update({ title: 'Updated 1' })
+    })
+    await saturated
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    expect(peakInFlightRefreshes).toBe(refreshConcurrencyLimit)
+    expect(counters.queryExecutions).toBe(subscriptionCount + refreshConcurrencyLimit)
+
+    releaseRefreshes()
+    const refreshQueries = await committed
+    expect(refreshQueries).toHaveLength(subscriptionCount)
+    expect(deliveries).toEqual(Array<number>(subscriptionCount).fill(2))
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
+    expect(peakInFlightRefreshes).toBe(refreshConcurrencyLimit)
+  })
+
+  it('refreshes each identical subscription once per burst of batched invalidations', async () => {
+    const rows = createPatchBenchmarkRows()
+    const adapter = new BenchmarkModelAdapter(rows)
+    const db = createBenchmarkReturningDatabaseContext(adapter)
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const counters: BenchmarkCounters = { emittedSnapshots: 0, queryExecutions: 0 }
+    for (let index = 0; index < subscriptionCount; index += 1) {
+      await subscribeRealtimeQuery(createUserPostsCountedQuery(counters), {}, {
+        onData: () => { counters.emittedSnapshots += 1 },
+      })
+    }
+    adapter.queries.length = 0
+
+    await Promise.all([1, 2, 3].map(() => realtimeRuntimeInternals.handleBatchedDatabaseInvalidation({
+      connectionName,
+      dependencies: createInvalidationDependencies(1),
+    })))
+
+    expect(adapter.queries).toHaveLength(subscriptionCount)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
+  })
+
+  it('refreshes each affected subscription once for a burst of writes inside one transaction', async () => {
+    const rows = createPatchBenchmarkRows()
+    const adapter = new BenchmarkModelAdapter(rows)
+    const db = createBenchmarkReturningDatabaseContext(adapter)
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const counters: BenchmarkCounters = { emittedSnapshots: 0, queryExecutions: 0 }
+    for (let index = 0; index < subscriptionCount; index += 1) {
+      await subscribeRealtimeQuery(createUserPostsCountedQuery(counters), {}, {
+        onData: () => { counters.emittedSnapshots += 1 },
+      })
+    }
+
+    const refreshQueries = await commitBenchmarkWrites(db, adapter, async (transaction) => {
+      for (const id of [1, 2, 3]) {
+        rows[id - 1] = { ...rows[id - 1]!, title: `Updated ${id}` }
+        await transaction.table('posts').where('id', id).update({ title: `Updated ${id}` })
+      }
+    })
+
+    expect(refreshQueries).toHaveLength(subscriptionCount)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
+  })
+
+  it('issues no queries for a write to another table', async () => {
+    const tables = createRelationAggregateBenchmarkTables(5)
+    const adapter = new BenchmarkModelAdapter(tables)
+    const db = createBenchmarkReturningDatabaseContext(adapter)
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const counters: BenchmarkCounters = { emittedSnapshots: 0, queryExecutions: 0 }
+    await subscribeRealtimeQuery(createUserPostsCountedQuery(counters), {}, {
+      onData: () => { counters.emittedSnapshots += 1 },
+    })
+
+    const refreshQueries = await commitBenchmarkWrites(db, adapter, async (transaction) => {
+      tables.authors[0] = { ...tables.authors[0]!, name: 'Renamed' }
+      await transaction.table('authors').where('id', 1).update({ name: 'Renamed' })
+    })
+
+    expect(refreshQueries).toEqual([])
+    expect(counters.queryExecutions).toBe(1)
+  })
+
+  it.each([
+    { operation: 'UPDATE', refreshCount: 1 },
+    { operation: 'DELETE', refreshCount: 1 },
+    { operation: 'INSERT', refreshCount: 0 },
+  ])('issues $refreshCount refresh queries for a real $operation outside the subscription predicate', async ({ operation, refreshCount }) => {
+    const adapter = await createNativeRelationalAdapter({ posts: createAlternatingOwnerPostRows() })
+    const db = createDatabase({ adapter, dialect: createDialect('sqlite'), connectionName })
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const counters: BenchmarkCounters = { emittedSnapshots: 0, queryExecutions: 0 }
+    const snapshots: unknown[] = []
+    await subscribeRealtimeQuery(createUserPostsCountedQuery(counters), {}, {
+      onData: (snapshot) => { snapshots.push(snapshot.data) },
+    })
+
+    const refreshQueries = await commitBenchmarkWrites(db, adapter, async (transaction) => {
+      if (operation === 'UPDATE') await transaction.table('posts').where('user_id', 2).update({ title: 'Updated owner 2' })
+      else if (operation === 'DELETE') await transaction.table('posts').where('user_id', 2).delete()
+      else await transaction.table('posts').insert({ id: 7, user_id: 2, title: 'New owner 2' })
+    })
+
+    expect([...adapter.executions, ...adapter.queries].some(statement => statement.sql.startsWith(operation))).toBe(true)
+    expect(refreshQueries).toEqual(refreshCount === 0 ? [] : [{
+      sql: `SELECT * FROM "posts" WHERE "user_id" = ? ORDER BY "id" ASC LIMIT ${pageSize}`,
+      bindings: [1],
+    }])
+    expect(counters.queryExecutions).toBe(1 + refreshCount)
+    expect(snapshots.at(-1)).toEqual(createAlternatingOwnerPostRows().filter(row => row.user_id === 1))
+  })
+
+  it('issues no queries for an exact invalidation contradicting the subscription predicate', async () => {
+    const rows = createAlternatingOwnerPostRows()
+    const adapter = new BenchmarkModelAdapter(rows)
+    const db = createBenchmarkReturningDatabaseContext(adapter)
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const counters: BenchmarkCounters = { emittedSnapshots: 0, queryExecutions: 0 }
+    await subscribeRealtimeQuery(createUserPostsCountedQuery(counters), {}, {
+      onData: () => { counters.emittedSnapshots += 1 },
+    })
+    adapter.queries.length = 0
+
+    await realtimeRuntimeInternals.handleDatabaseInvalidation({
+      connectionName,
+      dependencies: createInvalidationDependencies(2),
+    })
+
+    expect(adapter.queries).toEqual([])
+    expect(counters.queryExecutions).toBe(1)
   })
 })
