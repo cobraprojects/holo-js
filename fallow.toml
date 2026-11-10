@@ -1,4 +1,4 @@
-publicPackages = ["@holo-js/validation"]
+publicPackages = ["@holo-js/db", "@holo-js/validation"]
 
 entry = [
   "packages/cli/tests/global-setup.ts",
