@@ -187,6 +187,30 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a h
     await mutate(db => db.table(tableName).insert({ id: 1, title: 'Again', subtitle: 'Sub' }))
     expect(subscription.current.data).toEqual(await transform(db))
   })
+
+  it('skips the handler re-run for writes whose rows contradict every predicate of an unbound count', async () => {
+    const { db, tableName } = await createPosts(driver)
+    let handlerRuns = 0
+    const handler = async () => {
+      handlerRuns += 1
+      return (await db.table(tableName).where('id', '>', 2).count()) * 2
+    }
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+      onData: () => {},
+      onError: (error) => { throw error },
+    })
+    const mutate = (mutation: (db: Database) => Promise<unknown>) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => mutation(db) }))
+
+    await mutate(db => db.table(tableName).insert({ id: 3, title: 'Third' }))
+    expect(handlerRuns).toBe(2)
+    expect(subscription.current.data).toBe(2)
+
+    await mutate(db => db.table(tableName).where('id', 1).delete())
+    await mutate(db => db.table(tableName).insert({ id: 0, title: 'Zero' }))
+    expect(handlerRuns).toBe(2)
+    expect(subscription.current.data).toBe(2)
+    expect(subscription.current.data).toEqual(await handler())
+  })
 })
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('an eager-loaded hasManyThrough relation on %s', (driver) => {
