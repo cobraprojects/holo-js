@@ -24,6 +24,7 @@ import {
   createTableRowWildcardCacheDependency,
   recordDatabaseQueryRefreshTables,
   createDatabaseQueryObservation,
+  createDatabaseQueryFallbackObservation,
   inferAutomaticInsertCacheInvalidationPlan,
   inferAutomaticQueryCacheInvalidationPlan,
   inferDatabaseQueryObservationDependencies,
@@ -2109,6 +2110,7 @@ export class TableQueryBuilder<
     const observationDependencies = activeDependencyCollector && !this.plan.lockMode
       ? dependencies ?? inferDatabaseQueryObservationDependencies(this.plan, this.connection.getConnectionName())
       : dependencies
+    const createObservation = dependencies ? createDatabaseQueryObservation : createDatabaseQueryFallbackObservation
     recordDatabaseQueryDependencies(observationDependencies)
     const expired = cacheConfig?.ttl instanceof Date && cacheConfig.ttl.getTime() <= Date.now()
     if (!cacheConfig || this.plan.lockMode || expired || !canUseQueryCache(this.connection) || currentRootTransaction(this.connection)?.schemaChanged) {
@@ -2116,6 +2118,7 @@ export class TableQueryBuilder<
       this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
         observationDependencies,
+        createObservation,
       )
       return rows
     }
@@ -2143,6 +2146,7 @@ export class TableQueryBuilder<
       this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
         observationDependencies,
+        createObservation,
       )
       return rows
     }
@@ -2164,6 +2168,7 @@ export class TableQueryBuilder<
     this.recordCollectedQueryObservation(
       activeDependencyCollector && collectObservation,
       observationDependencies,
+      createObservation,
     )
     return rows
   }
@@ -2198,10 +2203,11 @@ export class TableQueryBuilder<
   private recordCollectedQueryObservation(
     activeDependencyCollector: boolean,
     observationDependencies: readonly string[] | undefined,
+    createObservation: typeof createDatabaseQueryObservation,
   ): void {
     if (activeDependencyCollector) recordDatabaseQueryContext(this.connection)
     if (!activeDependencyCollector || !observationDependencies) return
-    const observation = createDatabaseQueryObservation(withResolvedDefinitions(this.plan, this.connection.getConnectionName()), this.connection.getConnectionName(), observationDependencies)
+    const observation = createObservation(withResolvedDefinitions(this.plan, this.connection.getConnectionName()), this.connection.getConnectionName(), observationDependencies)
     recordDatabaseQueryObservation(observation)
     if (observation) recordDatabaseQueryRefreshTables(observationDependencies, observation.connectionName, observation.tableName)
   }

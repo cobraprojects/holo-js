@@ -1473,12 +1473,11 @@ export function inferDatabaseQueryObservationDependencies(
   return Object.freeze([...dependencies])
 }
 
-export function createDatabaseQueryObservation(
+function createDatabaseQueryObservationFromPlan(
   plan: SelectQueryPlan,
   connectionName: string,
   dependencies: readonly string[],
-): DatabaseQueryObservation | undefined {
-  if (dependencies.length === 0 && !supportsAutomaticQueryCacheInvalidation(plan)) return undefined
+): DatabaseQueryObservation {
   return Object.freeze({
     connectionName,
     tableName: plan.source.tableName,
@@ -1486,6 +1485,24 @@ export function createDatabaseQueryObservation(
     predicates: collectQueryPredicateObservations(plan.predicates),
     primaryKey: resolveObservedRowKey(plan.source, connectionName),
   })
+}
+
+export function createDatabaseQueryObservation(
+  plan: SelectQueryPlan,
+  connectionName: string,
+  dependencies: readonly string[],
+): DatabaseQueryObservation | undefined {
+  if (!supportsAutomaticQueryCacheInvalidation(plan)) return undefined
+  return createDatabaseQueryObservationFromPlan(plan, connectionName, dependencies)
+}
+
+export function createDatabaseQueryFallbackObservation(
+  plan: SelectQueryPlan,
+  connectionName: string,
+  dependencies: readonly string[],
+): DatabaseQueryObservation | undefined {
+  if (dependencies.length === 0) return undefined
+  return createDatabaseQueryObservationFromPlan(plan, connectionName, dependencies)
 }
 
 export function createDatabaseMutationEvent(
