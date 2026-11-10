@@ -1,6 +1,7 @@
+import { createDatabaseQueryObservation, onDatabaseDependencyInvalidated, resetDatabaseDependencyInvalidationListeners } from '../src/cache'
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { DB, clearGeneratedTables, column, defineModel, queryCacheInternals, registerGeneratedTables, type DatabaseDependencyInvalidationEvent } from '../src'
+import { DB, clearGeneratedTables, column, defineModel, registerGeneratedTables, type DatabaseDependencyInvalidationEvent } from '../src'
 import type { DatabaseMutationEvent } from '../src/cache'
 import { defineTable } from './support/internal'
 import { mysqlIntegration, openDatabase } from './support/database'
@@ -14,13 +15,13 @@ async function openTable(name: string, columns: Parameters<typeof defineTable>[1
 }
 
 function observe(query: ReturnType<typeof DB.table>) {
-  return queryCacheInternals.createDatabaseQueryObservation(query.getPlan(), 'default', [])
+  return createDatabaseQueryObservation(query.getPlan(), 'default', [])
 }
 
 function captureMutations(): DatabaseMutationEvent[] {
   const mutations: DatabaseMutationEvent[] = []
-  onTestFinished(() => queryCacheInternals.resetDatabaseDependencyInvalidationListeners())
-  queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
+  onTestFinished(() => resetDatabaseDependencyInvalidationListeners())
+  onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
     mutations.push(...event.mutations ?? [])
   })
   return mutations
@@ -38,22 +39,22 @@ describe('query observations and mutation events carry the table primary key', (
     const detail = observe(DB.table('countries').select('name').where('code', 'FR').limit(1))
     await DB.table('countries').where('code', 'FR').update({ name: 'République' })
 
-    expect([list, projected, projectedWithoutKey, detail].map(observation => [observation?.primaryKey, observation?.patchable])).toEqual([
-      ['code', true],
-      ['code', true],
-      ['code', false],
-      ['code', true],
+    expect([list, projected, projectedWithoutKey, detail].map(observation => observation?.primaryKey)).toEqual([
+      'code',
+      'code',
+      'code',
+      'code',
     ])
     expect(mutations.map(mutation => mutation.primaryKey)).toEqual(['code'])
   })
 
-  it('makes composite-key and keyless table observations unpatchable', async () => {
+  it('leaves composite-key and keyless table observations without a primary key', async () => {
     await openTable('seats', { id: column.integer(), row_no: column.integer().primaryKey(), seat_no: column.integer().primaryKey() }, {}, 'CREATE TABLE seats (id INTEGER, row_no INTEGER, seat_no INTEGER, PRIMARY KEY (row_no, seat_no))')
     await openTable('events', { id: column.integer(), name: column.string() }, { primaryKeyColumns: [] }, 'CREATE TABLE events (id INTEGER, name TEXT)')
 
-    expect([observe(DB.table('seats')), observe(DB.table('events'))].map(observation => [observation?.primaryKey, observation?.patchable])).toEqual([
-      [undefined, false],
-      [undefined, false],
+    expect([observe(DB.table('seats')), observe(DB.table('events'))].map(observation => observation?.primaryKey)).toEqual([
+      undefined,
+      undefined,
     ])
   })
 
@@ -71,10 +72,10 @@ describe('query observations and mutation events carry the table primary key', (
     const composite = observe(Seat.query().getTableQueryBuilder())
     await Entry.query().where('entry_no', 'A').update({ amount: 11 })
 
-    expect([model, table, composite].map(observation => [observation?.primaryKey, observation?.patchable])).toEqual([
-      ['entry_no', true],
-      ['id', true],
-      [undefined, false],
+    expect([model, table, composite].map(observation => observation?.primaryKey)).toEqual([
+      'entry_no',
+      'id',
+      undefined,
     ])
     expect(mutations.map(mutation => mutation.primaryKey)).toEqual(['entry_no'])
   })
@@ -111,7 +112,7 @@ describe('query observations and mutation events carry the table primary key', (
     const { adapter } = await openDatabase('sqlite')
     await adapter.execute('CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)')
 
-    expect([observe(DB.table('notes'))].map(observation => [observation?.primaryKey, observation?.patchable])).toEqual([['id', true]])
+    expect([observe(DB.table('notes'))].map(observation => observation?.primaryKey)).toEqual(['id'])
   })
 
   it('publishes an inserted row under its generated auto-increment key', async () => {

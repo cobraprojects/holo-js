@@ -1,3 +1,4 @@
+import { getQueryCacheBridgeState, hasDatabaseDependencyInvalidationPublisher } from '../../db/src/cache'
 import { randomUUID } from 'node:crypto'
 import { symlinkPackageDependency } from '../../../tests/support/published-package'
 import { existsSync } from 'node:fs'
@@ -18,7 +19,6 @@ import {
   createSchemaService,
   DB,
   getDatabaseDriverFactory,
-  queryCacheInternals,
 } from '@holo-js/db'
 import {
   broadcastRaw,
@@ -154,7 +154,6 @@ function holoCookieValue(setCookie: string): string {
 function sessionCookieValue(sessionId: string | undefined): string {
   return holoCookieValue(getSessionRuntime().sessionCookie(sessionId ?? ''))
 }
-
 
 async function writeBaseConfig(root: string, databaseUrl = ':memory:'): Promise<void> {
   await writeFile(join(root, 'config/app.ts'), `
@@ -353,7 +352,6 @@ export default defineBroadcastConfig({
 
 type ScalingRedisClient = Awaited<ReturnType<typeof startRedisService>>['clients'][number]
 
-
 let scalingRedisPort = 0
 
 async function createScalingInvalidationProject(): Promise<{
@@ -387,7 +385,7 @@ async function countScalingInvalidations(client: ScalingRedisClient): Promise<{ 
 }
 
 async function publishThroughRegisteredPublisher(): Promise<void> {
-  const candidates = queryCacheInternals.getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
+  const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
   if (candidates.length === 0) throw new Error('No database invalidation publisher is registered')
   const invalidation = { id: randomUUID(), connectionName: 'main', dependencies: ['db:main:scores'] }
   for (const candidate of candidates) await candidate.publisher(invalidation)
@@ -3886,7 +3884,7 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     await resetHoloRuntime()
 
     await expect.poll(connections).toBe(baseline)
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationPublisher()).toBe(false)
   })
 
   it('disposes the database invalidation sender and unregisters its publisher when a reconfiguration removes the broadcast config', async () => {
@@ -3899,7 +3897,7 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
 
     await expect.poll(connections).toBe(baseline)
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationPublisher()).toBe(false)
     await resetHoloRuntime()
   })
 
@@ -3915,7 +3913,7 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     await client.client('PAUSE', '1500', 'ALL')
     const beforeSwap = publishThroughRegisteredPublisher()
     await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(true)
+    expect(hasDatabaseDependencyInvalidationPublisher()).toBe(true)
     const afterSwap = publishThroughRegisteredPublisher()
     await Promise.all([beforeSwap, afterSwap])
 

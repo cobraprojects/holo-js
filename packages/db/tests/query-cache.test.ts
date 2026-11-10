@@ -1,3 +1,4 @@
+import { onDatabaseDependencyInvalidated, resetDatabaseDependencyInvalidationListeners, createDeterministicQueryCacheKey, createTablePredicateCacheDependency, createTableRowCacheDependency } from '../src/cache'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -33,7 +34,7 @@ describe('native database and cache integration', () => {
   beforeEach(async () => {
     resetDB()
     resetCacheRuntime()
-    queryCacheInternals.resetDatabaseDependencyInvalidationListeners()
+    resetDatabaseDependencyInvalidationListeners()
     queries.length = 0
     directory = await mkdtemp(join(tmpdir(), 'holo-native-query-cache-'))
     configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' }, file: { driver: 'file', path: directory } } } })
@@ -56,7 +57,7 @@ describe('native database and cache integration', () => {
   })
 
   afterEach(async () => {
-    queryCacheInternals.resetDatabaseDependencyInvalidationListeners()
+    resetDatabaseDependencyInvalidationListeners()
     resetCacheRuntime()
     resetDB()
     await adapter?.disconnect()
@@ -183,7 +184,7 @@ describe('native database and cache integration', () => {
 
   it('publishes concrete counter values for each changed row after commit', async () => {
     const mutations: DatabaseMutationEvent[] = []
-    queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
+    onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
       mutations.push(...event.mutations ?? [])
     })
     expect(await DB.table(users).orderBy('id').cache(60).pluck('score')).toEqual([10, 20])
@@ -246,7 +247,7 @@ describe('native database and cache integration', () => {
 
   it('defers invalidation until commit and preserves cached values after rollback', async () => {
     const events: string[][] = []
-    queryCacheInternals.onDatabaseDependencyInvalidated(event => { events.push([...event.dependencies]) })
+    onDatabaseDependencyInvalidated(event => { events.push([...event.dependencies]) })
     expect(await names()).toEqual(['Ava', 'Ben'])
     await expect(DB.transaction(async tx => {
       await tx.table(users).where('id', 1).update({ name: 'Rolled back' })
@@ -283,8 +284,8 @@ describe('native database and cache integration', () => {
     onTestFinished(() => { errorReportingInternals.configure(undefined) })
     const subscriberError = new Error('subscriber failed')
     const received: string[] = []
-    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidated(() => { received.push('failing'); throw subscriberError })
-    queryCacheInternals.onDatabaseDependencyInvalidated(() => { received.push('healthy') })
+    const unsubscribe = onDatabaseDependencyInvalidated(() => { received.push('failing'); throw subscriberError })
+    onDatabaseDependencyInvalidated(() => { received.push('healthy') })
     await DB.table(users).where('id', 1).update({ score: 11 })
     expect(received).toEqual(['failing', 'healthy'])
     expect(reports).toEqual([{ error: subscriberError, context: { capability: 'db', operation: 'cache.invalidationListener' } }])
@@ -333,7 +334,7 @@ describe('native database and cache integration', () => {
 
   it('ignores a received remote invalidation that carries no table keys', async () => {
     const received: string[][] = []
-    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidated(event => { received.push([...event.dependencies]) })
+    const unsubscribe = onDatabaseDependencyInvalidated(event => { received.push([...event.dependencies]) })
     onTestFinished(unsubscribe)
 
     await queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation(remoteInvalidation([]))
@@ -346,7 +347,7 @@ describe('native database and cache integration', () => {
     const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(invalidation => { published.push(invalidation) })
     onTestFinished(unsubscribe)
     const received: string[][] = []
-    queryCacheInternals.onDatabaseDependencyInvalidated(event => { received.push([...event.dependencies]) })
+    onDatabaseDependencyInvalidated(event => { received.push([...event.dependencies]) })
 
     await queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation(remoteInvalidation(['db:main:users']))
 
@@ -460,7 +461,7 @@ describe('native database and cache integration', () => {
 
 describe('query cache BigInt values', () => {
   it('encodes BigInt dependency values as the integers they hold and keeps BigInt cache keys apart from numbers', () => {
-    const { createDeterministicQueryCacheKey, createTablePredicateCacheDependency, createTableRowCacheDependency } = queryCacheInternals
+
 
     expect(createTablePredicateCacheDependency('main', 'users', 'score', 0n)).toBe(createTablePredicateCacheDependency('main', 'users', 'score', 0))
     expect(createTablePredicateCacheDependency('main', 'users', 'score', [1n, 2])).toBe(createTablePredicateCacheDependency('main', 'users', 'score', [1, 2]))

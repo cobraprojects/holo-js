@@ -1,4 +1,3 @@
-import { markDatabaseQueryObservationsSerialized, requireDatabaseQueryRefreshForRows, runRequiringDatabaseQueryRefresh, serializeDatabaseQueryObservationsOnArrayWrites } from '../cache'
 import { HydrationError } from '../core/errors'
 import { assertAttributeNameAllowed, exposeUntypedEntityAttributes, initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
@@ -63,7 +62,6 @@ let readOriginalAttribute: (entity: EntityBase, key: string) => unknown
 let readWriteState: (entity: EntityBase) => EntityWriteState
 let applyWriteState: (entity: EntityBase, state: EntityWriteState) => void
 let copySerializationOverrides: (target: EntityBase, source: EntityBase) => void
-let observeRelation: (entity: EntityBase, name: string) => void
 
 export interface EntityWriteState {
   readonly attributes: Record<string, unknown>
@@ -87,13 +85,9 @@ class EntityBase<
   #visibleOverrides = new Set<string>()
   #visibleOnly: string[] | null = null
   #appendedOverrides: string[] | null = null
-  #observedRelations = new Set<string>()
 
   static {
     readOriginalAttribute = (entity, key) => entity.#original[key]
-    observeRelation = (entity, name) => {
-      entity.#observedRelations.add(name)
-    }
     copySerializationOverrides = (target, source) => {
       target.#hiddenOverrides = new Set(source.#hiddenOverrides)
       target.#visibleOverrides = new Set(source.#visibleOverrides)
@@ -324,10 +318,6 @@ class EntityBase<
   }
 
   setRelation(name: string, value: unknown): this {
-    if (this.#observedRelations.has(name)) {
-      markDatabaseQueryObservationsSerialized()
-    }
-
     if (!(name in this)) {
       Object.defineProperty(this, name, {
         configurable: true,
@@ -335,7 +325,6 @@ class EntityBase<
         get: () => this.getRelation(name),
       })
     }
-    serializeDatabaseQueryObservationsOnArrayWrites(value)
     this.#relations[name] = value
     return this
   }
@@ -352,8 +341,6 @@ class EntityBase<
       this.#hiddenOverrides.add(key)
       this.#visibleOverrides.delete(key)
     }
-
-    markDatabaseQueryObservationsSerialized()
     return this
   }
 
@@ -362,8 +349,6 @@ class EntityBase<
       this.#visibleOverrides.add(key)
       this.#hiddenOverrides.delete(key)
     }
-
-    markDatabaseQueryObservationsSerialized()
     return this
   }
 
@@ -371,7 +356,6 @@ class EntityBase<
     this.#hiddenOverrides = new Set(keys)
     this.#visibleOverrides.clear()
     this.#visibleOnly = null
-    markDatabaseQueryObservationsSerialized()
     return this
   }
 
@@ -379,26 +363,22 @@ class EntityBase<
     this.#visibleOnly = [...keys]
     this.#hiddenOverrides.clear()
     this.#visibleOverrides = new Set(keys)
-    markDatabaseQueryObservationsSerialized()
     return this
   }
 
   append(...keys: readonly string[]): this {
     const next = this.#appendedOverrides ?? []
     this.#appendedOverrides = [...new Set([...next, ...keys])]
-    markDatabaseQueryObservationsSerialized()
     return this
   }
 
   setAppends(keys: readonly string[]): this {
     this.#appendedOverrides = [...keys]
-    markDatabaseQueryObservationsSerialized()
     return this
   }
 
   withoutAppends(): this {
     this.#appendedOverrides = []
-    markDatabaseQueryObservationsSerialized()
     return this
   }
 
@@ -429,10 +409,6 @@ class EntityBase<
   }
 
   forgetRelation(name: string): this {
-    if (this.#observedRelations.has(name)) {
-      markDatabaseQueryObservationsSerialized()
-    }
-
     Reflect.deleteProperty(this.#relations, name)
     return this
   }
@@ -746,8 +722,7 @@ class EntityBase<
     }
 
     const loadRelations = repo.loadRelations.bind(repo)
-    await runRequiringDatabaseQueryRefresh(() => loadRelations([this], relations, false))
-    requireDatabaseQueryRefreshForRows([this])
+    await loadRelations([this], relations, false)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- widened return merges this + new loads
     return this as any
   }
@@ -767,8 +742,7 @@ class EntityBase<
     }
 
     const loadRelations = repo.loadRelations.bind(repo)
-    await runRequiringDatabaseQueryRefresh(() => loadRelations([this], relations, true))
-    requireDatabaseQueryRefreshForRows([this])
+    await loadRelations([this], relations, true)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- widened return merges this + new loads
     return this as any
   }
@@ -783,7 +757,6 @@ class EntityBase<
     }
 
     await repo.loadMorphRelations([this], relation, mapping)
-    requireDatabaseQueryRefreshForRows([this])
     return this
   }
 
@@ -1113,11 +1086,4 @@ export function copyEntitySerializationOverrides<TTable extends TableDefinition,
   source: Entity<TTable, TRelations>,
 ): void {
   copySerializationOverrides(target as unknown as EntityBase, source as unknown as EntityBase)
-}
-
-export function markEntityRelationObserved<TTable extends TableDefinition, TRelations extends RelationMap>(
-  entity: Entity<TTable, TRelations>,
-  name: string,
-): void {
-  observeRelation(entity as unknown as EntityBase, name)
 }

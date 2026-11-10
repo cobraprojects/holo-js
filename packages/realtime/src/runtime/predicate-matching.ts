@@ -4,12 +4,6 @@ export type DatabaseQueryPredicateObservation = {
   readonly value: unknown
 }
 
-export const EMPTY_MUTATION_VALUE_KEYS: readonly string[] = Object.freeze([])
-
-function hasRecordKey(record: Readonly<Record<string, unknown>>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key)
-}
-
 function isNumberLike(value: unknown): boolean {
   return typeof value === 'number' || typeof value === 'bigint'
 }
@@ -21,10 +15,6 @@ function isUnsafeInteger(value: unknown): boolean {
 function comparesBooleanWithNumber(left: unknown, right: unknown): boolean {
   return (typeof left === 'boolean' && (typeof right === 'boolean' || isNumberLike(right)))
     || (typeof right === 'boolean' && isNumberLike(left))
-}
-
-export function holdsUnsafeIntegerPredicate(predicates: readonly DatabaseQueryPredicateObservation[]): boolean {
-  return predicates.some(predicate => Array.isArray(predicate.value) ? predicate.value.some(isUnsafeInteger) : isUnsafeInteger(predicate.value))
 }
 
 export function compareValues(left: unknown, right: unknown): number | undefined {
@@ -162,48 +152,4 @@ export function matchesPredicateValue(
     default:
       return undefined
   }
-}
-
-export function matchesPredicate(
-  row: Readonly<Record<string, unknown>>,
-  predicate: DatabaseQueryPredicateObservation,
-): boolean | undefined {
-  if (!hasRecordKey(row, predicate.column)) {
-    return undefined
-  }
-
-  const value = row[predicate.column]
-  return matchesPredicateValue(value, predicate)
-}
-
-export function matchesPredicates(
-  row: Readonly<Record<string, unknown>>,
-  predicates: readonly DatabaseQueryPredicateObservation[],
-): boolean | undefined {
-  const firstPredicate = predicates[0]
-  if (!firstPredicate) {
-    return true
-  }
-
-  if (predicates.length === 1) {
-    if (!hasRecordKey(row, firstPredicate.column)) {
-      return undefined
-    }
-
-    const value = row[firstPredicate.column]
-    return matchesPredicateValue(value, firstPredicate)
-  }
-
-  for (const predicate of predicates) {
-    const matches = matchesPredicate(row, predicate)
-    if (typeof matches === 'undefined') {
-      return undefined
-    }
-
-    if (!matches) {
-      return false
-    }
-  }
-
-  return true
 }

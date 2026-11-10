@@ -7,10 +7,8 @@ export type DatabaseMutationEvent = {
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly previousRows?: readonly Readonly<Record<string, unknown>>[]
   readonly primaryKey?: string
-  readonly publicationStartedAt?: number
   readonly rows?: readonly Readonly<Record<string, unknown>>[]
   readonly tableName: string
-  readonly unordered?: true
   readonly values?: Readonly<Record<string, unknown>>
 }
 
@@ -35,9 +33,7 @@ export type DatabaseDependencyInvalidationMetadata = {
   readonly exactPredicates: readonly ParsedPredicateDependency[]
   readonly hasMutationDependency: boolean
   readonly predicates: readonly ParsedPredicateDependency[]
-  readonly publicationStartedAt?: number
   readonly tableDependencies: readonly string[]
-  readonly unordered?: true
 }
 
 export type DatabaseDependencyInvalidationEventWithMetadata = DatabaseDependencyInvalidationEvent & {

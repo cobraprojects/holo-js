@@ -11,22 +11,10 @@ import {
   replaceValueAtPath,
 } from './result-value-replacement'
 
-export type PathValueReplacement = {
-  readonly path: readonly RealtimePatchPathSegment[]
-  readonly value: unknown
-}
-
 export type PathSpliceReplacement = {
   readonly index: number
   readonly deleteCount: number
   readonly values: readonly unknown[]
-}
-
-export function replaceValuesAtPaths(
-  value: unknown,
-  replacements: readonly PathValueReplacement[],
-): unknown {
-  return replaceValuesAtPathsUsing(value, replacements, replacement => replacement.value)
 }
 
 export function replaceValuesAtPathsUsing<TReplacement extends {
@@ -56,20 +44,6 @@ export function replaceValuesAtPathsUsing<TReplacement extends {
   }
 
   return replaceValueWithPlan(value, replacementPlan)
-}
-
-export function spliceValueAtPath(
-  value: unknown,
-  path: readonly RealtimePatchPathSegment[],
-  index: number,
-  deleteCount: number,
-  items: readonly unknown[],
-): unknown {
-  return spliceValuesAtPath(value, path, [{
-    index,
-    deleteCount,
-    values: items,
-  }])
 }
 
 export function spliceValuesAtPath(

@@ -33,13 +33,13 @@ import {
   type InitialQueryResult,
   type InternalRealtimeExecutionResult,
 } from './state'
-import type { DatabaseQueryObservation, DatabaseQueryRead } from './query-state'
+import type { DatabaseQueryObservation } from './query-state'
 
 export function getRealtimeDatabaseContext(): RealtimeDatabaseContext {
   return createRuntimeDatabaseContext(getRuntimeState().bindings)
 }
 
-function projectDatabaseQueryObservation(query: DatabaseQueryRead): DatabaseQueryObservation {
+function projectDatabaseQueryObservation(query: DatabaseQueryObservation): DatabaseQueryObservation {
   return Object.freeze({
     connectionName: query.connectionName,
     dependencies: query.dependencies,

@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto'
-import { rebindDatabaseQueryObservationResult } from '../cache'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import type { TableDefinition } from '../schema/types'
@@ -65,7 +64,6 @@ export async function* queryBatches<
       const compare = traversal.direction === 'desc' ? compareChunkValuesDescending : compareChunkValuesAscending
       const decimal = resultColumnDefinition(withResolvedDefinitions({ ...plan, source: { ...plan.source, table } }, input.getConnectionName()), key)?.kind === 'decimal'
       rows.sort((left, right) => compare(left[key], right[key], decimal))
-      rebindDatabaseQueryObservationResult(fetchedRows, rows)
     }
     const values = await transform(rows)
     for (let index = 0; index < values.length; index += size) yield values.slice(index, index + size)
@@ -118,7 +116,6 @@ export async function* queryBatches<
       for (const hiddenColumn of hiddenColumns) delete attributes[hiddenColumn]
       return attributes
     })
-    rebindDatabaseQueryObservationResult(batch.data, rows)
     yield await transform(rows)
     cursor = batch.nextCursor
   } while (cursor !== null)

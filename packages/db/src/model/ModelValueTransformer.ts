@@ -1,12 +1,10 @@
-import { serializeDatabaseQueryObservationsOnArrayWrites } from '../cache'
 import { HydrationError } from '../core/errors'
-import { booleanStorageValue, calendarMidnightWriteValue, coerceBoolean, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, readsAsInteger, isConvertedByModelReads, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
+import { booleanStorageValue, calendarMidnightWriteValue, coerceBoolean, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
 import { ownEntry } from './entityRuntime'
 import { getModelRuntimeSettings } from './runtimeSettings'
-import { serializeModels } from './serialize'
 import type { BuiltInCastName, ModelCastDefinition, ModelDefinition, ModelRecord } from './types'
 
 type WriteMode = 'create' | 'update'
@@ -94,7 +92,6 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
 
     if (Array.isArray(value)) {
       const serialized = value.map(item => this.serializeRelationValue(item))
-      serializeDatabaseQueryObservationsOnArrayWrites(serialized)
       return serialized
     }
 
@@ -177,67 +174,6 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     const cast = this.resolveCast(key)
     const casted = this.isNativeJsonCast(key, cast) ? value : this.applyCastSet(cast, value)
     return this.applySchemaWriteNormalization(key, casted)
-  }
-
-  readStoredAttributes(row: Readonly<Record<string, unknown>>, dialect: SchemaDialectName, written = false): Readonly<Record<string, unknown>> {
-    const normalized = this.normalizeFromStorage(row as Partial<ModelRecord<TTable>>, {}, written ? 'serialized' : 'database', dialect)
-    return Object.freeze(Object.fromEntries(Object.entries(normalized).map(([key, value]) => [key, serializeModels(value)])))
-  }
-
-  readStoredRow(row: Readonly<Record<string, unknown>>, dialect: SchemaDialectName, written = false): Readonly<Record<string, unknown>> {
-    const normalized = this.normalizeFromStorage(row as Partial<ModelRecord<TTable>>, {}, written ? 'serialized' : 'database', dialect)
-    return Object.freeze(Object.fromEntries(Object.entries(normalized).map(([key, value]) => [key, serializeModels(this.serializeAttributeValue(key, value))])))
-  }
-
-  readsWithoutRejectingValues(): boolean {
-    if (this.definition.untyped) return false
-    const { casts, createdAtColumn, updatedAtColumn, deletedAtColumn, table } = this.definition
-    const keys = new Set([...Object.keys(table.columns), ...Object.keys(casts), ...[createdAtColumn, updatedAtColumn, deletedAtColumn].filter(key => key !== undefined)])
-    return [...keys].every((key) => {
-      const column = ownEntry(table.columns, key)
-      if (column && (column.kind === 'json' || column.kind === 'vector')) return false
-      const cast = this.resolveCast(key)
-      if (cast === undefined) return true
-      const name = this.parseBuiltInCast(cast)?.name
-      if (name === 'date' || name === 'datetime' || name === 'timestamp') return column !== undefined && storesDate(column)
-      return name === 'boolean' || name === 'number' || name === 'string'
-    })
-  }
-
-  readsColumnAsStored(key: string): boolean {
-    const column = ownEntry(this.definition.table.columns, key)
-    return this.resolveCast(key) === undefined && !(column && isConvertedByModelReads(column))
-  }
-
-  readsKeyAsStored(key: string): boolean {
-    return this.readsColumnAsStored(key) && ownEntry(this.definition.table.columns, key)?.kind !== 'decimal'
-  }
-
-  comparesWithStoredValues(key: string): boolean {
-    const cast = this.resolveCast(key)
-    const column = ownEntry(this.definition.table.columns, key)
-    if (cast === undefined) {
-      if (!column || !isConvertedByModelReads(column)) return true
-      return storesDate(column) && !this.definition.serializeDate
-    }
-    const builtInCast = this.parseBuiltInCast(cast)
-    if (builtInCast?.name === 'boolean') return column?.kind === 'boolean'
-    if (builtInCast?.name === 'number') return column !== undefined && readsAsInteger(column)
-    return this.hasBuiltInDateCast(key)
-      && builtInCast?.parameter === undefined
-      && !this.definition.serializeDate
-      && column !== undefined
-      && storesDate(column)
-  }
-
-  readsRowsAsStored(): boolean {
-    if (this.isUntypedIncrementingKey(this.definition.primaryKey)) return false
-    const { casts, createdAtColumn, updatedAtColumn, deletedAtColumn, table } = this.definition
-    const keys = new Set([...Object.keys(table.columns), ...Object.keys(casts), ...[createdAtColumn, updatedAtColumn, deletedAtColumn].filter(key => key !== undefined)])
-    return [...keys].every((key) => {
-      const column = ownEntry(table.columns, key)
-      return !(column && isConvertedByModelReads(column)) && this.resolveCast(key) === undefined
-    })
   }
 
   resolveCast(key: string): ModelCastDefinition | undefined {

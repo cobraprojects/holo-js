@@ -1,3 +1,4 @@
+import { hasDatabaseDependencyInvalidationListeners } from '../../db/src/cache'
 import { applyWireSnapshotPatch } from '../src/client/patching'
 import { isRecord } from '../src/runtime/value'
 import { createNativeRelationalAdapter, expectEquivalentWireOperations } from './helpers/native-fixture'
@@ -2097,15 +2098,11 @@ function createPatchBenchmarkQuery(counters: BenchmarkCounters, rows: readonly B
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -2134,15 +2131,11 @@ function createPredicateOnlyPatchBenchmarkQuery(counters: BenchmarkCounters, row
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: 'in',
           value: [1, 2],
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -2166,15 +2159,11 @@ function createWidePatchBenchmarkQuery(counters: BenchmarkCounters, rows: readon
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -2201,24 +2190,11 @@ function createSelectedPatchBenchmarkQuery(counters: BenchmarkCounters, rows: re
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [
-          {
-            column: 'id',
-            resultKey: 'id',
-          },
-          {
-            column: 'title',
-            resultKey: 'title',
-          },
-        ],
         tableName,
       })
 
@@ -2246,15 +2222,11 @@ function createOrderedPatchBenchmarkQuery(counters: BenchmarkCounters, rows: rea
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -2282,17 +2254,11 @@ function createOffsetOrderedPatchBenchmarkQuery(counters: BenchmarkCounters, row
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        limit: pageSize,
-        offset: pageSize,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -2330,38 +2296,21 @@ function createPaginatedPatchBenchmarkQuery(counters: BenchmarkCounters, rows: r
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        limit: pageSize,
-        offset: 0,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        pagination: {
-          currentPage: 1,
-          kind: 'standard',
-          pageName: 'page',
-          perPage: result.length,
-          total: rows.length,
-        },
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result: meta,
-        selections: [],
         tableName,
       })
 
@@ -2399,23 +2348,11 @@ function createPaginationMetaPredicateOnlyBenchmarkQuery(counters: BenchmarkCoun
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        pagination: {
-          currentPage: 1,
-          kind: 'standard',
-          pageName: 'page',
-          perPage,
-          total: totalRows,
-        },
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result: meta,
-        resultPath: Object.freeze(['meta']),
-        selections: [],
         tableName,
       })
 
@@ -2456,38 +2393,21 @@ function createPaginatedOffsetPatchBenchmarkQuery(counters: BenchmarkCounters, r
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        limit: perPage,
-        offset,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        pagination: {
-          currentPage,
-          kind: 'standard',
-          pageName: 'page',
-          perPage,
-          total: rows.length,
-        },
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result: meta,
-        selections: [],
         tableName,
       })
 
@@ -2531,46 +2451,22 @@ function createCursorPaginatedPatchBenchmarkQuery(counters: BenchmarkCounters, r
       recordDatabaseQueryDependencies(dependencies)
       recordDatabaseQueryObservation({
         connectionName,
-        cursorRowCount: rows.length,
-        cursorRows: observedRows,
         dependencies,
-        limit: pageSize,
-        offset: undefined,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        resultPath: Object.freeze(['data']),
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'id', direction: 'asc' }],
-        pagination: {
-          cursorName: 'cursor',
-          hasMorePages: nextCursor !== null,
-          kind: 'cursor',
-          nextCursor,
-          perPage: pageSize,
-          prevCursor: null,
-          rows: observedRows,
-          rowCount: rows.length,
-        },
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result: nextCursor,
-        resultPath: Object.freeze(['nextCursor']),
-        selections: [],
         tableName,
       })
 
@@ -2611,25 +2507,11 @@ function createCursorPaginationPredicateOnlyBenchmarkQuery(counters: BenchmarkCo
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'priority', direction: 'asc' }],
-        pagination: {
-          cursorName: 'cursor',
-          hasMorePages: nextCursor !== null,
-          kind: 'cursor',
-          nextCursor,
-          perPage,
-          prevCursor: null,
-          rows: observedRows,
-          rowCount: rows.length,
-        },
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result: nextCursor,
-        selections: [],
         tableName,
       })
 
@@ -3827,15 +3709,11 @@ function createPriorityOrderedPatchBenchmarkQuery(counters: BenchmarkCounters, r
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [{ column: 'priority', direction: 'asc' }],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -3863,15 +3741,11 @@ function createWrapperPatchBenchmarkQuery(counters: BenchmarkCounters, rows: rea
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates: [{
           column: 'user_id',
           operator: '=',
           value: 1,
         }],
-        result,
-        selections: [],
         tableName,
       })
 
@@ -3907,58 +3781,33 @@ function createAggregatePatchBenchmarkQuery(counters: BenchmarkCounters, rows: r
       }]
       recordDatabaseQueryDependencies(dependencies)
       recordDatabaseQueryObservation({
-        aggregate: { kind: 'count' },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: count,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
-        aggregate: { column: 'score', kind: 'sum' },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: scoreSum,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
-        aggregate: { absoluteSum: scoreSum, column: 'score', count, kind: 'avg', sum: scoreSum },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: scoreAverage,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
-        aggregate: { column: 'score', kind: 'min' },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: scoreMinimum,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
-        aggregate: { column: 'score', kind: 'max' },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: scoreMaximum,
-        selections: [],
         tableName,
       })
 
@@ -3992,25 +3841,15 @@ function createAmbiguousAggregatePatchBenchmarkQuery(counters: BenchmarkCounters
       }]
       recordDatabaseQueryDependencies(dependencies)
       recordDatabaseQueryObservation({
-        aggregate: { kind: 'count' },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: count,
-        selections: [],
         tableName,
       })
       recordDatabaseQueryObservation({
-        aggregate: { column: 'id', kind: 'max' },
         connectionName,
         dependencies,
-        orderBy: [],
-        patchable: true,
         predicates,
-        result: maximum,
-        selections: [],
         tableName,
       })
 
@@ -4660,15 +4499,11 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         recordDatabaseQueryObservation({
           connectionName,
           dependencies,
-          orderBy: [],
-          patchable: true,
           predicates: [{
             column: 'user_id',
             operator: '!=',
             value: 1,
           }],
-          result,
-          selections: [],
           tableName,
         })
 
@@ -4841,7 +4676,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(true)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(true)
     expect(counters.queryExecutions).toBe(1)
     expect(counters.emittedSnapshots).toBe(1)
 
@@ -4849,7 +4684,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     subscription.unsubscribe()
     const cleanupDurationMs = Number((performance.now() - cleanupStartedAt).toFixed(3))
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
     expect(realtimeRuntimeInternals.getRuntimeState().unsubscribeFromDatabase).toBeUndefined()
 
     adapter.queries.length = 0
@@ -5129,15 +4964,11 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         recordDatabaseQueryObservation({
           connectionName,
           dependencies,
-          orderBy: [],
-          patchable: false,
           predicates: [{
             column: 'user_id',
             operator: '=',
             value: 1,
           }],
-          result: result.rows,
-          selections: [],
           tableName,
         })
 
@@ -5357,15 +5188,11 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         recordDatabaseQueryObservation({
           connectionName,
           dependencies,
-          orderBy: [],
-          patchable: false,
           predicates: [{
             column: 'user_id',
             operator: '=',
             value: 1,
           }],
-          result: result.rows,
-          selections: [],
           tableName,
         })
 
@@ -5455,15 +5282,11 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         recordDatabaseQueryObservation({
           connectionName,
           dependencies,
-          orderBy: [],
-          patchable: false,
           predicates: [{
             column: 'user_id',
             operator: '=',
             value: 1,
           }],
-          result: result.rows,
-          selections: [],
           tableName,
         })
 
@@ -7035,18 +6858,10 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         recordDatabaseQueryObservation({
           connectionName,
           dependencies,
-          limit: 1,
-          orderBy: [],
-          patchable: true,
           predicates: [{
             column: 'id',
             operator: '=',
             value: middleRowId,
-          }],
-          result,
-          selections: [{
-            column: 'title',
-            resultKey: 'title',
           }],
           tableName,
         })
@@ -7142,19 +6957,10 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         recordDatabaseQueryObservation({
           connectionName,
           dependencies,
-          limit: 1,
-          orderBy: [],
-          patchable: true,
           predicates: [{
             column: 'id',
             operator: '=',
             value: 700,
-          }],
-          result,
-          resultPath: [],
-          selections: [{
-            column: 'title',
-            resultKey: 'title',
           }],
           tableName,
         })
