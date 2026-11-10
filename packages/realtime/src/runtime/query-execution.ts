@@ -33,9 +33,24 @@ import {
   type InitialQueryResult,
   type InternalRealtimeExecutionResult,
 } from './state'
+import type { DatabaseQueryObservation, DatabaseQueryRead } from './query-state'
 
 export function getRealtimeDatabaseContext(): RealtimeDatabaseContext {
   return createRuntimeDatabaseContext(getRuntimeState().bindings)
+}
+
+function projectDatabaseQueryObservation(query: DatabaseQueryRead): DatabaseQueryObservation {
+  return Object.freeze({
+    connectionName: query.connectionName,
+    dependencies: query.dependencies,
+    predicates: Object.freeze(query.predicates.map(predicate => Object.freeze({
+      column: predicate.column,
+      operator: predicate.operator,
+      value: predicate.value,
+    }))),
+    primaryKey: query.primaryKey,
+    tableName: query.tableName,
+  })
 }
 
 export async function executeRealtimeQueryInternal<TDefinition extends RealtimeQueryDefinitionMetadata>(
@@ -63,7 +78,7 @@ export async function executeRealtimeQueryInternal<TDefinition extends RealtimeQ
       name: definition.name,
       data,
       dependencies: result.dependencies,
-      queries: result.queries,
+      queries: Object.freeze(result.queries.map(projectDatabaseQueryObservation)),
       contexts: result.contexts,
     })
   })

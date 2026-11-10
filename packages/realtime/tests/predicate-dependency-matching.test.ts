@@ -9,8 +9,6 @@ function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): Databas
   return {
     connectionName: 'main',
     dependencies: ['db:main:posts'],
-    orderBy: [],
-    patchable: true,
     predicates: [],
     tableName: 'posts',
     ...overrides,

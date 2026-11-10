@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import v8 from 'node:v8'
+import vm from 'node:vm'
 import { clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, hasMany, hasManyThrough, resetDB, resetDatabaseDependencyInvalidationListeners, type DriverAdapter } from '@holo-js/db'
 import { createMySQLAdapter } from '../../db-mysql/src'
 import { createPostgresAdapter } from '../../db-postgres/src'
@@ -472,3 +474,40 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('an 
     expect(subscription.current.data).toEqual(await handler())
   })
 })
+
+function collectGarbage(): () => void {
+  v8.setFlagsFromString('--expose_gc')
+  return vm.runInNewContext('gc') as () => void
+}
+
+describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('an active subscription on %s', (driver) => {
+  it('keeps no reference to the rows its query read once the handler has returned', async () => {
+    const { db, tableName } = await createPosts(driver)
+    const rowRefs: WeakRef<object>[] = []
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({
+      access: 'public',
+      handler: async () => {
+        const posts = await db.table(tableName).select('id', 'title').orderBy('id').get() as Post[]
+        for (const post of posts) rowRefs.push(new WeakRef(post))
+        return posts.length
+      },
+    }), {}, {
+      onData: () => {},
+      onError: (error) => { throw error },
+    })
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: ({ db }) => db.table(tableName).insert({ id: 3, title: 'Third' }),
+    }))
+    expect(subscription.current.data).toBe(3)
+    expect(rowRefs.length).toBeGreaterThan(0)
+
+    const gc = collectGarbage()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await new Promise(resolve => setImmediate(resolve))
+      gc()
+    }
+    expect(rowRefs.filter(reference => reference.deref() !== undefined)).toEqual([])
+  })
+})
+

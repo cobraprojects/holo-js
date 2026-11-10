@@ -173,11 +173,9 @@ describe('@holo-js/realtime', () => {
     expect(entry?.queries).toEqual([expect.objectContaining({
       connectionName: 'main',
       tableName: 'posts',
-      limit: 5,
-      orderBy: [{ column: 'id', direction: 'desc' }],
-      patchable: true,
       predicates: [{ column: 'title', operator: '=', value: 'First' }],
     })])
+    expect(Object.keys(entry?.queries[0] ?? {}).sort()).toEqual(['connectionName', 'dependencies', 'predicates', 'primaryKey', 'tableName'])
     expect('queries' in subscription.current).toBe(false)
   })
 

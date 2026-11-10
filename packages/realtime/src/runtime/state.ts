@@ -16,6 +16,7 @@ import type {
 } from './dependencies'
 import type {
   DatabaseQueryObservation,
+  DatabaseQueryRead,
 } from './query-state'
 import type { RealtimePatchPathSegment } from './result-patching'
 
@@ -130,7 +131,7 @@ export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata
 export type DatabaseDependencyCollectionWithQueries<TValue> = {
   readonly contexts: ReadonlyMap<string, ReadonlySet<number>>
   readonly dependencies: readonly string[]
-  readonly queries: readonly DatabaseQueryObservation[]
+  readonly queries: readonly DatabaseQueryRead[]
   readonly value: TValue
 }
 
