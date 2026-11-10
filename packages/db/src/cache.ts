@@ -424,13 +424,11 @@ const refreshOnlyObservationIndexes = new AsyncLocalStorage<Set<number>>()
 const refreshOnlyObservations = new WeakSet<DatabaseQueryObservation>()
 const refreshOnlyTables = new AsyncLocalStorage<Set<string>>()
 
-type MutationPreviousRowsRequirement = (connectionName: string, tableName: string, columns: readonly string[]) => boolean
 
 function getQueryCacheBridgeState(): {
   bridge?: DatabaseQueryCacheBridge
   dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
   dependencyInvalidationPublishers?: DatabaseDependencyInvalidationPublisherCandidate[]
-  mutationPreviousRowsRequirements?: Map<DatabaseDependencyInvalidationListenerInternal, MutationPreviousRowsRequirement>
   mutationPublications?: MutationPublicationState
   recentDatabaseInvalidationIds?: Map<string, number>
 } {
@@ -439,7 +437,6 @@ function getQueryCacheBridgeState(): {
       bridge?: DatabaseQueryCacheBridge
       dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
       dependencyInvalidationPublishers?: DatabaseDependencyInvalidationPublisherCandidate[]
-      mutationPreviousRowsRequirements?: Map<DatabaseDependencyInvalidationListenerInternal, MutationPreviousRowsRequirement>
       mutationPublications?: MutationPublicationState
       recentDatabaseInvalidationIds?: Map<string, number>
     }
@@ -474,7 +471,6 @@ export function onDatabaseDependencyInvalidated(
 
   return () => {
     state.dependencyInvalidationListeners?.delete(internalListener)
-    state.mutationPreviousRowsRequirements?.delete(internalListener)
   }
 }
 
@@ -490,7 +486,6 @@ function onDatabaseDependencyInvalidationPublished(publisher: DatabaseDependency
 
 export function resetDatabaseDependencyInvalidationListeners(): void {
   getQueryCacheBridgeState().dependencyInvalidationListeners = undefined
-  getQueryCacheBridgeState().mutationPreviousRowsRequirements = undefined
 }
 
 function getMutationPublicationState(): MutationPublicationState {
@@ -610,22 +605,6 @@ function recordRemoteMutationPublication(dependencies: readonly string[]): void 
   if (records.length > 0) {
     recordMutationPublications(records, undefined)
   }
-}
-
-function setMutationPreviousRowsRequirement(listener: DatabaseDependencyInvalidationListener, requirement: MutationPreviousRowsRequirement): void {
-  const state = getQueryCacheBridgeState()
-  state.mutationPreviousRowsRequirements ??= new Map()
-  state.mutationPreviousRowsRequirements.set(listener as DatabaseDependencyInvalidationListenerInternal, requirement)
-}
-
-function requiresMutationPreviousRows(connectionName: string, tableName: string, columns: readonly string[]): boolean {
-  const requirements = getQueryCacheBridgeState().mutationPreviousRowsRequirements
-  if (!requirements) return false
-  const canonicalName = canonicalTableName(connectionName, tableName)
-  for (const requirement of requirements.values()) {
-    if (requirement(connectionName, canonicalName, columns)) return true
-  }
-  return false
 }
 
 export async function collectDatabaseQueryDependencies<TValue>(
@@ -3337,8 +3316,6 @@ export const queryCacheInternals = {
   hasUnstoredFetchedBoolean,
   readFetchedRow,
   readMutationRow,
-  setMutationPreviousRowsRequirement,
-  requiresMutationPreviousRows,
   collectDatabaseQueryDependencies: collectDatabaseQueryDependenciesInternal,
   configureDatabaseQueryCacheBridge,
   createDatabaseMutationEvent,
