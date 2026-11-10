@@ -3701,7 +3701,7 @@ export class TableQueryBuilder<
     const databaseRows = !needsStoredRows
       ? keyedRows
       : options.canReadRows ? await this.readWrittenRows(keyedRows) : undefined
-    const dependencyRows = databaseRows ?? keyedRows.map(row => this.withoutDecimalColumns(row))
+    const dependencyRows = databaseRows ?? [Object.freeze({})]
     const mutations = !hasInvalidationListeners
       ? []
       : this.holdsUnreadableInteger([...databaseRows ?? [], ...options.previousRows ?? []])
