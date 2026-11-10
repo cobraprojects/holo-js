@@ -441,6 +441,19 @@ describe('sqlite model on a connection outside the generated schema', () => {
   })
 })
 
+describe.each(integrationDrivers(['postgres'] as const))('%s cached reads after set_config in SELECT', driver => {
+  it.each(['pg_catalog."set_config"', String.raw`U&"set\005fconfig"`])('refreshes bare names after a real %s call', async call => {
+    const { db, name, home, tenant } = await openSingleSession(driver)
+    useMemoryCache()
+    await DB.table(`${home}.${name}`).insert({ id: 1, name: 'home' })
+    expect(await cachedNames(name)).toEqual(['home'])
+    await db.unsafeQuery(unsafeSql(`SELECT 'set_config(ignored)' AS note, ${call} /* call */ ($key$search_path$key$, '${tenant}', false)`))
+    expect(await cachedNames(name)).toEqual([])
+    await DB.table(`${tenant}.${name}`).insert({ id: 2, name: 'tenant' })
+    expect(await cachedNames(name)).toEqual(['tenant'])
+  })
+})
+
 class RollbackRequested extends Error {}
 
 describe.each(integrationDrivers(['postgres'] as const))('%s table identity after a rolled-back search_path change', (driver) => {

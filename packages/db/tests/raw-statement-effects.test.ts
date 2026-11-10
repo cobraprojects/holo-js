@@ -46,4 +46,32 @@ describe('raw statement schema effects', () => {
   ])('advances the schema generation for %s', (sql) => {
     expect(isSchemaPreservingRawStatement(sql)).toBe(false)
   })
+
+  it.each([
+    ['sqlite', "UPDATE posts SET name = 'search_path; set_config(''x'')' /* ; DROP TABLE posts */; -- tail"],
+    ['sqlite', "SELECT 'into; set_config' AS [search_path]"],
+    ['postgres', "SELECT $text$search_path; set_config('x')$text$ /* outer /* nested */ ; INTO ignored */;"],
+    ['postgres', String.raw`SELECT E'escaped\' search_path; set_config(ignored)'`],
+    ['mysql', String.raw`SELECT 'search_path; set_config(\'ignored\')' # ; INTO ignored`],
+    ['mysql', 'SELECT "search_path; set_config(ignored)"; -- tail'],
+  ])('keeps literal and comment contents inert on %s: %s', (dialect, sql) => {
+    expect(isSchemaPreservingRawStatement(sql, dialect)).toBe(true)
+  })
+
+  it.each([
+    ['postgres', `SELECT pg_catalog."set_config" /* comment */ ('statement_timeout', '1000', false)`],
+    ['postgres', String.raw`SELECT U&"set\005fconfig"('statement_timeout', '1000', false)`],
+    ['postgres', "SELECT 'safe'; /* outer /* nested */ ignored */ SET ROLE tenant"],
+    ['postgres', "SELECT 1 -- comment\r; SET ROLE tenant"],
+    ['postgres', 'SELECT été$tag$; RESET ROLE; SELECT $tag$'],
+    ['postgres', String.raw`SELECT 'backslash\', set_config('statement_timeout', '1000', false)`],
+    ['postgres', String.raw`SELECT 'backslash\', set_config FROM posts`],
+    ['mysql', 'SELECT 1 /*! ; SET SESSION sql_mode = NO_BACKSLASH_ESCAPES */'],
+    ['mysql', 'SELECT 1--2; SET NAMES utf8mb4'],
+    ['mysql', String.raw`SELECT 'backslash\'; SET NAMES utf8mb4 -- '`],
+    ['sqlite', "SELECT 'safe'; ATTACH DATABASE ':memory:' AS aux"],
+    ['sqlite', "SELECT 'unterminated"],
+  ])('retains conservative session classification on %s: %s', (dialect, sql) => {
+    expect(isSchemaPreservingRawStatement(sql, dialect)).toBe(false)
+  })
 })

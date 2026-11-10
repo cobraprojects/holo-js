@@ -93,6 +93,38 @@ describe.each(modes)('raw write invalidation on $driver (returning: $returning)'
     await f.expectFresh()
   })
 
+  it('discards ordinary raw writes containing SQL-like text on rollback', async () => {
+    const f = await fixture()
+    const primed = await cache.get('raw.active')
+    const literal = driver === 'postgres' ? "$note$search_path; set_config('ignored')$note$"
+      : driver === 'mysql' ? "'search_path; set_config(\\'ignored\\')'" : "'search_path; set_config(''ignored'')'"
+    const comment = driver === 'postgres' ? '/* outer /* nested */ search_path; set_config( */'
+      : driver === 'mysql' ? '# search_path; set_config(\n' : '-- search_path; set_config(\n'
+    const statement = { sql: f.sql.update.replace(' WHERE', `, name = ${literal} /* search_path; set_config( */ WHERE`) + `; ${comment}`, bindings: f.bindings(false), unsafe: true as const }
+    await expect(f.db.transaction(async tx => {
+      await tx.unsafeExecute(statement)
+      expect(f.events).toEqual([])
+      expect(await cache.get('raw.active')).toEqual(primed)
+      throw new Error('rollback SQL-like text')
+    })).rejects.toThrow('rollback SQL-like text')
+    expect(f.events).toEqual([])
+    expect(await cache.get('raw.active')).toEqual(primed)
+    await f.expectFresh()
+    await f.db.unsafeExecute(statement)
+    expect(f.events).toHaveLength(1)
+    await f.expectFresh()
+  })
+
+  it('does not publish a failed ordinary write containing SQL-like text', async () => {
+    const f = await fixture()
+    const primed = await cache.get('raw.active')
+    const sql = f.sql.insert.replace("(2, 'inserted'", "(1, 'search_path; set_config(''ignored'')'") + '; /* search_path; set_config( */'
+    await expect(f.db.unsafeExecute({ sql, bindings: f.bindings(true), unsafe: true })).rejects.toThrow()
+    expect(f.events).toEqual([])
+    expect(await cache.get('raw.active')).toEqual(primed)
+    await f.expectFresh()
+  })
+
   it.each([false, true])('leaves opaque CTE writes untracked even with a table label (scoped: %s)', async scoped => {
     const f = await fixture()
     const statement = {

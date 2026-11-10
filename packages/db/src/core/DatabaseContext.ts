@@ -417,7 +417,7 @@ export class DatabaseContext {
   }
 
   private async _runRawStatement<T>(statement: UnsafeStatement, run: () => Promise<T>): Promise<T> {
-    if (isSchemaPreservingRawStatement(statement.sql)) {
+    if (isSchemaPreservingRawStatement(statement.sql, this._dialect.name)) {
       const result = await run()
       const target = rawStatementWriteTarget(statement.sql, this._dialect.name)
       if (target) await this.invalidateTables([target])
