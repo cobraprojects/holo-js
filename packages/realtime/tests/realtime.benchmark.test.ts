@@ -19811,6 +19811,28 @@ describe('@holo-js/realtime refresh SQL cost', () => {
     expect(counters.queryExecutions).toBe(subscriptionCount * 2)
   })
 
+  it('refreshes each affected subscription once for a burst of writes inside one transaction', async () => {
+    const rows = createPatchBenchmarkRows()
+    const adapter = new BenchmarkModelAdapter(rows)
+    const db = createBenchmarkReturningDatabaseContext(adapter)
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const counters: BenchmarkCounters = { emittedSnapshots: 0, queryExecutions: 0 }
+    for (let index = 0; index < subscriptionCount; index += 1) {
+      await subscribeRealtimeQuery(createUserPostsCountedQuery(counters), {}, {
+        onData: () => { counters.emittedSnapshots += 1 },
+      })
+    }
+
+    const refreshQueries = await commitBenchmarkWrites(db, adapter, async (transaction) => {
+      for (const id of [1, 2, 3]) {
+        rows[id - 1] = { ...rows[id - 1]!, title: `Updated ${id}` }
+        await transaction.table('posts').where('id', id).update({ title: `Updated ${id}` })
+      }
+    })
+
+    expect(refreshQueries).toHaveLength(subscriptionCount)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
+  })
 
   it('issues no queries for a write to another table', async () => {
     const tables = createSizedAuthorPostTables(5)
@@ -19831,6 +19853,29 @@ describe('@holo-js/realtime refresh SQL cost', () => {
     expect(counters.queryExecutions).toBe(1)
   })
 
+  it('re-executes exactly one query when a write to its own table contradicts the subscription predicate', async () => {
+    const rows = createAlternatingOwnerPostRows()
+    const adapter = new BenchmarkModelAdapter(rows)
+    const db = createBenchmarkReturningDatabaseContext(adapter)
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const counters: BenchmarkCounters = { emittedSnapshots: 0, queryExecutions: 0 }
+    await subscribeRealtimeQuery(createUserPostsCountedQuery(counters), {}, {
+      onData: () => { counters.emittedSnapshots += 1 },
+    })
+
+    const refreshQueries = await commitBenchmarkWrites(db, adapter, async (transaction) => {
+      for (let index = 0; index < rows.length; index += 1) {
+        if (rows[index]!.user_id === 2) rows[index] = { ...rows[index]!, title: 'Updated owner 2' }
+      }
+      await transaction.table('posts').where('user_id', 2).update({ title: 'Updated owner 2' })
+    })
+
+    expect(refreshQueries).toEqual([{
+      sql: `SELECT * FROM "posts" WHERE "user_id" = ? ORDER BY "id" ASC LIMIT ${pageSize}`,
+      bindings: [1],
+    }])
+    expect(counters.queryExecutions).toBe(2)
+  })
 
   it('issues no queries for an exact invalidation contradicting the subscription predicate', async () => {
     const rows = createAlternatingOwnerPostRows()
