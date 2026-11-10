@@ -2,15 +2,11 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { onDatabaseDependencyInvalidated, queryCacheInternals } from '@holo-js/db'
 import {
-  EMPTY_DATABASE_MUTATIONS,
   EMPTY_TABLE_DEPENDENCIES,
   parseDatabaseDependency,
   readDatabaseDependencyInvalidationMetadata,
-  createMutationIndex,
-  createMutationIndexKey,
   parseInvalidationEvent,
   type DatabaseDependencyInvalidationEventWithMutations,
-  type MutationIndex,
   type ParsedInvalidationEvent,
 } from './dependencies'
 import {
@@ -34,8 +30,6 @@ import {
 import {
   collectQueryEntriesForParsedInvalidations,
 } from './subscription-index'
-import { isQueryContradictedByMutationRows } from './predicate-dependency-matching'
-import type { DatabaseQueryObservation } from './query-state'
 import type {
   RealtimeQueryDefinitionMetadata,
 } from '../contracts'
@@ -166,27 +160,8 @@ function deferRefreshUntilSessionRelease(entry: ActiveQueryEntry<RealtimeQueryDe
   })
 }
 
-function isQueryContradictedByMutations(query: DatabaseQueryObservation, mutations: MutationIndex): boolean {
-  const queryMutations = mutations.get(createMutationIndexKey(query.connectionName, query.tableName)) ?? EMPTY_DATABASE_MUTATIONS
-  return queryMutations.length > 0 && queryMutations.every(mutation => isQueryContradictedByMutationRows(query, mutation))
-}
-
-function isEntryContradictedByMutations(
-  entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
-  mutations: MutationIndex,
-): boolean {
-  if (!entry.current || entry.refreshFailed || entry.schemaGeneration !== queryCacheInternals.currentSchemaGeneration()) return false
-  if (getRuntimeState().refreshes.get(entry.refreshKey)?.running) return false
-  if (entry.queries.length === 0) return false
-  if ([...entry.contexts.values()].some(contexts => contexts.size !== 1 || !contexts.has(entry.contextId))) return false
-  return entry.queries.every(query => isQueryContradictedByMutations(query, mutations))
-}
-
 async function refreshParsedInvalidations(events: readonly ParsedInvalidationEvent[]): Promise<void> {
-  const mutations = createMutationIndex(events)
-  await Promise.all(collectQueryEntriesForParsedInvalidations(events)
-    .filter(entry => !isEntryContradictedByMutations(entry, mutations))
-    .map(entry => scheduleRefreshKey(entry.refreshKey)))
+  await Promise.all(collectQueryEntriesForParsedInvalidations(events).map(entry => scheduleRefreshKey(entry.refreshKey)))
 }
 
 const refreshExecution = new AsyncLocalStorage<{ readonly generation: number, active: boolean }>()

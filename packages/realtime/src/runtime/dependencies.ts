@@ -1,4 +1,4 @@
-import { queryCacheInternals, type DatabaseDependencyInvalidationEvent } from '@holo-js/db'
+import type { DatabaseDependencyInvalidationEvent } from '@holo-js/db'
 import type { DatabaseQueryPredicateObservation } from './predicate-matching'
 export type DatabaseMutationEvent = {
   readonly connectionName: string
@@ -58,10 +58,7 @@ export type ParsedInvalidationEvent = {
   readonly tableDependencies: readonly string[]
 }
 
-export type MutationIndex = Map<string, readonly DatabaseMutationEvent[]>
-
-export const EMPTY_DATABASE_MUTATIONS: readonly DatabaseMutationEvent[] = Object.freeze([])
-export const EMPTY_MUTATION_INDEX: MutationIndex = new Map()
+const EMPTY_DATABASE_MUTATIONS: readonly DatabaseMutationEvent[] = Object.freeze([])
 export const EMPTY_TABLE_DEPENDENCIES: readonly string[] = Object.freeze([])
 
 const DATABASE_DEPENDENCY_PREFIX = 'db:'
@@ -69,36 +66,6 @@ const DATABASE_DEPENDENCY_METADATA_KEY = '__holoDatabaseDependencyMetadata__'
 const MUTATION_DEPENDENCY_SUFFIX = 'mutation'
 const WHERE_DEPENDENCY_PREFIX = 'where:'
 const WHERE_EXACT_DEPENDENCY_PREFIX = 'where-exact:'
-
-export function createMutationIndexKey(connectionName: string, tableName: string): string {
-  return `${connectionName}:${queryCacheInternals.canonicalTableName(connectionName, tableName)}`
-}
-
-export function createMutationIndex(events: readonly ParsedInvalidationEvent[]): MutationIndex {
-  const mutations = new Map<string, DatabaseMutationEvent[]>()
-  for (const event of events) {
-    for (const mutation of event.mutations) {
-      const key = createMutationIndexKey(mutation.connectionName, mutation.tableName)
-      const indexedMutations = mutations.get(key)
-      if (indexedMutations) {
-        indexedMutations.push(mutation)
-        continue
-      }
-
-      mutations.set(key, [mutation])
-    }
-  }
-
-  if (mutations.size === 0) {
-    return EMPTY_MUTATION_INDEX
-  }
-
-  for (const indexedMutations of mutations.values()) {
-    Object.freeze(indexedMutations)
-  }
-
-  return mutations
-}
 
 export function parseDatabaseDependency(dependency: string): ParsedDatabaseDependency | undefined {
   if (!dependency.startsWith(DATABASE_DEPENDENCY_PREFIX)) {

@@ -5,7 +5,6 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, mysqlTestConnection, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
-import { createMutationIndexKey } from '../src/runtime/dependencies'
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)
 
