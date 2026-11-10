@@ -8,6 +8,53 @@ import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)
 
 describe.each(drivers)('insert SQL comparisons on %s', (driver) => {
+  it.each(['declared', 'name-only'] as const)('skips unrelated inserts for a large %s primary key', async (mode) => {
+    const { db, schema } = await openDatabase(driver)
+    const name = `large_id_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, table => { table.id() })
+    onTestFinished(async () => {
+      resetRealtimeRuntime()
+      await schema.dropTable(name)
+    })
+    const table = defineGeneratedTable(name, { id: column.id() })
+    await db.table(table).insert({ id: 20000001 })
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    let runs = 0
+    const handler = async () => {
+      runs += 1
+      return db.table(mode === 'declared' ? table : name).where('id', 20000001).get()
+    }
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(table).insert({ id: 20000002 }) }))
+
+    expect(runs).toBe(1)
+    const id = driver === 'postgres' && mode === 'name-only' ? '20000001' : 20000001
+    expect(subscription.current.data).toEqual([{ id }])
+  })
+
+  it('refreshes fractional predicates on an undeclared column even when exactly representable in float32', async () => {
+    const { db, schema } = await openDatabase(driver)
+    const name = `fractional_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await db.executeCompiled({ sql: `CREATE TABLE ${name} (id INTEGER PRIMARY KEY, value REAL)`, source: 'schema' })
+    onTestFinished(async () => {
+      resetRealtimeRuntime()
+      await schema.dropTable(name)
+    })
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    let runs = 0
+    const handler = async () => {
+      runs += 1
+      return db.table(name).where('value', 0.5).get()
+    }
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(name).insert({ id: 1, value: 0.25 }) }))
+
+    expect(runs).toBe(2)
+    expect(subscription.current.data).toEqual(await handler())
+  })
+
   it.each([1.1, 16777217])('keeps a REAL equality subscription fresh for %s', async (value) => {
     const { db, schema } = await openDatabase(driver)
     const name = `real_${randomUUID().replaceAll('-', '').slice(0, 12)}`
@@ -97,13 +144,13 @@ describe.each(drivers)('insert SQL comparisons on %s', (driver) => {
       await schema.dropTable(name)
     })
     configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
-    const handler = () => db.table(name).where('value', 16777217).get()
+    const handler = () => db.table(name).where('value', 1.00000006).get()
     const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
 
-    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(name).insert({ id: 1, value: 16777217 }) }))
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(name).insert({ id: 1, value: 1.00000006 }) }))
 
     const fresh = await handler()
-    expect(fresh).toEqual([{ id: 1, value: 16777216 }])
+    expect(fresh).toEqual([{ id: 1, value: 1.0000001 }])
     expect(subscription.current.data).toEqual(fresh)
   })
 

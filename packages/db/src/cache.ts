@@ -2749,13 +2749,13 @@ function hasDatabaseCoercedPredicate(plan: SelectQueryPlan, connectionName: stri
   const coerced = (predicate: QueryPredicateNode): boolean => {
     if (predicate.kind === 'group') return predicate.predicates.some(coerced)
     if (!('column' in predicate)) return false
-    const kind = table?.columns[getColumnName(predicate.column)]?.kind
-    if (kind === 'real') return true
+    const column = table?.columns[getColumnName(predicate.column)]
+    if (column?.kind === 'real') return true
     if (predicate.kind !== 'comparison') return false
     const unsafeNumber = (value: unknown): boolean => Array.isArray(value)
       ? value.some(unsafeNumber)
-      : typeof value === 'number' && (!Number.isFinite(value)
-        || (kind !== 'integer' && kind !== 'bigInteger' && Math.fround(value) !== value))
+      : typeof value === 'number' && (!Number.isSafeInteger(value)
+        || (column !== undefined && !readsAsInteger(column) && column.kind !== 'boolean'))
     return unsafeNumber(predicate.value)
   }
   return plan.predicates.some(coerced)
