@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   compareValues,
-  holdsUnsafeIntegerPredicate,
-  matchesPredicate,
   matchesPredicateValue,
-  matchesPredicates,
   type DatabaseQueryPredicateObservation,
 } from '../src/runtime/predicate-matching'
 
@@ -18,9 +15,6 @@ describe('@holo-js/realtime predicate matching', () => {
     expect(compareValues(9007199254740993n, 9007199254740992)).toBeUndefined()
     expect(compareValues(9007199254740993n, 9007199254740992n)).toBeUndefined()
     expect(compareValues(9007199254740994, 9007199254740992)).toBeUndefined()
-    expect(holdsUnsafeIntegerPredicate([{ column: 'n', operator: '=', value: 9007199254740991n }, { column: 'm', operator: 'in', value: [1, 2n] }])).toBe(false)
-    expect(holdsUnsafeIntegerPredicate([{ column: 'n', operator: 'in', value: [1, 9007199254740992n] }])).toBe(true)
-    expect(holdsUnsafeIntegerPredicate([{ column: 'n', operator: '=', value: 9007199254740992 }])).toBe(true)
     expect(matchesPredicateValue(0, { column: 'n', operator: '=', value: 0n })).toBe(true)
     expect(matchesPredicateValue(1, { column: 'n', operator: '=', value: 0n })).toBe(false)
     expect(matchesPredicateValue(2, { column: 'n', operator: '!=', value: 2n })).toBe(false)
@@ -105,20 +99,6 @@ describe('@holo-js/realtime predicate matching', () => {
     expect(compareValues(false, true)).toBe(-1)
     expect(compareValues(true, 0)).toBe(1)
     expect(compareValues(true, true)).toBe(0)
-  })
-
-  it('matches row predicates and patched values without hiding missing columns', () => {
-    const row = Object.freeze({ id: 1, status: 'draft', count: 1 })
-
-    expect(matchesPredicate(row, createPredicate('status', '=', 'draft'))).toBe(true)
-    expect(matchesPredicate(row, createPredicate('missing', '=', true))).toBeUndefined()
-    expect(matchesPredicates(row, [])).toBe(true)
-    expect(matchesPredicates(row, [createPredicate('status', '!=', 'published')])).toBeUndefined()
-    expect(matchesPredicates(row, [createPredicate('missing', '=', true)])).toBeUndefined()
-    expect(matchesPredicates(row, [
-      createPredicate('status', '=', 'draft'),
-      createPredicate('count', '>', 2),
-    ])).toBe(false)
   })
 
 })

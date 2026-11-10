@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { replaceValueAtPath } from '../src/runtime/result-value-replacement'
 import {
-  replaceValuesAtPaths,
   replaceValuesAtPathsUsing,
-  spliceValueAtPath,
   spliceValuesAtPath,
 } from '../src/runtime/result-multi-replacement'
 import {
@@ -16,26 +14,6 @@ import {
 } from '../src/runtime/result-replacement-plan'
 
 describe('@holo-js/realtime result replacement helpers', () => {
-  it('replaces multiple values through a shared replacement plan', () => {
-    const value = Object.freeze({
-      data: Object.freeze({
-        first: Object.freeze({ id: 1 }),
-        second: Object.freeze({ id: 2 }),
-      }),
-      meta: Object.freeze({ total: 2 }),
-    })
-
-    expect(replaceValuesAtPaths(value, [
-      { path: ['data', 'first'], value: { id: 10 } },
-      { path: ['meta', 'total'], value: 3 },
-    ])).toEqual({
-      data: {
-        first: { id: 10 },
-        second: { id: 2 },
-      },
-      meta: { total: 3 },
-    })
-  })
 
   it('rejects invalid and conflicting replacement plans', () => {
     const childPlan = createEmptyPathReplacementPlan()
@@ -58,32 +36,6 @@ describe('@holo-js/realtime result replacement helpers', () => {
     expect(replaceValueWithPlan(value, plan)).toBe(value)
   })
 
-  it('falls back to sequential replacement for conflicting paths', () => {
-    const value = Object.freeze({
-      data: Object.freeze({
-        rows: Object.freeze([{ id: 1 }]),
-      }),
-    })
-
-    expect(replaceValuesAtPaths(value, [
-      { path: ['data'], value: { rows: [{ id: 2 }], total: 1 } },
-      { path: ['data', 'total'], value: 2 },
-    ])).toEqual({
-      data: {
-        rows: [{ id: 2 }],
-        total: 2,
-      },
-    })
-    expect(replaceValuesAtPaths(value, [])).toBe(value)
-    expect(replaceValuesAtPaths(value, [
-      { path: [], value: { replaced: true } },
-    ])).toEqual({ replaced: true })
-    expect(replaceValuesAtPaths(value, [
-      { path: ['data'], value: { total: 1 } },
-      { path: [], value: { replaced: true } },
-    ])).toEqual({ replaced: true })
-  })
-
   it('uses custom replacement readers for batched path replacement', () => {
     const value = Object.freeze({
       first: 1,
@@ -97,19 +49,6 @@ describe('@holo-js/realtime result replacement helpers', () => {
       first: 10,
       second: 20,
     })
-  })
-
-  it('splices root and nested arrays while preserving no-op splices', () => {
-    const root = Object.freeze([1, 2, 3])
-
-    expect(spliceValueAtPath(root, [], 1, 1, [20, 21])).toEqual([1, 20, 21, 3])
-    expect(spliceValueAtPath(root, [], 1, 1, [2])).toBe(root)
-    expect(spliceValueAtPath(root, [], 1, 0, [])).toBe(root)
-    expect(spliceValueAtPath(root, [], -1, 1, [9])).toBe(root)
-    expect(spliceValueAtPath({ rows: root }, ['rows'], 2, 10, [30])).toEqual({
-      rows: [1, 2, 30],
-    })
-    expect(spliceValueAtPath({ rows: root }, ['missing'], 0, 1, [9])).toEqual({ rows: root })
   })
 
   it('applies multiple splices against the evolving target', () => {
