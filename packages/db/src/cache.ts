@@ -2045,7 +2045,7 @@ function readLiteralDependencyValues(
       : [value]
   }
 
-  if (comparesLoosely(column, value, caseInsensitiveColumns) || isUnsafeInteger(value)) {
+  if (comparesLoosely(column, value, caseInsensitiveColumns) || isUnsafeInteger(value) || (typeof value === 'number' && !Number.isFinite(value))) {
     return undefined
   }
 
@@ -2760,6 +2760,29 @@ export function inferDatabaseQueryObservationDependencies(
   return Object.freeze([...dependencies])
 }
 
+function readsRowsBeyondSourcePredicates(plan: SelectQueryPlan): boolean {
+  return hasObservationDependencyFallbackShape(plan)
+    || plan.having.length > 0
+    || plan.orderBy.some(order => order.kind === 'vector')
+}
+
+function hasDatabaseCoercedPredicate(plan: SelectQueryPlan, connectionName: string): boolean {
+  const table = plan.source.table ?? getConnectionGeneratedTableDefinition(plan.source.tableName, connectionName)
+  const coerced = (predicate: QueryPredicateNode): boolean => {
+    if (predicate.kind === 'group') return predicate.predicates.some(coerced)
+    if (!('column' in predicate)) return false
+    const kind = table?.columns[getColumnName(predicate.column)]?.kind
+    if (kind === 'real') return true
+    if (predicate.kind !== 'comparison') return false
+    const unsafeNumber = (value: unknown): boolean => Array.isArray(value)
+      ? value.some(unsafeNumber)
+      : typeof value === 'number' && (!Number.isFinite(value)
+        || (kind !== 'integer' && kind !== 'bigInteger' && Math.fround(value) !== value))
+    return unsafeNumber(predicate.value)
+  }
+  return plan.predicates.some(coerced)
+}
+
 function createDatabaseQueryObservationFromPlan(
   plan: SelectQueryPlan,
   connectionName: string,
@@ -2769,6 +2792,7 @@ function createDatabaseQueryObservationFromPlan(
   groupedAggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[],
 ): DatabaseQueryObservation | undefined {
   const primaryKey = resolveObservedRowKey(plan.source, connectionName)
+  const conservative = readsRowsBeyondSourcePredicates(plan) || hasDatabaseCoercedPredicate(plan, connectionName)
   return Object.freeze({
     connectionName,
     belongsToHydrations: undefined,
@@ -2780,10 +2804,10 @@ function createDatabaseQueryObservationFromPlan(
     limit: plan.limit,
     offset: plan.offset,
     orderBy: collectQueryOrderObservations(plan),
-    patchable: patchable ?? isPatchableQueryObservation(plan, primaryKey),
+    patchable: (!conservative || plan.predicates.length === 0) && (patchable ?? isPatchableQueryObservation(plan, primaryKey)),
     pagination: undefined,
-    predicates: collectQueryPredicateObservations(plan.predicates),
-    predicateTree: hasDisjunctivePredicate(plan.predicates) ? plan.predicates : undefined,
+    predicates: conservative ? Object.freeze([]) : collectQueryPredicateObservations(plan.predicates),
+    predicateTree: !conservative && hasDisjunctivePredicate(plan.predicates) ? plan.predicates : undefined,
     primaryKey,
     result,
     selections: collectQuerySelectionObservations(plan),
@@ -2996,6 +3020,10 @@ export function inferAutomaticQueryCacheDependencies(
 ): readonly string[] | undefined {
   if (!supportsAutomaticQueryCacheInvalidation(plan)) {
     return undefined
+  }
+
+  if (readsRowsBeyondSourcePredicates(plan) || hasDatabaseCoercedPredicate(plan, connectionName)) {
+    return Object.freeze([createTableCacheDependency(connectionName, plan.source.tableName)])
   }
 
   if (!hasDisjunctivePredicate(plan.predicates)) {
