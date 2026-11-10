@@ -26,7 +26,6 @@ import {
   resolveArgs,
   runWithExecutionOptions,
 } from './execution'
-import { bindQueryObservationsToSerializedValue } from './result-bindings'
 import { createResultHash } from './result-hash'
 import {
   getRuntimeState,
@@ -60,17 +59,11 @@ export async function executeRealtimeQueryInternal<TDefinition extends RealtimeQ
     }) as DatabaseDependencyCollectionWithQueries<unknown>
 
     const data = serializeModels(result.value) as RealtimeResultFor<TDefinition>
-    const queries = bindQueryObservationsToSerializedValue(
-      result.queries,
-      result.value,
-      data,
-    )
-
     return Object.freeze({
       name: definition.name,
       data,
       dependencies: result.dependencies,
-      queries,
+      queries: result.queries,
       contexts: result.contexts,
     })
   })

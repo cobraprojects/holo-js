@@ -1,6 +1,7 @@
 import { queryCacheInternals } from '@holo-js/db'
 import type { DatabaseMutationEvent, PredicateDependencyIndex } from './dependencies'
 import {
+  hasRecordKey,
   matchesPredicate,
   matchesPredicates,
   matchesPredicateValue,
@@ -93,9 +94,19 @@ export function isQueryContradictedByMutationRows(
     case 'delete':
       return rowsCannotMatchQuery(query, mutation.rows)
     case 'update':
+      return rowsCannotMatchQuery(query, mutation.rows)
+        && (!updateChangesPredicateColumn(query, mutation) || rowsCannotMatchQuery(query, mutation.previousRows))
     case 'upsert':
       return rowsCannotMatchQuery(query, mutation.previousRows) && rowsCannotMatchQuery(query, mutation.rows)
   }
+}
+
+function updateChangesPredicateColumn(query: DatabaseQueryObservation, mutation: DatabaseMutationEvent): boolean {
+  if (!mutation.values || query.predicateTree?.length) {
+    return true
+  }
+
+  return query.predicates.some(predicate => hasRecordKey(mutation.values!, predicate.column))
 }
 
 function rowsCannotMatchQuery(

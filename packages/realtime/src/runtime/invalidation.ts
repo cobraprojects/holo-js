@@ -171,13 +171,13 @@ function isQueryContradictedByMutations(query: DatabaseQueryObservation, mutatio
   return queryMutations.length > 0 && queryMutations.every(mutation => isQueryContradictedByMutationRows(query, mutation))
 }
 
-function isUnboundEntryContradictedByMutations(
+function isEntryContradictedByMutations(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   mutations: MutationIndex,
 ): boolean {
   if (!entry.current || entry.refreshFailed || entry.schemaGeneration !== queryCacheInternals.currentSchemaGeneration()) return false
   if (getRuntimeState().refreshes.get(entry.refreshKey)?.running) return false
-  if (entry.queries.length === 0 || entry.queries.some(query => query.resultBound === true)) return false
+  if (entry.queries.length === 0) return false
   if ([...entry.contexts.values()].some(contexts => contexts.size !== 1 || !contexts.has(entry.contextId))) return false
   return entry.queries.every(query => isQueryContradictedByMutations(query, mutations))
 }
@@ -185,7 +185,7 @@ function isUnboundEntryContradictedByMutations(
 async function refreshParsedInvalidations(events: readonly ParsedInvalidationEvent[]): Promise<void> {
   const mutations = createMutationIndex(events)
   await Promise.all(collectQueryEntriesForParsedInvalidations(events)
-    .filter(entry => !isUnboundEntryContradictedByMutations(entry, mutations))
+    .filter(entry => !isEntryContradictedByMutations(entry, mutations))
     .map(entry => scheduleRefreshKey(entry.refreshKey)))
 }
 

@@ -6,7 +6,7 @@ export type DatabaseQueryPredicateObservation = {
 
 export const EMPTY_MUTATION_VALUE_KEYS: readonly string[] = Object.freeze([])
 
-function hasRecordKey(record: Readonly<Record<string, unknown>>, key: string): boolean {
+export function hasRecordKey(record: Readonly<Record<string, unknown>>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key)
 }
 

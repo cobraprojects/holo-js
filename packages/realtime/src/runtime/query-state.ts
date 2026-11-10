@@ -25,7 +25,6 @@ export type DatabaseQueryObservation = {
   readonly readRow?: RealtimeRowReader
   readonly relation?: DatabaseQueryRelationObservation
   readonly result?: unknown
-  readonly resultBound?: boolean
   readonly serializedSources?: readonly unknown[]
   readonly observedResult?: {
     readonly list: boolean
@@ -177,10 +176,6 @@ export type DatabaseQueryBelongsToParentKeyRelationObservation = {
   readonly relatedConnectionName: string
   readonly relatedTableName: string
   readonly relatedTable?: TableDefinition
-}
-
-export type QueryResultBinding = {
-  readonly value: unknown
 }
 
 

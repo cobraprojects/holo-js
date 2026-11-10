@@ -424,8 +424,8 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a h
   })
 })
 
-describe.each(integrationDrivers(['mysql'] as const))('an unbound count with an update outside its predicates on %s', (driver) => {
-  it('skips the handler re-run for an update whose previous and new rows both contradict every predicate', async () => {
+describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('an unbound count with an update outside its predicates on %s', (driver) => {
+  it('skips the handler re-run for an update of other columns on rows outside every predicate', async () => {
     const { db, tableName } = await createPosts(driver)
     let handlerRuns = 0
     const subscription = await subscribeRealtimeQuery(
