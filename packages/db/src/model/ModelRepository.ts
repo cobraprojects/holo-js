@@ -4,6 +4,7 @@ import { ConfigurationError, DatabaseError, HydrationError, ModelNotFoundExcepti
 import { assertQueryTablePath } from '../query/validator'
 import { TableQueryBuilder, aliasTableSource, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
 import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
+import { selectionOutputName } from '../query/modelRowProjection'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadTableDefinition } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition, isUnresolvedGeneratedPrimaryKey } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
@@ -2366,8 +2367,12 @@ export class ModelRepository<
         const keyed = inline
           ? grouped.withPredicates([...grouped.getPlan().predicates, { kind: 'integer-in', column: reference, values: inline }])
           : whereRelationKeys(grouped, reference, relatedKeys)
-        const selected = keyed.select(`${qualifier}.${column}`)
-        const scalar = new TableQueryBuilder(related.definition.table, connection, withScalarExtremum(selected.getPlan(), { kind: aggregate.kind, column }))
+        const outputs = new Set([...Object.keys(related.definition.table.columns), ...keyed.getPlan().selections.map(selectionOutputName)])
+        let valueAlias = '__holo_extremum_value'
+        while (outputs.has(valueAlias)) valueAlias += '_'
+        const projected = keyed.getPlan().selections.length === 0 ? keyed.select(`${qualifier}.*`) : keyed
+        const selected = projected.addSelect(`${qualifier}.${column} as ${valueAlias}`)
+        const scalar = new TableQueryBuilder(related.definition.table, connection, withScalarExtremum(selected.getPlan(), { kind: aggregate.kind, column: valueAlias }))
         const count = scalar.toSQL().bindings?.length ?? 0
         if (bindings + count > 16000) await flush()
         query = query.addSelectSub(scalar, `__holo_extremum_${pending.length}`)

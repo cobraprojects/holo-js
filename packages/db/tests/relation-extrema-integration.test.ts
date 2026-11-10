@@ -189,6 +189,19 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('relation ext
       .toEqual([{ parentId, parent_max_name: 'Owner' }])
   })
 
+  it('preserves scoped projections used by aliased and distinct ordering', async () => {
+    const { Owner, items } = await openExtremaFixture(driver)
+    await DB.table(items).insert([
+      { id: 1, ownerId: 1, label: 'Alpha', score: 10 },
+      { id: 2, ownerId: 1, label: 'Zulu', score: 1 },
+    ])
+    const owner = await Owner.query()
+      .withMin({ items: query => query.select('ownerId', 'label', 'score as tenantId').orderBy('tenantId').limit(1) }, 'label')
+      .withMax({ items: query => query.distinct().orderBy('id').limit(1) }, 'label')
+      .findOrFail(1)
+    expect(owner.toAttributes()).toMatchObject({ items_min_label: 'Zulu', items_max_label: 'Alpha' })
+  })
+
   it('ignores nulls and returns null for all-null or empty relations', async () => {
     const { Owner, items } = await openExtremaFixture(driver)
     await DB.table(items).insert([
