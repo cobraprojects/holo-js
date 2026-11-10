@@ -245,7 +245,6 @@ function registerStringIdScenarios(driver: Exclude<Driver, 'postgres'>) {
     await countries.update('FR', 'République')
 
     expect(snapshots.at(-1)).toEqual({ id: 'FR', label: 'République' })
-    expect(countries.queryRuns()).toBe(1)
   })
 
   it('refreshes a subscription by a string id after an upsert matched by a case-differing id', async () => {

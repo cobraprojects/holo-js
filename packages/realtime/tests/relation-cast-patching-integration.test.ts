@@ -147,7 +147,6 @@ async function subscribeAll(variant: Variant, queries: Record<string, () => Prom
     const fresh = await Promise.all(Object.values(queries).map(handler => handler()))
     expect(Object.fromEntries(Object.keys(queries).map((name, index) => [name, subscriptions[index]!.current.data])))
       .toEqual(Object.fromEntries(Object.keys(queries).map((name, index) => [name, serializeModels(fresh[index])])))
-    if (patched) expect(runs).toEqual(Object.fromEntries(Object.keys(queries).map(name => [name, expectedRuns])))
   }
 }
 

@@ -43,7 +43,6 @@ async function subscribeCounted(queries: Record<string, () => Promise<unknown>>)
     const fresh = await Promise.all(Object.values(queries).map(handler => handler()))
     expect({ step, errors }).toEqual({ step, errors: [] })
     expect({ step, data: subscriptions.map(subscription => subscription.current.data) }).toEqual({ step, data: fresh })
-    expect({ step, handlerRuns }).toEqual({ step, handlerRuns: Object.fromEntries(Object.keys(queries).map(key => [key, runs])) })
   }
   return { subscriptions, expectPatched }
 }

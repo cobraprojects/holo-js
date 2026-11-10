@@ -87,7 +87,7 @@ function createEntry(
 ): ActiveQueryEntry<typeof todosQuery> {
   return {
     options: {},
-    runWithContext: callback => callback(),
+    runWithContext: Object.assign(<TValue>(callback: () => TValue) => callback(), { runWithAuth: <TValue>(callback: () => TValue) => callback() }),
     contextId: 0,
     contexts: new Map(),
     args: {},

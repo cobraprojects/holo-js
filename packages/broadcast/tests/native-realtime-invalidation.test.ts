@@ -14,10 +14,11 @@ import { createSQLiteAdapter } from '../../db-sqlite/src'
 import { configureDB, createConnectionManager, createDatabase, createDialect, queryCacheInternals, resetDB, resetDatabaseDependencyInvalidationListeners } from '@holo-js/db'
 import { startRedisService } from '../../session/tests/support/redis'
 import { normalizeBroadcastConfig, startBroadcastWorker, workerInternals } from '../src'
-import { query } from '../../realtime/src'
+import { query, type RealtimeSubscriptionSnapshot } from '../../realtime/src'
+import { realtimeClientInternals } from '../../realtime/src/client'
 import { configureRealtimeRuntime, executeRealtimeQuery, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../../realtime/src/server'
 
-type Packet = { event: string; data: { id?: string; snapshot?: { data: { score: number } } } & Record<string, unknown> }
+type Packet = { event: string; data: { id?: string; snapshot?: RealtimeSubscriptionSnapshot<{ score: number }> } & Record<string, unknown> }
 
 async function reservePort(): Promise<number> {
   const server = createServer()
@@ -120,21 +121,12 @@ it('refreshes a live query subscription when a write commits in another process 
   if (!redisPort) throw new Error('No native Redis port available')
   const worker = await startScoresWorker(db, redisPort, { nodeId: 'worker-a' })
 
-  const socket = new WebSocket(`ws://${worker.host}:${worker.port}/app/key`)
-  onTestFinished(() => socket.terminate())
-  const packets: Packet[] = []
-  socket.on('message', data => {
-    const packet = JSON.parse(data.toString())
-    packets.push({ ...packet, data: typeof packet.data === 'string' ? JSON.parse(packet.data) : packet.data })
-  })
-  await once(socket, 'open')
-  await expect.poll(() => packets.some(packet => packet.event === 'pusher:connection_established')).toBe(true)
-  socket.send(JSON.stringify({ event: 'holo:realtime', data: { id: 'subscription', action: 'subscribe', name: 'scores.current', args: {} } }))
-  await expect.poll(() => packets.find(packet => packet.data.id === 'subscription')?.data.snapshot?.data.score).toBe(10)
+  const subscriber = await connectScoresSubscriber(worker.host, worker.port, 'key')
 
   await writeFromAnotherProcess(filename, 42, redisPort)
 
-  await expect.poll(() => packets.some(packet => packet.data.id === 'subscription' && packet.event === 'holo:realtime:snapshot' && packet.data.snapshot?.data.score === 42), { timeout: 10_000 }).toBe(true)
+  await expect.poll(() => subscriber.hasScore(42), { timeout: 10_000 }).toBe(true)
+  expect(subscriber.states()).toEqual([{ data: { score: 10 }, version: 1 }, { data: { score: 42 }, version: 2 }])
 }, 30_000)
 
 it('keeps a written column value off the scaling channel while the subscription still refreshes to it', async () => {
@@ -144,21 +136,12 @@ it('keeps a written column value off the scaling channel while the subscription 
   if (!redisPort) throw new Error('No native Redis port available')
   const worker = await startScoresWorker(db, redisPort, { nodeId: 'worker-a' })
   const invalidations = await subscribeToScalingEvents(redis)
-  const socket = new WebSocket(`ws://${worker.host}:${worker.port}/app/key`)
-  onTestFinished(() => socket.terminate())
-  const packets: Packet[] = []
-  socket.on('message', data => {
-    const packet = JSON.parse(data.toString())
-    packets.push({ ...packet, data: typeof packet.data === 'string' ? JSON.parse(packet.data) : packet.data })
-  })
-  await once(socket, 'open')
-  await expect.poll(() => packets.some(packet => packet.event === 'pusher:connection_established')).toBe(true)
-  socket.send(JSON.stringify({ event: 'holo:realtime', data: { id: 'subscription', action: 'subscribe', name: 'scores.current', args: {} } }))
-  await expect.poll(() => packets.find(packet => packet.data.id === 'subscription')?.data.snapshot?.data.score).toBe(10)
+  const subscriber = await connectScoresSubscriber(worker.host, worker.port, 'key')
 
   await writeFromAnotherProcess(filename, 4242, redisPort)
 
-  await expect.poll(() => packets.some(packet => packet.data.id === 'subscription' && packet.event === 'holo:realtime:snapshot' && packet.data.snapshot?.data.score === 4242), { timeout: 10_000 }).toBe(true)
+  await expect.poll(() => subscriber.hasScore(4242), { timeout: 10_000 }).toBe(true)
+  expect(subscriber.states()).toEqual([{ data: { score: 10 }, version: 1 }, { data: { score: 4242 }, version: 2 }])
   await expect.poll(() => invalidations.length).toBeGreaterThan(0)
   expect(JSON.stringify(invalidations)).not.toContain('4242')
 }, 30_000)
@@ -483,16 +466,28 @@ async function connectScoresSubscriber(host: string, port: number, key: string) 
   const socket = new WebSocket(`ws://${host}:${port}/app/${key}`)
   onTestFinished(() => socket.terminate())
   const packets: Packet[] = []
+  const snapshots: RealtimeSubscriptionSnapshot<{ score: number }>[] = []
   socket.on('message', data => {
-    const packet = JSON.parse(data.toString())
-    packets.push({ ...packet, data: typeof packet.data === 'string' ? JSON.parse(packet.data) : packet.data })
+    const frame = JSON.parse(data.toString()) as { event: string, data: string | Packet['data'] }
+    const packet: Packet = { ...frame, data: typeof frame.data === 'string' ? JSON.parse(frame.data) : frame.data }
+    packets.push(packet)
+    if (packet.data.id !== 'subscription') return
+    if (packet.event === 'holo:realtime:snapshot' && packet.data.snapshot) {
+      snapshots.push(packet.data.snapshot)
+    } else if (packet.event === 'holo:realtime:patch') {
+      const patch = realtimeClientInternals.parseWireSnapshotPatch(packet.data.patch)
+      const current = snapshots.at(-1)
+      if (!patch || !current) throw new Error('Expected a valid subscription patch after its snapshot')
+      snapshots.push(realtimeClientInternals.applyWireSnapshotPatch(current, patch))
+    }
   })
   await once(socket, 'open')
   await expect.poll(() => packets.some(packet => packet.event === 'pusher:connection_established')).toBe(true)
   socket.send(JSON.stringify({ event: 'holo:realtime', data: { id: 'subscription', action: 'subscribe', name: 'scores.current', args: {} } }))
-  await expect.poll(() => packets.find(packet => packet.data.id === 'subscription')?.data.snapshot?.data.score).toBe(10)
+  await expect.poll(() => snapshots[0]?.data.score).toBe(10)
   return {
-    hasScore: (score: number) => packets.some(packet => packet.data.id === 'subscription' && packet.event === 'holo:realtime:snapshot' && packet.data.snapshot?.data.score === score),
+    hasScore: (score: number) => snapshots.some(snapshot => snapshot.data.score === score),
+    states: () => snapshots.map(({ data, version }) => ({ data, version })),
   }
 }
 
@@ -511,6 +506,8 @@ it('refreshes only the subscriptions of the writing app when two apps share one 
   await expect.poll(() => subscriberA.hasScore(42), { timeout: 10_000 }).toBe(true)
   await new Promise(resolve => setTimeout(resolve, 1_500))
   expect(subscriberB.hasScore(42)).toBe(false)
+  expect(subscriberA.states()).toEqual([{ data: { score: 10 }, version: 1 }, { data: { score: 42 }, version: 2 }])
+  expect(subscriberB.states()).toEqual([{ data: { score: 10 }, version: 1 }])
 }, 60_000)
 
 it('keeps publishing exactly once after the first of two embedded workers stops', async () => {

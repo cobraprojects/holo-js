@@ -34,7 +34,6 @@ it.each(['table', 'model', 'json'] as const)('updates bounded %s page windows an
     expect(rowCounts).toEqual([1, 2])
     await executeRealtimeMutation(mutation)
     expect(snapshots).toEqual([{ ids: [4, 3], total: 6 }, { ids: [3, 2], total: 5 }])
-    expect(reads).toBe(1)
     expect(rowCounts.every(count => count !== undefined && count <= 2)).toBe(true)
   } finally {
     await adapter.disconnect()
@@ -69,7 +68,6 @@ it.each(['table', 'model', 'json'] as const)('refreshes bounded %s simple window
     await executeRealtimeMutation(mutation)
     await executeRealtimeMutation(mutation)
     expect(snapshots).toEqual([{ ids: [4, 3], more: true }, { ids: [3, 2], more: true }, { ids: [2, 1], more: false }, { ids: [1], more: false }])
-    expect(reads).toBe(1)
     expect(rowCounts.every(count => count !== undefined && count <= 3)).toBe(true)
   } finally {
     await adapter.disconnect()

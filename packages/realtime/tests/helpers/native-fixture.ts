@@ -1,6 +1,9 @@
 import { createDialect, type DriverQueryResult } from '@holo-js/db'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { onTestFinished } from 'vitest'
+import { expect, onTestFinished } from 'vitest'
+import { applyWireSnapshotPatch } from '../../src/client/patching'
+import type { RealtimeSubscriptionPatchOperation, RealtimeSubscriptionPatch } from '../../src/runtime/state'
+import type { RealtimeSubscriptionSnapshot } from '../../src/contracts'
 
 type FixtureRow = Readonly<Record<string, string | number | boolean | null>>
 type FixtureColumn = 'INTEGER' | 'REAL' | 'TEXT'
@@ -42,4 +45,64 @@ export async function createNativeRelationalAdapter(
     return execute(sql, bindings)
   }
   return Object.assign(adapter, { queries, executions })
+}
+
+export function expectEquivalentWireOperations(
+  previous: unknown,
+  actual: readonly RealtimeSubscriptionPatchOperation[] | undefined,
+  expected: readonly RealtimeSubscriptionPatchOperation[],
+  current: unknown,
+): void {
+  const snapshot = { name: 'test', data: previous, dependencies: [], version: 0 }
+  expect(actual ? applyWireSnapshotPatch(snapshot, { operations: actual, version: 1 }).data : current)
+    .toEqual(applyWireSnapshotPatch(snapshot, { operations: expected, version: 1 }).data)
+}
+
+export function expectWireHistory(
+  snapshots: readonly unknown[],
+  patches: readonly { readonly operations: readonly RealtimeSubscriptionPatchOperation[], readonly version: number }[],
+  expectedSnapshots: readonly unknown[],
+  expectedOperations: readonly (readonly RealtimeSubscriptionPatchOperation[])[],
+): void {
+  const expected = [...expectedSnapshots]
+  if (expectedOperations.length > 0) {
+    for (const operations of expectedOperations) {
+      expected.push(applyWireSnapshotPatch({ name: 'test', data: expected.at(-1), dependencies: [], version: 0 }, { operations, version: 1 }).data)
+    }
+  }
+  const actual: unknown[] = []
+  expect(new Set(patches.map(patch => patch.version)).size).toBe(patches.length)
+  expect(patches.map(patch => patch.version)).toEqual(patches.map(patch => patch.version).sort((left, right) => left - right))
+  let snapshotIndex = 0
+  let patchIndex = 0
+  for (let version = 1; version <= snapshots.length + patches.length; version += 1) {
+    const patch = patches[patchIndex]
+    if (patch?.version === version) {
+      expect(version).toBeGreaterThan(1)
+      actual.push(applyWireSnapshotPatch({ name: 'test', data: actual.at(-1), dependencies: [], version: version - 1 }, patch).data)
+      patchIndex += 1
+    } else {
+      expect(snapshotIndex).toBeLessThan(snapshots.length)
+      actual.push(snapshots[snapshotIndex])
+      snapshotIndex += 1
+    }
+  }
+  expect(patchIndex).toBe(patches.length)
+  expect(actual).toEqual(expected)
+}
+
+export function observeWireSnapshots(snapshots: unknown[], patches: unknown[]) {
+  let current: RealtimeSubscriptionSnapshot<unknown> | undefined
+  return {
+    onData(snapshot: RealtimeSubscriptionSnapshot<unknown>) {
+      current = snapshot
+      snapshots.push(snapshot.data)
+    },
+    onPatch(patch: RealtimeSubscriptionPatch) {
+      patches.push(patch)
+      if (!current) throw new Error('A wire patch requires its initial snapshot.')
+      current = applyWireSnapshotPatch(current, patch)
+      snapshots.push(current.data)
+    },
+  }
 }

@@ -25,37 +25,40 @@ export {
   compactPatchOperations,
 } from './patch-operation-compaction'
 
+const MAX_DEEP_PATCH_PATH_LENGTH = 16
+
 export function createReplacePatchOperations(
   path: readonly RealtimePatchPathSegment[],
   previousValue: unknown,
   nextValue: unknown,
   primaryKey: string,
+  deep = false,
 ): readonly RealtimeSubscriptionPatchOperation[] {
   if (areEquivalentPatchValues(previousValue, nextValue)) {
     return Object.freeze([])
   }
 
-  const recordOperations = createRecordFieldReplacePatchOperations(path, previousValue, nextValue)
+  const recordOperations = createRecordFieldReplacePatchOperations(path, previousValue, nextValue, primaryKey, deep)
   if (recordOperations) {
     return recordOperations
   }
 
-  const arrayMoveOperations = createArrayMovePatchOperations(path, previousValue, nextValue, primaryKey)
+  const arrayMoveOperations = createArrayMovePatchOperations(path, previousValue, nextValue, primaryKey, deep)
   if (arrayMoveOperations) {
     return arrayMoveOperations
   }
 
-  const arrayWindowSlideOperations = createArrayWindowSlidePatchOperations(path, previousValue, nextValue)
+  const arrayWindowSlideOperations = createArrayWindowSlidePatchOperations(path, previousValue, nextValue, primaryKey)
   if (arrayWindowSlideOperations) {
     return arrayWindowSlideOperations
   }
 
-  const arrayItemOperations = createArrayItemReplacePatchOperations(path, previousValue, nextValue, primaryKey)
+  const arrayItemOperations = createArrayItemReplacePatchOperations(path, previousValue, nextValue, primaryKey, deep)
   if (arrayItemOperations) {
     return arrayItemOperations
   }
 
-  const spliceOperation = createArraySplicePatchOperation(path, previousValue, nextValue)
+  const spliceOperation = createArraySplicePatchOperation(path, previousValue, nextValue, deep)
   if (spliceOperation) {
     return Object.freeze([spliceOperation])
   }
@@ -67,6 +70,7 @@ function createArraySplicePatchOperation(
   path: readonly RealtimePatchPathSegment[],
   previousValue: unknown,
   nextValue: unknown,
+  deep: boolean,
 ): RealtimeSubscriptionPatchOperation | undefined {
   if (!Array.isArray(previousValue) || !Array.isArray(nextValue)) {
     return undefined
@@ -76,7 +80,7 @@ function createArraySplicePatchOperation(
   while (
     prefixLength < previousValue.length
     && prefixLength < nextValue.length
-    && previousValue[prefixLength] === nextValue[prefixLength]
+    && (deep ? areEquivalentPatchValues(previousValue[prefixLength], nextValue[prefixLength]) : previousValue[prefixLength] === nextValue[prefixLength])
   ) {
     prefixLength += 1
   }
@@ -85,7 +89,7 @@ function createArraySplicePatchOperation(
   while (
     suffixLength < previousValue.length - prefixLength
     && suffixLength < nextValue.length - prefixLength
-    && previousValue[previousValue.length - 1 - suffixLength] === nextValue[nextValue.length - 1 - suffixLength]
+    && (deep ? areEquivalentPatchValues(previousValue[previousValue.length - 1 - suffixLength], nextValue[nextValue.length - 1 - suffixLength]) : previousValue[previousValue.length - 1 - suffixLength] === nextValue[nextValue.length - 1 - suffixLength])
   ) {
     suffixLength += 1
   }
@@ -99,12 +103,18 @@ function createArrayWindowSlidePatchOperations(
   path: readonly RealtimePatchPathSegment[],
   previousValue: unknown,
   nextValue: unknown,
+  primaryKey: string,
 ): readonly RealtimeSubscriptionPatchOperation[] | undefined {
   if (!Array.isArray(previousValue) || !Array.isArray(nextValue) || previousValue.length !== nextValue.length) {
     return undefined
   }
 
-  const appendedCount = readWindowAppendedRowCount(previousValue, nextValue)
+  for (const endpoint of [previousValue[0], nextValue[0]]) {
+    if (endpoint !== null && typeof endpoint === 'object'
+      && (!isRecord(endpoint) || !Object.prototype.propertyIsEnumerable.call(endpoint, primaryKey) || endpoint[primaryKey] === undefined)) return undefined
+  }
+
+  const appendedCount = readWindowAppendedRowCount(previousValue, nextValue, primaryKey)
   if (typeof appendedCount === 'number') {
     return Object.freeze([
       createSplicePatchOperation(path, 0, appendedCount, Object.freeze([])),
@@ -112,7 +122,7 @@ function createArrayWindowSlidePatchOperations(
     ])
   }
 
-  const prependedCount = readWindowPrependedRowCount(previousValue, nextValue)
+  const prependedCount = readWindowPrependedRowCount(previousValue, nextValue, primaryKey)
   if (typeof prependedCount === 'number') {
     return Object.freeze([
       createSplicePatchOperation(path, 0, 0, nextValue.slice(0, prependedCount)),
@@ -126,10 +136,11 @@ function createArrayWindowSlidePatchOperations(
 function readWindowAppendedRowCount(
   previousValue: readonly unknown[],
   nextValue: readonly unknown[],
+  primaryKey: string,
 ): number | undefined {
   for (let count = 1; count < previousValue.length; count += 1) {
-    if (arraysMatchByIdentity(previousValue, count, nextValue, 0, previousValue.length - count)) {
-      return count
+    if (previousValue[count] === nextValue[0] || hasSameDefinedRecordIdentity(previousValue[count], nextValue[0], primaryKey)) {
+      return arraysMatchByIdentity(previousValue, count, nextValue, 0, previousValue.length - count) ? count : undefined
     }
   }
 
@@ -139,10 +150,11 @@ function readWindowAppendedRowCount(
 function readWindowPrependedRowCount(
   previousValue: readonly unknown[],
   nextValue: readonly unknown[],
+  primaryKey: string,
 ): number | undefined {
   for (let count = 1; count < previousValue.length; count += 1) {
-    if (arraysMatchByIdentity(previousValue, 0, nextValue, count, previousValue.length - count)) {
-      return count
+    if (previousValue[0] === nextValue[count] || hasSameDefinedRecordIdentity(previousValue[0], nextValue[count], primaryKey)) {
+      return arraysMatchByIdentity(previousValue, 0, nextValue, count, previousValue.length - count) ? count : undefined
     }
   }
 
@@ -170,6 +182,7 @@ function createArrayMovePatchOperations(
   previousValue: unknown,
   nextValue: unknown,
   primaryKey: string,
+  deep = false,
 ): readonly RealtimeSubscriptionPatchOperation[] | undefined {
   if (!Array.isArray(previousValue) || !Array.isArray(nextValue) || previousValue.length !== nextValue.length) {
     return undefined
@@ -184,6 +197,8 @@ function createArrayMovePatchOperations(
     [...path, move.to],
     previousValue[move.from],
     nextValue[move.to],
+    primaryKey,
+    deep,
   )
   if (!movedFieldOperations && !areEquivalentArrayItems(previousValue[move.from], nextValue[move.to])) {
     return undefined
@@ -200,16 +215,15 @@ function findSingleArrayMove(
   nextValue: readonly unknown[],
   primaryKey: string,
 ): { readonly from: number, readonly to: number } | undefined {
-  for (let from = 0; from < previousValue.length; from += 1) {
-    const candidate = previousValue[from]
-    for (let to = 0; to < nextValue.length; to += 1) {
-      if (!areSameArrayMoveItem(candidate, nextValue[to], primaryKey) || from === to) {
-        continue
-      }
+  let first = 0
+  while (first < previousValue.length && areEquivalentArrayItems(previousValue[first], nextValue[first])) first += 1
+  let last = previousValue.length - 1
+  while (last > first && areEquivalentArrayItems(previousValue[last], nextValue[last])) last -= 1
+  if (first >= last) return undefined
 
-      if (arraysMatchAfterMove(previousValue, nextValue, from, to)) {
-        return { from, to }
-      }
+  for (const [from, to] of [[first, last], [last, first]] as const) {
+    if (areSameArrayMoveItem(previousValue[from], nextValue[to], primaryKey) && arraysMatchAfterMove(previousValue, nextValue, from, to)) {
+      return { from, to }
     }
   }
 
@@ -259,6 +273,7 @@ function createArrayItemReplacePatchOperations(
   previousValue: unknown,
   nextValue: unknown,
   primaryKey: string,
+  deep = false,
 ): readonly RealtimeSubscriptionPatchOperation[] | undefined {
   if (!Array.isArray(previousValue) || !Array.isArray(nextValue) || previousValue.length !== nextValue.length) {
     return undefined
@@ -276,7 +291,7 @@ function createArrayItemReplacePatchOperations(
       continue
     }
 
-    const itemOperations = createRecordFieldReplacePatchOperations([...path, index], previousItem, nextItem)
+    const itemOperations = createRecordFieldReplacePatchOperations([...path, index], previousItem, nextItem, primaryKey, deep)
     if (itemOperations && hasSameRecordIdentity(previousItem, nextItem, primaryKey)) {
       operations.push(...itemOperations)
     } else {
@@ -363,6 +378,7 @@ function areEquivalentArrayValues(previousValue: unknown, nextValue: unknown): b
 }
 
 function areEquivalentPatchValues(previousValue: unknown, nextValue: unknown): boolean {
+  if (previousValue instanceof Date || nextValue instanceof Date) return previousValue instanceof Date && nextValue instanceof Date && Object.is(previousValue.getTime(), nextValue.getTime())
   return previousValue === nextValue
     || areEquivalentRecordValues(previousValue, nextValue)
     || areEquivalentArrayValues(previousValue, nextValue)
@@ -372,8 +388,10 @@ function createRecordFieldReplacePatchOperations(
   path: readonly RealtimePatchPathSegment[],
   previousValue: unknown,
   nextValue: unknown,
+  primaryKey: string,
+  deep = false,
 ): readonly RealtimeSubscriptionPatchOperation[] | undefined {
-  if (!isRecord(previousValue) || !isRecord(nextValue) || !hasSamePatchableRecordKeys(previousValue, nextValue)) {
+  if (!isRecord(previousValue) || !isRecord(nextValue) || previousValue instanceof Date || nextValue instanceof Date || !hasSamePatchableRecordKeys(previousValue, nextValue)) {
     return undefined
   }
 
@@ -387,6 +405,9 @@ function createRecordFieldReplacePatchOperations(
   }
 
   const changedKeys = Object.keys(fields)
+  if (deep && path.length < MAX_DEEP_PATCH_PATH_LENGTH && changedKeys.some(key => Array.isArray(previousValue[key]) && Array.isArray(nextValue[key]) || isRecord(previousValue[key]) && isRecord(nextValue[key]))) {
+    return Object.freeze(changedKeys.flatMap(key => createReplacePatchOperations([...path, key], previousValue[key], nextValue[key], primaryKey, true)))
+  }
   if (changedKeys.length === 1) {
     return Object.freeze([createReplacePatchOperation([...path, changedKeys[0]!], fields[changedKeys[0]!])])
   }

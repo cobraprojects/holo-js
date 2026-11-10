@@ -1,11 +1,15 @@
+import { randomUUID } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, onTestFinished } from 'vitest'
 import { authRuntimeInternals, createAsyncAuthContext, getAuthRuntime, resetAuthRuntime, type AuthRuntimeContext } from '@holo-js/auth'
 import { DB, configureDB, createConnectionManager, createDatabase, createDialect, resetDB, type DatabaseContext } from '@holo-js/db'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
 import { createRequestAwareAuthContext } from '../../core/src/portable/authRequestContext'
 import { createNativeAuthPersistence } from '../../auth/tests/support/native-persistence'
 import { createNativeSessionStore } from '../../auth/tests/support/native-session'
+import { createPostgresAdapter } from '../../db-postgres/src'
+import { createMySQLAdapter } from '../../db-mysql/src'
+import { integrationDrivers, postgresTestConnection, mysqlTestConnection } from '../../../tests/support/real-database'
 import { createNativeRelationalAdapter } from './helpers/native-fixture'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, executeRealtimeQuery, RealtimeUnauthorizedError, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
@@ -86,7 +90,7 @@ it.each(['authenticated', 'public'] as const)('isolates identical %s subscriptio
   expect(second.current.data).toEqual([{ id: 20, name: 'Ben' }])
 }, 30000)
 
-it('uses one initial query and patches a single subscription without extra reads', async () => {
+it('uses one initial query and one native read to refresh a single subscription', async () => {
   const adapter = await createNativeRelationalAdapter({ posts: [{ id: 1, title: 'First' }] })
   const db = createDatabase({ adapter, dialect: createDialect('sqlite'), connectionName: 'main' })
   configureRealtimeRuntime({ db: () => db })
@@ -107,7 +111,7 @@ it('uses one initial query and patches a single subscription without extra reads
   }))
 
   expect(subscription.current.data).toEqual([{ id: 1, title: 'Updated' }])
-  expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(0)
+  expect(adapter.queries.filter(query => query.sql.startsWith('SELECT '))).toHaveLength(1)
 })
 
 it('refreshes outside a completed subscription transaction', async () => {
@@ -209,7 +213,6 @@ it('reruns queries that observe a different database from the runtime binding', 
   expect(subscription.current.data).toEqual([{ id: 2, title: 'B2' }])
 })
 
-
 it('authorizes a remembered user from a read-only realtime request without writing cookies', async () => {
   const context = createRequestAwareAuthContext(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
   const persistence = await configureAuthenticatedSubscriptions(context)
@@ -267,6 +270,89 @@ it('captures credentials resolved through request accessors before the request e
   expect(second.current.data).toEqual([{ id: 20, name: 'Ben' }])
   expect(anonymous.current.data).toEqual([])
 }, 30000)
+
+it.each(['data', 'error'] as const)('delivers native handler %s in the subscribing user context', async channel => {
+  const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
+  const persistence = await configureAuthenticatedSubscriptions(context)
+  const principals: Array<string | number | undefined> = []
+  const errors: unknown[] = []
+  const definition = defineRealtimeQuery({ access: 'authenticated', handler: async ({ auth, db }) => {
+    const rows = await db.table('users').where('id', auth.user.id).select('id', 'name').get()
+    if (channel === 'error' && rows[0]?.name === 'Updated Ben') throw new Error('The updated row is hidden.')
+    return rows
+  } })
+  const subscription = await context.run(async () => {
+    await getAuthRuntime().guard('web').loginUsingId(20)
+    return await subscribeRealtimeQuery(definition, {}, {
+      onData: async () => { principals.push((await getAuthRuntime().guard('web').user())?.id) },
+      onError: async error => { errors.push(error); principals.push((await getAuthRuntime().guard('web').user())?.id) },
+    })
+  })
+  await context.run(async () => {
+    await getAuthRuntime().guard('web').loginUsingId(10)
+    await persistence.db.table('users').where('id', 20).update({ name: 'Updated Ben' })
+  })
+  expect(subscription.current.data).toEqual([{ id: 20, name: channel === 'error' ? 'Ben' : 'Updated Ben' }])
+  expect(errors).toHaveLength(channel === 'error' ? 1 : 0)
+  expect(principals).toEqual([20, 20])
+})
+
+it.each(integrationDrivers(['postgres', 'mysql'] as const))('delivers ended %s session entry errors in the subscribing user context', async driver => {
+  const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })
+  const persistence = await configureAuthenticatedSubscriptions(context)
+  const adapter = driver === 'postgres'
+    ? createPostgresAdapter({ config: { ...postgresTestConnection(), max: 1 } })
+    : createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 1 } })
+  const tableName = `entry_error_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+  const db = createDatabase({ adapter, dialect: createDialect(driver), connectionName: 'events' })
+  await adapter.initialize()
+  onTestFinished(async () => {
+    resetRealtimeRuntime()
+    await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
+    await adapter.disconnect()
+  })
+  await adapter.execute(`CREATE TABLE ${tableName} (id INTEGER PRIMARY KEY, name VARCHAR(64))`)
+  await db.table(tableName).insert({ id: 1, name: 'Before' })
+  configureRealtimeRuntime({ db: () => db })
+  const principals: Array<string | number | undefined> = []
+  const errors: unknown[] = []
+  const callbackRows: unknown[] = []
+  const callbackErrors: unknown[] = []
+  let authorizations = 0
+  let handlerCalls = 0
+  const definition = defineRealtimeQuery({
+    access: { require: 'authenticated', authorize: () => { authorizations += 1; return true } },
+    handler: async ({ db }) => { handlerCalls += 1; return await db.table(tableName).select('id', 'name').get() },
+  })
+  const subscription = await context.run(async () => {
+    await getAuthRuntime().guard('web').loginUsingId(20)
+    return await adapter.runWithTransactionScope(() => subscribeRealtimeQuery(definition, {}, {
+      onData: async () => { principals.push((await getAuthRuntime().guard('web').user())?.id) },
+      onError: async error => {
+        errors.push(error)
+        await persistence.db.transaction(async () => {
+          const principal = (await getAuthRuntime().guard('web').user())?.id
+          principals.push(principal)
+          callbackRows.push(await persistence.db.table('users').where('id', principal ?? 0).select('id', 'name').first())
+          await persistence.db.table('users').where('id', principal ?? 0).update({ name: 'Callback' })
+        }).catch(error => { callbackErrors.push(error) })
+      },
+    }))
+  })
+  await context.run(async () => {
+    await getAuthRuntime().guard('web').loginUsingId(10)
+    await db.table(tableName).where('id', 1).update({ name: 'After' })
+  })
+  expect(errors).toEqual([expect.objectContaining({ code: 'SESSION_ENDED' })])
+  expect(subscription.current.data).toEqual([{ id: 1, name: 'Before' }])
+  expect(await db.table(tableName).select('id', 'name').get()).toEqual([{ id: 1, name: 'After' }])
+  expect(authorizations).toBe(1)
+  expect(handlerCalls).toBe(1)
+  if (callbackErrors.length > 0) throw callbackErrors[0]
+  expect(principals).toEqual([20, 20])
+  expect(callbackRows).toEqual([{ id: 20, name: 'Ben' }])
+  expect(await persistence.db.table('users').select('id', 'name').orderBy('id').get()).toEqual([{ id: 10, name: 'Ava' }, { id: 20, name: 'Callback' }])
+})
 
 it('bounds captured authorization and handlers while keeping identical subscriptions independent for each principal', async () => {
   const context = Object.assign(createAsyncAuthContext(), { appendResponseCookie: () => undefined })

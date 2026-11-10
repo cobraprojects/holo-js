@@ -18,6 +18,8 @@ import {
   deliverRefreshError,
 } from './delivery'
 import { tryPatchQueryEntry } from './patch-delivery'
+import { createReplacePatchOperations } from './patch-operations'
+import { applyWireSnapshotPatch, parseWireSnapshotPatch } from '../client/patching'
 import { executeRealtimeQueryInternal } from './query-execution'
 import { createResultHash } from './result-hash'
 import {
@@ -37,6 +39,8 @@ import {
 import type {
   RealtimeQueryDefinitionMetadata,
 } from '../contracts'
+
+const MAX_REFRESH_PATCH_OPERATIONS = 64
 
 export function ensureDatabaseSubscription(): void {
   const state = getRuntimeState()
@@ -130,43 +134,66 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
   const schemaGeneration = queryCacheInternals.currentSchemaGeneration()
   const generation = refreshGeneration
   const isCurrent = () => generation === refreshGeneration && getRuntimeState().queryEntries.get(refreshKey) === entry
-  try {
-    if (deferRefreshUntilSessionRelease(entry)) return
-    if (!await acquireRefreshSlot()) return
-    let result: Awaited<ReturnType<typeof executeRealtimeQueryInternal>>
-    const execution = { generation, active: true }
-    try {
-      if (!isCurrent()) return
-      if (queuedRemoteRefreshKeys.delete(refreshKey)) remoteRefreshLastRunAt.set(refreshKey, Date.now())
-      result = await refreshExecution.run(execution, () => entry.runWithContext(async () => await executeRealtimeQueryInternal(
-        entry.definition,
-        entry.args,
-        undefined,
-        () => { if (!isCurrent()) throw new Error('Realtime refresh is no longer active.') },
-      )))
-    } finally {
-      execution.active = false
-      releaseRefreshSlot(generation)
-    }
-    if (!isCurrent()) return
-    if (schemaGeneration !== queryCacheInternals.currentSchemaGeneration() || hasPendingQuerySchemaChanges(entry)) {
-      const refresh = getRuntimeState().refreshes.get(refreshKey)
-      if (refresh && !hasPendingQuerySchemaChanges(entry)) refresh.pending = true
-      return
-    }
-    entry.schemaGeneration = schemaGeneration
-    entry.readBoundary = queryCacheInternals.markMutationPublicationBoundary()
-    entry.contexts = new Map(result.contexts)
-    const delivery = {
-      result,
-      resultHash: createResultHash(result.data),
-    } satisfies RefreshDelivery<typeof entry.definition>
-    entry.refreshFailed = false
-    await deliverRefreshData(entry, delivery)
-  } catch (error) {
+  const fail = async (error: unknown) => {
     if (!isCurrent()) return
     entry.refreshFailed = true
     await deliverRefreshError(entry, error)
+  }
+  try {
+    if (deferRefreshUntilSessionRelease(entry)) return
+    await entry.runWithContext(async () => {
+      try {
+        if (!isCurrent()) return
+        if (!await acquireRefreshSlot()) return
+        let result: Awaited<ReturnType<typeof executeRealtimeQueryInternal>>
+        const execution = { generation, active: true }
+        try {
+          if (!isCurrent()) return
+          if (queuedRemoteRefreshKeys.delete(refreshKey)) remoteRefreshLastRunAt.set(refreshKey, Date.now())
+          result = await refreshExecution.run(execution, async () => await executeRealtimeQueryInternal(
+            entry.definition,
+            entry.args,
+            undefined,
+            () => { if (!isCurrent()) throw new Error('Realtime refresh is no longer active.') },
+          ))
+        } finally {
+          execution.active = false
+          releaseRefreshSlot(generation)
+        }
+        if (!isCurrent()) return
+        if (schemaGeneration !== queryCacheInternals.currentSchemaGeneration() || hasPendingQuerySchemaChanges(entry)) {
+          const refresh = getRuntimeState().refreshes.get(refreshKey)
+          if (refresh && !hasPendingQuerySchemaChanges(entry)) refresh.pending = true
+          return
+        }
+        entry.schemaGeneration = schemaGeneration
+        entry.readBoundary = queryCacheInternals.markMutationPublicationBoundary()
+        entry.contexts = new Map(result.contexts)
+        const resultHash = createResultHash(result.data)
+        let delivery: RefreshDelivery<typeof entry.definition> = { result, resultHash }
+        try {
+          const current = entry.current
+          const patchOperations = current
+            ? createReplacePatchOperations([], current.data, result.data, entry.queries[0]?.primaryKey ?? 'id', true)
+            : undefined
+          const patch = (patchOperations?.length ?? 0) > MAX_REFRESH_PATCH_OPERATIONS || patchOperations?.some(operation => 'valueKind' in operation && operation.path.length > 0)
+            ? undefined
+            : parseWireSnapshotPatch({ operations: patchOperations, version: entry.version + 1 })
+          const data = current && patch ? applyWireSnapshotPatch(current, patch).data : result.data
+          if (patch && createResultHash(data) === resultHash) {
+            delivery = { patchOperations, result: { ...result, data }, resultHash }
+          }
+        } catch {
+          delivery = { result, resultHash }
+        }
+        entry.refreshFailed = false
+        await deliverRefreshData(entry, delivery)
+      } catch (error) {
+        await fail(error)
+      }
+    })
+  } catch (error) {
+    await entry.runWithContext.runWithAuth(() => fail(error))
   }
 }
 
@@ -226,8 +253,10 @@ async function refreshInvalidatedQueryEntry(
     if (deferRefreshUntilSessionRelease(entry)) return
     if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills))) return
   } catch (error) {
-    entry.refreshFailed = true
-    await deliverRefreshError(entry, error)
+    await entry.runWithContext.runWithAuth(async () => {
+      entry.refreshFailed = true
+      await deliverRefreshError(entry, error)
+    })
     return
   }
 
@@ -284,7 +313,7 @@ async function refreshParsedInvalidations(events: readonly ParsedInvalidationEve
   const databases = new Map<number, ActiveQueryEntry<RealtimeQueryDefinitionMetadata>[]>()
   const reruns: Promise<void>[] = []
   for (const entry of entries) {
-    if ([...entry.contexts.values()].some(contexts => contexts.size !== 1 || !contexts.has(entry.contextId))) {
+    if (entry.queries.some(query => query.resultBound === true) || [...entry.contexts.values()].some(contexts => contexts.size !== 1 || !contexts.has(entry.contextId))) {
       reruns.push(scheduleRefreshKey(entry.refreshKey))
       continue
     }

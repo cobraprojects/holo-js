@@ -1,3 +1,5 @@
 # Keep Realtime window policies behind shared orchestration
 
 The Realtime row-window module will concentrate shared patch preparation and mutation orchestration privately while retaining its existing interfaces and distinct cursor, offset, aggregate, and relation policies. We chose this over simplifying optimized paths through broader fetching or query reruns because page contents, ordering, structural sharing, bounded fetching, and avoided reruns must survive the refactor. Existing behavior and query-count verification remain the test surface.
+
+For #655, correctness of arbitrary handler return values takes precedence over avoiding handler reruns. Relevant changes execute the original handler through native query execution, retaining its captured context, normal serialization and existing snapshot/patch delivery. A database result appearing in the return value does not prove that replacing it will update derived fields, branches or custom serialization. The earlier avoided-rerun and mutation-only SQL budgets are superseded for these refreshes; query limits, eager-load batching, unrelated query efficiency and client delivery contracts remain unchanged.

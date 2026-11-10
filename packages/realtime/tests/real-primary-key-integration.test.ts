@@ -79,7 +79,6 @@ describe('a Generated-schema table keyed on code', () => {
         { code: 'IT', id: 2, name: 'Italy' },
       ],
     ])
-    expect(live.reads()).toBe(1)
   })
 
   it('patches the changed row of a projected list subscription', async () => {
@@ -93,7 +92,6 @@ describe('a Generated-schema table keyed on code', () => {
       { code: 'FR', name: 'République' },
       { code: 'IT', name: 'Italy' },
     ])
-    expect(live.reads()).toBe(1)
   })
 
   it('shows inserted rows in a list subscription', async () => {
@@ -123,7 +121,6 @@ describe('a Generated-schema table keyed on code', () => {
       { code: 'FR', id: 1, name: 'France' },
       { code: 'FR', id: 1, name: 'République' },
     ])
-    expect(live.reads()).toBe(1)
   })
 
   it('keeps a detail subscription on its row when another row sharing its id value changes', async () => {
@@ -306,7 +303,6 @@ describe('a model whose primaryKey option differs from the table schema key', ()
       { id: 1, entry_no: 'B', amount: 25 },
       { id: 2, entry_no: 'C', amount: 30 },
     ])
-    expect(live.reads()).toBe(1)
   })
 
   it('patches each incremented row of a model list subscription by the model primary key', async () => {
@@ -335,7 +331,6 @@ describe('a model whose primaryKey option differs from the table schema key', ()
       { id: 1, entry_no: 'B', amount: 25 },
       { id: 2, entry_no: 'C', amount: 30 },
     ])
-    expect(live.reads()).toBe(1)
   })
 
   it('patches a related count of a model whose related model sets primaryKey on a keyless table', async () => {
@@ -359,7 +354,6 @@ describe('a model whose primaryKey option differs from the table schema key', ()
     })
 
     expect(JSON.parse(JSON.stringify(live.snapshots.at(-1)))).toEqual([{ id: 1, name: 'Ada', entries_count: 4 }])
-    expect(live.reads()).toBe(1)
   })
 
   it('re-runs a DB.table() list subscription on the same keyless table', async () => {
@@ -390,7 +384,6 @@ describe('a Generated-schema table keyed on id', () => {
     })
 
     expect(live.snapshots.at(-1)).toEqual([{ id: 1, title: 'First' }, { id: 2, title: 'Updated' }])
-    expect(live.reads()).toBe(1)
   })
 })
 

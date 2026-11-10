@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
+import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
+import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
+import type { InternalRealtimeSubscribeOptions } from '../src/runtime/state'
 import { createBroadcastRealtimeTransport, realtimeClientInternals, resetRealtimeClientRuntime } from '../src/client'
 import { createWireError, RealtimeAuthorizationError, RealtimeClientError } from '../src/client/errors'
 
@@ -237,4 +241,162 @@ describe('@holo-js/realtime broadcast client transport', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(sockets).toHaveLength(1)
   })
+})
+
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
+  it(`keeps native ${driver} undefined array results consistent with JSON browser snapshots`, async () => {
+    const { db, table } = await openDatabase(driver)
+    onTestFinished(resetRealtimeRuntime)
+    await db.table(table.tableName).insert([{ id: 1, name: 'First' }, { id: 2, name: 'Second' }])
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const handler = async () => (await db.table(table.tableName).orderBy('id').get()).map(row => row.name === 'Missing' ? undefined : row.name)
+    const sockets = installFakeRealtimeBroadcast()
+    const transport = createBroadcastRealtimeTransport()
+    const deliveries: unknown[] = []
+    const nativeResults: Awaited<ReturnType<typeof handler>>[] = []
+    const errors: unknown[] = []
+    const leave = transport.subscribe('records.transformed', {}, snapshot => deliveries.push(snapshot.data), error => errors.push(error))
+    onTestFinished(leave)
+    await expect.poll(() => sockets.length).toBe(1)
+    const socket = sockets[0]!
+    socket.open()
+    await expect.poll(() => socket.frames.length).toBe(1)
+    const { id } = socket.frames[0]!.data as { id: string }
+    const options: InternalRealtimeSubscribeOptions<Awaited<ReturnType<typeof handler>>> = {
+      onData: snapshot => {
+        nativeResults.push(snapshot.data)
+        socket.receive('holo:realtime:snapshot', { id, snapshot })
+      },
+      onPatch: patch => socket.receive('holo:realtime:patch', { id, patch }),
+      onError: error => { errors.push(error) },
+    }
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table(table.tableName).where('id', 1).update({ name: 'Missing' }),
+    }))
+    const fresh = await handler()
+    expect(fresh).toEqual([undefined, 'Second'])
+    expect(errors).toEqual([])
+    expect(subscription.current.data).toEqual(fresh)
+    expect(deliveries).toEqual([['First', 'Second'], [null, 'Second']])
+    expect(nativeResults.at(-1)).toEqual(fresh)
+  })
+
+  it.each(['__proto__', 'constructor', 'prototype'])(`delivers native ${driver} transformed own %s properties through the browser transport`, async key => {
+    const { db, table } = await openDatabase(driver)
+    onTestFinished(resetRealtimeRuntime)
+    await db.table(table.tableName).insert([{ id: 1, name: 'First' }, { id: 2, name: 'Second' }])
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const handler = async () => {
+      const count = await db.table(table.tableName).count()
+      return [
+        { [key]: 'metadata', double: count * 2, triple: count * 3 },
+        { [key]: { double: count * 2 } },
+      ]
+    }
+    const sockets = installFakeRealtimeBroadcast()
+    const transport = createBroadcastRealtimeTransport()
+    const deliveries: unknown[] = []
+    const errors: unknown[] = []
+    const leave = transport.subscribe('records.transformed', {}, snapshot => deliveries.push(snapshot.data), error => errors.push(error))
+    onTestFinished(leave)
+    await expect.poll(() => sockets.length).toBe(1)
+    const socket = sockets[0]!
+    socket.open()
+    await expect.poll(() => socket.frames.length).toBe(1)
+    const { id } = socket.frames[0]!.data as { id: string }
+    const options: InternalRealtimeSubscribeOptions<Awaited<ReturnType<typeof handler>>> = {
+      onData: snapshot => socket.receive('holo:realtime:snapshot', { id, snapshot }),
+      onPatch: patch => socket.receive('holo:realtime:patch', { id, patch }),
+      onError: error => { errors.push(error) },
+    }
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
+    const initial = [
+      { [key]: 'metadata', double: 4, triple: 6 },
+      { [key]: { double: 4 } },
+    ]
+    expect(deliveries).toEqual([initial])
+    await executeRealtimeMutation(defineRealtimeMutation({
+      access: 'public',
+      handler: () => db.table(table.tableName).insert({ id: 3, name: 'Third' }),
+    }))
+    const fresh = await handler()
+    expect(fresh).toEqual([
+      { [key]: 'metadata', double: 6, triple: 9 },
+      { [key]: { double: 6 } },
+    ])
+    expect(errors).toEqual([])
+    expect(subscription.current.data).toEqual(fresh)
+    expect(deliveries).toEqual([initial, fresh])
+  })
+}
+
+it.each([
+  ['800 repeated primitive values', 800, 1, 'tail'],
+  ['100 by 200 nested repeated values', 100, 200, 'tail'],
+  ['1600 by 200 nested repeated values with two changes', 1600, 200, 'middle-and-tail'],
+  ['4000 empty records with one 4000-key endpoint', 4000, 4000, 'head-record'],
+  ['1200-level chain with equal siblings', 1, 1200, 'chain'],
+  ['8000 records with two changed fields', 8000, 1, 'bulk-record'],
+] as const)('refreshes %s and yields after a change', async (_label, rowCount, columnCount, change) => {
+  const { db, table } = await openDatabase('sqlite')
+  onTestFinished(resetRealtimeRuntime)
+  await db.table(table.tableName).insert(Array.from({ length: rowCount }, (_, index) => ({ id: index + 1, name: 'Open' })))
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+  const recordValue = change === 'head-record' ? Object.fromEntries<number>(Array.from({ length: columnCount }, (_, index) => [`field_${index}`, index] as const)) : {}
+  type ChainValue = { value: unknown } | { same: string, next: ChainValue }
+  const makeChain = (value: unknown): ChainValue => {
+    let node: ChainValue = { value }
+    for (let depth = 0; depth < columnCount; depth += 1) node = { same: 'Open', next: node }
+    return node
+  }
+  const handler = async () => {
+    const rows = await db.table(table.tableName).orderBy('id').get()
+    if (change === 'chain') return makeChain(rows[0]?.name)
+    if (change === 'bulk-record') return rows.map(row => ({ id: row.id, a: row.name, b: row.name }))
+    return rows.map(row => change === 'head-record'
+      ? row.name === 'Closed' ? recordValue : {}
+      : columnCount === 1 ? row.name : Array.from({ length: columnCount }, (_, index) => index === columnCount - 1 ? row.name : 'Open'))
+  }
+  const sockets = installFakeRealtimeBroadcast()
+  const transport = createBroadcastRealtimeTransport()
+  const deliveries: unknown[] = []
+  const errors: unknown[] = []
+  const leave = transport.subscribe('records.repeated', {}, snapshot => deliveries.push(snapshot.data), error => errors.push(error))
+  onTestFinished(leave)
+  await expect.poll(() => sockets.length).toBe(1)
+  const socket = sockets[0]!
+  socket.open()
+  await expect.poll(() => socket.frames.length).toBe(1)
+  const { id } = socket.frames[0]!.data as { id: string }
+  const options: InternalRealtimeSubscribeOptions<Awaited<ReturnType<typeof handler>>> = {
+    onData: snapshot => socket.receive('holo:realtime:snapshot', { id, snapshot }),
+    onPatch: patch => socket.receive('holo:realtime:patch', { id, patch }),
+    onError: error => { errors.push(error) },
+  }
+  const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, options)
+  const initial = Array.from({ length: rowCount }, (_, index) => change === 'bulk-record' ? { id: index + 1, a: 'Open', b: 'Open' } : change === 'head-record' || change === 'chain' ? {} : columnCount === 1 ? 'Open' : Array.from({ length: columnCount }, () => 'Open'))
+  if (change === 'chain') expect(JSON.stringify(deliveries)).toBe(JSON.stringify([makeChain('Open')]))
+  else expect(deliveries).toEqual([initial])
+  const changedIds = change === 'bulk-record' ? Array.from({ length: rowCount }, (_, index) => index + 1) : change === 'middle-and-tail' ? [rowCount / 2, rowCount] : [change === 'head-record' ? 1 : rowCount]
+  await executeRealtimeMutation(defineRealtimeMutation({
+    access: 'public',
+    handler: () => db.table(table.tableName).whereIn('id', changedIds).update({ name: 'Closed' }),
+  }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const fresh = await handler()
+  expect(errors).toEqual([])
+  if (change === 'chain') {
+    const expected = JSON.stringify(makeChain('Closed'))
+    expect(JSON.stringify(fresh)).toBe(expected)
+    expect(JSON.stringify(subscription.current.data)).toBe(expected)
+    expect(JSON.stringify(deliveries.at(-1))).toBe(expected)
+  } else {
+    expect(fresh).toEqual(initial.map((value, index) => changedIds.includes(index + 1)
+      ? change === 'bulk-record' ? { id: index + 1, a: 'Closed', b: 'Closed' } : change === 'head-record' ? recordValue : columnCount === 1 ? 'Closed' : [...Array.from({ length: columnCount - 1 }, () => 'Open'), 'Closed']
+      : value))
+    expect(subscription.current.data).toEqual(fresh)
+    expect(deliveries.at(-1)).toEqual(fresh)
+  }
 })

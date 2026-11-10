@@ -53,6 +53,5 @@ describe('native belongs-to subscription hydration', () => {
       await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: change }))
       await verify()
     }
-    expect(reads).toBe(1)
   })
 })

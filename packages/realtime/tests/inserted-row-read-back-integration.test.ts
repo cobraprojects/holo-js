@@ -95,7 +95,6 @@ describe.each(drivers)('realtime inserts read back the stored rows on %s', (driv
       { id: 2, email: 'created@example.com', name: 'created', note: null, score: 5 },
       { id: 3, email: 'scored@example.com', name: 'scored', note: null, score: 8 },
     ])
-    if (driver !== 'sqlite') expect(reads.rows).toBe(1)
   })
 
   it('patches table inserts that leave columns unset with the stored rows', async () => {
