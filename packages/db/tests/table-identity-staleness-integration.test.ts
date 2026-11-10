@@ -441,6 +441,19 @@ describe('sqlite model on a connection outside the generated schema', () => {
   })
 })
 
+describe.each(integrationDrivers(['postgres'] as const))('%s cached reads after set_config in SELECT', driver => {
+  it.each(['pg_catalog."set_config"', String.raw`U&"set\005fconfig"`])('refreshes bare names after a real %s call', async call => {
+    const { db, name, home, tenant } = await openSingleSession(driver)
+    useMemoryCache()
+    await DB.table(`${home}.${name}`).insert({ id: 1, name: 'home' })
+    expect(await cachedNames(name)).toEqual(['home'])
+    await db.unsafeQuery(unsafeSql(`SELECT 'set_config(ignored)' AS note, ${call} /* call */ ($key$search_path$key$, '${tenant}', false)`))
+    expect(await cachedNames(name)).toEqual([])
+    await DB.table(`${tenant}.${name}`).insert({ id: 2, name: 'tenant' })
+    expect(await cachedNames(name)).toEqual(['tenant'])
+  })
+})
+
 class RollbackRequested extends Error {}
 
 describe.each(integrationDrivers(['postgres'] as const))('%s table identity after a rolled-back search_path change', (driver) => {
@@ -753,3 +766,30 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
     })
   })
 }
+
+describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('%s raw write identity failures', driver => {
+  it.each(['unsafeExecute', 'unsafeQuery'] as const)('does not execute %s when table identity lookup fails', async method => {
+    let failLookup = false
+    const { db, table } = await openDatabase(driver, {
+      security,
+      wrapAdapter: adapter => new Proxy(adapter, {
+        get(target, property) {
+          if (property !== 'query' && property !== 'introspect') return Reflect.get(target, property, target)
+          const query = (target[property] ?? target.query).bind(target)
+          return async (...args: Parameters<typeof query>) => {
+            if (failLookup && args[0].includes('bare_schema')) throw new Error('identity lookup unavailable')
+            return query(...args)
+          }
+        },
+      }),
+    })
+    const { qualified } = tableSpellings(driver, table.tableName)
+    const sql = `INSERT INTO ${quotePath(driver, qualified)} (id, name) VALUES (1, 'inserted')${method === 'unsafeQuery' && driver !== 'mysql' ? ' RETURNING id' : ''}`
+
+    failLookup = true
+    await expect(db[method]({ sql, unsafe: true })).rejects.toThrow('identity lookup unavailable')
+    failLookup = false
+
+    expect(await db.table(table).pluck('id')).toEqual([])
+  })
+})

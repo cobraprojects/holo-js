@@ -1,4 +1,5 @@
-import { invalidateDatabaseSchema } from '../cache'
+import { createTableCacheDependency, createTableRowWildcardCacheDependency, invalidateDatabaseSchema, invalidateQueryCacheDependencies } from '../cache'
+import { resolveTableIdentity } from '../query/tableIdentity'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { getRootDatabaseContext, registerDatabaseContext } from './contextOwnership'
@@ -19,7 +20,7 @@ import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
 import { runAfterCommitCallbacks } from './afterCommitPublications'
 import { advanceSchemaGeneration, beginSchemaChange, endSchemaChange, markSessionUncertain, resetSessionUncertainty } from './schemaGeneration'
-import { isSchemaPreservingRawStatement } from './rawStatementEffects'
+import { isSchemaPreservingRawStatement, rawStatementWriteTarget } from './rawStatementEffects'
 import { currentRootTransaction, runInRootTransaction, type TransactionFrame } from './openTransactions'
 import { registerTransactionScopeEntry } from './transactionScope'
 import type { ModelDefinitionLike } from '../model/types'
@@ -299,6 +300,21 @@ export class DatabaseContext {
     return new TableQueryBuilder(table, this)
   }
 
+  async invalidateTables(tables: readonly string[]): Promise<void> {
+    await invalidateQueryCacheDependencies(this, await this._tableInvalidationDependencies(tables))
+  }
+
+  private async _tableInvalidationDependencies(tables: readonly string[]): Promise<string[]> {
+    const identities = new Set<string>()
+    for (const table of new Set(tables)) {
+      identities.add(await resolveTableIdentity(this, table))
+    }
+    return [...identities].flatMap(tableName => [
+      createTableCacheDependency(this._connectionName, tableName),
+      createTableRowWildcardCacheDependency(this._connectionName, tableName),
+    ])
+  }
+
   getLogger(): DatabaseLogger | undefined {
     return this._logger
   }
@@ -404,8 +420,14 @@ export class DatabaseContext {
     return this._runSchemaChange(() => this.executeCompiled(statement, options))
   }
 
-  private _runRawStatement<T>(statement: UnsafeStatement, run: () => Promise<T>): Promise<T> {
-    if (isSchemaPreservingRawStatement(statement.sql)) return run()
+  private async _runRawStatement<T>(statement: UnsafeStatement, run: () => Promise<T>): Promise<T> {
+    if (isSchemaPreservingRawStatement(statement.sql, this._dialect.name)) {
+      const target = rawStatementWriteTarget(statement.sql, this._dialect.name)
+      const dependencies = target ? await this._tableInvalidationDependencies([target]) : []
+      const result = await run()
+      if (target) await invalidateQueryCacheDependencies(this, dependencies)
+      return result
+    }
     markSessionUncertain(getRootDatabaseContext(this))
     return this._runSchemaChange(run)
   }

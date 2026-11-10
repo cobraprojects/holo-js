@@ -69,7 +69,7 @@ await cache.forget('posts.published')
 
 Use a different `key` for each distinct query. Two queries with the same key share one cache entry.
 
-Query caching bypasses shared reads and writes inside transactions and explicit PostgreSQL/MySQL connection scopes. It also bypasses them for injected clients, pools or pool factories, and after Holo observes raw SQL that may change session or schema resolution. That last restriction lasts until disconnect; simple ordinary reads and framework introspection keep caching enabled on default managed pools. The raw SQL check is conservative: multiple statements, or a semicolon followed by non-whitespace inside a literal or comment (such as `SELECT 'a; b'`), can disable reuse until disconnect even when the SQL only reads data. These conservative paths run the query normally, including when a custom cache key is supplied.
+Query caching bypasses shared reads and writes inside transactions and explicit PostgreSQL/MySQL connection scopes. It also bypasses them for injected clients, pools or pool factories, and after Holo observes raw SQL that may change session or schema resolution. That last restriction lasts until disconnect; simple ordinary reads and framework introspection keep caching enabled on default managed pools. The raw SQL check is conservative: multiple statements, MySQL executable comments, unterminated literals or comments, PostgreSQL `U&` identifiers, and strings with ambiguous backslash escaping can disable reuse until disconnect even when the SQL only reads data. Semicolons and SQL-like text inside ordinary literals and comments, such as `SELECT 'a; b'`, do not. These conservative paths run the query normally, including when a custom cache key is supplied.
 
 Holo-observed schema changes clear query-cache entries, including custom keys with explicit invalidation lists, and refresh existing realtime queries. Timed-out DDL clears them again when the underlying driver operation settles. SQL executed outside Holo does not provide this signal.
 
@@ -116,7 +116,11 @@ A database can match a write to a cached row even when the two values differ as 
 Realtime queries follow the same rules, so a subscription refreshes after any write the database matched to its rows.
 
 ::: warning
-Holo only sees writes made through Holo. Changes from raw SQL clients, other apps, or database triggers don't clear the cache.
+Simple raw `INSERT INTO`, `UPDATE … SET`, and `DELETE FROM` statements run through Holo also clear cached reads of the identified target table, including cached reads of individual rows. Invalidation waits for transaction commit. See [raw SQL](/database/#raw-sql) for recognition limits.
+
+A raw `WITH … UPDATE` with no recognized target leaves cached results unchanged. Do not rely on automatic invalidation for other unrecognized raw writes. Changes from external SQL clients or other apps, and changes to other tables through database triggers, don't clear the cache.
+
+After an unrecognized write, call `await DB.connection().invalidateTables(['posts'])` with every affected table to clear cached queries, including reads of individual rows, and refresh realtime subscriptions. Inside a transaction, use `await tx.invalidateTables(['posts'])`: it registers the refresh and returns before commit. Commit publishes it; rollback discards it. See the [explicit invalidation example](/database/#raw-sql).
 
 The list of which entries depend on which tables lives in each server process's memory. If you run several servers or workers against a shared Redis or database cache, a write on one server doesn't clear entries another server cached. Those entries stay until their TTL ends. Keep TTLs short in that setup, or clear keys yourself.
 :::
