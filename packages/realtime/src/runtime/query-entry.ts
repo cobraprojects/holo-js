@@ -16,9 +16,6 @@ import { queryCacheInternals } from '@holo-js/db'
 import { EMPTY_TABLE_DEPENDENCIES } from './dependencies'
 import { executeInitialQuery } from './query-execution'
 import {
-  updateQueryEntryObservedQueries,
-} from './query-patching'
-import {
   getRuntimeState,
   type ActiveQueryEntry,
   type InternalRealtimeSubscribeOptions,
@@ -61,11 +58,9 @@ export async function createQueryEntry<TDefinition extends RealtimeQueryDefiniti
     args,
     options,
     dependencies: Object.freeze([]),
-    patchTargets: [],
     predicateDependencies: new Map<string, Map<string, Set<string>>>(),
     queries: [],
     resultHash: '',
-    resultHashDirty: false,
     tableDependencies: EMPTY_TABLE_DEPENDENCIES,
     version: 0,
   }
@@ -76,22 +71,16 @@ export async function createQueryEntry<TDefinition extends RealtimeQueryDefiniti
   try {
     const result = await executeInitialQuery(definition, args, undefined)
     entry.schemaGeneration = schemaGeneration
-    entry.readBoundary = queryCacheInternals.markMutationPublicationBoundary()
     const auth = await captureAuthContext(state.bindings)
     entry.runWithContext = createExecutionContext(database, auth)
     entry.contexts = new Map(result.contexts)
     entry.dependencies = result.result.dependencies
     entry.predicateDependencies = result.predicateDependencies
     entry.resultHash = result.resultHash
-    entry.resultHashDirty = false
     entry.tableDependencies = result.tableDependencies
     entry.version = 1
     entry.current = result.snapshot
-    updateQueryEntryObservedQueries(
-      entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
-      result.result.queries,
-      result.snapshot.data,
-    )
+    entry.queries = [...result.result.queries]
     addQueryEntryDependencies(entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)
     if (entry.refreshAfterInitialRead || hasTableInvalidationSince(generationsAtStart, entry.dependencies) || schemaGeneration !== queryCacheInternals.currentSchemaGeneration()) {
       requestInitialRefresh(refreshKey)

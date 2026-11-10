@@ -21,10 +21,6 @@ export {
   createSplicePatchOperation,
 } from './patch-operation-factories'
 
-export {
-  compactPatchOperations,
-} from './patch-operation-compaction'
-
 const MAX_DEEP_PATCH_PATH_LENGTH = 16
 
 export function createReplacePatchOperations(

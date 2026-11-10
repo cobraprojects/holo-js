@@ -13,24 +13,6 @@ export type PathReplacementPlan = {
   replacement: unknown
 }
 
-export function createTwoPathReplacementPlan(
-  firstPath: readonly RealtimePatchPathSegment[],
-  firstValue: unknown,
-  secondPath: readonly RealtimePatchPathSegment[],
-  secondValue: unknown,
-): PathReplacementPlan | undefined {
-  const root = createEmptyPathReplacementPlan()
-  if (!addPathReplacementToPlan(root, firstPath, firstValue)) {
-    return undefined
-  }
-
-  if (!addPathReplacementToPlan(root, secondPath, secondValue)) {
-    return undefined
-  }
-
-  return root
-}
-
 export function createEmptyPathReplacementPlan(): PathReplacementPlan {
   return {
     hasReplacement: false,

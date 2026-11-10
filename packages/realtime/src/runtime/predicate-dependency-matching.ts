@@ -77,27 +77,3 @@ export function isQueryObservationContradictedByExactPredicates(
 
   return false
 }
-
-export function readExactPredicateValues(
-  exactPredicateDependencies: PredicateDependencyIndex,
-  connectionName: string,
-  tableName: string,
-  column: string,
-): readonly unknown[] | undefined {
-  const encodedValues = exactPredicateDependencies.get(createTableKey(connectionName, tableName))?.get(column)
-  if (!encodedValues) {
-    return undefined
-  }
-
-  const values: unknown[] = []
-  for (const encodedValue of encodedValues) {
-    const value = decodeDependencyValue(encodedValue)
-    if (value === UNREADABLE_DEPENDENCY_VALUE) {
-      return undefined
-    }
-
-    values.push(value)
-  }
-
-  return Object.freeze(values)
-}

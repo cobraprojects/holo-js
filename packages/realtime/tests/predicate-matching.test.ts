@@ -1,22 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   compareValues,
-  createMutationPredicateMatchContext,
   holdsUnsafeIntegerPredicate,
-  createPredicateMatchContext,
-  matchesPatchedPredicate,
   matchesPredicate,
   matchesPredicateValue,
   matchesPredicates,
-  mutationChangesColumns,
-  NO_EXACT_ID_PREDICATE,
-  readMutationExactIdPredicateValue,
-  readMutationFirstPredicate,
-  readMutationPredicateCount,
-  readMutationValueKeys,
-  readQueryExactIdPredicateValue,
-  rowValuesChanged,
-  valueKeysChangeColumns,
   type DatabaseQueryPredicateObservation,
 } from '../src/runtime/predicate-matching'
 
@@ -124,9 +112,6 @@ describe('@holo-js/realtime predicate matching', () => {
 
     expect(matchesPredicate(row, createPredicate('status', '=', 'draft'))).toBe(true)
     expect(matchesPredicate(row, createPredicate('missing', '=', true))).toBeUndefined()
-    expect(matchesPatchedPredicate(row, { status: 'published' }, createPredicate('status', '=', 'published'))).toBe(true)
-    expect(matchesPatchedPredicate(row, {}, createPredicate('count', '>', 0))).toBe(true)
-    expect(matchesPatchedPredicate(row, {}, createPredicate('missing', '=', true))).toBeUndefined()
     expect(matchesPredicates(row, [])).toBe(true)
     expect(matchesPredicates(row, [createPredicate('status', '!=', 'published')])).toBeUndefined()
     expect(matchesPredicates(row, [createPredicate('missing', '=', true)])).toBeUndefined()
@@ -136,59 +121,6 @@ describe('@holo-js/realtime predicate matching', () => {
     ])).toBe(false)
   })
 
-  it('reads predicate metadata and changed columns from queries and mutations', () => {
-    const idPredicate = createPredicate('id', '=', 10)
-    const statusPredicate = createPredicate('status', '=', 'draft')
-
-    expect(readQueryExactIdPredicateValue({ predicates: [idPredicate] })).toBe(10)
-    expect(readQueryExactIdPredicateValue({ exactId: 11, predicates: [idPredicate] })).toBe(11)
-    expect(readQueryExactIdPredicateValue({ predicates: [statusPredicate, idPredicate] })).toBe(10)
-    expect(readQueryExactIdPredicateValue({ predicates: [
-      idPredicate,
-      createPredicate('id', '=', 11),
-    ] })).toBe(NO_EXACT_ID_PREDICATE)
-    expect(readQueryExactIdPredicateValue({ predicates: [statusPredicate] })).toBe(NO_EXACT_ID_PREDICATE)
-    expect(readMutationExactIdPredicateValue({ predicates: [idPredicate] })).toBe(10)
-    expect(readMutationExactIdPredicateValue({ predicates: [statusPredicate, idPredicate] })).toBe(10)
-    expect(readMutationExactIdPredicateValue({ exactId: 12, predicates: [idPredicate] })).toBe(12)
-    expect(readMutationFirstPredicate({ predicates: [statusPredicate] })).toBe(statusPredicate)
-    expect(readMutationFirstPredicate({ firstPredicate: idPredicate, predicates: [statusPredicate] })).toBe(idPredicate)
-    expect(readMutationPredicateCount({ predicates: [statusPredicate] })).toBe(1)
-    expect(readMutationPredicateCount({ predicateCount: 2, predicates: [statusPredicate] })).toBe(2)
-    expect(readMutationValueKeys({ predicates: [] })).toEqual([])
-    expect(readMutationValueKeys({ predicates: [], values: { status: 'published' } })).toEqual(['status'])
-    expect(readMutationValueKeys({ predicates: [], valueKeys: ['title'] })).toEqual(['title'])
-    expect(createPredicateMatchContext([statusPredicate], NO_EXACT_ID_PREDICATE, 'id')).toEqual({
-      exactId: NO_EXACT_ID_PREDICATE,
-      firstPredicate: statusPredicate,
-      predicateCount: 1,
-      predicates: [statusPredicate],
-      primaryKey: 'id',
-    })
-    expect(createMutationPredicateMatchContext({
-      firstPredicate: idPredicate,
-      predicateCount: 2,
-      predicates: [statusPredicate],
-    }, 10)).toEqual({
-      exactId: 10,
-      firstPredicate: idPredicate,
-      predicateCount: 2,
-      predicates: [statusPredicate],
-      primaryKey: 'id',
-    })
-
-    expect(rowValuesChanged({ title: 'Old' }, { title: 'Old' }, ['title'])).toBe(false)
-    expect(rowValuesChanged({ title: 'Old' }, { title: 'New' }, ['title'])).toBe(true)
-    expect(rowValuesChanged({}, { title: 'New' }, ['title'])).toBe(true)
-    expect(mutationChangesColumns({ predicates: [] }, ['title'])).toBe(false)
-    expect(mutationChangesColumns({ predicates: [], values: { title: 'New' } }, ['title'])).toBe(true)
-    expect(valueKeysChangeColumns([], ['title'])).toBe(false)
-    expect(valueKeysChangeColumns(['title'], [])).toBe(false)
-    expect(valueKeysChangeColumns(['status'], ['title'])).toBe(false)
-    expect(valueKeysChangeColumns(['title'], ['title', 'status'])).toBe(true)
-    expect(valueKeysChangeColumns(['title', 'status'], ['body', 'status'])).toBe(true)
-    expect(valueKeysChangeColumns(['title', 'status'], ['body', 'category'])).toBe(false)
-  })
 })
 
 function createPredicate(
