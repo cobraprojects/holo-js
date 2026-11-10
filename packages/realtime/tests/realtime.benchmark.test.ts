@@ -1,6 +1,6 @@
 import { applyWireSnapshotPatch } from '../src/client/patching'
 import { isRecord } from '../src/runtime/value'
-import { expectEquivalentWireOperations } from './helpers/native-fixture'
+import { createNativeRelationalAdapter, expectEquivalentWireOperations } from './helpers/native-fixture'
 import { performance } from 'node:perf_hooks'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -11,6 +11,7 @@ import {
   createCapabilities,
   createConnectionManager,
   createDatabase,
+  createDialect,
   defineGeneratedTable,
   defineModel,
   hasMany,
@@ -1000,13 +1001,13 @@ function createAggregatePatchBenchmarkRows(): BenchmarkPostRow[] {
   }))
 }
 
-function createRelationAggregateBenchmarkTables(): { authors: BenchmarkAuthorRow[], posts: BenchmarkPostRow[] } {
+function createRelationAggregateBenchmarkTables(rowCount = patchRowCount): { authors: BenchmarkAuthorRow[], posts: BenchmarkPostRow[] } {
   return {
-    authors: Array.from({ length: patchRowCount }, (_, index) => ({
+    authors: Array.from({ length: rowCount }, (_, index) => ({
       id: index + 1,
       name: `Author ${index + 1}`,
     })),
-    posts: Array.from({ length: patchRowCount }, (_, index) => ({
+    posts: Array.from({ length: rowCount }, (_, index) => ({
       author_id: index + 1,
       id: index + 1,
       score: 10_000 + index + 1,
@@ -1104,24 +1105,24 @@ function createRuntimeRelationAggregateUpsertMutation(
   })
 }
 
-function createBelongsToManyBenchmarkTables(): {
+function createBelongsToManyBenchmarkTables(rowCount = patchRowCount): {
   post_tags: BenchmarkPostTagRow[]
   posts: BenchmarkPostRow[]
   tags: BenchmarkTagRow[]
 } {
   return {
-    posts: Array.from({ length: patchRowCount }, (_, index) => ({
+    posts: Array.from({ length: rowCount }, (_, index) => ({
       id: index + 1,
       title: `Post ${index + 1}`,
       user_id: 1,
     })),
-    post_tags: Array.from({ length: patchRowCount }, (_, index) => ({
+    post_tags: Array.from({ length: rowCount }, (_, index) => ({
       id: index + 1,
       postId: index + 1,
       tagId: index + 1,
       weight: index + 1,
     })),
-    tags: Array.from({ length: patchRowCount }, (_, index) => ({
+    tags: Array.from({ length: rowCount }, (_, index) => ({
       id: index + 1,
       name: `Tag ${index + 1}`,
     })),
@@ -19605,45 +19606,9 @@ function createAlternatingOwnerPostRows(): BenchmarkPostRow[] {
   }))
 }
 
-function createSizedAuthorPostTables(rowCount: number): { authors: BenchmarkAuthorRow[], posts: BenchmarkPostRow[] } {
-  return {
-    authors: Array.from({ length: rowCount }, (_, index) => ({
-      id: index + 1,
-      name: `Author ${index + 1}`,
-    })),
-    posts: Array.from({ length: rowCount }, (_, index) => ({
-      author_id: index + 1,
-      id: index + 1,
-      score: 10_000 + index + 1,
-      title: `Post ${index + 1}`,
-      user_id: 1,
-    })),
-  }
-}
-
-function createSizedPostTagTables(rowCount: number): { post_tags: BenchmarkPostTagRow[], posts: BenchmarkPostRow[], tags: BenchmarkTagRow[] } {
-  return {
-    posts: Array.from({ length: rowCount }, (_, index) => ({
-      id: index + 1,
-      title: `Post ${index + 1}`,
-      user_id: 1,
-    })),
-    post_tags: Array.from({ length: rowCount }, (_, index) => ({
-      id: index + 1,
-      postId: index + 1,
-      tagId: index + 1,
-      weight: index + 1,
-    })),
-    tags: Array.from({ length: rowCount }, (_, index) => ({
-      id: index + 1,
-      name: `Tag ${index + 1}`,
-    })),
-  }
-}
-
 async function commitBenchmarkWrites(
   db: DatabaseContext,
-  adapter: BenchmarkModelAdapter,
+  adapter: { readonly queries: readonly BenchmarkStatement[] },
   write: (transaction: DatabaseContext) => Promise<void>,
 ): Promise<readonly BenchmarkStatement[]> {
   let refreshStart = 0
@@ -19691,7 +19656,7 @@ describe('@holo-js/realtime refresh SQL cost', () => {
   })
 
   it.each([5, 50])('refreshes a has-many with() handler with a fixed query count at %i authors', async (rowCount) => {
-    const tables = createSizedAuthorPostTables(rowCount)
+    const tables = createRelationAggregateBenchmarkTables(rowCount)
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
     configureDB(createConnectionManager({
@@ -19715,7 +19680,7 @@ describe('@holo-js/realtime refresh SQL cost', () => {
   })
 
   it.each([5, 50])('refreshes a belongs-to-many with() handler with a fixed query count at %i posts', async (rowCount) => {
-    const tables = createSizedPostTagTables(rowCount)
+    const tables = createBelongsToManyBenchmarkTables(rowCount)
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
     configureDB(createConnectionManager({
@@ -19766,8 +19731,9 @@ describe('@holo-js/realtime refresh SQL cost', () => {
         return result
       },
     })
+    const deliveries = Array<number>(subscriptionCount).fill(0)
     for (let index = 0; index < subscriptionCount; index += 1) {
-      await subscribeRealtimeQuery(query, {}, { onData: () => { counters.emittedSnapshots += 1 } })
+      await subscribeRealtimeQuery(query, {}, { onData: () => { deliveries[index] = (deliveries[index] ?? 0) + 1 } })
     }
     expect(counters.queryExecutions).toBe(subscriptionCount)
     adapter.queries.length = 0
@@ -19785,6 +19751,7 @@ describe('@holo-js/realtime refresh SQL cost', () => {
     releaseRefreshes()
     const refreshQueries = await committed
     expect(refreshQueries).toHaveLength(subscriptionCount)
+    expect(deliveries).toEqual(Array<number>(subscriptionCount).fill(2))
     expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(peakInFlightRefreshes).toBe(refreshConcurrencyLimit)
   })
@@ -19835,7 +19802,7 @@ describe('@holo-js/realtime refresh SQL cost', () => {
   })
 
   it('issues no queries for a write to another table', async () => {
-    const tables = createSizedAuthorPostTables(5)
+    const tables = createRelationAggregateBenchmarkTables(5)
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkReturningDatabaseContext(adapter)
     configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
@@ -19853,28 +19820,33 @@ describe('@holo-js/realtime refresh SQL cost', () => {
     expect(counters.queryExecutions).toBe(1)
   })
 
-  it('re-executes exactly one query when a write to its own table contradicts the subscription predicate', async () => {
-    const rows = createAlternatingOwnerPostRows()
-    const adapter = new BenchmarkModelAdapter(rows)
-    const db = createBenchmarkReturningDatabaseContext(adapter)
+  it.each([
+    { operation: 'UPDATE', refreshCount: 1 },
+    { operation: 'DELETE', refreshCount: 1 },
+    { operation: 'INSERT', refreshCount: 0 },
+  ])('issues $refreshCount refresh queries for a real $operation outside the subscription predicate', async ({ operation, refreshCount }) => {
+    const adapter = await createNativeRelationalAdapter({ posts: createAlternatingOwnerPostRows() })
+    const db = createDatabase({ adapter, dialect: createDialect('sqlite'), connectionName })
     configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
     const counters: BenchmarkCounters = { emittedSnapshots: 0, queryExecutions: 0 }
+    const snapshots: unknown[] = []
     await subscribeRealtimeQuery(createUserPostsCountedQuery(counters), {}, {
-      onData: () => { counters.emittedSnapshots += 1 },
+      onData: (snapshot) => { snapshots.push(snapshot.data) },
     })
 
     const refreshQueries = await commitBenchmarkWrites(db, adapter, async (transaction) => {
-      for (let index = 0; index < rows.length; index += 1) {
-        if (rows[index]!.user_id === 2) rows[index] = { ...rows[index]!, title: 'Updated owner 2' }
-      }
-      await transaction.table('posts').where('user_id', 2).update({ title: 'Updated owner 2' })
+      if (operation === 'UPDATE') await transaction.table('posts').where('user_id', 2).update({ title: 'Updated owner 2' })
+      else if (operation === 'DELETE') await transaction.table('posts').where('user_id', 2).delete()
+      else await transaction.table('posts').insert({ id: 7, user_id: 2, title: 'New owner 2' })
     })
 
-    expect(refreshQueries).toEqual([{
+    expect([...adapter.executions, ...adapter.queries].some(statement => statement.sql.startsWith(operation))).toBe(true)
+    expect(refreshQueries).toEqual(refreshCount === 0 ? [] : [{
       sql: `SELECT * FROM "posts" WHERE "user_id" = ? ORDER BY "id" ASC LIMIT ${pageSize}`,
       bindings: [1],
     }])
-    expect(counters.queryExecutions).toBe(2)
+    expect(counters.queryExecutions).toBe(1 + refreshCount)
+    expect(snapshots.at(-1)).toEqual(createAlternatingOwnerPostRows().filter(row => row.user_id === 1))
   })
 
   it('issues no queries for an exact invalidation contradicting the subscription predicate', async () => {
