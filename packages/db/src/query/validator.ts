@@ -402,6 +402,14 @@ function assertPredicate(
     return
   }
 
+  if (predicate.kind === 'relation-keys') {
+    assertColumnReference(predicate.column, tableName, allowedColumns)
+    if (!Array.isArray(predicate.values) || predicate.values.length === 0) {
+      throw new SecurityError('Relation keys require a non-empty array.')
+    }
+    return
+  }
+
   if (predicate.kind === 'fulltext') {
     if (predicate.columns.length === 0) {
       throw new SecurityError('Full-text predicates must target at least one column.')

@@ -1,5 +1,6 @@
 import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { SQLQueryCompiler } from './SQLQueryCompiler'
+import { serializeRelationKeys, type QueryRelationKeysPredicate } from './ast'
 import { splitTablePath } from '../schema/identifiers'
 import type { CompiledStatement } from '../core/types'
 import type { TableNameFolding } from '../schema/tableIdentityRegistry'
@@ -12,6 +13,17 @@ const MYSQL_DECIMAL_DIGITS = 65
 const MYSQL_DECIMAL_KEY_INTEGER_DIGITS = 35
 
 export class MySQLQueryCompiler extends SQLQueryCompiler {
+  protected override compileRelationKeys(predicate: QueryRelationKeysPredicate, bindings: unknown[]): string {
+    const column = this.compileColumnReference(predicate.column)
+    const serialized = serializeRelationKeys(predicate.values)
+    bindings.push(serialized)
+    const parameter = this.createPlaceholder(bindings.length)
+    bindings.push(serialized)
+    const value = `JSON_UNQUOTE(JSON_EXTRACT(${parameter}, CONCAT('$[', holo_keys.ordinal - 1, ']')))`
+    const key = predicate.valueType === 'blob' ? `UNHEX(${value})` : value
+    return `${column} IN (SELECT ${key} FROM JSON_TABLE(${this.createPlaceholder(bindings.length)}, '$[*]' COLUMNS (ordinal FOR ORDINALITY)) AS holo_keys)`
+  }
+
   override compileTableIdentityLookup(tableName: string): CompiledStatement {
     const { schema, table } = splitTablePath(tableName)
     const schemaLiteral = schema === undefined ? 'NULL' : compileMySQLStringLiteral(schema)

@@ -13,6 +13,7 @@ import type {
   DeleteQueryPlan,
   QueryDatePredicate,
   QueryLikePredicate,
+  QueryRelationKeysPredicate,
   QueryBetweenColumnsPredicate,
   QueryFullTextPredicate,
   QueryHavingClause,
@@ -38,7 +39,7 @@ import type {
   QueryColumnSelection,
   UpdateQueryPlan,
 } from './ast'
-import { isOneOfManyAggregatePlan } from './ast'
+import { hasScalarSelections, isOneOfManyAggregatePlan, readScalarExtremum, serializeRelationKeys, withScalarExtremum } from './ast'
 
 type IdentifierQuoter = (identifier: string) => string
 type PlaceholderFactory = (index: number) => string
@@ -194,6 +195,11 @@ export class SQLQueryCompiler {
     bindings: unknown[],
     projection?: string,
   ): string {
+    const extremum = readScalarExtremum(plan)
+    if (extremum) {
+      const source = this.compileSelectSql(withScalarExtremum(plan, undefined), bindings)
+      return `SELECT ${extremum.kind.toUpperCase()}(${this.quoteIdentifier(extremum.column)}) FROM (${source}) AS ${this.quoteIdentifier('__holo_extremum')}`
+    }
     const selectKeyword = plan.distinct ? 'SELECT DISTINCT' : 'SELECT'
     const selectList = projection ?? (plan.selections.length === 0
       ? '*'
@@ -241,7 +247,8 @@ export class SQLQueryCompiler {
     const limitClause = typeof plan.limit === 'number' ? ` LIMIT ${plan.limit}` : ''
     const offsetClause = typeof plan.offset === 'number' ? ` OFFSET ${plan.offset}` : ''
 
-    return `${selectKeyword} ${selectList} FROM ${this.compileSource(plan.source)}${joinClause}${whereClause}${groupByClause}${havingClause}${unionClause}${orderClause}${limitClause}${offsetClause}${lockClause}`
+    const sourceClause = hasScalarSelections(plan) ? '' : ` FROM ${this.compileSource(plan.source)}`
+    return `${selectKeyword} ${selectList}${sourceClause}${joinClause}${whereClause}${groupByClause}${havingClause}${unionClause}${orderClause}${limitClause}${offsetClause}${lockClause}`
   }
 
   protected compileInsert(plan: InsertQueryPlan): CompiledStatement {
@@ -655,6 +662,10 @@ export class SQLQueryCompiler {
       return `${this.compileColumnReference(predicate.column)} IN (${literals.join(', ')})`
     }
 
+    if (predicate.kind === 'relation-keys') {
+      return this.compileRelationKeys(predicate, bindings)
+    }
+
     if (predicate.kind === 'exists') {
       const nested = this.compileSelectSql(predicate.subquery, bindings)
       return `${predicate.negated ? 'NOT ' : ''}EXISTS (${nested})`
@@ -724,6 +735,21 @@ export class SQLQueryCompiler {
 
     bindings.push(predicate.value)
     return `${this.compileComparisonSubject(predicate)} ${predicate.operator.toUpperCase()} ${this.compileComparisonPlaceholder(predicate, bindings.length)}`
+  }
+
+  protected compileRelationKeys(predicate: QueryRelationKeysPredicate, bindings: unknown[]): string {
+    const column = this.compileColumnReference(predicate.column)
+    const serialized = serializeRelationKeys(predicate.values)
+    bindings.push(serialized)
+    const parameter = this.createPlaceholder(bindings.length)
+    if (this.dialect === 'sqlite') {
+      const key = predicate.valueType === 'blob' ? 'unhex(value)' : 'value'
+      return `${column} IN (SELECT ${key} FROM json_each(${parameter}))`
+    }
+    const casts = { integer: 'BIGINT', decimal: 'NUMERIC', real: 'DOUBLE PRECISION', boolean: 'BOOLEAN', uuid: 'UUID', date: 'DATE', timestamp: 'TIMESTAMP' }
+    const key = predicate.valueType === 'blob' ? `decode(value, 'hex')`
+      : predicate.valueType ? `CAST(value AS ${casts[predicate.valueType]})` : 'value'
+    return `${column} IN (SELECT ${key} FROM jsonb_array_elements_text(CAST(${parameter} AS jsonb)) AS holo_keys(value))`
   }
 
   protected compileColumnComparison(predicate: QueryColumnPredicate): string {
