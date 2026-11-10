@@ -338,6 +338,24 @@ describe('model relation slice', () => {
     await detachedUser.load('posts', 'profile')
     expect(detachedUser.getRelation<Entity<TableDefinition>[]>('posts')).toEqual([])
     expect(detachedUser.getRelation('profile')).toBeNull()
+
+    const jsonQuery = () => User.query().with('profile').withCount('posts').orderBy('id')
+    expect((await jsonQuery().getJson()).map(user => ({ profile: user.profile, count: user.posts_count }))).toEqual([
+      { profile: { id: 100, userId: 1, bio: 'Engineer' }, count: 2 },
+      { profile: null, count: 1 },
+    ])
+    const first = await jsonQuery().firstJson()
+    const page = await jsonQuery().paginateJson(1, 1)
+    const simple = await jsonQuery().simplePaginateJson(1, 1)
+    const cursor = await jsonQuery().cursorPaginateJson(1)
+    for (const user of [first, page.data[0], simple.data[0], cursor.data[0]]) {
+      expect(user).toMatchObject({ id: 1, posts_count: 2, profile: { bio: 'Engineer' } })
+    }
+    for (const empty of [await jsonQuery().paginateJson(1, 99), await jsonQuery().simplePaginateJson(1, 99)]) {
+      expect(empty.data).toEqual([])
+      expect(empty.meta).toMatchObject({ from: null, to: null })
+    }
+    expect((await jsonQuery().cursorPaginateJson(10)).nextCursor).toBeNull()
   })
 
   it('respects persisted soft-delete scopes and explicit withTrashed relation constraints', async () => {

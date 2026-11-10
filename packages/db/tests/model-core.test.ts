@@ -2503,6 +2503,26 @@ describe('model core slice', () => {
     await expect(Cancelled.create({ name: 'Blocked' })).rejects.toThrow('creating event cancelled')
   })
 
+  it.each(['class', 'instance'] as const)('dispatches a constructor-assigned retrieved callback on a %s observer', async (kind) => {
+    const { db, table } = await openDatabase('sqlite')
+    await db.table(table).insert({ id: 1, name: 'Original' })
+    let retrieved = 0
+    class Observer {
+      readonly retrieved = (entity: unknown): void => {
+        retrieved += 1
+        asTestEntity(entity).set('name', 'Observed')
+      }
+
+      get service(): never {
+        throw new Error('The service is only available during a request.')
+      }
+    }
+    const User = defineModel(table, { timestamps: false, fillable: ['name'], observers: [kind === 'class' ? Observer : new Observer()] })
+
+    expect((await db.model(User).query().firstOrFail()).get('name')).toBe('Observed')
+    expect(retrieved).toBe(1)
+  })
+
   it('preserves duplicate configured observers', async () => {
     const calls: string[] = []
     const observer = {
@@ -2774,6 +2794,8 @@ describe('model core slice', () => {
     await user.save()
     expect((await User.findOrFail(1)).get('name')).toBe('Changed')
     const relation = user.posts as typeof user.posts & Pick<Promise<readonly ReturnType<typeof Post.make>[]>, 'then' | 'catch' | 'finally'>
+    const concurrent = await Promise.all([relation.then(records => records), relation.then(records => records)])
+    expect(concurrent.map(records => records.map(record => record.get('title')))).toEqual([['Loaded'], ['Loaded']])
     expect((await relation.then(records => records))[0]?.get('title')).toBe('Loaded')
     expect((await relation.catch(() => []))[0]?.get('title')).toBe('Loaded')
     let finalized = false
