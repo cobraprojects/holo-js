@@ -448,7 +448,7 @@ import { DB } from '@holo-js/db'
 
 await DB.transaction(async tx => {
   await tx.unsafeExecute(DB.raw(
-    'WITH selected AS (SELECT id FROM posts WHERE status = ?) UPDATE posts SET status = ? WHERE id IN (SELECT id FROM selected)',
+    'WITH selected AS (SELECT id FROM posts WHERE status = $1) UPDATE posts SET status = $2 WHERE id IN (SELECT id FROM selected)',
     ['draft', 'archived'],
   ))
   await tx.invalidateTables(['posts'])
