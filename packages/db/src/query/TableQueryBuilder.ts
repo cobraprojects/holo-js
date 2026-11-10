@@ -8,7 +8,38 @@ import { createDateExtremaSelection, createFractionalCountSelection } from './tr
 import type { QueryRawSelection } from './ast'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
-import { getDatabaseQueryCacheBridge, canUseQueryCache, needsFullQueryRefresh, databaseSchemaDependency, hasActiveDatabaseDependencyCollector, hasDatabaseDependencyInvalidationListeners, hasDatabaseDependencyInvalidationPublisher, invalidateQueryCacheDependencies, runQueryCacheOperation, createDatabaseMutationEvent, resolveInsertIdKey, createTableCacheDependency, createTableRowWildcardCacheDependency, recordDatabaseQueryRefreshTables, createDatabaseQueryObservation, inferAutomaticInsertCacheInvalidationPlan, inferAutomaticQueryCacheInvalidationPlan, inferDatabaseQueryObservationDependencies, normalizeQueryCacheConfig, recordDatabaseQueryDependencies, recordDatabaseQueryObservation, recordDatabaseQueryContext, resolveQueryCacheDependencies, writesTextLiterals, type QueryTextMatching, resolveQueryCacheKey, type NormalizedQueryCacheConfig, type QueryCacheConfig, type QueryCacheFlexibleTtlInput, type QueryCacheTtlInput } from '../cache'
+import {
+  getDatabaseQueryCacheBridge,
+  canUseQueryCache,
+  needsFullQueryRefresh,
+  databaseSchemaDependency,
+  hasActiveDatabaseDependencyCollector,
+  hasDatabaseDependencyInvalidationListeners,
+  hasDatabaseDependencyInvalidationPublisher,
+  invalidateQueryCacheDependencies,
+  runQueryCacheOperation,
+  createDatabaseMutationEvent,
+  resolveInsertIdKey,
+  createTableCacheDependency,
+  createTableRowWildcardCacheDependency,
+  recordDatabaseQueryRefreshTables,
+  createDatabaseQueryObservation,
+  inferAutomaticInsertCacheInvalidationPlan,
+  inferAutomaticQueryCacheInvalidationPlan,
+  inferDatabaseQueryObservationDependencies,
+  normalizeQueryCacheConfig,
+  recordDatabaseQueryDependencies,
+  recordDatabaseQueryObservation,
+  recordDatabaseQueryContext,
+  resolveQueryCacheDependencies,
+  writesTextLiterals,
+  type QueryTextMatching,
+  resolveQueryCacheKey,
+  type NormalizedQueryCacheConfig,
+  type QueryCacheConfig,
+  type QueryCacheFlexibleTtlInput,
+  type QueryCacheTtlInput,
+} from '../cache'
 import { queryBatches, visitRows } from './traversal'
 import { holdsUnreadableInteger, readConvertedResultColumns, readInsertedKey, readIntegerColumns, resolveConvertedResultColumns, withResolvedDefinitions } from './resultColumns'
 import {
