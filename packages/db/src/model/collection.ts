@@ -1,4 +1,3 @@
-import { markDatabaseQueryObservationsSerialized, requireDatabaseQueryRefreshForRows, runRequiringDatabaseQueryRefresh, rebindDatabaseQueryObservationSerializedResult } from '../cache'
 import { HydrationError } from '../core/errors'
 import { integerKeysToInline, singleStatementRelationKeys } from './relationRetrieval'
 import { whereIntegerKeysIn } from './ModelQueryBuilder'
@@ -174,7 +173,6 @@ export function createModelCollection<
     },
     toJSON(): Array<CollectionSerializedItem<TItem, TTable>> {
       const serialized = collection.map(item => item.toJSON() as CollectionSerializedItem<TItem, TTable>)
-      rebindDatabaseQueryObservationSerializedResult(collection, serialized)
       return serialized
     },
     async load(...relations: readonly ModelRelationPath<TRelations>[]): Promise<ModelCollection<TTable, TRelations, CollectionLoadedItem<TItem, TTable, TRelations, typeof relations>, TScopes>> {
@@ -184,8 +182,7 @@ export function createModelCollection<
       }
 
       const repo = getRepository(first)
-      await runRequiringDatabaseQueryRefresh(() => repo.loadRelations(collection, relations, false))
-      requireDatabaseQueryRefreshForRows(collection)
+      await repo.loadRelations(collection, relations, false)
       return collection as ModelCollection<TTable, TRelations, CollectionLoadedItem<TItem, TTable, TRelations, typeof relations>, TScopes>
     },
     async loadMissing(...relations: readonly ModelRelationPath<TRelations>[]): Promise<ModelCollection<TTable, TRelations, CollectionLoadedItem<TItem, TTable, TRelations, typeof relations>, TScopes>> {
@@ -195,8 +192,7 @@ export function createModelCollection<
       }
 
       const repo = getRepository(first)
-      await runRequiringDatabaseQueryRefresh(() => repo.loadRelations(collection, relations, true))
-      requireDatabaseQueryRefreshForRows(collection)
+      await repo.loadRelations(collection, relations, true)
       return collection as ModelCollection<TTable, TRelations, CollectionLoadedItem<TItem, TTable, TRelations, typeof relations>, TScopes>
     },
     async loadMorph(
@@ -213,7 +209,6 @@ export function createModelCollection<
         throw new HydrationError('The bound repository cannot load morph relations.')
       }
       await repo.loadMorphRelations(collection, relation, mapping)
-      requireDatabaseQueryRefreshForRows(collection)
       return collection
     },
     async loadCount(...relations: readonly ModelRelationName<TRelations>[]): Promise<ModelCollection<TTable, TRelations, TItem, TScopes>> {
@@ -250,42 +245,36 @@ export function createModelCollection<
       for (const entity of collection) {
         entity.append(...keys)
       }
-      markDatabaseQueryObservationsSerialized()
       return collection
     },
     withoutAppends(): ModelCollection<TTable, TRelations, TItem, TScopes> {
       for (const entity of collection) {
         entity.withoutAppends()
       }
-      markDatabaseQueryObservationsSerialized()
       return collection
     },
     makeVisible(...keys: readonly string[]): ModelCollection<TTable, TRelations, TItem, TScopes> {
       for (const entity of collection) {
         entity.makeVisible(...keys)
       }
-      markDatabaseQueryObservationsSerialized()
       return collection
     },
     makeHidden(...keys: readonly string[]): ModelCollection<TTable, TRelations, TItem, TScopes> {
       for (const entity of collection) {
         entity.makeHidden(...keys)
       }
-      markDatabaseQueryObservationsSerialized()
       return collection
     },
     setVisible(keys: readonly string[]): ModelCollection<TTable, TRelations, TItem, TScopes> {
       for (const entity of collection) {
         entity.setVisible(keys)
       }
-      markDatabaseQueryObservationsSerialized()
       return collection
     },
     setHidden(keys: readonly string[]): ModelCollection<TTable, TRelations, TItem, TScopes> {
       for (const entity of collection) {
         entity.setHidden(keys)
       }
-      markDatabaseQueryObservationsSerialized()
       return collection
     },
   }

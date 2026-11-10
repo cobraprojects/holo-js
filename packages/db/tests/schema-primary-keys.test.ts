@@ -1,3 +1,4 @@
+import { onDatabaseDependencyInvalidated, resetDatabaseDependencyInvalidationListeners } from '../src/cache'
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -260,8 +261,8 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
     it('increments matching rows of a composite-key table and publishes each row by its full key', async () => {
       const { db } = await openPivotDatabase()
       const mutations: DatabaseMutationEvent[] = []
-      onTestFinished(() => queryCacheInternals.resetDatabaseDependencyInvalidationListeners())
-      queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
+      onTestFinished(() => resetDatabaseDependencyInvalidationListeners())
+      onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
         mutations.push(...event.mutations ?? [])
       })
 

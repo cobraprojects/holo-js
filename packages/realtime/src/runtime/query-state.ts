@@ -7,9 +7,3 @@ export type DatabaseQueryObservation = {
   readonly primaryKey?: string
   readonly tableName: string
 }
-
-export type DatabaseQueryRead = DatabaseQueryObservation & {
-  readonly observedResult?: unknown
-  readonly result?: unknown
-  readonly serializedSources?: readonly unknown[]
-}

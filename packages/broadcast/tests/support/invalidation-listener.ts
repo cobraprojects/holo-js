@@ -1,3 +1,4 @@
+import { onDatabaseDependencyInvalidated } from '../../../db/src/cache'
 import { queryCacheInternals } from '@holo-js/db'
 import { normalizeRedisConfig } from '@holo-js/kernel'
 import { realtimeServerInternals } from '../../../realtime/src/server'
@@ -5,7 +6,7 @@ import { normalizeBroadcastConfig, startBroadcastWorker } from '../../src'
 
 const [redisPort = '', port = '', appId = '', redisDb = '0'] = process.argv.slice(2)
 
-queryCacheInternals.onDatabaseDependencyInvalidated(event => {
+onDatabaseDependencyInvalidated(event => {
   process.stdout.write(`applied ${JSON.stringify({ connectionName: event.connectionName, dependencies: [...event.dependencies] })}\n`)
 })
 

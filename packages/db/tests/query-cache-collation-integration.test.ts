@@ -1,3 +1,4 @@
+import { onDatabaseDependencyInvalidated } from '../src/cache'
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
@@ -206,7 +207,7 @@ describe('query cache invalidation by an upsert that changes the key on sqlite',
     const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
     registerGeneratedTables({ countries: defineTable(name, { code: column.string().primaryKey(), region: column.string(), label: column.string() }) })
-    queryCacheInternals.onDatabaseDependencyInvalidated(() => {})
+    onDatabaseDependencyInvalidated(() => {})
     onTestFinished(() => {
       resetDatabaseDependencyInvalidationListeners()
       clearGeneratedTables()
@@ -228,7 +229,7 @@ describe('query cache invalidation by an upsert that changes a key spelled in an
     const { adapter } = await openDatabase('sqlite')
     const name = `users_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
-    queryCacheInternals.onDatabaseDependencyInvalidated(() => {})
+    onDatabaseDependencyInvalidated(() => {})
     onTestFinished(() => {
       resetDatabaseDependencyInvalidationListeners()
       resetCacheRuntime()
@@ -247,7 +248,7 @@ describe('query cache invalidation by an upsert that changes a key spelled in an
     const { adapter } = await openDatabase('sqlite')
     const name = `users_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
-    queryCacheInternals.onDatabaseDependencyInvalidated(() => {})
+    onDatabaseDependencyInvalidated(() => {})
     onTestFinished(() => {
       resetDatabaseDependencyInvalidationListeners()
       resetCacheRuntime()

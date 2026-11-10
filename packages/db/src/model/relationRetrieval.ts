@@ -1,4 +1,3 @@
-import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
 import { isInlineIntegerValue, keyCastFor } from '../query/ast'
 import { hasQueryCache } from '../query/TableQueryBuilder'
 import { isCanonicalIntegerText, isDecimalKeyText, readFractionalDecimalKey, readIntegralDecimalKey, readsAsInteger } from '../schema/normalization'
@@ -183,41 +182,22 @@ function isTextKeyColumn(definition: AnyColumnDefinition | undefined): boolean {
   return definition?.kind === 'string' || definition?.kind === 'text'
 }
 
-function selectsRelationColumn(plan: SelectQueryPlan, column: string): boolean {
-  if (plan.selections.length === 0) {
-    return true
-  }
-
-  if (plan.selections.some(selection => selection.kind !== 'column' || typeof selection.alias !== 'undefined')) {
-    return false
-  }
-
-  return plan.selections.some(selection => selection.kind === 'column'
-    && (selection.column === '*' || selection.column.endsWith('.*') || selection.column.split('.').at(-1) === column))
-}
-
 export async function retrieveRelation(
   keys: readonly unknown[],
   createQuery: () => ModelQueryBuilder,
   column: string,
-  observe = false,
   definition?: AnyColumnDefinition,
-): Promise<{ entities: Entity[], plan?: SelectQueryPlan, rowsPatchable?: boolean }> {
+): Promise<{ entities: Entity[] }> {
   if (keys.length === 0) return { entities: [] }
-  const observationCount = observe && hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
-  let plan: SelectQueryPlan | undefined
   const entities: Entity[] = []
   const probe = createQuery()
   const columnKeys = keysForColumn(keys, definition ?? columnDefinition(probe.getTableQueryBuilder(), column), probe.getTableQueryBuilder().getConnection().getDriver())
   const paginated = isPaginatedRelationQuery(probe)
-  if (typeof observationCount === 'number') plan = probe.getTableQueryBuilder().getPlan()
-  const rowsPatchable = !paginated && selectsRelationColumn(probe.getTableQueryBuilder().getPlan(), column) && probe.canPatchLoadedRows()
   for (const [index, chunk] of chunkRelationKeys(columnKeys, paginated).entries()) {
     const query = index === 0 ? probe : createQuery()
     for (const entity of await query.where(column, 'in', chunk).get()) entities.push(entity)
   }
-  if (typeof observationCount === 'number') truncateDatabaseQueryObservations(observationCount)
-  return { entities, plan, rowsPatchable }
+  return { entities }
 }
 
 export function indexRelation(entities: readonly Entity[], column: string, options: StoredKeyOptions = {}): StoredKeyMap<Entity> {
@@ -254,6 +234,6 @@ export async function retrievePivotRelation(
     .where(parentColumn, 'in', chunk)
     .get<Record<string, unknown>>()))
   const keys = distinctStoredKeys(rows.map(row => row[relatedColumn]).filter(value => value != null))
-  const { entities } = await retrieveRelation(keys, createRelatedQuery, relatedKey, false, keyDefinitions.relatedKey)
+  const { entities } = await retrieveRelation(keys, createRelatedQuery, relatedKey, keyDefinitions.relatedKey)
   return { rows, related: indexRelation(entities, relatedKey, relationKeyOptions(keyDefinitions.relatedKey, columnDefinition(pivotQuery, relatedColumn) ?? keyDefinitions.pivotRelatedKey)) }
 }

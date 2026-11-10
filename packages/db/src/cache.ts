@@ -11,11 +11,10 @@ import { ConfigurationError } from './core/errors'
 import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
-import { coerceBoolean, isStoredBoolean, readsAsInteger } from './schema/normalization'
-import { failsIntegerRead, readCanonicalInteger } from './query/resultColumns'
+import { coerceBoolean, isStoredBoolean } from './schema/normalization'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { CaseInsensitiveColumns, TextColumnCollations } from './schema/caseInsensitiveColumns'
-import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
+import type { QueryOperator, QueryPredicateNode, QuerySource, SelectQueryPlan } from './query/ast'
 import type { TableDefinition } from './schema/types'
 import { canonicalTableName } from './schema/tableIdentityRegistry'
 
@@ -103,223 +102,12 @@ export interface DatabaseQueryPredicateObservation {
   readonly value: unknown
 }
 
-export interface DatabaseQueryOrderObservation {
-  readonly column: string
-  readonly direction: 'asc' | 'desc'
-}
-
-export interface DatabaseQueryAggregateObservation {
-  readonly absoluteSum?: number
-  readonly column?: string
-  readonly count?: number
-  readonly currentValueCount?: number
-  readonly kind: 'avg' | 'count' | 'max' | 'min' | 'sum'
-  readonly output?: 'boolean' | 'inverseBoolean'
-  readonly sum?: number
-  readonly valueCounts?: readonly DatabaseQueryAggregateValueCountObservation[]
-}
-
-export interface DatabaseQueryAggregateValueCountObservation {
-  readonly count: number
-  readonly value: number
-}
-
-export interface DatabaseQuerySelectionObservation {
-  readonly column: string
-  readonly resultKey: string
-}
-
-export interface DatabaseQueryGroupedAggregateObservation {
-  readonly aggregateColumn?: string
-  readonly aggregateResultKey: string
-  readonly aggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[]
-  readonly groupColumn: string
-  readonly groupResultKey: string
-  readonly integerColumn?: true
-  readonly having?: DatabaseQueryGroupedAggregateHavingObservation
-  readonly kind: 'avg' | 'count' | 'max' | 'min' | 'sum'
-}
-
-export interface DatabaseQueryGroupedAggregateStateObservation {
-  readonly aggregateValue: number
-  readonly groupValue: unknown
-  readonly rowCount: number
-  readonly valueCounts?: readonly DatabaseQueryGroupedAggregateValueCountObservation[]
-}
-
-export interface DatabaseQueryGroupedAggregateValueCountObservation {
-  readonly count: number
-  readonly value: number
-}
-
-export interface DatabaseQueryGroupedAggregateHavingObservation {
-  readonly operator: Extract<QueryOperator, '<' | '<=' | '=' | '>' | '>='>
-  readonly value: number
-}
-
-export type DatabaseQueryPaginationObservation =
-  | DatabaseQueryStandardPaginationObservation
-  | DatabaseQuerySimplePaginationObservation
-  | DatabaseQueryCursorPaginationObservation
-
-export interface DatabaseQueryStandardPaginationObservation {
-  readonly currentPage: number
-  readonly kind: 'standard'
-  readonly pageName: string
-  readonly perPage: number
-  readonly total: number
-}
-
-export interface DatabaseQuerySimplePaginationObservation {
-  readonly currentPage: number
-  readonly hasMorePages: boolean
-  readonly kind: 'simple'
-  readonly pageName: string
-  readonly perPage: number
-  readonly rowCount: number | null
-}
-
-export interface DatabaseQueryCursorPaginationObservation {
-  readonly cursorName: string
-  readonly hasMorePages: boolean
-  readonly kind: 'cursor'
-  readonly nextCursor: string | null
-  readonly perPage: number
-  readonly prevCursor: string | null
-  readonly rows: readonly Readonly<Record<string, unknown>>[]
-  readonly rowCount: number
-  readonly rowCountKnown?: boolean
-}
-
-type DatabaseQueryPaginationMetaObservation =
-  | DatabaseQueryStandardPaginationMetaObservation
-  | DatabaseQuerySimplePaginationMetaObservation
-
-interface DatabaseQueryStandardPaginationMetaObservation {
-  readonly currentPage: number
-  readonly from: number | null
-  readonly hasMorePages: boolean
-  readonly lastPage: number
-  readonly pageName: string
-  readonly perPage: number
-  readonly to: number | null
-  readonly total: number
-}
-
-interface DatabaseQuerySimplePaginationMetaObservation {
-  readonly currentPage: number
-  readonly from: number | null
-  readonly hasMorePages: boolean
-  readonly pageName: string
-  readonly perPage: number
-  readonly to: number | null
-}
-
-interface DatabaseQueryCursorPaginationMetaObservation {
-  readonly cursorName: string
-  readonly nextCursor: string | null
-  readonly perPage: number
-  readonly prevCursor: string | null
-}
-
-export type DatabaseQueryResultPathSegment = string | number
-
-export type DatabaseQueryRowReader = (row: Readonly<Record<string, unknown>>, written?: boolean) => Readonly<Record<string, unknown>>
-
 export interface DatabaseQueryObservation {
-  readonly aggregate?: DatabaseQueryAggregateObservation
-  readonly belongsToHydrations?: readonly DatabaseQueryBelongsToHydrationObservation[]
   readonly connectionName: string
-  readonly cursorRowCount?: number
-  readonly cursorRowCountKnown?: boolean
-  readonly cursorRows?: readonly Readonly<Record<string, unknown>>[]
   readonly tableName: string
-  readonly table?: TableDefinition
   readonly dependencies: readonly string[]
-  readonly emptyRecordValue?: null
-  readonly groupedAggregate?: DatabaseQueryGroupedAggregateObservation
-  readonly limit?: number
-  readonly offset?: number
-  readonly orderBy: readonly DatabaseQueryOrderObservation[]
-  readonly patchable: boolean
-  readonly pagination?: DatabaseQueryPaginationObservation
-  readonly predicates: readonly DatabaseQueryPredicateObservation[]
-  readonly predicateTree?: SelectQueryPlan['predicates']
-  readonly primaryKey?: string
-  readonly readRow?: DatabaseQueryRowReader
-  readonly relation?: DatabaseQueryRelationObservation
-  readonly result?: unknown
-  readonly resultPath?: readonly DatabaseQueryResultPathSegment[]
-  readonly observedResult?: DatabaseQueryObservedResult
-  readonly serializedSources?: readonly unknown[]
-  readonly scalarColumn?: string
-  readonly scalarListColumn?: string
-  readonly scalarListRows?: readonly Readonly<Record<string, unknown>>[]
-  readonly relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[]
-  readonly selections: readonly DatabaseQuerySelectionObservation[]
-  readonly serialized?: boolean
-}
-
-export interface DatabaseQueryObservedResult {
-  readonly list: boolean
-  readonly values: readonly unknown[]
-  readonly fields: readonly (Readonly<Record<string, unknown>> | undefined)[]
-}
-
-export interface DatabaseQueryBelongsToHydrationObservation {
-  readonly foreignKey: string
-  readonly ownerKey: string
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly primaryKey?: string
-  readonly readRow?: DatabaseQueryRowReader
-  readonly relationKey: string
-  readonly relatedConnectionName: string
-  readonly relatedTableName: string
-  readonly relatedTable?: TableDefinition
-}
-
-export interface DatabaseQueryRelatedHydrationObservation {
-  readonly foreignKey: string
-  readonly kind: 'hasMany' | 'hasOne'
-  readonly localKey: string
-  readonly orderBy: readonly DatabaseQueryOrderObservation[]
-  readonly predicates: readonly DatabaseQueryPredicateObservation[]
-  readonly primaryKey?: string
-  readonly readRow?: DatabaseQueryRowReader
-  readonly relationKey: string
-  readonly relatedConnectionName: string
-  readonly relatedTableName: string
-  readonly relatedTable?: TableDefinition
-}
-
-export type DatabaseQueryRelationObservation =
-  | DatabaseQueryBelongsToManyRelationObservation
-  | DatabaseQueryBelongsToParentKeyRelationObservation
-
-export interface DatabaseQueryBelongsToManyRelationObservation {
-  readonly foreignPivotKey: string
-  readonly kind: 'belongsToMany'
-  readonly pivotAccessor: string
-  readonly pivotColumns: readonly string[]
-  readonly pivotOrderBy: readonly DatabaseQueryOrderObservation[]
-  readonly relatedConnectionName: string
-  readonly relatedKey: string
-  readonly relatedPivotKey: string
-  readonly relatedReadRow?: DatabaseQueryRowReader
-  readonly relatedTableName: string
-  readonly relatedTable?: TableDefinition
-}
-
-export interface DatabaseQueryBelongsToParentKeyRelationObservation {
-  readonly foreignKey: string
-  readonly kind: 'belongsToParentKey'
-  readonly ownerKey: string
-  readonly predicates: readonly DatabaseQueryPredicateObservation[]
-  readonly relatedReadRow?: DatabaseQueryRowReader
-  readonly relationKey: string
-  readonly relatedConnectionName: string
-  readonly relatedTableName: string
-  readonly relatedTable?: TableDefinition
 }
 
 export interface DatabaseMutationEvent {
@@ -346,21 +134,7 @@ type DatabaseDependencyInvalidationMetadata = {
   readonly exactPredicates: readonly DatabaseDependencyPredicateMetadata[]
   readonly hasMutationDependency: boolean
   readonly predicates: readonly DatabaseDependencyPredicateMetadata[]
-  readonly publicationStartedAt?: number
   readonly tableDependencies: readonly string[]
-  readonly unordered?: true
-}
-
-type MutationPublicationRecord = {
-  readonly identities?: ReadonlySet<string>
-  readonly publishedAt: number
-  readonly tableKey: string
-}
-
-type MutationPublicationState = {
-  prunedThrough: number
-  readonly records: MutationPublicationRecord[]
-  sequence: number
 }
 
 type DatabaseDependencyInvalidationEventWithMutations = DatabaseDependencyInvalidationEvent & {
@@ -398,12 +172,7 @@ type DatabaseDependencyCollectorState = {
   readonly contexts: Map<string, Set<number>>
   readonly dependencies: Set<string>
   readonly queries: DatabaseQueryObservation[]
-  readonly observedResults: WeakMap<object, DatabaseQueryObservedResult>
-  readonly serializedResults: WeakMap<object, unknown>
-  readonly refreshQueries: DatabaseQueryObservation[]
-  readonly refreshTables: Map<string, DatabaseQueryObservation | undefined>
-  readonly arraySnapshots: Map<readonly unknown[], readonly unknown[]>
-  serializationOverridden: boolean
+  readonly refreshTables: Set<string>
 }
 
 const DATABASE_DEPENDENCY_PREFIX = 'db:'
@@ -412,23 +181,17 @@ const MUTATION_DEPENDENCY_SUFFIX = 'mutation'
 const WHERE_DEPENDENCY_PREFIX = 'where:'
 const WHERE_EXACT_DEPENDENCY_PREFIX = 'where-exact:'
 const EMPTY_COLUMNS: ReadonlySet<string> = new Set<string>()
-const MUTATION_PUBLICATION_RETENTION = 1024
-const MUTATION_PUBLICATION_IDENTITY_LIMIT = 1024
 const PREDICATE_WILDCARD_VALUE = '*'
 const IDENTITY_EXPANSION: LiteralExpansion = (_column, value) => [value]
 const SQLITE_ROWID_ALIASES: ReadonlySet<string> = new Set(['rowid', '_rowid_', 'oid'])
 const NUMERIC_TEXT_PATTERN = /^\s*[+-]?(?:(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:e[+-]?\d[\d_]*)?|0x[\da-f_]+|0o[0-7_]+|0b[01_]+|nan|inf(?:inity)?)\s*$/i
 
 const databaseDependencyCollector = new AsyncLocalStorage<DatabaseDependencyCollectorState>()
-const refreshOnlyObservationIndexes = new AsyncLocalStorage<Set<number>>()
-const refreshOnlyObservations = new WeakSet<DatabaseQueryObservation>()
-const refreshOnlyTables = new AsyncLocalStorage<Set<string>>()
 
-function getQueryCacheBridgeState(): {
+export function getQueryCacheBridgeState(): {
   bridge?: DatabaseQueryCacheBridge
   dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
   dependencyInvalidationPublishers?: DatabaseDependencyInvalidationPublisherCandidate[]
-  mutationPublications?: MutationPublicationState
   recentDatabaseInvalidationIds?: Map<string, number>
 } {
   const runtime = globalThis as typeof globalThis & {
@@ -436,7 +199,6 @@ function getQueryCacheBridgeState(): {
       bridge?: DatabaseQueryCacheBridge
       dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
       dependencyInvalidationPublishers?: DatabaseDependencyInvalidationPublisherCandidate[]
-      mutationPublications?: MutationPublicationState
       recentDatabaseInvalidationIds?: Map<string, number>
     }
   }
@@ -463,9 +225,6 @@ export function onDatabaseDependencyInvalidated(
   const state = getQueryCacheBridgeState()
   state.dependencyInvalidationListeners ??= new Set<DatabaseDependencyInvalidationListenerInternal>()
   const internalListener = listener as DatabaseDependencyInvalidationListenerInternal
-  if (state.dependencyInvalidationListeners.size === 0) {
-    startMutationPublicationEpoch()
-  }
   state.dependencyInvalidationListeners.add(internalListener)
 
   return () => {
@@ -487,125 +246,6 @@ export function resetDatabaseDependencyInvalidationListeners(): void {
   getQueryCacheBridgeState().dependencyInvalidationListeners = undefined
 }
 
-function getMutationPublicationState(): MutationPublicationState {
-  return getQueryCacheBridgeState().mutationPublications ??= { prunedThrough: 0, records: [], sequence: 0 }
-}
-
-function markMutationPublicationBoundary(): number {
-  const state = getMutationPublicationState()
-  state.sequence += 1
-  return state.sequence
-}
-
-function startMutationPublicationEpoch(): void {
-  const state = getMutationPublicationState()
-  state.sequence += 1
-  state.prunedThrough = state.sequence
-}
-
-function beginMutationPublication(): number | undefined {
-  return hasDatabaseDependencyInvalidationListeners()
-    ? getQueryCacheBridgeState().mutationPublications?.sequence ?? 0
-    : undefined
-}
-
-function createMutationPublicationTableKey(tableKey: string): string {
-  const tableStart = tableKey.indexOf(':', DATABASE_DEPENDENCY_PREFIX.length) + 1
-  const tableName = tableKey.slice(tableStart)
-  return tableKey.slice(0, tableStart) + tableName.slice(tableName.lastIndexOf('.') + 1).toLowerCase()
-}
-
-function normalizeMutationPublicationIdentity(value: unknown): string | undefined {
-  if (typeof value === 'number' || typeof value === 'bigint') return String(Number(value))
-  if (typeof value !== 'string') {
-    return JSON.stringify(value, (_key, item: unknown) => typeof item === 'bigint' ? item.toString() : item) ?? String(value)
-  }
-  if (!NUMERIC_TEXT_PATTERN.test(value)) return value.trimEnd().toLowerCase()
-  const numeric = Number(value.trim())
-  return Number.isNaN(numeric) ? undefined : String(numeric)
-}
-
-function readMutationPublicationIdentities(mutation: DatabaseMutationEvent): ReadonlySet<string> | undefined {
-  const primaryKey = mutation.primaryKey
-  const rows = [...(mutation.rows ?? []), ...(mutation.previousRows ?? [])]
-  if (
-    !primaryKey
-    || rows.length === 0
-    || rows.length > MUTATION_PUBLICATION_IDENTITY_LIMIT
-    || (mutation.values && Object.prototype.hasOwnProperty.call(mutation.values, primaryKey))
-  ) {
-    return undefined
-  }
-
-  const identities = new Set<string>()
-  for (const row of rows) {
-    const value = row[primaryKey]
-    const identity = value === undefined || value === null ? undefined : normalizeMutationPublicationIdentity(value)
-    if (identity === undefined) return undefined
-    identities.add(identity)
-  }
-  return identities
-}
-
-function mutationPublicationsOverlap(left: ReadonlySet<string> | undefined, right: ReadonlySet<string> | undefined): boolean {
-  if (!left || !right) return true
-  for (const identity of left) {
-    if (right.has(identity)) return true
-  }
-  return false
-}
-
-function hasOverlappingMutationPublication(
-  published: readonly MutationPublicationRecord[],
-  records: readonly Omit<MutationPublicationRecord, 'publishedAt'>[],
-  startedAt: number,
-): boolean {
-  for (let index = published.length - 1; index >= 0; index -= 1) {
-    const candidate = published[index]
-    if (!candidate || candidate.publishedAt <= startedAt) return false
-    if (records.some(record => record.tableKey === candidate.tableKey && mutationPublicationsOverlap(record.identities, candidate.identities))) {
-      return true
-    }
-  }
-  return false
-}
-
-function recordMutationPublications(records: readonly Omit<MutationPublicationRecord, 'publishedAt'>[], startedAt: number | undefined): boolean {
-  const state = getMutationPublicationState()
-  const ordered = startedAt !== undefined
-    && startedAt >= state.prunedThrough
-    && !hasOverlappingMutationPublication(state.records, records, startedAt)
-
-  for (const record of records) {
-    state.sequence += 1
-    state.records.push({ ...record, publishedAt: state.sequence })
-  }
-  const overflow = state.records.length - MUTATION_PUBLICATION_RETENTION
-  if (overflow > 0) {
-    const pruned = state.records.splice(0, overflow)
-    state.prunedThrough = Math.max(state.prunedThrough, pruned[pruned.length - 1]?.publishedAt ?? 0)
-  }
-  return ordered
-}
-
-function recordDatabaseMutationPublication(mutations: readonly DatabaseMutationEvent[], startedAt: number | undefined): boolean {
-  return recordMutationPublications(mutations.map(mutation => ({
-    identities: readMutationPublicationIdentities(mutation),
-    tableKey: createMutationPublicationTableKey(createTableCacheDependency(mutation.connectionName, mutation.tableName)),
-  })), startedAt)
-}
-
-function recordRemoteMutationPublication(dependencies: readonly string[]): void {
-  const records: Omit<MutationPublicationRecord, 'publishedAt'>[] = []
-  for (const dependency of dependencies) {
-    const tableKey = parseDatabaseDependency(dependency)?.tableKey
-    if (tableKey !== undefined) records.push({ tableKey: createMutationPublicationTableKey(tableKey) })
-  }
-  if (records.length > 0) {
-    recordMutationPublications(records, undefined)
-  }
-}
-
 export async function collectDatabaseQueryDependencies<TValue>(
   callback: () => TValue | Promise<TValue>,
 ): Promise<DatabaseDependencyCollectionResult<TValue>> {
@@ -624,94 +264,16 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     contexts: new Map(),
     dependencies: new Set<string>(),
     queries: [],
-    observedResults: new WeakMap(),
-    serializedResults: new WeakMap(),
-    refreshQueries: [],
-    refreshTables: new Map(),
-    arraySnapshots: new Map(),
-    serializationOverridden: false,
+    refreshTables: new Set(),
   }
   const value = await databaseDependencyCollector.run(state, callback)
-  if (hasChangedArraySnapshot(state)) {
-    databaseDependencyCollector.run(state, markDatabaseQueryObservationsSerialized)
-  }
 
   return Object.freeze({
     value,
     contexts: state.contexts,
     dependencies: Object.freeze([...state.dependencies]),
-    queries: Object.freeze([...state.queries.map(query => withObservedResult(state, query)), ...state.refreshQueries]),
+    queries: Object.freeze([...state.queries]),
   })
-}
-
-function rememberObservedResult(state: DatabaseDependencyCollectorState, query: DatabaseQueryObservation | undefined): void {
-  const result = query?.result
-  if (result && typeof result === 'object' && state.observedResults.has(result)) {
-    return
-  }
-
-  if (Array.isArray(result)) {
-    state.observedResults.set(result, observeResultValues(true, [...result]))
-  } else if (readObservedFields(result)) {
-    state.observedResults.set(result as object, observeResultValues(false, [result]))
-  }
-}
-
-function observeResultValues(list: boolean, values: readonly unknown[]): DatabaseQueryObservedResult {
-  return Object.freeze({
-    list,
-    values: Object.freeze(values),
-    fields: Object.freeze(values.map(value => {
-      const fields = readObservedFields(value)
-      return fields ? Object.freeze({ ...fields }) : undefined
-    })),
-  })
-}
-
-function readObservedFields(value: unknown): Readonly<Record<string, unknown>> | undefined {
-  if (isPlainResultRecord(value)) {
-    return value
-  }
-
-  return isAttributeRecord(value) ? value.toAttributes() : undefined
-}
-
-function isAttributeRecord(value: unknown): value is { toAttributes(): Readonly<Record<string, unknown>> } {
-  return Boolean(value) && typeof value === 'object' && typeof (value as { toAttributes?: unknown }).toAttributes === 'function'
-}
-
-function isPlainResultRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return false
-  }
-
-  const prototype = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
-}
-
-function hasObservedResultChanged(observed: DatabaseQueryObservedResult, result: unknown): boolean {
-  const values = observed.list ? result : [result]
-  if (!Array.isArray(values) || values.length !== observed.values.length) {
-    return true
-  }
-
-  return observed.values.some((value, index) => !Object.is(value, values[index]) || hasObservedFieldsChanged(observed.fields[index], value))
-}
-
-function hasObservedFieldsChanged(fields: Readonly<Record<string, unknown>> | undefined, value: unknown): boolean {
-  const current = fields ? readObservedFields(value) : undefined
-  if (!fields || !current) {
-    return false
-  }
-
-  const keys = Object.keys(fields)
-  return keys.length !== Object.keys(current).length
-    || keys.some(key => !Object.hasOwn(current, key) || !Object.is(fields[key], current[key]))
-}
-
-function withObservedResult(state: DatabaseDependencyCollectorState, query: DatabaseQueryObservation): DatabaseQueryObservation {
-  const observedResult = query.result && typeof query.result === 'object' ? state.observedResults.get(query.result) : undefined
-  return observedResult ? Object.freeze({ ...query, observedResult }) : query
 }
 
 export function hasActiveDatabaseDependencyCollector(): boolean {
@@ -740,51 +302,28 @@ export function recordDatabaseQueryDependencies(dependencies: readonly string[] 
     return
   }
 
-  const tables = refreshOnlyTables.getStore()
   for (const dependency of dependencies) {
     state.dependencies.add(dependency)
-    const tableKey = tables ? parseDatabaseDependency(dependency)?.tableKey : undefined
-    if (tableKey) tables!.add(tableKey)
   }
 }
 
 export function recordDatabaseQueryRefreshTables(dependencies: readonly string[], connectionName: string, tableName: string): void {
   const state = databaseDependencyCollector.getStore()
-  if (!state) {
-    return
-  }
-
+  if (!state) return
   const ownTable = createTableCacheDependency(connectionName, tableName)
   for (const dependency of dependencies) {
     const tableKey = parseDatabaseDependency(dependency)?.tableKey
-    if (!tableKey || tableKey === ownTable || (state.refreshTables.has(tableKey) && hasTableRefreshObservation(state, tableKey))) {
-      continue
-    }
-
-    const observation = tableRefreshObservation(state, tableKey)
-    state.refreshTables.set(tableKey, observation)
-    pushDatabaseQueryObservation(state, observation)
+    if (!tableKey || tableKey === ownTable || state.refreshTables.has(tableKey)) continue
+    state.refreshTables.add(tableKey)
+    state.dependencies.add(`${tableKey}:${WHERE_DEPENDENCY_PREFIX}${PREDICATE_WILDCARD_VALUE}:${PREDICATE_WILDCARD_VALUE}`)
+    const connectionEnd = tableKey.indexOf(':', DATABASE_DEPENDENCY_PREFIX.length)
+    state.queries.push(Object.freeze({
+      connectionName: tableKey.slice(DATABASE_DEPENDENCY_PREFIX.length, connectionEnd),
+      dependencies: Object.freeze([tableKey]),
+      predicates: Object.freeze([]),
+      tableName: tableKey.slice(connectionEnd + 1),
+    }))
   }
-}
-
-function hasTableRefreshObservation(state: DatabaseDependencyCollectorState, tableKey: string): boolean {
-  const observation = state.refreshTables.get(tableKey)
-  return !observation || state.queries.includes(observation)
-}
-
-function tableRefreshObservation(state: DatabaseDependencyCollectorState, tableKey: string): DatabaseQueryObservation {
-  state.dependencies.add(`${tableKey}:${WHERE_DEPENDENCY_PREFIX}${PREDICATE_WILDCARD_VALUE}:${PREDICATE_WILDCARD_VALUE}`)
-  const connectionEnd = tableKey.indexOf(':', DATABASE_DEPENDENCY_PREFIX.length)
-  return Object.freeze({
-    connectionName: tableKey.slice(DATABASE_DEPENDENCY_PREFIX.length, connectionEnd),
-    dependencies: Object.freeze([tableKey]),
-    orderBy: Object.freeze([]),
-    patchable: false,
-    predicates: Object.freeze([]),
-    selections: Object.freeze([]),
-    serialized: true,
-    tableName: tableKey.slice(connectionEnd + 1),
-  })
 }
 
 export function recordDatabaseQueryContext(connection: DatabaseContext): void {
@@ -806,576 +345,7 @@ export function recordDatabaseQueryObservation(observation: DatabaseQueryObserva
     return
   }
 
-  pushDatabaseQueryObservation(state, state.serializationOverridden ? serializedQueryObservation(observation) : observation)
-}
-
-function pushDatabaseQueryObservation(state: DatabaseDependencyCollectorState, observation: DatabaseQueryObservation): void {
   state.queries.push(observation)
-  rememberObservedResult(state, observation)
-  refreshOnlyObservationIndexes.getStore()?.add(state.queries.length - 1)
-}
-
-function serializedQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
-  return Object.freeze({
-    ...observation,
-    patchable: false,
-    serialized: true,
-  })
-}
-
-export function readDatabaseQueryObservationCount(): number {
-  return databaseDependencyCollector.getStore()?.queries.length ?? 0
-}
-
-export async function runRequiringDatabaseQueryRefresh<TValue>(load: () => Promise<TValue>): Promise<TValue> {
-  const state = databaseDependencyCollector.getStore()
-  if (!state) {
-    return await load()
-  }
-
-  const indexes = new Set<number>()
-  const tables = new Set<string>()
-  const value = await refreshOnlyTables.run(tables, () => refreshOnlyObservationIndexes.run(indexes, load))
-  for (const index of indexes) {
-    const query = state.queries[index]
-    if (query) {
-      replaceDatabaseQueryObservation(state, index, refreshOnlyQueryObservation(query))
-    }
-  }
-  for (const tableKey of tables) {
-    if (state.refreshTables.has(tableKey) && !state.refreshTables.get(tableKey)) {
-      continue
-    }
-
-    state.refreshTables.set(tableKey, undefined)
-    state.refreshQueries.push(tableRefreshObservation(state, tableKey))
-  }
-
-  return value
-}
-
-function refreshQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
-  return Object.freeze({
-    connectionName: observation.connectionName,
-    dependencies: observation.dependencies,
-    orderBy: observation.orderBy,
-    patchable: false,
-    predicates: observation.predicates,
-    predicateTree: observation.predicateTree,
-    selections: observation.selections,
-    serialized: true,
-    tableName: observation.tableName,
-    ...(observation.table ? { table: observation.table } : {}),
-  })
-}
-
-function replaceDatabaseQueryObservation(state: DatabaseDependencyCollectorState, index: number, next: DatabaseQueryObservation): void {
-  const current = state.queries[index]
-  if (current && refreshOnlyObservations.has(current)) {
-    refreshOnlyObservations.add(next)
-  }
-  state.queries[index] = next
-  rememberObservedResult(state, next)
-}
-
-function refreshOnlyQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
-  const refreshOnly = serializedQueryObservation(observation)
-  refreshOnlyObservations.add(refreshOnly)
-  return refreshOnly
-}
-
-export function truncateDatabaseQueryObservations(count: number): void {
-  const state = databaseDependencyCollector.getStore()
-  if (!state || count >= state.queries.length) {
-    return
-  }
-
-  const length = Math.max(0, count)
-  const indexes = refreshOnlyObservationIndexes.getStore()
-  for (let index = length; index < state.queries.length; index += 1) {
-    const query = state.queries[index]!
-    if (refreshOnlyObservations.has(query) || indexes?.has(index)) {
-      state.refreshQueries.push(refreshQueryObservation(query))
-    }
-  }
-  state.queries.length = length
-  if (indexes) {
-    for (const index of indexes) {
-      if (index >= length) {
-        indexes.delete(index)
-      }
-    }
-  }
-}
-
-export function rebindDatabaseQueryObservationResult(source: unknown, result: unknown, readRow?: DatabaseQueryRowReader): void {
-  rebindDatabaseQueryObservation(source, result, undefined, undefined, undefined, undefined, undefined, undefined, readRow)
-}
-
-export function rebindDatabaseQueryObservationHydratedResult(
-  source: unknown,
-  result: unknown,
-  belongsToHydrations: readonly DatabaseQueryBelongsToHydrationObservation[],
-  relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[],
-  readRow?: DatabaseQueryRowReader,
-): void {
-  rebindDatabaseQueryObservation(source, result, undefined, undefined, undefined, undefined, belongsToHydrations, relatedHydrations, readRow)
-}
-
-export function rebindDatabaseQueryObservationPagination(
-  source: unknown,
-  data: unknown,
-  meta: DatabaseQueryPaginationMetaObservation,
-  pagination: DatabaseQueryPaginationObservation,
-  offset: number,
-  belongsToHydrations?: readonly DatabaseQueryBelongsToHydrationObservation[],
-  relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[],
-): void {
-  const state = databaseDependencyCollector.getStore()
-  if (!state) {
-    return
-  }
-
-  for (let index = state.queries.length - 1; index >= 0; index -= 1) {
-    const query = state.queries[index]
-    if (!query || query.result !== source) {
-      continue
-    }
-
-    replaceDatabaseQueryObservation(state, index, Object.freeze({
-      aggregate: undefined,
-      belongsToHydrations: belongsToHydrations ?? query.belongsToHydrations,
-      connectionName: query.connectionName,
-      tableName: query.tableName,
-      table: query.table,
-      dependencies: query.dependencies,
-      limit: pagination.perPage,
-      offset,
-      orderBy: query.orderBy,
-      patchable: query.patchable,
-      pagination: undefined,
-      predicates: query.predicates,
-      predicateTree: query.predicateTree,
-      primaryKey: query.primaryKey,
-      readRow: query.readRow,
-      relation: query.relation,
-      result: data,
-      resultPath: query.resultPath,
-      relatedHydrations: relatedHydrations ?? query.relatedHydrations,
-      scalarColumn: undefined,
-      scalarListColumn: undefined,
-      scalarListRows: undefined,
-      selections: query.selections,
-      serialized: query.serialized,
-    }))
-    pushDatabaseQueryObservation(state, Object.freeze({
-      aggregate: undefined,
-      belongsToHydrations: undefined,
-      connectionName: query.connectionName,
-      tableName: query.tableName,
-      table: query.table,
-      dependencies: query.dependencies,
-      limit: undefined,
-      offset: undefined,
-      orderBy: query.orderBy,
-      patchable: query.patchable,
-      pagination,
-      predicates: query.predicates,
-      predicateTree: query.predicateTree,
-      primaryKey: query.primaryKey,
-      readRow: query.readRow,
-      relation: query.relation,
-      result: meta,
-      resultPath: undefined,
-      relatedHydrations: undefined,
-      scalarColumn: undefined,
-      scalarListColumn: undefined,
-      scalarListRows: undefined,
-      selections: query.selections,
-      serialized: query.serialized,
-    }))
-    return
-  }
-}
-
-export function rebindDatabaseQueryObservationCursorPagination(
-  source: unknown,
-  data: unknown,
-  meta: DatabaseQueryCursorPaginationMetaObservation,
-  pagination: DatabaseQueryCursorPaginationObservation,
-  belongsToHydrations?: readonly DatabaseQueryBelongsToHydrationObservation[],
-  relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[],
-): void {
-  const state = databaseDependencyCollector.getStore()
-  if (!state) {
-    return
-  }
-
-  for (let index = state.queries.length - 1; index >= 0; index -= 1) {
-    const query = state.queries[index]
-    if (!query || query.result !== source) {
-      continue
-    }
-
-    replaceDatabaseQueryObservation(state, index, Object.freeze({
-      aggregate: undefined,
-      belongsToHydrations: belongsToHydrations ?? query.belongsToHydrations,
-      connectionName: query.connectionName,
-      tableName: query.tableName,
-      table: query.table,
-      cursorRowCount: pagination.rowCount,
-      cursorRowCountKnown: pagination.rowCountKnown,
-      cursorRows: pagination.rows,
-      dependencies: query.dependencies,
-      limit: pagination.perPage,
-      offset: undefined,
-      orderBy: query.orderBy,
-      patchable: query.patchable,
-      pagination: undefined,
-      predicates: query.predicates,
-      predicateTree: query.predicateTree,
-      primaryKey: query.primaryKey,
-      readRow: query.readRow,
-      relation: query.relation,
-      result: data,
-      resultPath: query.resultPath,
-      relatedHydrations: relatedHydrations ?? query.relatedHydrations,
-      scalarColumn: undefined,
-      scalarListColumn: undefined,
-      scalarListRows: undefined,
-      selections: query.selections,
-      serialized: query.serialized,
-    }))
-    pushDatabaseQueryObservation(state, Object.freeze({
-      aggregate: undefined,
-      belongsToHydrations: undefined,
-      connectionName: query.connectionName,
-      tableName: query.tableName,
-      table: query.table,
-      dependencies: query.dependencies,
-      limit: undefined,
-      offset: undefined,
-      orderBy: query.orderBy,
-      patchable: query.patchable,
-      pagination,
-      predicates: query.predicates,
-      predicateTree: query.predicateTree,
-      primaryKey: query.primaryKey,
-      readRow: query.readRow,
-      relation: query.relation,
-      result: meta.nextCursor,
-      resultPath: Object.freeze(['nextCursor']),
-      relatedHydrations: undefined,
-      scalarColumn: undefined,
-      scalarListColumn: undefined,
-      scalarListRows: undefined,
-      selections: query.selections,
-      serialized: query.serialized,
-    }))
-    return
-  }
-}
-
-export function disableDatabaseQueryObservationPatching(
-  source: unknown,
-  options: { readonly serialized?: boolean } = {},
-): void {
-  const state = databaseDependencyCollector.getStore()
-  if (!state) {
-    return
-  }
-
-  for (let index = state.queries.length - 1; index >= 0; index -= 1) {
-    const query = state.queries[index]
-    if (!query || query.result !== source) {
-      continue
-    }
-
-    replaceDatabaseQueryObservation(state, index, Object.freeze({
-      aggregate: query.aggregate,
-      belongsToHydrations: query.belongsToHydrations,
-      connectionName: query.connectionName,
-      tableName: query.tableName,
-      table: query.table,
-      dependencies: query.dependencies,
-      limit: query.limit,
-      offset: query.offset,
-      orderBy: query.orderBy,
-      patchable: false,
-      pagination: query.pagination,
-      predicates: query.predicates,
-      predicateTree: query.predicateTree,
-      primaryKey: query.primaryKey,
-      readRow: query.readRow,
-      relation: query.relation,
-      result: query.result,
-      resultPath: query.resultPath,
-      relatedHydrations: query.relatedHydrations,
-      scalarColumn: query.scalarColumn,
-      scalarListColumn: query.scalarListColumn,
-      scalarListRows: query.scalarListRows,
-      selections: query.selections,
-      serialized: options.serialized || query.serialized,
-    }))
-    return
-  }
-}
-
-function holdsLoadedRows(query: DatabaseQueryObservation, loadedRows: ReadonlySet<unknown>): boolean {
-  return loadedRows.has(query.result) || (Array.isArray(query.result) && query.result.some(row => loadedRows.has(row)))
-}
-
-export function requireDatabaseQueryRefreshForRows(rows: readonly unknown[]): void {
-  const state = databaseDependencyCollector.getStore()
-  if (!state || rows.length === 0) {
-    return
-  }
-
-  const loadedRows = new Set(rows)
-  for (let index = 0; index < state.queries.length; index += 1) {
-    const query = state.queries[index]
-    if (!query || query.serialized || !holdsLoadedRows(query, loadedRows)) {
-      continue
-    }
-
-    replaceDatabaseQueryObservation(state, index, refreshOnlyQueryObservation(query))
-  }
-}
-
-export function rebindDatabaseQueryObservationSerializedResult(source: unknown, result: unknown): void {
-  const state = databaseDependencyCollector.getStore()
-  if (!state || !source || typeof source !== 'object') {
-    return
-  }
-
-  const earlierResult = state.serializedResults.get(source)
-  state.serializedResults.set(source, result)
-  const observed = state.observedResults.get(source)
-  const sourceChanged = observed ? hasObservedResultChanged(observed, source) : false
-  for (let index = 0; index < state.queries.length; index += 1) {
-    const query = state.queries[index]
-    if (!query) {
-      continue
-    }
-
-    if (earlierResult !== undefined && query.result === earlierResult && !query.serialized) {
-      replaceDatabaseQueryObservation(state, index, refreshOnlyQueryObservation(query))
-      continue
-    }
-
-    if (query.result === source && !sourceChanged) {
-      replaceDatabaseQueryObservation(state, index, Object.freeze({ ...query, result, serializedSources: Object.freeze(Array.isArray(source) ? [source, ...source] : [source]) }))
-    }
-  }
-}
-
-export function markDatabaseQueryObservationsSerialized(): void {
-  const state = databaseDependencyCollector.getStore()
-  if (!state) {
-    return
-  }
-
-  state.serializationOverridden = true
-  for (let index = 0; index < state.queries.length; index += 1) {
-    const query = state.queries[index]
-    if (!query || query.serialized) {
-      continue
-    }
-
-    replaceDatabaseQueryObservation(state, index, serializedQueryObservation(query))
-  }
-}
-
-const ARRAY_WRITE_METHODS = ['copyWithin', 'fill', 'pop', 'push', 'reverse', 'shift', 'sort', 'splice', 'unshift'] as const
-const arrayWriteCollectors = new WeakMap<object, WeakSet<DatabaseDependencyCollectorState>>()
-
-function markSerializedOnCollectedArrayWrite(array: object): void {
-  const state = databaseDependencyCollector.getStore()
-  if (state && arrayWriteCollectors.get(array)?.has(state)) {
-    markDatabaseQueryObservationsSerialized()
-  }
-}
-
-const arrayWriteMethods = Object.fromEntries(ARRAY_WRITE_METHODS.map((name) => {
-  const write = Array.prototype[name] as (this: unknown[], ...args: unknown[]) => unknown
-  const method = {
-    [name](this: unknown[], ...args: unknown[]) {
-      markSerializedOnCollectedArrayWrite(this)
-      return write.apply(this, args)
-    },
-  }[name]!
-  Object.defineProperty(method, 'length', { value: write.length })
-  return [name, method]
-})) as Readonly<Record<typeof ARRAY_WRITE_METHODS[number], (this: unknown[], ...args: unknown[]) => unknown>>
-
-function snapshotArray(array: readonly unknown[]): readonly unknown[] | undefined {
-  const values: unknown[] = []
-  values.length = array.length
-  for (let index = 0; index < array.length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(array, index)
-    if (descriptor && !('value' in descriptor)) {
-      return undefined
-    }
-
-    if (descriptor) {
-      values[index] = descriptor.value
-    }
-  }
-
-  return Object.freeze(values)
-}
-
-function hasChangedArraySnapshot(state: DatabaseDependencyCollectorState): boolean {
-  for (const [array, values] of state.arraySnapshots) {
-    if (array.length !== values.length) {
-      return true
-    }
-
-    for (let index = 0; index < values.length; index += 1) {
-      const descriptor = Object.getOwnPropertyDescriptor(array, index)
-      if (Boolean(descriptor) !== Object.hasOwn(values, index) || (descriptor && (!('value' in descriptor) || !Object.is(values[index], descriptor.value)))) {
-        return true
-      }
-    }
-  }
-
-  return false
-}
-
-export function serializeDatabaseQueryObservationsOnArrayWrites(array: unknown): void {
-  const state = databaseDependencyCollector.getStore()
-  if (!state || !Array.isArray(array) || Object.isFrozen(array)) {
-    return
-  }
-
-  if (!state.arraySnapshots.has(array)) {
-    const values = snapshotArray(array)
-    if (!values) {
-      markDatabaseQueryObservationsSerialized()
-      return
-    }
-
-    state.arraySnapshots.set(array, values)
-  }
-
-  if (!Object.isExtensible(array) || Object.getPrototypeOf(array) !== Array.prototype) {
-    return
-  }
-
-  const collectors = arrayWriteCollectors.get(array)
-  if (collectors) {
-    collectors.add(state)
-    return
-  }
-
-  if (ARRAY_WRITE_METHODS.some(name => Object.hasOwn(array, name))) {
-    return
-  }
-
-  arrayWriteCollectors.set(array, new WeakSet([state]))
-  for (const name of ARRAY_WRITE_METHODS) {
-    Object.defineProperty(array, name, { configurable: true, enumerable: false, value: arrayWriteMethods[name], writable: true })
-  }
-}
-
-export function createAverageAggregateObservation(
-  column: string,
-  values: readonly number[],
-): DatabaseQueryAggregateObservation {
-  let sum = 0
-  let absoluteSum = 0
-  for (const value of values) {
-    sum += value
-    absoluteSum += Math.abs(value)
-    if (!Number.isSafeInteger(value) || !Number.isSafeInteger(absoluteSum)) {
-      return Object.freeze({ column, kind: 'avg' })
-    }
-  }
-
-  return Object.freeze({ absoluteSum, column, count: values.length, kind: 'avg', sum })
-}
-
-export function rebindDatabaseQueryObservationAggregate(
-  source: unknown,
-  result: unknown,
-  aggregate: DatabaseQueryAggregateObservation,
-  readRow?: DatabaseQueryRowReader,
-): void {
-  rebindDatabaseQueryObservation(source, result, aggregate, undefined, undefined, undefined, undefined, undefined, readRow)
-}
-
-export function rebindDatabaseQueryObservationScalar(
-  source: unknown,
-  result: unknown,
-  column: string,
-  readRow?: DatabaseQueryRowReader,
-): void {
-  rebindDatabaseQueryObservation(source, result, undefined, column, undefined, undefined, undefined, undefined, readRow)
-}
-
-export function rebindDatabaseQueryObservationScalarList(
-  rows: readonly Readonly<Record<string, unknown>>[],
-  result: readonly unknown[],
-  column: string,
-  readRow?: DatabaseQueryRowReader,
-): void {
-  if (!databaseDependencyCollector.getStore()) {
-    return
-  }
-
-  rebindDatabaseQueryObservation(rows, result, undefined, undefined, column, readRow ? Object.freeze(rows.map(row => readRow(row))) : rows, undefined, undefined, readRow)
-}
-
-function rebindDatabaseQueryObservation(
-  source: unknown,
-  result: unknown,
-  aggregate?: DatabaseQueryAggregateObservation,
-  scalarColumn?: string,
-  scalarListColumn?: string,
-  scalarListRows?: readonly Readonly<Record<string, unknown>>[],
-  belongsToHydrations?: readonly DatabaseQueryBelongsToHydrationObservation[],
-  relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[],
-  readRow?: DatabaseQueryRowReader,
-): void {
-  const state = databaseDependencyCollector.getStore()
-  if (!state) {
-    return
-  }
-
-  for (let index = state.queries.length - 1; index >= 0; index -= 1) {
-    const query = state.queries[index]
-    if (!query || query.result !== source) {
-      continue
-    }
-
-    replaceDatabaseQueryObservation(state, index, Object.freeze({
-      aggregate,
-      readRow: readRow ?? query.readRow,
-      belongsToHydrations,
-      connectionName: query.connectionName,
-      tableName: query.tableName,
-      table: query.table,
-      dependencies: query.dependencies,
-      limit: query.limit,
-      offset: query.offset,
-      orderBy: query.orderBy,
-      patchable: query.patchable && !(aggregate?.column !== undefined && isBooleanColumn(query.table, aggregate.column)),
-      pagination: query.pagination,
-      predicates: query.predicates,
-      predicateTree: query.predicateTree,
-      primaryKey: query.primaryKey,
-      relation: query.relation,
-      result,
-      resultPath: query.resultPath,
-      relatedHydrations,
-      scalarColumn,
-      scalarListColumn,
-      scalarListRows,
-      selections: query.selections,
-      serialized: query.serialized,
-    }))
-    return
-  }
 }
 
 export function hasDatabaseDependencyInvalidationListeners(): boolean {
@@ -1457,10 +427,6 @@ async function receiveRemoteDatabaseDependencyInvalidation(
   }
 
   if (invalidation.dependencies.includes(databaseSchemaDependency)) advanceSchemaGeneration()
-
-  if (hasDatabaseDependencyInvalidationListeners()) {
-    recordRemoteMutationPublication(invalidation.dependencies)
-  }
 
   await evictThenNotify(
     () => invalidation.dependencies.includes(databaseSchemaDependency)
@@ -1845,7 +811,6 @@ function createDatabaseDependencyInvalidationEvent(
   dependencies: readonly string[],
   mutations: readonly DatabaseMutationEvent[],
   metadata?: DatabaseDependencyInvalidationMetadata,
-  publication: { readonly startedAt?: number, readonly unordered: boolean } = { unordered: false },
 ): DatabaseDependencyInvalidationEventInternal {
   const event: DatabaseDependencyInvalidationEventInternal = {
     connectionName: connection.getConnectionName(),
@@ -1859,8 +824,6 @@ function createDatabaseDependencyInvalidationEvent(
     value: Object.freeze({
       ...(metadata ?? createDatabaseDependencyInvalidationMetadata(dependencies, mutations)),
       contextId: connection.getContextId(),
-      ...(publication.startedAt === undefined ? {} : { publicationStartedAt: publication.startedAt }),
-      ...(publication.unordered ? { unordered: true } : {}),
     }),
     writable: false,
   })
@@ -2378,170 +1341,6 @@ function collectQueryPredicateObservations(predicates: readonly QueryPredicateNo
   return Object.freeze(observations)
 }
 
-function collectQueryOrderObservations(plan: SelectQueryPlan): readonly DatabaseQueryOrderObservation[] {
-  return Object.freeze(plan.orderBy.flatMap((order) => {
-    if (order.kind !== 'column') {
-      return []
-    }
-
-    return [Object.freeze({
-      column: getColumnName(order.column),
-      direction: order.direction,
-    })]
-  }))
-}
-
-function collectQuerySelectionObservations(plan: SelectQueryPlan): readonly DatabaseQuerySelectionObservation[] {
-  return Object.freeze(plan.selections.flatMap((selection) => {
-    if (selection.kind !== 'column') {
-      return []
-    }
-
-    const column = getColumnName(selection.column)
-    return [Object.freeze({
-      column,
-      resultKey: selection.alias ?? column,
-    })]
-  }))
-}
-
-function isPatchablePredicateObservation(predicate: QueryPredicateNode): boolean {
-  if (predicate.kind === 'comparison' && predicate.boolean !== 'or') {
-    return true
-  }
-
-  if (predicate.kind !== 'group' || predicate.negated || predicate.boolean === 'or') {
-    return false
-  }
-
-  return predicate.predicates.every(child => isPatchablePredicateObservation(child))
-}
-
-function hasRequiredProjectionSelection(
-  selections: readonly DatabaseQuerySelectionObservation[],
-  column: string,
-): boolean {
-  return selections.some(selection => selection.column === column && selection.resultKey === column)
-}
-
-function isExactPrimaryKeySingleResultProjection(plan: SelectQueryPlan, primaryKey: string): boolean {
-  return plan.limit === 1
-    && typeof findExactPrimaryKeyValue(plan.predicates, primaryKey) !== 'undefined'
-}
-
-function isPatchableProjectionObservation(
-  plan: SelectQueryPlan,
-  primaryKey: string,
-  selections: readonly DatabaseQuerySelectionObservation[],
-  predicates: readonly DatabaseQueryPredicateObservation[],
-  orderBy: readonly DatabaseQueryOrderObservation[],
-): boolean {
-  if (plan.selections.length === 0) {
-    return true
-  }
-
-  if (plan.selections.every(selection => selection.kind === 'aggregate')) {
-    return true
-  }
-
-  const needsProjectedPrimaryKey = !isExactPrimaryKeySingleResultProjection(plan, primaryKey)
-  const requiredColumns = new Set<string>([
-    ...orderBy.map(order => order.column),
-  ])
-  if (needsProjectedPrimaryKey) {
-    requiredColumns.add(primaryKey)
-  }
-
-  for (const column of requiredColumns) {
-    if (!hasRequiredProjectionSelection(selections, column)) {
-      return false
-    }
-  }
-
-  return true
-}
-
-function isPatchableOffsetObservation(
-  plan: SelectQueryPlan,
-  orderBy: readonly DatabaseQueryOrderObservation[],
-): boolean {
-  return typeof plan.offset === 'undefined'
-    || plan.offset === 0
-    || (
-      typeof plan.limit === 'number'
-      && plan.offset > 0
-      && orderBy.length > 0
-    )
-}
-
-function readsSourceIntegerColumn(plan: SelectQueryPlan, column: string): boolean {
-  const separator = column.lastIndexOf('.')
-  if (separator >= 0 && column.slice(0, separator) !== (plan.source.alias ?? plan.source.tableName)) {
-    return false
-  }
-
-  const kind = plan.source.table?.columns[column.slice(separator + 1)]?.kind
-  return kind === 'integer' || kind === 'bigInteger'
-}
-
-function findGroupedAggregateObservation(
-  plan: SelectQueryPlan,
-  aggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[],
-): DatabaseQueryGroupedAggregateObservation | undefined {
-  if (
-    plan.groupBy.length !== 1
-    || plan.selections.length !== 2
-  ) {
-    return undefined
-  }
-
-  const groupColumn = getColumnName(plan.groupBy[0]!)
-  const groupSelection = plan.selections.find((selection): selection is Extract<QuerySelection, { readonly kind: 'column' }> => {
-    return selection.kind === 'column' && getColumnName(selection.column) === groupColumn
-  })
-  const aggregateSelection = plan.selections.find((selection): selection is Extract<QuerySelection, { readonly kind: 'aggregate' }> => {
-    return selection.kind === 'aggregate'
-      && (
-        (selection.aggregate === 'count' && selection.column === '*')
-        || (selection.aggregate === 'avg' && selection.column !== '*')
-        || (selection.aggregate === 'sum' && selection.column !== '*')
-        || (selection.aggregate === 'min' && selection.column !== '*')
-        || (selection.aggregate === 'max' && selection.column !== '*')
-      )
-  })
-  if (!groupSelection || !aggregateSelection) {
-    return undefined
-  }
-
-  const orderBy = collectQueryOrderObservations(plan)
-  if (orderBy.some(order => order.column !== groupColumn)) {
-    return undefined
-  }
-
-  const aggregateKind = aggregateSelection.aggregate === 'count'
-    ? 'count'
-    : aggregateSelection.aggregate
-  const having = readGroupedCountHavingObservation(plan)
-  if (plan.having.length > 0 && !isSupportedGroupedCountHaving(plan)) {
-    return undefined
-  }
-
-  const groupedAggregate = {
-    aggregateColumn: aggregateKind === 'count' ? undefined : getColumnName(aggregateSelection.column),
-    aggregateResultKey: aggregateSelection.alias,
-    ...((aggregateKind === 'count' || aggregateKind === 'sum' || aggregateKind === 'min' || aggregateKind === 'max') && aggregateStates
-      ? { aggregateStates: Object.freeze([...aggregateStates]) }
-      : {}),
-    groupColumn,
-    groupResultKey: groupSelection.alias ?? groupColumn,
-    having,
-    ...(aggregateKind === 'avg' && readsSourceIntegerColumn(plan, aggregateSelection.column) ? { integerColumn: true as const } : {}),
-    kind: aggregateKind,
-  } satisfies DatabaseQueryGroupedAggregateObservation
-
-  return Object.freeze(groupedAggregate)
-}
-
 function isSupportedGroupedCountHaving(plan: SelectQueryPlan): boolean {
   if (plan.having.length === 0) {
     return true
@@ -2552,7 +1351,7 @@ function isSupportedGroupedCountHaving(plan: SelectQueryPlan): boolean {
 
 function readGroupedCountHavingClause(
   plan: SelectQueryPlan,
-): DatabaseQueryGroupedAggregateHavingObservation | undefined {
+): { readonly operator: QueryOperator, readonly value: number } | undefined {
   if (plan.groupBy.length === 0 || plan.having.length !== 1) {
     return undefined
   }
@@ -2575,16 +1374,6 @@ function readGroupedCountHavingClause(
   })
 }
 
-function readGroupedCountHavingObservation(
-  plan: SelectQueryPlan,
-): DatabaseQueryGroupedAggregateHavingObservation | undefined {
-  if (hasOnlyRedundantGroupedCountHaving(plan)) {
-    return undefined
-  }
-
-  return readGroupedCountHavingClause(plan)
-}
-
 function isGroupedCountHavingOperator(
   operator: QueryOperator,
 ): operator is Extract<QueryOperator, '<' | '<=' | '=' | '>' | '>='> {
@@ -2593,61 +1382,6 @@ function isGroupedCountHavingOperator(
     || operator === '='
     || operator === '>'
     || operator === '>='
-}
-
-function hasOnlyRedundantGroupedCountHaving(plan: SelectQueryPlan): boolean {
-  if (plan.having.length === 0) {
-    return true
-  }
-
-  if (plan.groupBy.length === 0 || plan.having.length !== 1) {
-    return false
-  }
-
-  const clause = plan.having[0]
-  return typeof clause !== 'undefined'
-    && clause.kind === 'comparison'
-    && clause.expression.replace(/\s+/g, '').toLowerCase() === 'count(*)'
-    && clause.operator === '>='
-    && clause.value === 1
-}
-
-function isPatchableGroupedAggregateObservation(plan: SelectQueryPlan): boolean {
-  return supportsAutomaticQueryCacheInvalidation(plan)
-    && Boolean(findGroupedAggregateObservation(plan))
-    && !plan.distinct
-    && !plan.lockMode
-    && !plan.source.alias
-    && plan.joins.length === 0
-    && typeof plan.limit === 'undefined'
-    && typeof plan.offset === 'undefined'
-    && plan.unions.length === 0
-    && plan.orderBy.every(order => order.kind === 'column')
-    && plan.predicates.every(predicate => isPatchablePredicateObservation(predicate))
-}
-
-function isPatchableQueryObservation(plan: SelectQueryPlan, primaryKey: string | undefined): boolean {
-  if (primaryKey === undefined) {
-    return false
-  }
-
-  const predicates = collectQueryPredicateObservations(plan.predicates)
-  const orderBy = collectQueryOrderObservations(plan)
-  const selections = collectQuerySelectionObservations(plan)
-
-  return isPatchableGroupedAggregateObservation(plan)
-    || (supportsAutomaticQueryCacheInvalidation(plan)
-    && !plan.distinct
-    && !plan.lockMode
-    && !plan.source.alias
-    && plan.groupBy.length === 0
-    && plan.having.length === 0
-    && plan.joins.length === 0
-    && isPatchableOffsetObservation(plan, orderBy)
-    && isPatchableProjectionObservation(plan, primaryKey, selections, predicates, orderBy)
-    && plan.unions.length === 0
-    && plan.orderBy.every(order => order.kind === 'column')
-    && plan.predicates.every(predicate => isPatchablePredicateObservation(predicate)))
 }
 
 function appendObservableQueryDependencies(
@@ -2738,68 +1472,19 @@ export function inferDatabaseQueryObservationDependencies(
   return Object.freeze([...dependencies])
 }
 
-function createDatabaseQueryObservationFromPlan(
-  plan: SelectQueryPlan,
-  connectionName: string,
-  dependencies: readonly string[],
-  result?: unknown,
-  patchable?: boolean,
-  groupedAggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[],
-): DatabaseQueryObservation | undefined {
-  const primaryKey = resolveObservedRowKey(plan.source, connectionName)
-  return Object.freeze({
-    connectionName,
-    belongsToHydrations: undefined,
-    relatedHydrations: undefined,
-    tableName: plan.source.tableName,
-    table: plan.source.table,
-    dependencies: Object.freeze([...dependencies]),
-    groupedAggregate: findGroupedAggregateObservation(plan, groupedAggregateStates),
-    limit: plan.limit,
-    offset: plan.offset,
-    orderBy: collectQueryOrderObservations(plan),
-    patchable: patchable ?? isPatchableQueryObservation(plan, primaryKey),
-    pagination: undefined,
-    predicates: collectQueryPredicateObservations(plan.predicates),
-    predicateTree: hasDisjunctivePredicate(plan.predicates) ? plan.predicates : undefined,
-    primaryKey,
-    result,
-    selections: collectQuerySelectionObservations(plan),
-  })
-}
-
 export function createDatabaseQueryObservation(
   plan: SelectQueryPlan,
   connectionName: string,
   dependencies: readonly string[],
-  result?: unknown,
-  groupedAggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[],
 ): DatabaseQueryObservation | undefined {
-  if (!supportsAutomaticQueryCacheInvalidation(plan)) {
-    return undefined
-  }
-
-  return createDatabaseQueryObservationFromPlan(
-    plan,
+  if (dependencies.length === 0 && !supportsAutomaticQueryCacheInvalidation(plan)) return undefined
+  return Object.freeze({
     connectionName,
-    dependencies,
-    result,
-    undefined,
-    groupedAggregateStates,
-  )
-}
-
-export function createDatabaseQueryFallbackObservation(
-  plan: SelectQueryPlan,
-  connectionName: string,
-  dependencies: readonly string[],
-  result?: unknown,
-): DatabaseQueryObservation | undefined {
-  if (dependencies.length === 0) {
-    return undefined
-  }
-
-  return createDatabaseQueryObservationFromPlan(plan, connectionName, dependencies, result, false)
+    tableName: plan.source.tableName,
+    dependencies: Object.freeze([...dependencies]),
+    predicates: collectQueryPredicateObservations(plan.predicates),
+    primaryKey: resolveObservedRowKey(plan.source, connectionName),
+  })
 }
 
 export function createDatabaseMutationEvent(
@@ -2840,108 +1525,14 @@ function convertedBooleanColumns(table: TableDefinition | undefined, records: re
     && records.some(record => Object.hasOwn(record, column) && isDriverScalar(record[column]))))
 }
 
-function hasUnreadBoolean(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
-  return table !== undefined && Object.keys(row).some(key => isBooleanColumn(table, key) && isDriverScalar(row[key]) && !isStoredBoolean(row[key]))
-}
-
-function resultKeys(
-  table: TableDefinition | undefined,
-  row: Readonly<Record<string, unknown>>,
-  selections: readonly DatabaseQuerySelectionObservation[],
-  readsColumn: (table: TableDefinition, column: string) => boolean,
-  reads: (value: unknown) => boolean,
-): readonly string[] {
-  if (!table) return []
-  return Object.keys(row).filter((key) => {
-    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
-    return reads(row[key]) && readsColumn(table, selection ? selection.column : key)
-  })
-}
-
-function isIntegerColumn(table: TableDefinition, column: string): boolean {
-  return Object.hasOwn(table.columns, column) && readsAsInteger(table.columns[column]!)
-}
-
-function booleanResultKeys(
-  table: TableDefinition | undefined,
-  row: Readonly<Record<string, unknown>>,
-  selections: readonly DatabaseQuerySelectionObservation[],
-  reads: (value: unknown) => boolean,
-): readonly string[] {
-  return resultKeys(table, row, selections, isBooleanColumn, reads)
-}
-
-function hasUnstoredFetchedBoolean(
-  table: TableDefinition | undefined,
-  row: Readonly<Record<string, unknown>>,
-  selections: readonly DatabaseQuerySelectionObservation[] = [],
-): boolean {
-  return booleanResultKeys(table, row, selections, value => isDriverScalar(value) && !isStoredBoolean(value)).length > 0
-}
-
-function readBooleanColumns(
-  table: TableDefinition | undefined,
-  row: Readonly<Record<string, unknown>>,
-  selections: readonly DatabaseQuerySelectionObservation[],
-  reads: (value: unknown) => boolean,
-): Readonly<Record<string, unknown>> {
-  const booleanKeys = booleanResultKeys(table, row, selections, reads)
-  if (booleanKeys.length === 0) return row
-  return Object.freeze({ ...row, ...Object.fromEntries(booleanKeys.map(key => [key, coerceBoolean(row[key])])) })
-}
-
-function integerResultKeys(
-  table: TableDefinition | undefined,
-  row: Readonly<Record<string, unknown>>,
-  selections: readonly DatabaseQuerySelectionObservation[],
-  reads: (value: unknown) => boolean,
-): readonly string[] {
-  return resultKeys(table, row, selections, isIntegerColumn, reads)
-}
-
-function hasUnreadInteger(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
-  return resultKeys(table, row, [], isIntegerColumn, value => (typeof value === 'string' || typeof value === 'bigint' || typeof value === 'number')
-    && !Number.isSafeInteger(readCanonicalInteger(value))).length > 0
-}
-
-function hasUnreadableFetchedInteger(
-  table: TableDefinition | undefined,
-  row: Readonly<Record<string, unknown>>,
-  selections: readonly DatabaseQuerySelectionObservation[] = [],
-): boolean {
-  return integerResultKeys(table, row, selections, failsIntegerRead).length > 0
-}
-
-function readIntegerColumns(
-  table: TableDefinition | undefined,
-  row: Readonly<Record<string, unknown>>,
-  selections: readonly DatabaseQuerySelectionObservation[],
-): Readonly<Record<string, unknown>> {
-  const integerKeys = integerResultKeys(table, row, selections, value => readCanonicalInteger(value) !== value)
-  if (integerKeys.length === 0) return row
-  return Object.freeze({ ...row, ...Object.fromEntries(integerKeys.map(key => [key, readCanonicalInteger(row[key])])) })
-}
-
 function readStoredBooleans(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
-  return readBooleanColumns(table, row, [], isStoredBoolean)
-}
-
-function readMutationRow(
-  table: TableDefinition | undefined,
-  row: Readonly<Record<string, unknown>>,
-): Readonly<Record<string, unknown>> {
-  return readIntegerColumns(table, readStoredBooleans(table, row), [])
-}
-
-function readFetchedRow(
-  table: TableDefinition | undefined,
-  row: Readonly<Record<string, unknown>>,
-  selections: readonly DatabaseQuerySelectionObservation[] = [],
-): Readonly<Record<string, unknown>> {
-  return readIntegerColumns(table, readBooleanColumns(table, row, selections, isDriverScalar), selections)
+  if (!table) return row
+  const keys = Object.keys(row).filter(key => isBooleanColumn(table, key) && isStoredBoolean(row[key]))
+  if (keys.length === 0) return row
+  return Object.freeze({ ...row, ...Object.fromEntries(keys.map(key => [key, coerceBoolean(row[key])])) })
 }
 
 function readMutationRows(
@@ -3241,7 +1832,6 @@ export function needsFullQueryRefresh(connection: DatabaseContext): boolean {
 }
 
 export async function invalidateDatabaseSchema(connection: DatabaseContext): Promise<void> {
-  startMutationPublicationEpoch()
   const bridge = getDatabaseQueryCacheBridge()
   const event = createDatabaseDependencyInvalidationEvent(connection, [databaseSchemaDependency], [])
   await evictThenNotify(
@@ -3258,7 +1848,6 @@ export async function invalidateQueryCacheDependencies(
   dependencies: readonly string[],
   mutations: readonly DatabaseMutationEvent[] = [],
   plan?: { readonly metadata?: DatabaseDependencyInvalidationMetadata },
-  publicationStartedAt?: number,
 ): Promise<void> {
   if (dependencies.length === 0) {
     return
@@ -3266,7 +1855,6 @@ export async function invalidateQueryCacheDependencies(
 
   const invalidate = async () => {
     const fullRefresh = needsFullQueryRefresh(connection)
-    if (fullRefresh) startMutationPublicationEpoch()
     const localDependencies = fullRefresh ? [databaseSchemaDependency] : dependencies
     const bridge = getDatabaseQueryCacheBridge()
     await evictThenNotify(
@@ -3278,8 +1866,7 @@ export async function invalidateQueryCacheDependencies(
           return
         }
 
-        const unordered = hasLocalListeners && mutations.length > 0 && !recordDatabaseMutationPublication(mutations, publicationStartedAt)
-        const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata, { startedAt: publicationStartedAt, unordered })
+        const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata)
         publishDatabaseInvalidationEvent(event)
         if (hasLocalListeners) {
           await notifyDatabaseDependencyInvalidationListeners(fullRefresh
@@ -3304,51 +1891,9 @@ export const queryCacheInternals = {
   currentSchemaGeneration,
   hasPendingSchemaChanges,
   databaseSchemaDependency,
-  canUseQueryCache,
-  hasObservedResultChanged,
-  beginMutationPublication,
   getRootDatabaseContext,
-  markMutationPublicationBoundary,
-  hasUnreadBoolean,
-  hasUnreadableFetchedInteger,
-  hasUnreadInteger,
-  hasUnstoredFetchedBoolean,
-  readFetchedRow,
-  readMutationRow,
   collectDatabaseQueryDependencies: collectDatabaseQueryDependenciesInternal,
-  configureDatabaseQueryCacheBridge,
-  createDatabaseMutationEvent,
-  createDatabaseQueryObservation,
-  canonicalTableName,
-  createDeterministicQueryCacheKey,
-  createTablePredicateCacheDependency,
   createTableCacheDependency,
-  createTableRowCacheDependency,
-  createTableRowWildcardCacheDependency,
-  getQueryCacheBridgeState,
-  hasActiveDatabaseDependencyCollector,
-  hasDatabaseDependencyInvalidationListeners,
-  hasDatabaseDependencyInvalidationPublisher,
-  inferAutomaticInsertCacheInvalidationDependencies,
-  inferAutomaticInsertCacheInvalidationPlan,
-  inferAutomaticQueryCacheDependencies,
-  inferAutomaticQueryCacheInvalidationDependencies,
-  inferAutomaticQueryCacheInvalidationPlan,
-  normalizeQueryCacheConfig,
-  normalizeQueryCacheDependencies,
-  notifyDatabaseDependencyInvalidationListeners,
   onDatabaseDependencyInvalidationPublished,
   receiveRemoteDatabaseDependencyInvalidation,
-  disableDatabaseQueryObservationPatching,
-  rebindDatabaseQueryObservationResult,
-  rebindDatabaseQueryObservationScalar,
-  rebindDatabaseQueryObservationScalarList,
-  onDatabaseDependencyInvalidated,
-  recordDatabaseQueryDependencies,
-  recordDatabaseQueryObservation,
-  resolveQueryCacheDependencies,
-  resolveQueryCacheKey,
-  resetDatabaseDependencyInvalidationListeners,
-  supportsAutomaticPredicateInvalidation,
-  supportsAutomaticQueryCacheInvalidation,
 }

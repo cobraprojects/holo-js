@@ -1,3 +1,4 @@
+import { hasDatabaseDependencyInvalidationListeners } from '../../db/src/cache'
 import { applyWireSnapshotPatch } from '../src/client/patching'
 import { isRecord } from '../src/runtime/value'
 import { expectEquivalentWireOperations } from './helpers/native-fixture'
@@ -4840,7 +4841,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(true)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(true)
     expect(counters.queryExecutions).toBe(1)
     expect(counters.emittedSnapshots).toBe(1)
 
@@ -4848,7 +4849,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     subscription.unsubscribe()
     const cleanupDurationMs = Number((performance.now() - cleanupStartedAt).toFixed(3))
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
     expect(realtimeRuntimeInternals.getRuntimeState().unsubscribeFromDatabase).toBeUndefined()
 
     adapter.queries.length = 0

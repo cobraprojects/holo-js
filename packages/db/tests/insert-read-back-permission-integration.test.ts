@@ -1,3 +1,4 @@
+import { onDatabaseDependencyInvalidated, resetDatabaseDependencyInvalidationListeners } from '../src/cache'
 import { randomUUID } from 'node:crypto'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { describe, expect, it, onTestFinished } from 'vitest'
@@ -25,8 +26,8 @@ describe.runIf(mysqlIntegration)('MySQL inserts read back for realtime listeners
     onTestFinished(() => writer.disconnect())
     const notes = defineGeneratedTable(name, { id: column.id(), name: column.string(), note: column.string().nullable() })
     const mutations: DatabaseMutationEvent[] = []
-    onTestFinished(() => queryCacheInternals.resetDatabaseDependencyInvalidationListeners())
-    queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
+    onTestFinished(() => resetDatabaseDependencyInvalidationListeners())
+    onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
       mutations.push(...event.mutations ?? [])
     })
 
@@ -47,8 +48,8 @@ describe.runIf(mysqlIntegration)('MySQL inserts read back for realtime listeners
     const pairs = defineGeneratedTable(name, { a: column.integer().primaryKey(), b: column.integer().primaryKey(), note: column.string().nullable() })
     await db.table(pairs).insert([{ a: 1, b: 2 }, { a: 2, b: 1 }])
     const mutations: DatabaseMutationEvent[] = []
-    onTestFinished(() => queryCacheInternals.resetDatabaseDependencyInvalidationListeners())
-    queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
+    onTestFinished(() => resetDatabaseDependencyInvalidationListeners())
+    onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
       mutations.push(...event.mutations ?? [])
     })
     reads.length = 0

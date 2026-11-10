@@ -1,3 +1,4 @@
+import { hasDatabaseDependencyInvalidationListeners } from '../../db/src/cache'
 import { randomUUID } from 'node:crypto'
 import { createPostgresAdapter } from '../../db-postgres/src'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -332,13 +333,13 @@ describe('@holo-js/realtime', () => {
       },
     })
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
 
     await expect(executeRealtimeMutation(renamePost)).resolves.toMatchObject({
       data: { ok: true },
     })
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
     expect(realtimeRuntimeInternals.getRuntimeState().unsubscribeFromDatabase).toBeUndefined()
     expect(adapter.queries).toEqual([])
     expect(adapter.executions).toEqual([
@@ -373,7 +374,7 @@ describe('@holo-js/realtime', () => {
       dependencies: ['db:main:posts'],
     })
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
     expect(realtimeRuntimeInternals.getRuntimeState().unsubscribeFromDatabase).toBeUndefined()
 
     adapter.queries.length = 0
@@ -431,17 +432,17 @@ describe('@holo-js/realtime', () => {
     const firstSubscription = await subscribeRealtimeQuery(listPosts)
     const secondSubscription = await subscribeRealtimeQuery(listPosts)
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(true)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(true)
     expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(2)
 
     firstSubscription.unsubscribe()
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(true)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(true)
     expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(1)
 
     secondSubscription.unsubscribe()
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
     expect(realtimeRuntimeInternals.getRuntimeState().unsubscribeFromDatabase).toBeUndefined()
     expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(0)
 
@@ -477,7 +478,7 @@ describe('@holo-js/realtime', () => {
       },
     })).rejects.toThrow('Initial subscriber failed.')
 
-    expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
+    expect(hasDatabaseDependencyInvalidationListeners()).toBe(false)
     expect(realtimeRuntimeInternals.getRuntimeState().unsubscribeFromDatabase).toBeUndefined()
     expect(realtimeRuntimeInternals.getRuntimeState().subscriptions.size).toBe(0)
     expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(0)

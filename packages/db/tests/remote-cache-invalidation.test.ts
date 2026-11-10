@@ -1,3 +1,4 @@
+import { resetDatabaseDependencyInvalidationListeners } from '../src/cache'
 import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
@@ -15,7 +16,7 @@ let adapter: ReturnType<typeof createSQLiteAdapter>
 beforeEach(async () => {
   resetDB()
   resetCacheRuntime()
-  queryCacheInternals.resetDatabaseDependencyInvalidationListeners()
+  resetDatabaseDependencyInvalidationListeners()
   adapter = createSQLiteAdapter({ filename: ':memory:' })
   const db = createDatabase({ connectionName: 'main', adapter, dialect: createDialect('sqlite') })
   configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))

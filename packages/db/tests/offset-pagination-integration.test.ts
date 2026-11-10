@@ -26,8 +26,6 @@ describe('bounded standard pagination', () => {
       expect(result.value.data.map(row => row.id)).toEqual([5, 6])
       expect(result.value.meta).toMatchObject({ total: 90, currentPage: 3, from: 5, to: 6, hasMorePages: true })
       expect(logs.map(entry => entry.rowCount)).toEqual([1, 2])
-      expect(result.queries).toHaveLength(2)
-      expect(result.queries).toEqual(expect.arrayContaining([expect.objectContaining({ pagination: expect.objectContaining({ kind: 'standard', total: 90 }), result: result.value.meta }), expect.objectContaining({ limit: 2, offset: 4, result: result.value.data })]))
     } finally {
       await adapter.disconnect()
     }
@@ -68,7 +66,6 @@ describe('bounded standard pagination', () => {
       const first = await read(3)
       expect(first.value.data.map(row => row.id)).toEqual([5, 6])
       expect(first.value.meta).toMatchObject({ currentPage: 3, from: 5, to: 6, hasMorePages: true })
-      expect(first.queries).toEqual(expect.arrayContaining([expect.objectContaining({ result: first.value.data, limit: 2, offset: 4 }), expect.objectContaining({ result: first.value.meta, pagination: expect.objectContaining({ kind: 'simple', rowCount: null }) })]))
       const last = await read(45)
       expect(last.value.data.map(row => row.id)).toEqual([89, 90])
       expect(last.value.meta).toMatchObject({ from: 89, to: 90, hasMorePages: false })

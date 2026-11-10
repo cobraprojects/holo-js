@@ -46,10 +46,5 @@ describe('database count and existence', () => {
       absent: await query.where('active', true).doesntExist(),
     }))
     expect(collected.value).toEqual({ count: 2, exists: true, absent: false })
-    expect(collected.queries.map(entry => ({ result: entry.result, aggregate: entry.aggregate }))).toEqual([
-      { result: 2, aggregate: { kind: 'count' } },
-      { result: true, aggregate: { kind: 'count', count: 2, output: 'boolean' } },
-      { result: false, aggregate: { kind: 'count', count: 2, output: 'inverseBoolean' } },
-    ])
   })
 })
