@@ -423,3 +423,29 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a h
     await expectFresh()
   })
 })
+
+describe.each(integrationDrivers(['mysql'] as const))('an unbound count with an update outside its predicates on %s', (driver) => {
+  it('skips the handler re-run for an update whose previous and new rows both contradict every predicate', async () => {
+    const { db, tableName } = await createPosts(driver)
+    let handlerRuns = 0
+    const subscription = await subscribeRealtimeQuery(
+      defineRealtimeQuery({
+        access: 'public',
+        handler: async () => {
+          handlerRuns += 1
+          return (await db.table(tableName).where('id', '>', 2).count()) * 2
+        },
+      }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )
+    const mutate = (mutation: (db: Database) => Promise<unknown>) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => mutation(db) }))
+
+    await mutate(db => db.table(tableName).insert({ id: 3, title: 'Third' }))
+    expect(handlerRuns).toBe(2)
+
+    await mutate(db => db.table(tableName).where('id', 1).update({ title: 'Renamed' }))
+    expect(handlerRuns).toBe(2)
+    expect(subscription.current.data).toBe(2)
+  })
+})

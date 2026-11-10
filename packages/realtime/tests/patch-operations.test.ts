@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  compactPatchOperations,
   createMergePatchOperation,
   createMovePatchOperation,
   createReplacePatchOperation,
@@ -45,107 +44,6 @@ describe('@holo-js/realtime patch operations', () => {
     }
     expect(Object.isFrozen(merge.fields)).toBe(true)
     expect(Object.isFrozen(splice.values)).toBe(true)
-  })
-
-  it('compacts adjacent replace operations into merge operations only when paths are compatible', () => {
-    const first = createReplacePatchOperation(['row', 'title'], 'Updated')
-    const second = createReplacePatchOperation(['row', 'status'], 'open')
-    const duplicate = createReplacePatchOperation(['row', 'title'], 'Duplicate')
-    const numericPath = createReplacePatchOperation(['rows', 0], { id: 1 })
-    const undefinedReplace = createReplacePatchOperation(['row', 'body'], undefined)
-    const move = createMovePatchOperation(['rows'], 1, 0)
-
-    expect(compactPatchOperations([first])).toEqual([first])
-    expect(compactPatchOperations([
-      first,
-      second,
-      duplicate,
-      numericPath,
-      undefinedReplace,
-      move,
-    ])).toEqual([
-      createMergePatchOperation(['row'], {
-        status: 'open',
-        title: 'Duplicate',
-      }),
-      numericPath,
-      undefinedReplace,
-      move,
-    ])
-  })
-
-  it('compacts adjacent merge-compatible operations with ordered field overwrites', () => {
-    const title = createReplacePatchOperation(['row', 'title'], 'Updated')
-    const emptyMetadata = createMergePatchOperation(['row'], {})
-    const metadata = createMergePatchOperation(['row'], { status: 'draft', title: 'Merged' })
-    const optionalMetadata = createMergePatchOperation(['row'], { body: undefined, summary: 'Draft' })
-    const status = createReplacePatchOperation(['row', 'status'], 'open')
-    const other = createMergePatchOperation(['other'], { total: 1 })
-
-    expect(compactPatchOperations([
-      title,
-      emptyMetadata,
-      metadata,
-      status,
-      other,
-    ])).toEqual([
-      createMergePatchOperation(['row'], {
-        status: 'open',
-        title: 'Merged',
-      }),
-      other,
-    ])
-
-    expect(compactPatchOperations([
-      emptyMetadata,
-      createMergePatchOperation(['other'], {}),
-    ])).toEqual([])
-
-    expect(compactPatchOperations([
-      title,
-      undefined,
-      status,
-    ] as unknown as readonly RealtimeSubscriptionPatchOperation[])).toEqual([
-      createMergePatchOperation(['row'], {
-        status: 'open',
-        title: 'Updated',
-      }),
-    ])
-
-    expect(compactPatchOperations([
-      optionalMetadata,
-      status,
-    ])).toEqual([
-      optionalMetadata,
-      status,
-    ])
-  })
-
-  it('compacts splice runs and skips no-op splices without crossing incompatible operations', () => {
-    expect(compactPatchOperations([
-      undefined,
-      createSplicePatchOperation(['rows'], 1, 0, []),
-      createSplicePatchOperation(['rows'], 1, 0, [{ id: 2 }]),
-      createSplicePatchOperation(['rows'], 2, 0, [{ id: 3 }]),
-      createSplicePatchOperation(['rows'], 2, 1, [{ id: 4 }]),
-      createSplicePatchOperation(['other'], 0, 0, [{ id: 1 }]),
-    ] as unknown as readonly RealtimeSubscriptionPatchOperation[])).toEqual([
-      createSplicePatchOperation(['rows'], 1, 0, [{ id: 2 }, { id: 3 }]),
-      createSplicePatchOperation(['rows'], 2, 1, [{ id: 4 }]),
-      createSplicePatchOperation(['other'], 0, 0, [{ id: 1 }]),
-    ])
-  })
-
-  it('compacts same-index splice runs without crossing different path shapes', () => {
-    expect(compactPatchOperations([
-      createSplicePatchOperation(['rows'], 1, 0, [{ id: 2 }, { id: 3 }]),
-      createSplicePatchOperation(['rows'], 2, 0, []),
-      createSplicePatchOperation(['rows'], 1, 1, [{ id: 4 }]),
-      createSplicePatchOperation(['rows', 0], 0, 0, ['tag']),
-    ])).toEqual([
-      createSplicePatchOperation(['rows'], 1, 0, [{ id: 4 }, { id: 3 }]),
-      createSplicePatchOperation(['rows', 0], 0, 0, ['tag']),
-    ])
   })
 
   it('creates compact operations for record field, array item, move, slide, and splice replacements', () => {

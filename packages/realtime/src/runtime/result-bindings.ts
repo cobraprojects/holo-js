@@ -1,17 +1,5 @@
 import { queryCacheInternals } from '@holo-js/db'
-import {
-  createQueryObservationMetadata,
-} from './query-metadata'
-import { readPrimaryKey } from './predicate-matching'
-import { createQueryRowIdentityIndex } from './query-row-identity'
-import {
-  EMPTY_RESULT_PATH,
-  EMPTY_RESULT_PATH_KEY,
-  copyPatchPath,
-  createResultPathKey,
-  getValueAtPath,
-  type RealtimePatchPathSegment,
-} from './result-patching'
+import { getValueAtPath } from './result-patching'
 import type { DatabaseQueryObservation, QueryResultBinding } from './query-state'
 import { isRecord } from './value'
 
@@ -19,18 +7,13 @@ function addSerializedResultBinding(
   bindings: Map<unknown, QueryResultBinding[]>,
   rawValue: unknown,
   serializedValue: unknown,
-  path: readonly RealtimePatchPathSegment[],
 ): void {
   const valueBindings = bindings.get(rawValue)
   if (!valueBindings) {
     return
   }
 
-  valueBindings.push(Object.freeze({
-    path: copyPatchPath(path),
-    pathKey: createResultPathKey(path),
-    value: serializedValue,
-  }))
+  valueBindings.push(Object.freeze({ value: serializedValue }))
 }
 
 function isBindingTraversalValue(value: unknown): value is object {
@@ -64,19 +47,18 @@ function collectSerializedResultBindings(
   }
 
   const visited = new WeakSet<object>()
-  const path: RealtimePatchPathSegment[] = []
   const visit = (
     rawCurrent: unknown,
     serializedCurrent: unknown,
   ): void => {
     if (!isBindingTraversalValue(rawCurrent)) {
       if (tracksLeafBindings) {
-        addSerializedResultBinding(bindings, rawCurrent, serializedCurrent, path)
+        addSerializedResultBinding(bindings, rawCurrent, serializedCurrent)
       }
       return
     }
 
-    addSerializedResultBinding(bindings, rawCurrent, serializedCurrent, path)
+    addSerializedResultBinding(bindings, rawCurrent, serializedCurrent)
 
     if (visited.has(rawCurrent)) {
       return
@@ -85,9 +67,7 @@ function collectSerializedResultBindings(
 
     if (Array.isArray(rawCurrent)) {
       for (let index = 0; index < rawCurrent.length; index += 1) {
-        path.push(index)
         visit(rawCurrent[index], Array.isArray(serializedCurrent) ? serializedCurrent[index] : undefined)
-        path.pop()
       }
       return
     }
@@ -97,10 +77,7 @@ function collectSerializedResultBindings(
     }
 
     for (const key of Object.keys(rawCurrent)) {
-      const nestedRaw = rawCurrent[key]
-      path.push(key)
-      visit(nestedRaw, isRecord(serializedCurrent) ? serializedCurrent[key] : undefined)
-      path.pop()
+      visit(rawCurrent[key], isRecord(serializedCurrent) ? serializedCurrent[key] : undefined)
     }
   }
 
@@ -140,11 +117,7 @@ export function bindQueryObservationsToSerializedValue(
   serializedValue: unknown,
 ): readonly DatabaseQueryObservation[] {
   const implicitQueries = queries.filter(query => !query.resultPath)
-  const explicitlyBoundQueries = bindExplicitQueryObservationPaths(
-    queries,
-    serializedValue,
-    implicitQueries.some(query => hasChangedObservedResult(query)),
-  )
+  const explicitlyBoundQueries = bindExplicitQueryObservationPaths(queries, serializedValue)
   if (implicitQueries.length === 0) {
     return Object.freeze(explicitlyBoundQueries)
   }
@@ -156,12 +129,9 @@ export function bindQueryObservationsToSerializedValue(
     if (bindings.length === 0) {
       boundQueries.push(Object.freeze({
         ...query,
-        ...createQueryObservationMetadata(query),
         observedResult: undefined,
-      serializedSources: undefined,
+        serializedSources: undefined,
         resultBound: false,
-        resultPath: EMPTY_RESULT_PATH,
-        resultPathKey: EMPTY_RESULT_PATH_KEY,
       }))
       continue
     }
@@ -169,22 +139,16 @@ export function bindQueryObservationsToSerializedValue(
     for (const binding of bindings) {
       boundQueries.push(Object.freeze({
         ...query,
-        ...createQueryObservationMetadata(query),
         observedResult: undefined,
-      serializedSources: undefined,
+        serializedSources: undefined,
         resultBound: true,
-        resultFoundInHandlerValue: true,
         result: binding.value,
-        resultPath: binding.path,
-        resultPathKey: binding.pathKey,
-        rowIdentityIndex: createQueryRowIdentityIndex(binding.value, readPrimaryKey(query)),
       }))
     }
   }
 
   return Object.freeze(boundQueries)
 }
-
 
 function returnsSerializedSource(query: DatabaseQueryObservation, rawValue: unknown): boolean {
   return query.serializedSources !== undefined
@@ -215,7 +179,6 @@ function hasChangedObservedResult(query: DatabaseQueryObservation): boolean {
 function bindExplicitQueryObservationPaths(
   queries: readonly DatabaseQueryObservation[],
   serializedValue: unknown,
-  handlerChangedObservedResults: boolean,
 ): DatabaseQueryObservation[] {
   const boundQueries: DatabaseQueryObservation[] = []
   for (const query of queries) {
@@ -224,19 +187,12 @@ function bindExplicitQueryObservationPaths(
       continue
     }
 
-    const resultPath = copyPatchPath(path)
-    const result = getValueAtPath(serializedValue, resultPath)
     boundQueries.push(Object.freeze({
       ...query,
-      ...createQueryObservationMetadata(query),
       observedResult: undefined,
       serializedSources: undefined,
-      ...handlerChangedObservedResults ? { patchable: false } : {},
-      result,
+      result: getValueAtPath(serializedValue, path),
       resultBound: true,
-      resultPath,
-      resultPathKey: createResultPathKey(resultPath),
-      rowIdentityIndex: createQueryRowIdentityIndex(result, readPrimaryKey(query)),
     }))
   }
 

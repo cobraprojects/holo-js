@@ -2,21 +2,7 @@ import { isRecord } from './value'
 
 export type RealtimePatchPathSegment = string | number
 
-export const EMPTY_RESULT_PATH: readonly RealtimePatchPathSegment[] = Object.freeze([])
-export const EMPTY_RESULT_PATH_KEY = createResultPathKey(EMPTY_RESULT_PATH)
-
-export function createResultPathKey(path: readonly RealtimePatchPathSegment[]): string {
-  let result = '['
-  for (let index = 0; index < path.length; index += 1) {
-    if (index > 0) {
-      result += ','
-    }
-
-    result += JSON.stringify(path[index])
-  }
-
-  return `${result}]`
-}
+const EMPTY_RESULT_PATH: readonly RealtimePatchPathSegment[] = Object.freeze([])
 
 export function copyPatchPath(path: readonly RealtimePatchPathSegment[]): readonly RealtimePatchPathSegment[] {
   if (path.length === 0) {

@@ -2,22 +2,21 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { onDatabaseDependencyInvalidated, queryCacheInternals } from '@holo-js/db'
 import {
+  EMPTY_DATABASE_MUTATIONS,
   EMPTY_TABLE_DEPENDENCIES,
   parseDatabaseDependency,
   readDatabaseDependencyInvalidationMetadata,
   createMutationIndex,
-  createSingleEventMutationIndex,
+  createMutationIndexKey,
   parseInvalidationEvent,
   type DatabaseDependencyInvalidationEventWithMutations,
-  type DatabaseMutationEvent,
+  type MutationIndex,
   type ParsedInvalidationEvent,
-  type PredicateDependencyIndex,
 } from './dependencies'
 import {
   deliverRefreshData,
   deliverRefreshError,
 } from './delivery'
-import { tryPatchQueryEntry } from './patch-delivery'
 import { createReplacePatchOperations } from './patch-operations'
 import { applyWireSnapshotPatch, parseWireSnapshotPatch } from '../client/patching'
 import { executeRealtimeQueryInternal } from './query-execution'
@@ -29,13 +28,14 @@ import {
   type ActiveQueryEntry,
   type ActiveRefresh,
   type ActiveSubscription,
-  type BackfillCache,
   type PendingInvalidationBatch,
   type RefreshDelivery,
 } from './state'
 import {
   collectQueryEntriesForParsedInvalidations,
 } from './subscription-index'
+import { isQueryContradictedByMutationRows } from './predicate-dependency-matching'
+import type { DatabaseQueryObservation } from './query-state'
 import type {
   RealtimeQueryDefinitionMetadata,
 } from '../contracts'
@@ -46,82 +46,6 @@ export function ensureDatabaseSubscription(): void {
   const state = getRuntimeState()
   if (state.unsubscribeFromDatabase) return
   state.unsubscribeFromDatabase = onDatabaseDependencyInvalidated(handleBatchedDatabaseInvalidation)
-  queryCacheInternals.setMutationPreviousRowsRequirement(handleBatchedDatabaseInvalidation, requiresMutationPreviousRows)
-}
-
-function requiresMutationPreviousRows(connectionName: string, tableName: string, columns: readonly string[]): boolean {
-  const state = getRuntimeState()
-  const tableKey = queryCacheInternals.createTableCacheDependency(connectionName, tableName)
-  const entries = new Set(state.tableBroadSubscribers.get(tableKey))
-  for (const keys of state.tablePredicateColumnSubscribers.get(tableKey)?.values() ?? []) {
-    for (const key of keys) entries.add(key)
-  }
-  for (const key of entries) {
-    for (const query of state.queryEntries.get(key)?.queries ?? []) {
-      if (query.connectionName !== connectionName || queryCacheInternals.canonicalTableName(connectionName, query.tableName) !== tableName || (!query.aggregate && !query.groupedAggregate)) continue
-      const aggregateColumn = query.aggregate?.column ?? query.groupedAggregate?.aggregateColumn
-      if (columns.some(column => column === aggregateColumn || column === query.groupedAggregate?.groupColumn || query.predicates.some(predicate => predicate.column === column))) return true
-    }
-  }
-  return false
-}
-
-function readExactPredicatesForPatching(event: ParsedInvalidationEvent): PredicateDependencyIndex | undefined {
-  return event.hasMutationDependency || event.exactPredicates.size === 0
-    ? undefined
-    : event.exactPredicates
-}
-
-function addExactPredicateDependencies(
-  merged: PredicateDependencyIndex,
-  predicates: PredicateDependencyIndex,
-): void {
-  for (const [tableKey, tablePredicates] of predicates) {
-    const mergedTablePredicates = merged.get(tableKey) ?? new Map<string, Set<string>>()
-    for (const [columnName, values] of tablePredicates) {
-      const mergedValues = mergedTablePredicates.get(columnName) ?? new Set<string>()
-      for (const value of values) {
-        mergedValues.add(value)
-      }
-      mergedTablePredicates.set(columnName, mergedValues)
-    }
-    merged.set(tableKey, mergedTablePredicates)
-  }
-}
-
-function createBatchedExactPredicatesForPatching(
-  events: readonly ParsedInvalidationEvent[],
-): PredicateDependencyIndex | undefined {
-  const merged: PredicateDependencyIndex = new Map()
-  for (const event of events) {
-    const exactPredicates = readExactPredicatesForPatching(event)
-    if (!exactPredicates) {
-      return undefined
-    }
-
-    addExactPredicateDependencies(merged, exactPredicates)
-  }
-
-  return merged
-}
-
-function createMutationExactPredicatesForPatching(
-  events: readonly ParsedInvalidationEvent[],
-): WeakMap<DatabaseMutationEvent, PredicateDependencyIndex> | undefined {
-  let predicatesByMutation: WeakMap<DatabaseMutationEvent, PredicateDependencyIndex> | undefined
-  for (const event of events) {
-    const exactPredicates = readExactPredicatesForPatching(event)
-    if (!exactPredicates) {
-      continue
-    }
-
-    for (const mutation of event.mutations) {
-      predicatesByMutation ??= new WeakMap()
-      predicatesByMutation.set(mutation, exactPredicates)
-    }
-  }
-
-  return predicatesByMutation
 }
 
 async function refreshQueryEntry(refreshKey: string): Promise<void> {
@@ -167,7 +91,6 @@ async function refreshQueryEntry(refreshKey: string): Promise<void> {
           return
         }
         entry.schemaGeneration = schemaGeneration
-        entry.readBoundary = queryCacheInternals.markMutationPublicationBoundary()
         entry.contexts = new Map(result.contexts)
         const resultHash = createResultHash(result.data)
         let delivery: RefreshDelivery<typeof entry.definition> = { result, resultHash }
@@ -243,89 +166,27 @@ function deferRefreshUntilSessionRelease(entry: ActiveQueryEntry<RealtimeQueryDe
   })
 }
 
-async function refreshInvalidatedQueryEntry(
+function isQueryContradictedByMutations(query: DatabaseQueryObservation, mutations: MutationIndex): boolean {
+  const queryMutations = mutations.get(createMutationIndexKey(query.connectionName, query.tableName)) ?? EMPTY_DATABASE_MUTATIONS
+  return queryMutations.length > 0 && queryMutations.every(mutation => isQueryContradictedByMutationRows(query, mutation))
+}
+
+function isUnboundEntryContradictedByMutations(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
-  backfills: BackfillCache,
-): Promise<void> {
-  if (hasPendingQuerySchemaChanges(entry)) return
-  if (entry.schemaGeneration !== queryCacheInternals.currentSchemaGeneration()) return scheduleRefreshKey(entry.refreshKey)
-  try {
-    if (deferRefreshUntilSessionRelease(entry)) return
-    if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills))) return
-  } catch (error) {
-    await entry.runWithContext.runWithAuth(async () => {
-      entry.refreshFailed = true
-      await deliverRefreshError(entry, error)
-    })
-    return
-  }
-
-  await scheduleRefreshKey(entry.refreshKey)
-}
-
-async function refreshInvalidatedQueryEntries(
-  firstEntry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
-  remainingEntries: readonly ActiveQueryEntry<RealtimeQueryDefinitionMetadata>[],
-  backfills: BackfillCache,
-): Promise<void> {
-  const firstRefresh = refreshInvalidatedQueryEntry(firstEntry, backfills)
-  let refreshes: Promise<void>[] | undefined
-  for (const entry of remainingEntries) {
-    const refresh = refreshInvalidatedQueryEntry(entry, backfills)
-    refreshes ??= [firstRefresh]
-    refreshes.push(refresh)
-  }
-
-  if (refreshes) {
-    await Promise.all(refreshes)
-    return
-  }
-
-  await firstRefresh
-}
-
-function createInvalidationBackfills(
-  events: readonly ParsedInvalidationEvent[],
-  entries: readonly ActiveQueryEntry<RealtimeQueryDefinitionMetadata>[],
-): BackfillCache {
-  const event = events.length === 1 ? events[0] : undefined
-  return {
-    aggregates: new Map(),
-    aggregateGroupedSql: new Map(),
-    backfillConnectionLookupsAtStart: getRuntimeState().backfillConnectionLookups ?? 0,
-    aggregateSql: new Map(),
-    entries,
-    exactPredicates: event ? readExactPredicatesForPatching(event) : createBatchedExactPredicatesForPatching(events),
-    groupedAggregateValueCounts: new Map(),
-    groupedAggregateValues: new Map(),
-    mutationExactPredicates: createMutationExactPredicatesForPatching(events),
-    mutationMetadata: new WeakMap(),
-    mutations: event ? createSingleEventMutationIndex(event) : createMutationIndex(events),
-    paginationGroupedCounts: new Map(),
-    paginationCounts: new Map(),
-    rowGroups: new Map(),
-    rows: new Map(),
-  }
+  mutations: MutationIndex,
+): boolean {
+  if (!entry.current || entry.refreshFailed || entry.schemaGeneration !== queryCacheInternals.currentSchemaGeneration()) return false
+  if (getRuntimeState().refreshes.get(entry.refreshKey)?.running) return false
+  if (entry.queries.length === 0 || entry.queries.some(query => query.resultBound === true)) return false
+  if ([...entry.contexts.values()].some(contexts => contexts.size !== 1 || !contexts.has(entry.contextId))) return false
+  return entry.queries.every(query => isQueryContradictedByMutations(query, mutations))
 }
 
 async function refreshParsedInvalidations(events: readonly ParsedInvalidationEvent[]): Promise<void> {
-  const entries = collectQueryEntriesForParsedInvalidations(events)
-  const databases = new Map<number, ActiveQueryEntry<RealtimeQueryDefinitionMetadata>[]>()
-  const reruns: Promise<void>[] = []
-  for (const entry of entries) {
-    if (entry.queries.some(query => query.resultBound === true) || [...entry.contexts.values()].some(contexts => contexts.size !== 1 || !contexts.has(entry.contextId))) {
-      reruns.push(scheduleRefreshKey(entry.refreshKey))
-      continue
-    }
-    const group = databases.get(entry.contextId) ?? []
-    group.push(entry)
-    databases.set(entry.contextId, group)
-  }
-  await Promise.all([...reruns, ...[...databases.values()].map(async (group) => {
-    const first = group[0]
-    if (!first) return
-    await refreshInvalidatedQueryEntries(first, group.slice(1), createInvalidationBackfills(events, group))
-  })])
+  const mutations = createMutationIndex(events)
+  await Promise.all(collectQueryEntriesForParsedInvalidations(events)
+    .filter(entry => !isUnboundEntryContradictedByMutations(entry, mutations))
+    .map(entry => scheduleRefreshKey(entry.refreshKey)))
 }
 
 const refreshExecution = new AsyncLocalStorage<{ readonly generation: number, active: boolean }>()

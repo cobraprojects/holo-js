@@ -1,20 +1,9 @@
 import { queryCacheInternals, type DatabaseDependencyInvalidationEvent } from '@holo-js/db'
-import {
-  type NO_EXACT_ID_PREDICATE,
-  readMutationExactIdPredicateValue,
-  readMutationFirstPredicate,
-  readMutationPredicateCount,
-  readMutationValueKeys,
-  type DatabaseQueryPredicateObservation,
-} from './predicate-matching'
-
+import type { DatabaseQueryPredicateObservation } from './predicate-matching'
 export type DatabaseMutationEvent = {
   readonly connectionName: string
   readonly convertedColumns?: readonly string[]
-  readonly exactId?: unknown | typeof NO_EXACT_ID_PREDICATE
-  readonly firstPredicate?: DatabaseQueryPredicateObservation
   readonly kind: 'insert' | 'update' | 'delete' | 'upsert'
-  readonly predicateCount?: number
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly previousRows?: readonly Readonly<Record<string, unknown>>[]
   readonly primaryKey?: string
@@ -23,7 +12,6 @@ export type DatabaseMutationEvent = {
   readonly tableName: string
   readonly unordered?: true
   readonly values?: Readonly<Record<string, unknown>>
-  readonly valueKeys?: readonly string[]
 }
 
 export type DatabaseDependencyInvalidationEventWithMutations = DatabaseDependencyInvalidationEvent & {
@@ -103,40 +91,6 @@ export function createMutationIndex(events: readonly ParsedInvalidationEvent[]):
 
   if (mutations.size === 0) {
     return EMPTY_MUTATION_INDEX
-  }
-
-  for (const indexedMutations of mutations.values()) {
-    Object.freeze(indexedMutations)
-  }
-
-  return mutations
-}
-
-export function createSingleEventMutationIndex(event: ParsedInvalidationEvent): MutationIndex {
-  const firstMutation = event.mutations[0]
-  if (!firstMutation) {
-    return EMPTY_MUTATION_INDEX
-  }
-
-  if (event.mutations.length === 1) {
-    return new Map([
-      [
-        createMutationIndexKey(firstMutation.connectionName, firstMutation.tableName),
-        Object.freeze([firstMutation]),
-      ],
-    ])
-  }
-
-  const mutations = new Map<string, DatabaseMutationEvent[]>()
-  for (const mutation of event.mutations) {
-    const key = createMutationIndexKey(mutation.connectionName, mutation.tableName)
-    const indexedMutations = mutations.get(key)
-    if (indexedMutations) {
-      indexedMutations.push(mutation)
-      continue
-    }
-
-    mutations.set(key, [mutation])
   }
 
   for (const indexedMutations of mutations.values()) {
@@ -334,34 +288,10 @@ export function readDatabaseDependencyInvalidationMetadata(
   return (event as DatabaseDependencyInvalidationEventWithMetadata)[DATABASE_DEPENDENCY_METADATA_KEY]
 }
 
-function bindMutationMetadata(
-  mutations: readonly DatabaseMutationEvent[],
-  metadata: DatabaseDependencyInvalidationMetadata | undefined,
-): readonly DatabaseMutationEvent[] {
-  if (mutations.length === 0) {
-    return EMPTY_DATABASE_MUTATIONS
-  }
-
-  const boundMutations: DatabaseMutationEvent[] = []
-  for (const mutation of mutations) {
-    boundMutations.push(Object.freeze({
-      ...mutation,
-      exactId: readMutationExactIdPredicateValue(mutation),
-      firstPredicate: readMutationFirstPredicate(mutation),
-      predicateCount: readMutationPredicateCount(mutation),
-      valueKeys: readMutationValueKeys(mutation),
-      ...(metadata?.publicationStartedAt === undefined ? {} : { publicationStartedAt: metadata.publicationStartedAt }),
-      ...(metadata?.unordered ? { unordered: true as const } : {}),
-    }))
-  }
-
-  return Object.freeze(boundMutations)
-}
-
 export function parseInvalidationEvent(event: DatabaseDependencyInvalidationEvent): ParsedInvalidationEvent {
   const eventWithMutations = event as DatabaseDependencyInvalidationEventWithMutations
   const metadata = readDatabaseDependencyInvalidationMetadata(event)
-  const mutations = bindMutationMetadata(eventWithMutations.mutations ?? EMPTY_DATABASE_MUTATIONS, metadata)
+  const mutations = eventWithMutations.mutations ?? EMPTY_DATABASE_MUTATIONS
   if (metadata) {
     const hasMutationDependency = metadata.hasMutationDependency || hasUpsertMutation(mutations)
     return {
