@@ -17,6 +17,7 @@ import { createCapabilities } from './capabilities'
 import { markGenuineDatabaseContext } from './genuineContexts'
 import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
+import { readAfterCommitPublication } from './afterCommitPublications'
 import { advanceSchemaGeneration, beginSchemaChange, endSchemaChange, markSessionUncertain, resetSessionUncertainty } from './schemaGeneration'
 import { isSchemaPreservingRawStatement } from './rawStatementEffects'
 import { currentRootTransaction, runInRootTransaction, type TransactionFrame } from './openTransactions'
@@ -832,8 +833,23 @@ export class DatabaseContext {
     }
 
     const callbackConnection = this._createCallbackConnection()
-    for (let callback = callbacks.shift(); callback; callback = callbacks.shift()) {
-      await this._runCallbackOn(callbackConnection, callback)
+    const pending = callbacks.splice(0)
+    const deliveries: Promise<void>[] = []
+    try {
+      for (const callback of pending) {
+        const publish = readAfterCommitPublication(callback)
+        if (publish) {
+          await this._runCallbackOn(callbackConnection, () => publish(deliveries))
+        }
+      }
+
+      for (const callback of pending) {
+        if (!readAfterCommitPublication(callback)) {
+          await this._runCallbackOn(callbackConnection, callback)
+        }
+      }
+    } finally {
+      await Promise.all(deliveries)
     }
   }
 
