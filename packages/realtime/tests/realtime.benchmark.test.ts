@@ -50,12 +50,9 @@ import {
   subscribeRealtimeQuery,
 } from '../src/server'
 import {
-  compactPatchOperations,
   createSplicePatchOperation,
 } from '../src/runtime/patch-operations'
-import { collectRelevantMutationTargets } from '../src/runtime/query-relevant-mutations'
 import type { DatabaseMutationEvent as RuntimeDatabaseMutationEvent } from '../src/runtime/dependencies'
-import type { BackfillCache, QueryPatchTarget } from '../src/runtime/query-state'
 
 type BenchmarkMetrics = {
   readonly durationMs: number
@@ -1039,69 +1036,6 @@ function createDuplicateRelationExtremeBenchmarkTables(): {
     duplicateRow,
     tables,
   }
-}
-
-function createBenchmarkRelationAggregatePatchTarget(authorId: number, index: number): QueryPatchTarget {
-  return Object.freeze({
-    currentValue: 10_000 + authorId,
-    index,
-    mutationIndexKey: `${connectionName}:${tableName}`,
-    patchCapability: 'patchable',
-    query: Object.freeze({
-      aggregate: Object.freeze({
-        column: 'score',
-        kind: 'max',
-      }),
-      connectionName,
-      dependencies: [],
-      orderBy: [],
-      patchable: true,
-      predicates: [Object.freeze({
-        column: 'author_id',
-        operator: '=',
-        value: authorId,
-      })],
-      tableName,
-    }),
-    resultPath: Object.freeze(['data', index, 'posts_max_score']),
-    resultPathKey: `data.${index}.posts_max_score`,
-    skipsPatching: false,
-  })
-}
-
-function createRuntimeRelationAggregateUpsertMutation(
-  authorId: number,
-  id: number,
-  previousScore: number,
-  score: number,
-): RuntimeDatabaseMutationEvent {
-  return Object.freeze({
-    connectionName,
-    kind: 'upsert',
-    predicates: [],
-    previousRows: [Object.freeze({
-      author_id: authorId,
-      id,
-      score: previousScore,
-      title: `Post ${id}`,
-      user_id: 1,
-    })],
-    rows: [Object.freeze({
-      author_id: authorId,
-      id,
-      score,
-      title: `Post ${id}`,
-      user_id: 1,
-    })],
-    tableName,
-    values: Object.freeze({
-      author_id: authorId,
-      id,
-      score,
-      title: `Post ${id}`,
-      user_id: 1,
-    }),
-  })
 }
 
 function createBelongsToManyBenchmarkTables(): {
@@ -7156,7 +7090,6 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(entry?.queries[0]?.patchable).toBe(true)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialId).toBeUndefined()
@@ -7285,7 +7218,6 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(entry?.queries[0]?.patchable).toBe(true)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount * 2)
     expect(observedInitialId).toBeUndefined()
@@ -7517,7 +7449,6 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, `Post ${pageSize * 1.5 + 1}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
-    expect(entry?.queries[0]?.patchable).toBe(true)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedInitialUserId).toBeUndefined()
@@ -12585,17 +12516,6 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const entry = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.values()][0]
-    expect(entry?.queries.map(observation => observation.resultPath)).toEqual([
-      ['primary'],
-      ['secondary'],
-      ['tertiary'],
-    ])
-    expect(entry?.patchTargets.map(target => target.resultPath)).toEqual([
-      ['primary'],
-      ['secondary'],
-      ['tertiary'],
-    ])
-    expect(new Set(entry?.patchTargets.map(target => target.mutationIndexKey)).size).toBe(1)
 
     const patchStartedAt = performance.now()
     const patchedRow = {
@@ -14253,57 +14173,6 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         setupDurationMs,
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
-      },
-    })
-  })
-
-  it('measures returned-row relation aggregate target filtering before patching', () => {
-    const targetCount = 100
-    const targets = Object.freeze(Array.from({ length: targetCount }, (_, index) => {
-      return createBenchmarkRelationAggregatePatchTarget(index + 1, index)
-    }))
-    const authorFiftyMutation = createRuntimeRelationAggregateUpsertMutation(50, 1_050, 10_050, 10_049)
-    const authorFiftyOneMutation = createRuntimeRelationAggregateUpsertMutation(51, 1_051, 10_051, 10_050)
-    const backfills = {
-      aggregates: new Map(),
-      aggregateSql: new Map(),
-      entries: [],
-      mutationMetadata: new WeakMap(),
-      mutations: new Map([
-        [
-          `${connectionName}:${tableName}`,
-          Object.freeze([
-            authorFiftyMutation,
-            authorFiftyOneMutation,
-          ]),
-        ],
-      ]),
-      paginationGroupedCounts: new Map(),
-      paginationCounts: new Map(),
-      rowGroups: new Map(),
-      rows: new Map(),
-    } satisfies BackfillCache
-
-    const startedAt = performance.now()
-    const relevantTargets = collectRelevantMutationTargets(targets, backfills)
-    const durationMs = Number((performance.now() - startedAt).toFixed(3))
-    const retainedMutations = relevantTargets.reduce((count, target) => count + target.mutations.length, 0)
-
-    expect(relevantTargets).toHaveLength(2)
-    expect(retainedMutations).toBe(2)
-    expect(relevantTargets[0]?.target.query.predicates[0]?.value).toBe(50)
-    expect(relevantTargets[0]?.mutations).toEqual([authorFiftyMutation])
-    expect(relevantTargets[1]?.target.query.predicates[0]?.value).toBe(51)
-    expect(relevantTargets[1]?.mutations).toEqual([authorFiftyOneMutation])
-
-    reportBenchmark({
-      benchmark: '@holo-js/realtime returned-row relation aggregate target filtering',
-      metrics: {
-        durationMs,
-        inputMutations: 2,
-        relevantTargets: relevantTargets.length,
-        retainedMutations,
-        targetCount,
       },
     })
   })
@@ -18865,61 +18734,6 @@ describe('@holo-js/realtime invalidation benchmark', () => {
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
-      },
-    })
-  })
-
-  it('measures server patch operation coalescing for append bursts without expanding window slides', () => {
-    const burstRows = createPatchBenchmarkRows()
-    const burstOperations = burstRows.flatMap((row, index) => [
-      createSplicePatchOperation([], index, 0, [row]),
-      createSplicePatchOperation([], index + 1, 0, []),
-    ])
-    const rawBurstPatch = {
-      operations: burstOperations,
-      version: 1,
-    }
-    const compactStartedAt = performance.now()
-    const compactedBurstOperations = compactPatchOperations(burstOperations)
-    const compactDurationMs = Number((performance.now() - compactStartedAt).toFixed(3))
-    const compactedBurstPatch = {
-      operations: compactedBurstOperations,
-      version: 1,
-    }
-    const slideBackfillRow = createPatchBenchmarkRows()[pageSize]
-    if (!slideBackfillRow) {
-      throw new Error('Expected benchmark slide backfill row to exist.')
-    }
-
-    const slideOperations = [
-      createSplicePatchOperation([], 0, 1, []),
-      createSplicePatchOperation([], pageSize - 1, 0, [slideBackfillRow]),
-    ]
-    const compactedSlideOperations = compactPatchOperations(slideOperations)
-    const rawBurstBytes = jsonByteLength(rawBurstPatch)
-    const compactedBurstBytes = jsonByteLength(compactedBurstPatch)
-    const compactedOperation = compactedBurstOperations[0]
-
-    expect(compactedBurstOperations).toHaveLength(1)
-    expect(compactedOperation?.op).toBe('splice')
-    if (compactedOperation?.op !== 'splice') {
-      throw new Error('Expected compacted burst operation to be a splice.')
-    }
-    expect(compactedOperation.index).toBe(0)
-    expect(compactedOperation.deleteCount).toBe(0)
-    expect(compactedOperation.values).toHaveLength(patchRowCount)
-    expect(compactedSlideOperations).toEqual(slideOperations)
-    expect(compactedBurstBytes).toBeLessThan(rawBurstBytes)
-
-    reportBenchmark({
-      benchmark: '@holo-js/realtime server patch operation coalescing',
-      metrics: {
-        compactDurationMs,
-        compactedBurstBytes,
-        compactedBurstOperations: compactedBurstOperations.length,
-        rawBurstBytes,
-        rawBurstOperations: burstOperations.length,
-        slideOperations: compactedSlideOperations.length,
       },
     })
   })

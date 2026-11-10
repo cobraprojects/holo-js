@@ -3231,11 +3231,7 @@ export class TableQueryBuilder<
     const normalizedValues = this.normalizeUpdateValues(values)
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
-    const needsPreviousRows = hasInvalidationListeners && (!useReturningRows || queryCacheInternals.requiresMutationPreviousRows(
-      this.connection.getConnectionName(),
-      this.source.tableName,
-      Object.keys(normalizedValues),
-    ))
+    const needsPreviousRows = hasInvalidationListeners && !useReturningRows
     if (needsPreviousRows && this.connection.getScope().kind === 'root') {
       return this.connection.writeTransaction(transaction => new TableQueryBuilder(
         this.source.table ?? this.source.tableName,

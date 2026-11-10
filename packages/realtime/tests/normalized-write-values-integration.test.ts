@@ -5,9 +5,6 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, mysqlTestConnection, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
-import { createMutationIndexKey } from '../src/runtime/dependencies'
-import { getPaginationCountBackfill } from '../src/runtime/query-pagination-count-backfill'
-import type { BackfillCache } from '../src/runtime/state'
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)
 
@@ -318,53 +315,6 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
 
     const fresh = await Promise.all(Object.values(queries).map(handler => handler()))
     expect(subscriptions.map(subscription => subscription.current.data)).toEqual(fresh)
-  })
-
-  it('maps grouped pagination counts back to the predicate values that requested them', async () => {
-    const { db, rates, schema } = await openFixture(driver)
-    await db.table(rates).insert([{ id: 2, group_id: 2, tag_id: 1, rate: '1.00' }, { id: 3, group_id: 2, tag_id: 1, rate: '1.00' }])
-    const labelsName = `holo_norm_labels_${randomUUID().replaceAll('-', '').slice(0, 12)}`
-    await schema.createTable(labelsName, (table) => {
-      table.id()
-      table.string('category')
-    })
-    onTestFinished(() => schema.dropTable(labelsName))
-    const labels = defineGeneratedTable(labelsName, { id: column.id(), category: column.string() })
-    await db.table(labels).insert([{ id: 1, category: '1' }, { id: 2, category: 'integer:1' }, { id: 3, category: 'integer:1' }])
-    const observeIn = (table: typeof rates | typeof labels, groupColumn: string) => (value: unknown) => ({
-      connectionName: db.getConnectionName(),
-      dependencies: [],
-      orderBy: [],
-      pagination: { currentPage: 1, kind: 'standard' as const, pageName: 'page', perPage: 1, total: 0 },
-      patchable: true,
-      predicates: [{ column: groupColumn, operator: '=' as const, value }],
-      selections: [],
-      table,
-      tableName: table.tableName,
-    })
-    const countFor = async (values: readonly unknown[], table: typeof rates | typeof labels = rates, groupColumn = 'group_id') => {
-      const mutation = Object.freeze({ connectionName: db.getConnectionName(), kind: 'update' as const, predicates: [], tableName: table.tableName })
-      const tableKey = `db:${db.getConnectionName()}:${table.tableName}`
-      const queries = values.map(observeIn(table, groupColumn))
-      const backfills = {
-        aggregates: new Map(),
-        aggregateSql: new Map(),
-        entries: [{ queries }],
-        mutationExactPredicates: new WeakMap([[mutation, new Map([[tableKey, new Map([[groupColumn, new Set(values.map(value => encodeURIComponent(JSON.stringify(value))))]])]])]]),
-        mutationMetadata: new WeakMap(),
-        mutations: new Map([[createMutationIndexKey(db.getConnectionName(), table.tableName), Object.freeze([mutation])]]),
-        paginationGroupedCounts: new Map(),
-        paginationCounts: new Map(),
-        rowGroups: new Map(),
-        rows: new Map(),
-      } as unknown as BackfillCache
-      return Promise.all(queries.map(query => getPaginationCountBackfill(query as never, backfills)))
-    }
-
-    expect(await countFor([1, 2])).toEqual([1, 2])
-    expect(await countFor(['1', '2'])).toEqual([1, 2])
-    expect(await countFor([1, '1', '2'])).toEqual([1, 1, 2])
-    expect(await countFor(['1', 'integer:1'], labels, 'category')).toEqual([1, 2])
   })
 
   it('refreshes subscriptions filtering an integer column by text after writes of either representation', async () => {

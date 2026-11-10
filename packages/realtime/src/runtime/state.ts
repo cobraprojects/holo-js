@@ -15,14 +15,12 @@ import type {
   ParsedInvalidationEvent,
 } from './dependencies'
 import type {
-  BackfillCache as QueryBackfillCache,
   DatabaseQueryObservation,
-  QueryPatchTarget,
+  DatabaseQueryRead,
 } from './query-state'
 import type { RealtimePatchPathSegment } from './result-patching'
 
 export type RuntimeState = {
-  backfillConnectionLookups?: number
   bindings?: RealtimeRuntimeBindings
   dependencySubscribers: Map<string, Set<string>>
   invalidationBatch?: PendingInvalidationBatch
@@ -119,14 +117,10 @@ export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata
   readonly refreshKey: string
   readonly options: InternalRealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>
   dependencies: readonly string[]
-  patchTargets: QueryPatchTarget[]
   predicateDependencies: PredicateDependencyIndex
-  observationVersion?: number
   queries: DatabaseQueryObservation[]
-  readBoundary?: number
   schemaGeneration?: number
   resultHash: string
-  resultHashDirty: boolean
   tableDependencies: readonly string[]
   version: number
   current?: RealtimeSubscriptionSnapshot<RealtimeResultFor<TDefinition>>
@@ -134,12 +128,10 @@ export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata
   refreshAfterInitialRead?: boolean
 }
 
-export type BackfillCache = QueryBackfillCache<ActiveQueryEntry<RealtimeQueryDefinitionMetadata>>
-
 export type DatabaseDependencyCollectionWithQueries<TValue> = {
   readonly contexts: ReadonlyMap<string, ReadonlySet<number>>
   readonly dependencies: readonly string[]
-  readonly queries: readonly DatabaseQueryObservation[]
+  readonly queries: readonly DatabaseQueryRead[]
   readonly value: TValue
 }
 
@@ -157,11 +149,9 @@ export type InitialQueryResult<TDefinition extends RealtimeQueryDefinitionMetada
 }
 
 export type RefreshDelivery<TDefinition extends RealtimeQueryDefinitionMetadata> = {
-  readonly observedQueriesChanged?: boolean
   readonly patchOperations?: readonly RealtimeSubscriptionPatchOperation[]
   readonly result: InternalRealtimeExecutionResult<RealtimeResultFor<TDefinition>>
-  readonly resultHash?: string
-  readonly resultHashDirty?: boolean
+  readonly resultHash: string
   predicateDependencies?: PredicateDependencyIndex
   tableDependencies?: readonly string[]
 }
