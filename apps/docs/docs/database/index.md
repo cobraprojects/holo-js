@@ -437,6 +437,12 @@ const { affectedRows } = await DB.unsafeExecute(
 )
 ```
 
+Simple raw `INSERT INTO`, `UPDATE … SET`, and `DELETE FROM` statements refresh [cached queries](/cache/query-caching) and [realtime subscriptions](/realtime/) for their target table after they succeed. This also applies to writes returning rows through `unsafeQuery()`. Inside a transaction, refreshes wait for commit; rolled-back or failed writes publish nothing.
+
+Holo identifies the target from the SQL, including ordinary quoted and schema-qualified names. A table-scoped call or a `source` logging label does not override the SQL target. Detection is conservative: aliases, multi-table writes, vendor-specific modifiers, and unusual identifiers may have no recognized target. Do not rely on automatic refresh for these forms. For example, a CTE `WITH … UPDATE` leaves cached queries and subscriptions unchanged. Changes to other tables through triggers or stored routines are not discovered. Schema-changing SQL still clears caches and refreshes subscriptions separately.
+
+Use query-builder writes when you need automatic refresh for SQL Holo cannot identify. There is currently no public server API to explicitly refresh both query caches and realtime subscriptions after an unrecognized raw write.
+
 `unsafeSql()` builds the same statement and is handy where you don't need the facade:
 
 ```ts

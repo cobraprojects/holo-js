@@ -1,4 +1,5 @@
-import { invalidateDatabaseSchema } from '../cache'
+import { createTableCacheDependency, createTableRowWildcardCacheDependency, invalidateDatabaseSchema, invalidateQueryCacheDependencies } from '../cache'
+import { resolveTableIdentity } from '../query/tableIdentity'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { getRootDatabaseContext, registerDatabaseContext } from './contextOwnership'
@@ -19,7 +20,7 @@ import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
 import { runAfterCommitCallbacks } from './afterCommitPublications'
 import { advanceSchemaGeneration, beginSchemaChange, endSchemaChange, markSessionUncertain, resetSessionUncertainty } from './schemaGeneration'
-import { isSchemaPreservingRawStatement } from './rawStatementEffects'
+import { isSchemaPreservingRawStatement, rawStatementWriteTarget } from './rawStatementEffects'
 import { currentRootTransaction, runInRootTransaction, type TransactionFrame } from './openTransactions'
 import { registerTransactionScopeEntry } from './transactionScope'
 import type { ModelDefinitionLike } from '../model/types'
@@ -404,8 +405,19 @@ export class DatabaseContext {
     return this._runSchemaChange(() => this.executeCompiled(statement, options))
   }
 
-  private _runRawStatement<T>(statement: UnsafeStatement, run: () => Promise<T>): Promise<T> {
-    if (isSchemaPreservingRawStatement(statement.sql)) return run()
+  private async _runRawStatement<T>(statement: UnsafeStatement, run: () => Promise<T>): Promise<T> {
+    if (isSchemaPreservingRawStatement(statement.sql)) {
+      const result = await run()
+      const target = rawStatementWriteTarget(statement.sql, this._dialect.name)
+      if (target) {
+        const tableName = await resolveTableIdentity(this, target)
+        await invalidateQueryCacheDependencies(this, [
+          createTableCacheDependency(this._connectionName, tableName),
+          createTableRowWildcardCacheDependency(this._connectionName, tableName),
+        ])
+      }
+      return result
+    }
     markSessionUncertain(getRootDatabaseContext(this))
     return this._runSchemaChange(run)
   }

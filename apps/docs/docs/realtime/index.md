@@ -390,6 +390,14 @@ export const teamPosts = query({
 
 `authorize` receives `args`, `auth` (possibly `null`), and `db`. You can also call [authorization](/authorization/) helpers such as `authorize('update', post)` inside a handler.
 
+## Raw SQL writes
+
+Simple raw `INSERT INTO`, `UPDATE … SET`, and `DELETE FROM` statements executed through Holo refresh subscriptions that read the identified target table. Refreshes wait until the transaction commits. A rollback or failed statement publishes no change, and cached query results are cleared before subscription handlers run again.
+
+Holo reads the target from the SQL rather than a table scope or logging label. A raw `WITH … UPDATE` with no recognized target does not refresh subscriptions or clear query caches. Do not rely on automatic refresh for other unrecognized raw writes. Changes to other tables through triggers or stored routines are not discovered. See [raw SQL](/database/#raw-sql) for recognition limits.
+
+Use query-builder writes when you need automatic refresh. There is currently no public server API to explicitly invalidate both cached queries and subscriptions after an unrecognized raw write.
+
 ## Types
 
 Definitions carry their argument and result types:

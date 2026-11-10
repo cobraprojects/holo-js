@@ -116,7 +116,9 @@ A database can match a write to a cached row even when the two values differ as 
 Realtime queries follow the same rules, so a subscription refreshes after any write the database matched to its rows.
 
 ::: warning
-Holo only sees writes made through Holo. Changes from raw SQL clients, other apps, or database triggers don't clear the cache.
+Simple raw `INSERT INTO`, `UPDATE … SET`, and `DELETE FROM` statements run through Holo also clear cached reads of the identified target table, including cached reads of individual rows. Invalidation waits for transaction commit. See [raw SQL](/database/#raw-sql) for recognition limits.
+
+A raw `WITH … UPDATE` with no recognized target leaves cached results unchanged. Do not rely on automatic invalidation for other unrecognized raw writes. Changes from external SQL clients or other apps, and changes to other tables through database triggers, don't clear the cache. Use query-builder writes when you need automatic invalidation. There is currently no public server API that explicitly invalidates both query caches and realtime subscriptions for an unrecognized raw write.
 
 The list of which entries depend on which tables lives in each server process's memory. If you run several servers or workers against a shared Redis or database cache, a write on one server doesn't clear entries another server cached. Those entries stay until their TTL ends. Keep TTLs short in that setup, or clear keys yourself.
 :::
