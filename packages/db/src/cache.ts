@@ -3301,7 +3301,7 @@ export async function invalidateQueryCacheDependencies(
         reportError(error, { capability: 'db', operation: 'cache.invalidateDependencies' })
       }
     },
-    notify: (deliveries) => {
+    notify: async () => {
       const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
       const hasLocalListeners = hasDatabaseDependencyInvalidationListeners()
       if (candidates.length === 0 && !hasLocalListeners) {
@@ -3312,9 +3312,9 @@ export async function invalidateQueryCacheDependencies(
       const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata, { startedAt: publicationStartedAt, unordered })
       publishDatabaseInvalidationEvent(event)
       if (hasLocalListeners) {
-        deliveries.push(notifyDatabaseDependencyInvalidationListeners(fullRefresh
+        await notifyDatabaseDependencyInvalidationListeners(fullRefresh
           ? createDatabaseDependencyInvalidationEvent(connection, localDependencies, [])
-          : event))
+          : event)
       }
     },
   })

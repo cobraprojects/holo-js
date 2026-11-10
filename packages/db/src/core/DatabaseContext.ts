@@ -17,7 +17,7 @@ import { createCapabilities } from './capabilities'
 import { markGenuineDatabaseContext } from './genuineContexts'
 import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
-import { readAfterCommitPublication, type AfterCommitPublication } from './afterCommitPublications'
+import { runAfterCommitCallbacks } from './afterCommitPublications'
 import { advanceSchemaGeneration, beginSchemaChange, endSchemaChange, markSessionUncertain, resetSessionUncertainty } from './schemaGeneration'
 import { isSchemaPreservingRawStatement } from './rawStatementEffects'
 import { currentRootTransaction, runInRootTransaction, type TransactionFrame } from './openTransactions'
@@ -833,33 +833,7 @@ export class DatabaseContext {
     }
 
     const callbackConnection = this._createCallbackConnection()
-    const pending = callbacks.splice(0)
-    const publications = pending.flatMap((callback) => {
-      const publication = readAfterCommitPublication(callback)
-      return publication ? [publication] : []
-    })
-    await this._publishAfterCommit(callbackConnection, publications)
-
-    for (const callback of pending) {
-      if (!readAfterCommitPublication(callback)) {
-        await this._runCallbackOn(callbackConnection, callback)
-      }
-    }
-  }
-
-  private async _publishAfterCommit(
-    callbackConnection: DatabaseContext,
-    publications: readonly AfterCommitPublication[],
-  ): Promise<void> {
-    const deliveries: Promise<void>[] = []
-    try {
-      await Promise.all(publications.map(publication => this._runCallbackOn(callbackConnection, () => publication.evict())))
-      for (const publication of publications) {
-        await this._runCallbackOn(callbackConnection, () => { publication.notify(deliveries) })
-      }
-    } finally {
-      await Promise.all(deliveries)
-    }
+    await this._runCallbackOn(callbackConnection, () => runAfterCommitCallbacks(callbacks.splice(0)))
   }
 
   private async _runAfterRollbackCallbacks(callbackConnection: DatabaseContext): Promise<void> {
