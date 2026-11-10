@@ -424,7 +424,6 @@ const refreshOnlyObservationIndexes = new AsyncLocalStorage<Set<number>>()
 const refreshOnlyObservations = new WeakSet<DatabaseQueryObservation>()
 const refreshOnlyTables = new AsyncLocalStorage<Set<string>>()
 
-
 function getQueryCacheBridgeState(): {
   bridge?: DatabaseQueryCacheBridge
   dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
