@@ -1,19 +1,23 @@
 import type { TransactionCallback } from './types'
 
-export type AfterCommitPublication = (deliveries: Promise<void>[]) => Promise<void>
+export type AfterCommitPublication = {
+  readonly evict: () => Promise<void>
+  readonly notify: (deliveries: Promise<void>[]) => void
+}
 
 const publicationsByCallback = new WeakMap<TransactionCallback, AfterCommitPublication>()
 
-export function createAfterCommitPublication(publish: AfterCommitPublication): TransactionCallback {
+export function createAfterCommitPublication(publication: AfterCommitPublication): TransactionCallback {
   const callback = async (): Promise<void> => {
     const deliveries: Promise<void>[] = []
     try {
-      await publish(deliveries)
+      await publication.evict()
+      publication.notify(deliveries)
     } finally {
       await Promise.all(deliveries)
     }
   }
-  publicationsByCallback.set(callback, publish)
+  publicationsByCallback.set(callback, publication)
   return callback
 }
 

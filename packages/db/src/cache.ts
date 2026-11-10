@@ -3287,33 +3287,37 @@ export async function invalidateQueryCacheDependencies(
     return
   }
 
-  const publish = async (deliveries: Promise<void>[]): Promise<void> => {
-    const fullRefresh = needsFullQueryRefresh(connection)
-    if (fullRefresh) startMutationPublicationEpoch()
-    const localDependencies = fullRefresh ? [databaseSchemaDependency] : dependencies
-    const bridge = getDatabaseQueryCacheBridge()
-    await evictThenNotify(
-      () => runQueryCacheOperation(() => bridge?.invalidateDependencies(localDependencies)),
-      () => {
-        const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
-        const hasLocalListeners = hasDatabaseDependencyInvalidationListeners()
-        if (candidates.length === 0 && !hasLocalListeners) {
-          return
-        }
+  let fullRefresh = false
+  let localDependencies: readonly string[] = dependencies
+  const invalidate = createAfterCommitPublication({
+    evict: async () => {
+      fullRefresh = needsFullQueryRefresh(connection)
+      if (fullRefresh) startMutationPublicationEpoch()
+      localDependencies = fullRefresh ? [databaseSchemaDependency] : dependencies
+      const bridge = getDatabaseQueryCacheBridge()
+      try {
+        await runQueryCacheOperation(() => bridge?.invalidateDependencies(localDependencies))
+      } catch (error) {
+        reportError(error, { capability: 'db', operation: 'cache.invalidateDependencies' })
+      }
+    },
+    notify: (deliveries) => {
+      const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
+      const hasLocalListeners = hasDatabaseDependencyInvalidationListeners()
+      if (candidates.length === 0 && !hasLocalListeners) {
+        return
+      }
 
-        const unordered = hasLocalListeners && mutations.length > 0 && !recordDatabaseMutationPublication(mutations, publicationStartedAt)
-        const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata, { startedAt: publicationStartedAt, unordered })
-        publishDatabaseInvalidationEvent(event)
-        if (hasLocalListeners) {
-          deliveries.push(notifyDatabaseDependencyInvalidationListeners(fullRefresh
-            ? createDatabaseDependencyInvalidationEvent(connection, localDependencies, [])
-            : event))
-        }
-      },
-    )
-  }
-
-  const invalidate = createAfterCommitPublication(publish)
+      const unordered = hasLocalListeners && mutations.length > 0 && !recordDatabaseMutationPublication(mutations, publicationStartedAt)
+      const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata, { startedAt: publicationStartedAt, unordered })
+      publishDatabaseInvalidationEvent(event)
+      if (hasLocalListeners) {
+        deliveries.push(notifyDatabaseDependencyInvalidationListeners(fullRefresh
+          ? createDatabaseDependencyInvalidationEvent(connection, localDependencies, [])
+          : event))
+      }
+    },
+  })
   if (connection.getScope().kind === 'root') {
     await invalidate()
     return
