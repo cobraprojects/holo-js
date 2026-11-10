@@ -340,9 +340,9 @@ describe('model relation slice', () => {
     expect(detachedUser.getRelation('profile')).toBeNull()
 
     const jsonQuery = () => User.query().with('profile').withCount('posts').orderBy('id')
-    expect((await jsonQuery().getJson()).map(user => ({ profile: user.profile, count: user.posts_count }))).toEqual([
-      { profile: { id: 100, userId: 1, bio: 'Engineer' }, count: 2 },
-      { profile: null, count: 1 },
+    expect(await jsonQuery().getJson()).toMatchObject([
+      { id: 1, profile: { id: 100, userId: 1, bio: 'Engineer' }, posts_count: 2 },
+      { id: 2, profile: null, posts_count: 1 },
     ])
     const first = await jsonQuery().firstJson()
     const page = await jsonQuery().paginateJson(1, 1)
