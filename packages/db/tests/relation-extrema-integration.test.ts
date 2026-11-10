@@ -202,6 +202,24 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('relation ext
     expect(owner.toAttributes()).toMatchObject({ items_min_label: 'Zulu', items_max_label: 'Alpha' })
   })
 
+  it('returns null for null pivot keys and keys that cannot match the related integer column', async () => {
+    const { Owner, Item, items, itemsName } = await openExtremaFixture(driver)
+    const schema = createSchemaService(DB.connection())
+    const linksName = `${itemsName}_nullable_links`
+    await schema.createTable(linksName, table => { table.integer('ownerId'); table.integer('childId').nullable() })
+    onTestFinished(() => schema.dropTable(linksName))
+    const links = defineGeneratedTable(linksName, { ownerId: column.integer(), childId: column.integer().nullable() })
+    const Parent = defineModel(Owner.definition.table, { timestamps: false, relations: { linked: belongsToMany(() => Item, links, 'ownerId', 'childId') } })
+    const Child = defineModel(items, { timestamps: false, relations: { target: belongsTo(() => Item, 'label') } })
+    await DB.table(items).insert([{ id: 1, ownerId: 1, label: '1.5' }, { id: 2, ownerId: 2, label: '9223372036854775808' }])
+    await DB.table(links).insert([{ ownerId: 1, childId: null }, { ownerId: 2, childId: null }, { ownerId: 2, childId: 2 }])
+    expect(await Parent.query().withMin('linked', 'label').orderBy('id').getJson()).toEqual([
+      { id: 1, linked_min_label: null }, { id: 2, linked_min_label: '9223372036854775808' }, { id: 3, linked_min_label: null },
+    ])
+    const children = await Child.query().withMin('target', 'label').orderBy('id').getJson()
+    expect(children).toMatchObject([{ id: 1, target_min_label: null }, { id: 2, target_min_label: null }])
+  })
+
   it('ignores nulls and returns null for all-null or empty relations', async () => {
     const { Owner, items } = await openExtremaFixture(driver)
     await DB.table(items).insert([

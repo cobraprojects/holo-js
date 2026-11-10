@@ -2350,6 +2350,10 @@ export class ModelRepository<
       }
       for (const parent of parents) {
         const relatedKeys = keysForColumn(keys.get(parent) ?? [], ownEntry(related.definition.table.columns, relatedKey), connection.getDriver())
+        if (relatedKeys.length === 0) {
+          values.set(parent, Object.freeze({ value: null }))
+          continue
+        }
         const scoped = relation.kind === 'hasOneOfMany' || relation.kind === 'morphOneOfMany'
           ? this.createOneOfManyQuery(relation, related, relatedKey, relatedKeys, aggregate.constraint)
           : this.applyRelationConstraint(relation, related, aggregate.constraint)
@@ -2397,9 +2401,11 @@ export class ModelRepository<
       const { rows, options } = await this.retrievePivotKeyRows(entities, relation)
       const keys = new StoredKeyMap<unknown[]>([], options)
       for (const row of rows) {
+        const relatedValue = row[this.pivotRelatedColumn(relation)]
+        if (relatedValue == null) continue
         const parent = row[this.pivotParentColumn(relation)]
         const bucket = keys.get(parent) ?? []
-        bucket.push(row[this.pivotRelatedColumn(relation)])
+        bucket.push(relatedValue)
         keys.set(parent, bucket)
       }
       return { keys, column: relation.relatedKey }
