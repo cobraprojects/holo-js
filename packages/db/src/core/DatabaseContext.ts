@@ -300,6 +300,17 @@ export class DatabaseContext {
     return new TableQueryBuilder(table, this)
   }
 
+  async invalidateTables(tables: readonly string[]): Promise<void> {
+    const identities = new Set<string>()
+    for (const table of new Set(tables)) {
+      identities.add(await resolveTableIdentity(this, table))
+    }
+    await invalidateQueryCacheDependencies(this, [...identities].flatMap(tableName => [
+      createTableCacheDependency(this._connectionName, tableName),
+      createTableRowWildcardCacheDependency(this._connectionName, tableName),
+    ]))
+  }
+
   getLogger(): DatabaseLogger | undefined {
     return this._logger
   }
@@ -409,13 +420,7 @@ export class DatabaseContext {
     if (isSchemaPreservingRawStatement(statement.sql)) {
       const result = await run()
       const target = rawStatementWriteTarget(statement.sql, this._dialect.name)
-      if (target) {
-        const tableName = await resolveTableIdentity(this, target)
-        await invalidateQueryCacheDependencies(this, [
-          createTableCacheDependency(this._connectionName, tableName),
-          createTableRowWildcardCacheDependency(this._connectionName, tableName),
-        ])
-      }
+      if (target) await this.invalidateTables([target])
       return result
     }
     markSessionUncertain(getRootDatabaseContext(this))

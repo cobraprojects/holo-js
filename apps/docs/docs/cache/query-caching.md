@@ -118,7 +118,9 @@ Realtime queries follow the same rules, so a subscription refreshes after any wr
 ::: warning
 Simple raw `INSERT INTO`, `UPDATE … SET`, and `DELETE FROM` statements run through Holo also clear cached reads of the identified target table, including cached reads of individual rows. Invalidation waits for transaction commit. See [raw SQL](/database/#raw-sql) for recognition limits.
 
-A raw `WITH … UPDATE` with no recognized target leaves cached results unchanged. Do not rely on automatic invalidation for other unrecognized raw writes. Changes from external SQL clients or other apps, and changes to other tables through database triggers, don't clear the cache. Use query-builder writes when you need automatic invalidation. There is currently no public server API that explicitly invalidates both query caches and realtime subscriptions for an unrecognized raw write.
+A raw `WITH … UPDATE` with no recognized target leaves cached results unchanged. Do not rely on automatic invalidation for other unrecognized raw writes. Changes from external SQL clients or other apps, and changes to other tables through database triggers, don't clear the cache.
+
+After an unrecognized write, call `await DB.connection().invalidateTables(['posts'])` with every affected table to clear cached queries, including reads of individual rows, and refresh realtime subscriptions. Inside a transaction, use `await tx.invalidateTables(['posts'])`: it registers the refresh and returns before commit. Commit publishes it; rollback discards it. See the [explicit invalidation example](/database/#raw-sql).
 
 The list of which entries depend on which tables lives in each server process's memory. If you run several servers or workers against a shared Redis or database cache, a write on one server doesn't clear entries another server cached. Those entries stay until their TTL ends. Keep TTLs short in that setup, or clear keys yourself.
 :::

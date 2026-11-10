@@ -396,7 +396,7 @@ Simple raw `INSERT INTO`, `UPDATE … SET`, and `DELETE FROM` statements execute
 
 Holo reads the target from the SQL rather than a table scope or logging label. A raw `WITH … UPDATE` with no recognized target does not refresh subscriptions or clear query caches. Do not rely on automatic refresh for other unrecognized raw writes. Changes to other tables through triggers or stored routines are not discovered. See [raw SQL](/database/#raw-sql) for recognition limits.
 
-Use query-builder writes when you need automatic refresh. There is currently no public server API to explicitly invalidate both cached queries and subscriptions after an unrecognized raw write.
+After an unrecognized raw write, call `await tx.invalidateTables(['posts'])` on the transaction context, listing every table you changed. Awaiting this call registers the refresh without waiting for commit. Subscriptions and cached queries refresh after successful commit, and rollback discards it. Outside a transaction, `await DB.connection().invalidateTables(['posts'])` publishes immediately. See the [explicit invalidation example](/database/#raw-sql).
 
 ## Types
 

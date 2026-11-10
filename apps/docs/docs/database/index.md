@@ -441,7 +441,23 @@ Simple raw `INSERT INTO`, `UPDATE … SET`, and `DELETE FROM` statements refresh
 
 Holo identifies the target from the SQL, including ordinary quoted and schema-qualified names. A table-scoped call or a `source` logging label does not override the SQL target. Detection is conservative: aliases, multi-table writes, vendor-specific modifiers, and unusual identifiers may have no recognized target. Do not rely on automatic refresh for these forms. For example, a CTE `WITH … UPDATE` leaves cached queries and subscriptions unchanged. Changes to other tables through triggers or stored routines are not discovered. Schema-changing SQL still clears caches and refreshes subscriptions separately.
 
-Use query-builder writes when you need automatic refresh for SQL Holo cannot identify. There is currently no public server API to explicitly refresh both query caches and realtime subscriptions after an unrecognized raw write.
+For SQL Holo cannot identify, call `invalidateTables()` on the connection with every table you changed. It clears cached queries, including reads of individual rows, and refreshes subscriptions for those tables.
+
+```ts [server/lib/archive-posts.ts]
+import { DB } from '@holo-js/db'
+
+await DB.transaction(async tx => {
+  await tx.unsafeExecute(DB.raw(
+    'WITH selected AS (SELECT id FROM posts WHERE status = ?) UPDATE posts SET status = ? WHERE id IN (SELECT id FROM selected)',
+    ['draft', 'archived'],
+  ))
+  await tx.invalidateTables(['posts'])
+})
+```
+
+`DatabaseContext.invalidateTables(tables: readonly string[]): Promise<void>` accepts bare or schema-qualified table names using the connection's usual table resolution rules. Equivalent names are deduplicated and published together. An empty list does nothing. The call needs no SQL write and does not check whether rows changed.
+
+Inside a transaction, `await tx.invalidateTables(['posts'])` registers the refresh and returns before commit. Caches and subscriptions refresh only after a successful commit; rollback discards the refresh. For an autocommit write, use `await DB.connection().invalidateTables(['posts'])` after the write succeeds; that call publishes immediately. It does not wait for browsers to receive updates. List tables affected through triggers or stored routines yourself.
 
 `unsafeSql()` builds the same statement and is handy where you don't need the facade:
 
