@@ -1603,15 +1603,6 @@ export function inferAutomaticQueryCacheDependencies(
   ])
 }
 
-export function inferAutomaticQueryCacheInvalidationDependencies(
-  plan: SelectQueryPlan,
-  connectionName: string,
-  values: Readonly<Record<string, unknown>> = {},
-  caseInsensitiveColumns: CaseInsensitiveColumns = EMPTY_COLUMNS,
-): readonly string[] {
-  return inferAutomaticQueryCacheInvalidationPlan(plan, connectionName, values, false, caseInsensitiveColumns).dependencies
-}
-
 export function inferAutomaticQueryCacheInvalidationPlan(
   plan: SelectQueryPlan,
   connectionName: string,
@@ -1701,16 +1692,6 @@ export function inferAutomaticQueryCacheInvalidationPlan(
   return Object.freeze({
     dependencies: Object.freeze(dependencies),
   })
-}
-
-export function inferAutomaticInsertCacheInvalidationDependencies(
-  connectionName: string,
-  source: Pick<QuerySource, 'tableName' | 'table'>,
-  rows: readonly Readonly<Record<string, unknown>>[],
-  lastInsertId?: number | string,
-  caseInsensitiveColumns: CaseInsensitiveColumns = EMPTY_COLUMNS,
-): readonly string[] {
-  return inferAutomaticInsertCacheInvalidationPlan(connectionName, source, rows, lastInsertId, false, caseInsensitiveColumns).dependencies
 }
 
 export function inferAutomaticInsertCacheInvalidationPlan(
