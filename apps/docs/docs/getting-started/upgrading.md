@@ -2,7 +2,7 @@
 
 ## Upgrading from 0.5.6 to 0.6.0
 
-Update every installed `@holo-js/*` package to `0.6.0` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed: the next `npx holo migrate`, `npx holo build` or `npx holo dev` writes your types from the database you already have. 0.6.0 removes public APIs and changes how `holo build` and `migrate --isolated` work, so review the sections below before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#unreleased) lists the release changes.
+Update every installed `@holo-js/*` package to `0.6.0` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed: the next `npx holo migrate`, `npx holo build` or `npx holo dev` writes your types from the database you already have. 0.6.0 removes public APIs and changes how `holo build` and `migrate --isolated` work, so review the sections below before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#060---2026-11-11) lists the release changes.
 
 0.6.0 makes your database the only description of your schema, as in Laravel. Holo no longer keeps a schema registry in memory or replays migrations that already ran. After `migrate`, `migrate:rollback`, `migrate:fresh` and `holo build`, and before `holo dev`, `holo seed` and `holo media:regenerate` start, it reads the default connection's database and writes the generated schema from it, and a model's casts set the types the database can't state. See [Migrations and model types](/database/migrations#migrations-and-model-types).
 

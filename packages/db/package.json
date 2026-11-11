@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/db",
-  "version": "0.5.6",
+  "version": "0.6.0",
   "description": "Holo-JS Framework - portable database, ORM, migrations, factories, and seeders",
   "type": "module",
   "license": "MIT",
