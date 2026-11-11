@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/auth-social-facebook",
-  "version": "0.5.6",
+  "version": "0.6.0",
   "description": "Holo-JS Framework - Facebook social auth provider",
   "type": "module",
   "license": "MIT",
