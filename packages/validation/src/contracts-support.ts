@@ -163,13 +163,13 @@ export function normalizeSchemaShape<TShape extends SchemaInputShape>(shape: TSh
   return Object.freeze(Object.fromEntries(normalizedEntries)) as NormalizedSchemaShape<TShape>
 }
 
-export function createField<TOutput>(kind: FieldKind, item?: FieldDefinition['item'], sensitive = false): ValidationField<TOutput> {
+export function createField<TOutput>(kind: FieldKind, options: Pick<FieldDefinition, 'item' | 'sensitive' | 'alternatives'> = {}): ValidationField<TOutput> {
   return Object.freeze({
     kind: 'field' as const,
     definition: Object.freeze({
       kind,
-      item,
-      ...(sensitive ? { sensitive: true as const } : {}),
+      item: undefined,
+      ...options,
       rules: Object.freeze([]),
     }),
   })
@@ -565,6 +565,8 @@ export function declaredListLimit(definition: FieldDefinition): number | undefin
 }
 
 export function coerceFieldValue(definition: FieldDefinition, value: unknown): unknown {
+  if (definition.kind === 'union') return value
+
   if (definition.kind === 'array') {
     if (value === undefined || (value === null && definition.rules.some(rule => rule.name === 'nullable'))) {
       return value

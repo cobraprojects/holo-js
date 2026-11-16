@@ -1,9 +1,11 @@
 import * as v from 'valibot'
 import { exactSizeAction, digitsAction, minAction, maxAction, asPipeItem, stringSchema, numberSchema, booleanSchema, dateSchema, emailAction, urlAction, uuidAction, integerAction } from './compiler-actions'
 import type { FieldRule, FieldDefinition, SchemaInputShape, SupportedRuleFamily, WebFileLike } from './contracts-types'
-import { assertDigitCount, declaredListLimit, isFieldDefinition, isValidationFieldBuilderLike, isValidationField, normalizeFieldBuilder, isWebFileLike } from './contracts-support'
+import { assertDigitCount, declaredListLimit, isFieldDefinition, isPlainObject, isValidationFieldBuilderLike, isValidationField, normalizeFieldBuilder, isWebFileLike } from './contracts-support'
 
-import { createExecutionNode, createOrderedSchemaFactory, executeCustomRule, createFieldExecutionSchema, createShapeExecutionSchema, type ExecutionNode, type FieldExecution, type CompiledSchema } from './contracts-execution'
+import { confirmationFieldKey, createExecutionNode, createOrderedSchemaFactory, executeCustomRule, createFieldExecutionSchema, createShapeExecutionSchema, usesConfirmationOutput, type ExecutionNode, type FieldExecution, type CompiledSchema } from './contracts-execution'
+import { unionBranchIssue } from './contracts-runtime'
+import { createObjectContainer } from './error-bag'
 
 function getRule(definition: FieldDefinition, name: SupportedRuleFamily): FieldRule | undefined {
   return definition.rules.find(rule => rule.name === name)
@@ -37,6 +39,21 @@ function makeCompiledArrayItemSchema(plan: SchemaPlan, parent: ExecutionNode): C
   }
 }
 
+function makeUnionAlternative(plan: SchemaPlan, field: ExecutionNode): CompiledSchema {
+  if (typeof plan.schema !== 'function') return plan.schema
+  const compile = plan.schema
+  return {
+    ...v.unknown(),
+    async: true,
+    async '~run'(dataset, config) {
+      const node: ExecutionNode = { path: field.path, parent: field.parent, rawInput: field.rawInput, children: [] }
+      const result = await compile(node)['~run'](dataset, config)
+      const issue = result.typed ? await unionBranchIssue(node, result.issues ? undefined : config) : undefined
+      return issue === undefined ? result : v.check(() => false, issue)['~run'](result, config)
+    },
+  }
+}
+
 function makeConstraintAction(definition: FieldDefinition, rule: FieldRule) {
   const value = rule.args[0]
   if (typeof value !== 'number') return undefined
@@ -63,7 +80,7 @@ function makeListLimitSchema(definition: FieldDefinition): CompiledSchema {
   return v.pipeAsync(v.unknown(), ...actions)
 }
 
-function makeBaseSchema(definition: FieldDefinition, executionFor?: (dataset: object) => FieldExecution, itemPlan?: SchemaPlan): v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> {
+function makeBaseSchema(definition: FieldDefinition, executionFor?: (dataset: object) => FieldExecution, itemPlan?: SchemaPlan, alternatives: readonly SchemaPlan[] = []): CompiledSchema {
   switch (definition.kind) {
     case 'string':
       return stringSchema()
@@ -75,6 +92,19 @@ function makeBaseSchema(definition: FieldDefinition, executionFor?: (dataset: ob
       return dateSchema()
     case 'file':
       return v.custom<WebFileLike>(value => isWebFileLike(value), 'The selected file must be a file.')
+    case 'union': {
+      if (!executionFor) throw new Error('Validation union execution is missing.')
+      return {
+        ...v.unknown(),
+        async: true,
+        async '~run'(dataset, config) {
+          const node = executionFor(dataset).node
+          const branches = alternatives.map(plan => makeUnionAlternative(plan, node))
+          const result = await v.unionAsync(branches, 'This field must match one of the allowed types.')['~run'](dataset, config)
+          return Object.assign(dataset, result)
+        },
+      }
+    }
     case 'array': {
       if (!executionFor) throw new Error('Validation array execution is missing.')
       if (!itemPlan) throw new Error('Validation array item plan is missing.')
@@ -98,7 +128,7 @@ function makeBaseSchema(definition: FieldDefinition, executionFor?: (dataset: ob
   }
 }
 
-function compileFieldPipeline(definition: FieldDefinition, executionFor?: (dataset: object) => FieldExecution, itemPlan?: SchemaPlan): v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> {
+function compileFieldPipeline(definition: FieldDefinition, executionFor?: (dataset: object) => FieldExecution, itemPlan?: SchemaPlan, alternatives?: readonly SchemaPlan[]): CompiledSchema {
   const actions: (v.PipeItem<unknown, unknown, v.BaseIssue<unknown>> | v.PipeItemAsync<unknown, unknown, v.BaseIssue<unknown>>)[] = []
   if (executionFor) actions.push(v.rawCheck(({ dataset, addIssue }) => {
     const execution = executionFor(dataset)
@@ -186,7 +216,7 @@ function compileFieldPipeline(definition: FieldDefinition, executionFor?: (datas
     }
   }
 
-  let schema: v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> = v.pipeAsync(makeBaseSchema(definition, executionFor, itemPlan), ...actions)
+  let schema: v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> = v.pipeAsync(makeBaseSchema(definition, executionFor, itemPlan, alternatives), ...actions)
 
   const defaultRule = getRule(definition, 'default')
   const hasNullable = hasRule(definition, 'nullable')
@@ -203,14 +233,16 @@ function compileFieldPipeline(definition: FieldDefinition, executionFor?: (datas
   return schema
 }
 
-function compileFieldPlan(definition: FieldDefinition): SchemaPlan {
+function compileFieldPlan(definition: FieldDefinition, strict = false): SchemaPlan {
   const item = definition.item
   const itemPlan = definition.kind !== 'array' ? undefined : !item
     ? { schema: v.unknown(), hasCustomRules: false }
-    : isFieldDefinition(item) ? compileFieldPlan(item) : compileShapePlan(item)
+    : isFieldDefinition(item) ? compileFieldPlan(item, strict) : compileShapePlan(item, strict)
+  const alternatives = definition.alternatives?.map(alternative => compileFieldPlan(alternative, true))
   const hasCustomRules = definition.rules.some(rule => rule.name === 'custom' || rule.name === 'customAsync')
     || (itemPlan?.hasCustomRules ?? false)
-  const needsExecution = definition.kind === 'array'
+    || (alternatives?.some(plan => plan.hasCustomRules) ?? false)
+  const needsExecution = definition.kind === 'array' || definition.kind === 'union'
     || definition.rules.some(rule => rulesRequiringExecution.has(rule.name)
       || (definition.kind === 'file' && (rule.name === 'max' || rule.name === 'size')))
   if (!needsExecution) return { schema: compileFieldPipeline(definition), hasCustomRules }
@@ -220,7 +252,7 @@ function compileFieldPlan(definition: FieldDefinition): SchemaPlan {
     const execution = executions.get(dataset)
     if (!execution) throw new Error('Validation field execution is missing.')
     return execution
-  }, itemPlan)
+  }, itemPlan, alternatives)
   return {
     hasCustomRules,
     schema: node => createFieldExecutionSchema(definition, node, (execution, dataset) => {
@@ -235,24 +267,110 @@ export function makeCompiledFieldSchema(definition: FieldDefinition, node = crea
   return typeof plan.schema === 'function' ? plan.schema(node) : plan.schema
 }
 
-function compileShapePlan(shape: SchemaInputShape): SchemaPlan {
+function unionUsesConfirmationOutput(definition: FieldDefinition): boolean {
+  return definition.alternatives?.some(branch =>
+    branch.rules.some(rule => rule.name === 'confirmed' && usesConfirmationOutput(branch, rule))
+    || unionUsesConfirmationOutput(branch)) ?? false
+}
+
+type ShapeEntry = { readonly key: string; readonly confirmationKey?: string; readonly schema: CompiledSchema }
+type SchemaRun = CompiledSchema['~run']
+
+function compileShapeEntries(entries: readonly ShapeEntry[], parent: ExecutionNode, hasCustomRules: boolean): Record<string, CompiledSchema> {
+  const ordered = hasCustomRules ? createOrderedSchemaFactory() : undefined
+  if (!entries.some(entry => entry.confirmationKey !== undefined)) {
+    return Object.fromEntries(entries.map(({ key, schema }) => [key, ordered ? ordered(schema) : schema]))
+  }
+
+  const byKey = new Map(entries.map((entry, index) => [entry.key, { ...entry, index }]))
+  const output = createObjectContainer()
+  parent.output = output
+  const runs = new Map<string, Promise<Awaited<ReturnType<SchemaRun>>>>()
+  const waiting = new Set<string>()
+  function run(entry: ShapeEntry, dataset: Parameters<SchemaRun>[0], config: Parameters<SchemaRun>[1]) {
+    const existing = runs.get(entry.key)
+    if (existing) return existing
+    const pending = Promise.resolve().then(async () => {
+      const result = await entry.schema['~run'](dataset, config)
+      output[entry.key] = result.value
+      return result
+    })
+    runs.set(entry.key, pending)
+    return pending
+  }
+
+  function canRunWhileWaiting(entry: ShapeEntry): boolean {
+    let current: ShapeEntry | undefined = entry
+    while (current) {
+      if (waiting.has(current.key)) return false
+      current = current.confirmationKey === undefined ? undefined : byKey.get(current.confirmationKey)
+    }
+    return true
+  }
+
+  parent.resolveConfirmation = async (field, config) => {
+    const source = byKey.get(field)
+    const peer = byKey.get(confirmationFieldKey(field))
+    const input = parent.input
+    if (!source || !peer || !isPlainObject(input) || !Object.hasOwn(input, peer.key)) return
+
+    waiting.add(field)
+    try {
+      if (ordered) {
+        for (const entry of entries.slice(source.index + 1, peer.index)) {
+          if (Object.hasOwn(input, entry.key) && canRunWhileWaiting(entry)) {
+            await run(entry, { value: input[entry.key] }, config)
+          }
+        }
+      }
+      await run(peer, { value: input[peer.key] }, config)
+    } finally {
+      waiting.delete(field)
+    }
+  }
+
+  return Object.fromEntries(entries.map(entry => {
+    const schema: CompiledSchema = {
+      ...entry.schema,
+      async: true,
+      '~run': (dataset, config) => run(entry, dataset, config),
+    }
+    return [entry.key, ordered ? ordered(schema) : schema]
+  }))
+}
+
+function isRecordInput(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value)) return false
+  const prototype: unknown = Object.getPrototypeOf(value)
+  return prototype === null || prototype === Object.prototype
+}
+
+function compileShapePlan(shape: SchemaInputShape, strict = false): SchemaPlan {
   const entries = Object.entries(shape).map(([key, value]) => {
-    const plan = isValidationFieldBuilderLike(value) || isValidationField(value)
-      ? compileFieldPlan(normalizeFieldBuilder(value).definition)
-      : compileShapePlan(value as SchemaInputShape)
-    return { key, plan }
+    if (isValidationFieldBuilderLike(value) || isValidationField(value)) {
+      const definition = normalizeFieldBuilder(value).definition
+      return {
+        key,
+        plan: compileFieldPlan(definition, strict),
+        confirmationKey: unionUsesConfirmationOutput(definition) ? confirmationFieldKey(key) : undefined,
+      }
+    }
+    return { key, plan: compileShapePlan(value as SchemaInputShape, strict) }
   })
+  const strictInput = strict ? v.pipe(
+    v.custom<Record<string, unknown>>(isRecordInput, 'This field must be an object.'),
+    v.transform((input): unknown => Object.fromEntries(entries.map(({ key }) => [key, Object.hasOwn(input, key) ? input[key] : undefined]))),
+  ) : undefined
   const hasCustomRules = entries.some(({ plan }) => plan.hasCustomRules)
   return {
     hasCustomRules,
     schema: parent => {
-      const ordered = hasCustomRules ? createOrderedSchemaFactory() : undefined
-      return createShapeExecutionSchema(v.objectAsync(Object.fromEntries(
-        entries.map(({ key, plan }) => {
-          const compiled = typeof plan.schema === 'function' ? plan.schema(createExecutionNode(parent, key)) : plan.schema
-          return [key, ordered ? ordered(compiled) : compiled]
-        }),
-      )), parent)
+      const compiledEntries = entries.map(({ key, plan, confirmationKey }) => {
+        const compiled = typeof plan.schema === 'function' ? plan.schema(createExecutionNode(parent, key)) : plan.schema
+        return { key, confirmationKey, schema: compiled }
+      })
+      const compiled = createShapeExecutionSchema(v.objectAsync(compileShapeEntries(compiledEntries, parent, hasCustomRules)), parent)
+      return strictInput ? v.pipeAsync(strictInput, compiled) : compiled
     },
   }
 }

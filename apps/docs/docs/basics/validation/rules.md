@@ -1,6 +1,6 @@
 # Available Rules
 
-`@holo-js/validation` has seven field types. You chain rules on a field in any order; `transform()` and custom rules run in the order you write them. Every rule that checks a value takes an optional custom message as its last argument. See [Error Messages](/basics/validation/errors#custom-messages).
+Chain rules on fields from `@holo-js/validation`. Within a field, `transform()` and custom rules run in the order you write them. Every rule that checks a value takes an optional custom message as its last argument. See [Error Messages](/basics/validation/errors#custom-messages).
 
 ## Available rules
 
@@ -8,7 +8,7 @@ Rules are grouped by the field types they apply to. Rules marked "all fields" wo
 
 **Field types**
 
-- [`field.string()`](#field-types), [`field.password()`](#field-types), [`field.number()`](#field-types), [`field.boolean()`](#field-types), [`field.date()`](#field-types), [`field.file()`](#field-types), [`field.array()`](#arrays)
+- [`field.string()`](#field-types), [`field.password()`](#field-types), [`field.number()`](#field-types), [`field.boolean()`](#field-types), [`field.date()`](#field-types), [`field.file()`](#field-types), [`field.array()`](#arrays), [`field.union()`](#unions)
 
 **All fields**
 
@@ -76,6 +76,7 @@ Each builder creates a field with a fixed output type. Chain rules after it.
 | `field.date()` | `Date` | `Date` objects, or strings `new Date()` can parse |
 | `field.file()` | `WebFileLike` (a `Blob` with an optional `name`) | Uploaded files from `FormData` |
 | `field.array(item)` | `item[]` | Arrays. `item` is another field or an object shape. |
+| `field.union([first, second, ...])` | Union of alternative output types | Values accepted by at least one alternative. |
 
 ```ts
 import { field, schema } from '@holo-js/validation'
@@ -107,6 +108,18 @@ export const gallery = schema({
 Errors for items use their index, such as `tags.0` or `images.2.title`.
 
 Holo checks `max()` and `size()` before it validates any item. A list with more items than the limit fails with the size error, and its items aren't checked.
+
+### Unions
+
+Pass two or more field alternatives. Holo tries them in order and uses the first one that passes. Union alternatives validate the submitted value without implicit coercion, including array items. Presence rules apply to the union input. Value constraints, transforms, and custom callbacks chained on the union run on the selected output.
+
+```ts
+const selection = field.union([field.string(), field.array(field.string())]).required()
+```
+
+`selection` infers `string | string[]`. It preserves `'draft'` and `['draft']` as submitted and rejects mixed arrays such as `['draft', 1]`.
+
+When an alternative uses `confirmed()` after a transform, Holo resolves the confirmation field's output before selecting the alternative. The confirmation field and any intervening callbacks needed to reach it can run before custom rules chained on the union.
 
 ## Presence rules
 

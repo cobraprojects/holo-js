@@ -1,7 +1,9 @@
 import {
   type ArrayFieldBuilderInput,
+  type FieldBuilderInput,
   type FieldRule,
   type InferArrayItemOutput,
+  type InferFieldOutput,
   type InferSchemaData,
   type InferValidationSchemaData,
   type SchemaInputShape,
@@ -293,7 +295,7 @@ export function arrayField<TItemInput extends ArrayFieldBuilderInput>(
     ? normalized.definition
     : normalized
 
-  return new ValidationFieldBuilder<InferArrayItemOutput<TItemInput>[]>(createField('array', itemDefinition))
+  return new ValidationFieldBuilder<InferArrayItemOutput<TItemInput>[]>(createField('array', { item: itemDefinition }))
 }
 
 export const field = Object.freeze({
@@ -301,7 +303,7 @@ export const field = Object.freeze({
     return new ValidationFieldBuilder<string>(createField('string'))
   },
   password() {
-    return new ValidationFieldBuilder<string>(createField('string', undefined, true))
+    return new ValidationFieldBuilder<string>(createField('string', { sensitive: true }))
   },
   number() {
     return new ValidationFieldBuilder<number>(createField('number'))
@@ -316,6 +318,16 @@ export const field = Object.freeze({
     return new ValidationFieldBuilder<WebFileLike>(createField('file'))
   },
   array: arrayField,
+  union<const TAlternatives extends readonly [FieldBuilderInput, FieldBuilderInput, ...FieldBuilderInput[]]>(
+    alternatives: TAlternatives,
+  ): ValidationFieldBuilder<InferFieldOutput<TAlternatives[number]>> {
+    if (!Array.isArray(alternatives) || alternatives.length < 2) {
+      throw new ValidationContractError('A union must contain at least two fields.')
+    }
+
+    const definitions = Object.freeze(Array.from(alternatives, alternative => normalizeFieldBuilder(alternative).definition))
+    return new ValidationFieldBuilder(createField('union', { alternatives: definitions }))
+  },
 })
 
 export function defineSchema<TShape extends SchemaInputShape>(

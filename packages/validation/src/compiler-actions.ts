@@ -1,8 +1,13 @@
 import * as v from 'valibot'
+import { isWebFileLike } from './contracts-support'
 import type { FieldDefinition, FieldKind } from './contracts-types'
 
 export function exactSizeAction(definition: FieldDefinition, value: number, message?: string) {
   const fallback = message ?? defaultSizeMessage(definition.kind, value)
+
+  if (definition.kind === 'union') {
+    return v.check((input: unknown) => unionSize(input, false) === value, fallback)
+  }
 
   if (definition.kind === 'string' || definition.kind === 'array') {
     return v.length(value, fallback)
@@ -13,6 +18,10 @@ export function exactSizeAction(definition: FieldDefinition, value: number, mess
 
 export function minAction(definition: FieldDefinition, value: number, message?: string) {
   const fallback = message ?? defaultMinMessage(definition.kind, value)
+
+  if (definition.kind === 'union') {
+    return v.check((input: unknown) => unionSize(input, !definition.sensitive) >= value, fallback)
+  }
 
   if (definition.kind === 'string' && !definition.sensitive) {
     return v.check((input: unknown) => typeof input === 'string' && input.trim().length >= value, fallback)
@@ -28,11 +37,22 @@ export function minAction(definition: FieldDefinition, value: number, message?: 
 export function maxAction(definition: FieldDefinition, value: number, message?: string) {
   const fallback = message ?? defaultMaxMessage(definition.kind, value)
 
+  if (definition.kind === 'union') {
+    return v.check((input: unknown) => unionSize(input, false) <= value, fallback)
+  }
+
   if (definition.kind === 'string' || definition.kind === 'array') {
     return v.maxLength(value, fallback)
   }
 
   return v.maxValue(value, fallback)
+}
+
+function unionSize(input: unknown, trim: boolean): number {
+  if (typeof input === 'string') return (trim ? input.trim() : input).length
+  if (Array.isArray(input)) return input.length
+  if (isWebFileLike(input) && typeof input.size === 'number') return input.size
+  return typeof input === 'number' ? input : Number.NaN
 }
 
 export function digitsAction(name: 'digits' | 'minDigits' | 'maxDigits', count: number, message?: string) {

@@ -7423,6 +7423,74 @@ export const plainColumnIsString: Equal<UserRecord['email'], string> = true
     expect(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([])
   }, 90000)
 
+  it('types auth users from provider model casts on existing SQLite TEXT columns', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    const database = new DatabaseSync(join(projectRoot, 'data.sqlite'))
+    try {
+      database.exec(`
+        CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT);
+        CREATE TABLE staff (id INTEGER PRIMARY KEY, employeeCode TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT);
+      `)
+    } finally {
+      database.close()
+    }
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: { default: { driver: 'sqlite', url: './data.sqlite' } },
+})
+`)
+    await writeProjectFile(projectRoot, 'config/auth.ts', `
+import { defineAuthConfig } from '@holo-js/auth'
+
+export default defineAuthConfig({
+  defaults: { guard: 'web' },
+  guards: { web: { driver: 'session', provider: 'users' }, api: { driver: 'token', provider: 'staff' } },
+  providers: { users: { model: 'User' }, staff: { model: 'Staff' } },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/models/User.ts', `
+import { defineModel } from '@holo-js/db'
+
+export const User = defineModel('users', { name: 'User', casts: { createdAt: 'datetime', updatedAt: 'datetime' } })
+`)
+    await writeProjectFile(projectRoot, 'server/models/Staff.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('staff', { name: 'Staff', casts: { createdAt: 'datetime', updatedAt: 'datetime' } })
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    const prepared = runCliProcess(projectRoot, ['prepare'])
+    expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+
+    await writeProjectFile(projectRoot, 'check-auth-types.ts', `
+import './.holo-js/generated/index'
+import auth, { type AuthUser } from '@holo-js/auth'
+
+type Actor = NonNullable<Awaited<ReturnType<typeof auth.user>>>
+
+export const user: AuthUser = { id: 1, email: 'user@example.com', createdAt: new Date(), updatedAt: null }
+export const staff: AuthUser = { id: 2, employeeCode: 'A1', createdAt: new Date(), updatedAt: new Date() }
+export const timestamps = (actor: Actor): [Date, Date | null] => [actor.createdAt, actor.updatedAt]
+export const providerFields = (actor: Actor): { email: string } | { employeeCode: string } => actor
+`)
+    const program = ts.createProgram([join(projectRoot, 'check-auth-types.ts')], {
+      strict: true,
+      noEmit: true,
+      skipLibCheck: true,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      target: ts.ScriptTarget.ES2022,
+    })
+    expect(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([])
+  }, 90000)
+
   it('types model timestamps stored in SQLite TEXT columns as dates in the model registry', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

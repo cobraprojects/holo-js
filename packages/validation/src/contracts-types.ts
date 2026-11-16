@@ -1,4 +1,5 @@
-export const FIELD_KINDS = ['string', 'number', 'boolean', 'date', 'file', 'array'] as const
+const PRIMITIVE_FIELD_KINDS = ['string', 'number', 'boolean', 'date', 'file', 'array'] as const
+export const FIELD_KINDS = [...PRIMITIVE_FIELD_KINDS, 'union'] as const
 export const SUPPORTED_RULE_FAMILIES = [
   'required',
   'optional',
@@ -69,8 +70,8 @@ export interface StandardSchemaV1<TInput = unknown, TOutput = TInput> {
   readonly '~standard': StandardSchemaV1Props<TInput, TOutput>
 }
 
-export type PrimitiveFieldKind = typeof FIELD_KINDS[number]
-export type FieldKind = PrimitiveFieldKind
+export type PrimitiveFieldKind = typeof PRIMITIVE_FIELD_KINDS[number]
+export type FieldKind = typeof FIELD_KINDS[number]
 export type SupportedRuleFamily = typeof SUPPORTED_RULE_FAMILIES[number]
 export type SchemaSourceInput = Request | FormData | URLSearchParams | Record<string, unknown>
 
@@ -92,6 +93,7 @@ export interface FieldDefinition {
   readonly rules: readonly FieldRule[]
   readonly sensitive?: boolean
   readonly item?: FieldArrayItemDefinition
+  readonly alternatives?: readonly FieldDefinition[]
 }
 
 export interface ValidationField<TOutput = unknown> {

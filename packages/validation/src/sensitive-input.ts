@@ -25,14 +25,24 @@ interface SensitiveInputWalk extends StripSensitiveInputOptions {
   readonly clear: boolean
 }
 
-function isOmittedDefinition(definition: FieldDefinition, options: StripSensitiveInputOptions): boolean {
+function isOmittedDefinition(definition: FieldDefinition, options: StripSensitiveInputOptions, includeNestedFields = false): boolean {
   if (definition.sensitive === true || (options.files === true && definition.kind === 'file')) {
     return true
   }
 
-  return definition.kind === 'array'
-    && isFieldDefinition(definition.item)
-    && isOmittedDefinition(definition.item, options)
+  if (definition.kind === 'union') {
+    return definition.alternatives?.some(alternative => isOmittedDefinition(alternative, options, true)) ?? false
+  }
+
+  if (definition.kind !== 'array') return false
+  const item = definition.item
+  if (isFieldDefinition(item)) return isOmittedDefinition(item, options, includeNestedFields)
+  return includeNestedFields && containsOmittedField(item, options)
+}
+
+function containsOmittedField(value: unknown, options: StripSensitiveInputOptions): boolean {
+  if (isValidationField(value)) return isOmittedDefinition(value.definition, options, true)
+  return isPlainObject(value) && Object.values(value).some(field => containsOmittedField(field, options))
 }
 
 function walkArrayItems(

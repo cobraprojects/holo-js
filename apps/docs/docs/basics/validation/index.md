@@ -56,7 +56,7 @@ export const registerUser = schema({
 })
 ```
 
-The available types are `string`, `password`, `number`, `boolean`, `date`, `file`, and `array`. See [Available Rules](/basics/validation/rules) for every rule.
+The available builders are `string`, `password`, `number`, `boolean`, `date`, `file`, `array`, and `union`. See [Available Rules](/basics/validation/rules) for every rule.
 
 `schema()` and `defineSchema()` are the same function. Use either name.
 

@@ -26,7 +26,7 @@ import {
   parseByteSize,
 } from './contracts-support'
 
-import { checkFieldConfirmations, createExecutionNode, resolveRuleMessage, type CompiledSchema, type ExecutionNode, type FieldExecution } from './contracts-execution'
+import { checkFieldConfirmations, createExecutionNode, resolveRuleMessage, usesConfirmationOutput, type CompiledSchema, type ExecutionNode, type FieldExecution } from './contracts-execution'
 
 function resolveDateRuleValue(value: unknown): Date | undefined {
   /* v8 ignore next 8 -- public rule builders normalize Date arguments to ISO strings before runtime resolution */
@@ -227,23 +227,55 @@ function valueAtPath(value: unknown, path: readonly string[]): unknown {
   return current
 }
 
+function checkExecutionConfirmations(field: FieldExecution, rawInput: unknown, deferOutput = false): void {
+  const { node } = field
+  checkFieldConfirmations(
+    field,
+    node.parent?.field ? node.parent.field.shapeValue : node.parent?.output,
+    node.parent?.field ? node.parent.field.inputValue : node.parent?.input,
+    node.path.length ? valueAtPath(rawInput, node.path.slice(0, -1)) : undefined,
+    deferOutput,
+  )
+}
+
 function applyExecutionChecks(
   node: ExecutionNode,
   rawInput: unknown,
   issues: Record<string, string[]>,
+  deferOutput = false,
 ): void {
   if (node.field) {
-    checkFieldConfirmations(
-      node.field,
-      node.parent?.field ? node.parent.field.shapeValue : node.parent?.output,
-      node.parent?.field ? node.parent.field.inputValue : node.parent?.input,
-      node.path.length ? valueAtPath(rawInput, node.path.slice(0, -1)) : undefined,
-    )
+    checkExecutionConfirmations(node.field, rawInput, deferOutput)
     applyFieldChecks(node.field, issues)
   }
   for (const child of node.children) {
     applyExecutionChecks(child, rawInput, issues)
   }
+}
+
+export async function unionBranchIssue(
+  node: ExecutionNode,
+  config: Parameters<CompiledSchema['~run']>[1] | undefined,
+): Promise<string | undefined> {
+  let root = node
+  while (root.parent) root = root.parent
+  const { field } = node
+  const resolveConfirmation = node.parent?.resolveConfirmation
+  const deferred = config && resolveConfirmation && field?.checks.some(({ rule }) =>
+    usesConfirmationOutput(field.definition, rule))
+    ? { config, resolveConfirmation, field }
+    : undefined
+  const issues: Record<string, string[]> = {}
+  applyExecutionChecks(node, root.rawInput, issues, deferred !== undefined)
+  const issue = Object.values(issues)[0]?.[0]
+  if (issue !== undefined || !deferred) return issue
+
+  await deferred.resolveConfirmation(node.path.at(-1) ?? '_value', deferred.config)
+  checkExecutionConfirmations(deferred.field, root.rawInput)
+  for (const [rule, matches] of deferred.field.confirmationResults) {
+    if (!matches) return resolveRuleMessage(rule, 'This field does not match its confirmation.')
+  }
+  return undefined
 }
 
 async function runValidation(
@@ -252,6 +284,7 @@ async function runValidation(
   compile: (node: ExecutionNode) => CompiledSchema,
 ): Promise<{ success: boolean; output: unknown; issues: Record<string, string[]> }> {
   const execution = createExecutionNode()
+  execution.rawInput = rawInput
   const compiled = compile(execution)
   const result = await v.safeParseAsync(compiled, coerced)
   const issues: Record<string, string[]> = {}

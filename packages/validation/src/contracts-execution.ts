@@ -32,6 +32,8 @@ export type ExecutionNode = {
   input?: unknown
   output?: unknown
   field?: FieldExecution
+  rawInput?: unknown
+  resolveConfirmation?: (field: string, config: Parameters<CompiledSchema['~run']>[1]) => Promise<void>
 }
 
 export function resolveRuleMessage(rule: FieldRule | undefined, fallback: string): string {
@@ -103,13 +105,22 @@ export async function executeCustomRule(field: FieldExecution, rule: FieldRule, 
   }
 }
 
-export function checkFieldConfirmations(field: FieldExecution, output: unknown, input: unknown, rawInput?: unknown): void {
-  const confirmationKey = `${field.node.path.at(-1) ?? '_value'}Confirmation`
+export function usesConfirmationOutput(definition: FieldDefinition, rule: FieldRule): boolean {
+  return definition.rules.slice(0, definition.rules.indexOf(rule))
+    .some(previous => previous.name === 'transform')
+}
+
+export function confirmationFieldKey(key: string): string {
+  return `${key}Confirmation`
+}
+
+export function checkFieldConfirmations(field: FieldExecution, output: unknown, input: unknown, rawInput?: unknown, deferOutput = false): void {
+  const confirmationKey = confirmationFieldKey(field.node.path.at(-1) ?? '_value')
   for (const { rule, value } of field.checks) {
     if (field.confirmationResults.has(rule)) continue
-    const transformed = field.definition.rules.slice(0, field.definition.rules.indexOf(rule))
-      .some(previous => previous.name === 'transform')
-    const parent = transformed && isPlainObject(output) && Object.hasOwn(output, confirmationKey)
+    const usesOutput = usesConfirmationOutput(field.definition, rule)
+    if (usesOutput && deferOutput) continue
+    const parent = usesOutput && isPlainObject(output) && Object.hasOwn(output, confirmationKey)
       ? output
       : isPlainObject(input) && Object.hasOwn(input, confirmationKey) ? input : rawInput
     if (isPlainObject(parent)) field.confirmationResults.set(rule, parent[confirmationKey] === value)
@@ -141,8 +152,8 @@ export function createExecutionNode(parent?: ExecutionNode, key?: string): Execu
 
 export function isMissingValue(value: unknown, kind: FieldKind): boolean {
   if (value === undefined || value === null) return true
-  if (kind === 'string') return typeof value === 'string' && value.trim().length === 0
-  if (kind === 'array') return Array.isArray(value) && value.length === 0
+  if ((kind === 'string' || kind === 'union') && typeof value === 'string') return value.trim().length === 0
+  if ((kind === 'array' || kind === 'union') && Array.isArray(value)) return value.length === 0
   return false
 }
 

@@ -12,6 +12,18 @@ import {
 } from '../src'
 
 describe('@holo-js/validation typing', () => {
+  it('infers exact union types for Holo and Standard Schema consumers', async () => {
+    const contract = schema({
+      status: field.union([field.string(), field.array(field.string())]).required(),
+      ids: field.union([field.number().field, field.array(field.number())]),
+    })
+    type Data = { status: string | string[], ids: number | number[] }
+    type AdapterOutput = NonNullable<(typeof contract)['~standard']['types']>['output']
+    expectTypeOf<AdapterOutput>().toEqualTypeOf<Data>()
+    const result = await safeParse({ status: 'draft', ids: 1 }, contract)
+    expectTypeOf(result.data).toEqualTypeOf<Data | undefined>()
+  })
+
   it('preserves concrete number inference through digit constraints', async () => {
     const contract = schema({
       exact: field.number().digits(3),

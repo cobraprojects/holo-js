@@ -26,6 +26,160 @@ function objectPrototypeHas(key: string): boolean {
 }
 
 describe('@holo-js/validation contracts', () => {
+  it('validates scalar and array union branches without coercing their values', async () => {
+    const contract = schema({
+      status: field.union([field.string(), field.array(field.string())]).required(),
+      ids: field.union([field.number(), field.array(field.number())]),
+    })
+    for (const input of [
+      { status: 'draft', ids: 1 },
+      { status: ['draft'], ids: [1] },
+      { status: ['draft', 'published'], ids: [1, 2] },
+    ]) {
+      await expect(safeParse(input, contract)).resolves.toMatchObject({ valid: true, data: input })
+      await expect(contract['~standard'].validate(input)).resolves.toEqual({ value: input })
+    }
+
+    for (const input of [
+      { status: ['draft', 1], ids: 1 },
+      { status: { value: 'draft' }, ids: 1 },
+      { status: 'draft', ids: '1' },
+      { status: 'draft', ids: [1, '2'] },
+      { status: [], ids: 1 },
+    ]) {
+      await expect(safeParse(input, contract)).resolves.toMatchObject({ valid: false })
+      await expect(contract['~standard'].validate(input)).resolves.toHaveProperty('issues')
+    }
+  })
+
+  it('selects the first branch that passes its rules before applying union rules', async () => {
+    const contract = schema({
+      status: field.union([
+        field.string().customAsync(async value => value !== 'draft' && value !== 'archived')
+          .transform(value => value === 'large' ? 3 : 1),
+        field.string().in(['draft', 'published', 'large']).transform(() => 2),
+      ]).max(2),
+      date: field.union([
+        field.date().before('2000-01-01').transform(() => 'old'),
+        field.date().transform(() => 'recent'),
+      ]),
+    })
+    const date = new Date('2020-01-01')
+    await expect(parse({ status: 'draft', date }, contract)).resolves.toEqual({ status: 2, date: 'recent' })
+    await expect(parse({ status: 'published', date }, contract)).resolves.toEqual({ status: 1, date: 'recent' })
+    await expect(safeParse({ status: 'large', date }, contract)).resolves.toMatchObject({ valid: false })
+    await expect(safeParse({ status: 'archived', date }, contract)).resolves.toMatchObject({ valid: false })
+  })
+
+  it('checks a transformed union branch against the transformed confirmation field', async () => {
+    const lower = field.string().transform(value => value.toLowerCase())
+    const callbacks: string[] = []
+    const contract = schema({
+      status: field.union([lower.confirmed(), field.number()]).custom((value) => {
+        callbacks.push('status')
+        return value === 'draft'
+      }),
+      marker: field.string().custom(() => {
+        callbacks.push('marker')
+        return true
+      }),
+      statusConfirmation: lower.custom(() => {
+        const markerRan = callbacks.at(-1) === 'marker'
+        callbacks.push('confirmation')
+        return markerRan
+      }),
+    })
+    const input = { status: 'DRAFT', marker: 'ready', statusConfirmation: 'Draft' }
+    const output = { ...input, status: 'draft', statusConfirmation: 'draft' }
+    await expect(safeParse(input, contract)).resolves.toMatchObject({ valid: true, data: output })
+    await expect(contract['~standard'].validate(input)).resolves.toEqual({ value: output })
+    expect(callbacks).toEqual(['marker', 'confirmation', 'status', 'marker', 'confirmation', 'status'])
+    const invalid = await safeParse({ ...input, statusConfirmation: 'published' }, contract)
+    expect(invalid.errors.has('status')).toBe(true)
+
+    const withFallback = schema({
+      status: field.union([lower.confirmed(), field.string()]),
+      statusConfirmation: lower,
+    })
+    const fallback = { status: 'DRAFT', statusConfirmation: 'published' }
+    await expect(safeParse(fallback, withFallback)).resolves.toMatchObject({ valid: true, data: fallback })
+    await expect(withFallback['~standard'].validate(fallback)).resolves.toEqual({ value: fallback })
+  })
+
+  it('measures file bytes and array length for union size rules', async () => {
+    const file = new File(['a'], 'sample.txt')
+    const contract = schema({
+      files: field.union([field.file(), field.array(field.file())]).size(1).max(1),
+    })
+    await expect(parse({ files: file }, contract)).resolves.toEqual({ files: file })
+    await expect(parse({ files: [file] }, contract)).resolves.toEqual({ files: [file] })
+    await expect(safeParse({ files: new File(['ab'], 'sample.txt') }, contract)).resolves.toMatchObject({ valid: false })
+  })
+
+  it('preserves callback order when a union branch confirms the submitted value', async () => {
+    let accepted: string | undefined
+    const status = field.string().custom(value => {
+      accepted = value
+      return true
+    }).confirmed()
+    const unused = field.string().transform(value => value.trim()).confirmed()
+    const contract = schema({
+      status: field.union([status, unused]),
+      statusConfirmation: field.string().custom(value => value === accepted),
+    })
+    const input = { status: 'draft', statusConfirmation: 'draft' }
+    await expect(parse(input, contract)).resolves.toEqual(input)
+  })
+
+  it('resolves chained union confirmations when peers appear out of order', async () => {
+    const lower = field.string().transform(value => value.toLowerCase())
+    const confirmed = field.union([lower.confirmed(), field.number()])
+    const contract = schema({
+      status: confirmed,
+      markerConfirmation: confirmed,
+      marker: confirmed,
+      markerConfirmationConfirmation: lower.custom(value => value === 'draft'),
+      statusConfirmation: lower,
+    })
+    const keys = Object.keys(contract.fields)
+    const input = Object.fromEntries(keys.map(key => [key, 'Draft']))
+    const output = Object.fromEntries(keys.map(key => [key, 'draft']))
+    await expect(contract['~standard'].validate(input)).resolves.toEqual({ value: output })
+  })
+
+  it('validates records strictly and applies missing field defaults in array alternatives', async () => {
+    const lower = field.string().transform(value => value.toLowerCase())
+    const contract = schema({
+      entries: field.union([
+        field.string(),
+        field.array({
+          status: field.union([lower.confirmed(), field.number()]),
+          statusConfirmation: lower.default('Draft'),
+          tags: field.array(field.string()).optional(),
+        }),
+      ]),
+    })
+    const input = { entries: [{ status: 'DRAFT' }] }
+    const output = { entries: [{ status: 'draft', statusConfirmation: 'draft', tags: undefined }] }
+    await expect(safeParse(input, contract)).resolves.toMatchObject({ valid: true, data: output })
+    await expect(contract['~standard'].validate(input)).resolves.toEqual({ value: output })
+
+    const records = schema({ entries: field.union([field.string(), field.array({ name: field.string().optional() })]) })
+    for (const entry of [[], new Date(), new Map()]) {
+      await expect(safeParse({ entries: [entry] }, records)).resolves.toMatchObject({ valid: false })
+    }
+  })
+
+  it('redacts invalid union input when a branch contains a sensitive field', async () => {
+    const contract = schema({
+      credential: field.union([
+        field.string().in(['disabled']),
+        field.array({ secret: field.string().sensitive(), name: field.string().required() }),
+      ]),
+    })
+    await expect(validate({ credential: [{ secret: 'private' }] }, contract)).rejects.toMatchObject({ values: {} })
+  })
+
   it('returns validated data from validate and throws validation exceptions for failures', async () => {
     const updatePost = schema({
       title: field.string().required(),
@@ -248,7 +402,7 @@ describe('@holo-js/validation contracts', () => {
       },
     })
 
-    expect(FIELD_KINDS).toEqual(['string', 'number', 'boolean', 'date', 'file', 'array'])
+    expect(FIELD_KINDS).toEqual(['string', 'number', 'boolean', 'date', 'file', 'array', 'union'])
     expect(SUPPORTED_RULE_FAMILIES).toContain('confirmed')
     expect(registerUser.kind).toBe('schema')
     expect(registerUser['~standard'].version).toBe(1)
