@@ -85,7 +85,7 @@ These are the messages you get when you don't pass your own:
 
 ## Custom messages
 
-Pass a message as the last argument to any rule:
+Pass a message as the last argument to any rule. Pass it to `field.string()`, `field.password()`, `field.number()`, `field.boolean()`, or `field.date()` to replace the wrong-type message:
 
 ```ts
 import { field, schema } from '@holo-js/validation'
@@ -97,7 +97,9 @@ export const registerUser = schema({
   password: field.password()
     .required('Choose a password.')
     .min(8, 'Password must be at least 8 characters.'),
-  birthday: field.date()
+  age: field.number('Enter your age as a number.')
+    .optional(),
+  birthday: field.date('Enter a valid birthday.')
     .beforeToday('Your birthday must be in the past.'),
   avatar: field.file()
     .optional()

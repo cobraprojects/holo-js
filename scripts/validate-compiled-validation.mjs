@@ -16,6 +16,11 @@ export const schema = form({
   maxDigits: f.number().maxDigits(3).optional(),
   zeroDigits: f.number().maxDigits(0).optional(),
   enabled: f.boolean().default(false),
+  amount: f.number('amount_not_a_number').optional(),
+  title: f.string('title_not_text').optional(),
+  secret: f.password('secret_not_text').optional(),
+  agreed: f.boolean('agreed_not_boolean').optional(),
+  startsAt: f.date('starts_at_invalid').optional(),
   profile: { website: f.string().url().optional(), id: f.string().uuid().nullable() },
 })`
   const transformed = compile(source)
@@ -30,7 +35,7 @@ export const schema = form({
   }
   assert.deepEqual(variants.compiled.schema.fields, variants.original.schema.fields)
   const valid = { email: 'reader@example.com', password: '12345678', passwordConfirmation: '12345678', name: 'Alice', profile: { id: null } }
-  const inputs = [{}, valid, { ...valid, email: 'invalid' }, { ...valid, name: '  ' }, { ...valid, passwordConfirmation: 'different' }, { ...valid, count: '11' }, { ...valid, count: '3', enabled: 'on' }, { ...valid, profile: { website: 'invalid', id: 'invalid' } }, { ...valid, email: 42 }, { ...valid, count: 1.5 }, { ...valid, name: 'x'.repeat(20) }]
+  const inputs = [{}, valid, { ...valid, email: 'invalid' }, { ...valid, name: '  ' }, { ...valid, passwordConfirmation: 'different' }, { ...valid, count: '11' }, { ...valid, count: '3', enabled: 'on' }, { ...valid, profile: { website: 'invalid', id: 'invalid' } }, { ...valid, email: 42 }, { ...valid, count: 1.5 }, { ...valid, name: 'x'.repeat(20) }, { ...valid, amount: 'abc', title: 42, secret: 42, agreed: 'maybe', startsAt: 'not-a-date' }]
   for (const value of [0, -0, 12, 123, 1234, -123, 12.3, 1e21, 1e23, 1e23 - 2 ** 24, 1e23 + 2 ** 24, Number.MAX_VALUE, NaN, Infinity, -Infinity, undefined, null, '123', '123abc']) {
     inputs.push({ ...valid, digits: value, minDigits: value, maxDigits: value, zeroDigits: value })
   }
@@ -41,6 +46,9 @@ export const schema = form({
   const dynamic = `import {field,schema} from '@holo-js/validation'; const minimum = Number(globalThis.minimum); export const form = schema({name:field.string().min(minimum).custom(value => value !== 'reserved')})`
   assert.equal(compile(dynamic), undefined)
   assert.equal(compile(`import {field,schema} from '@holo-js/validation'; export const form = schema({})`), undefined)
+  for (const typeMessage of ["'   '", '42', 'message', "'a', 'b'"]) {
+    assert.equal(compile(`import {field,schema} from '@holo-js/validation'; export const form = schema({count:field.number(${typeMessage})})`), undefined)
+  }
   assert.equal(compile(`import {field,schema} from '@holo-js/validation'; export const form = schema({name:field.string(,)})`), undefined)
   for (const value of ['1e999', '-1e999', '-0']) {
     assert.equal(compile(`import {field,schema} from '@holo-js/validation'; export const form = schema({count:field.number().default(${value})})`), undefined)

@@ -65,15 +65,15 @@ Rules are grouped by the field types they apply to. Rules marked "all fields" wo
 
 ## Field types
 
-Each builder creates a field with a fixed output type. Chain rules after it.
+Each builder creates a field with a fixed output type. Chain rules after it. The `message` argument replaces the [default message](/basics/validation/errors#default-messages) shown when the value has the wrong type.
 
 | Builder | Output type | Accepts |
 |---|---|---|
-| `field.string()` | `string` | Strings |
-| `field.password()` | `string` | Strings. Same as `string()` but marked [sensitive](#sensitive), and `min()` counts raw characters without trimming. |
-| `field.number()` | `number` | Numbers, or numeric strings such as `'42'` |
-| `field.boolean()` | `boolean` | Booleans, or `'1'`/`'true'`/`'on'`/`'yes'` and `'0'`/`'false'`/`'off'`/`'no'` |
-| `field.date()` | `Date` | `Date` objects, or strings `new Date()` can parse |
+| `field.string(message?)` | `string` | Strings |
+| `field.password(message?)` | `string` | Strings. Same as `string()` but marked [sensitive](#sensitive), and `min()` counts raw characters without trimming. |
+| `field.number(message?)` | `number` | Numbers, or numeric strings such as `'42'` |
+| `field.boolean(message?)` | `boolean` | Booleans, or `'1'`/`'true'`/`'on'`/`'yes'` and `'0'`/`'false'`/`'off'`/`'no'` |
+| `field.date(message?)` | `Date` | `Date` objects, or strings `new Date()` can parse |
 | `field.file()` | `WebFileLike` (a `Blob` with an optional `name`) | Uploaded files from `FormData` |
 | `field.array(item)` | `item[]` | Arrays. `item` is another field or an object shape. |
 | `field.union([first, second, ...])` | Union of alternative output types | Values accepted by at least one alternative. |

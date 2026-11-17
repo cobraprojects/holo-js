@@ -163,13 +163,16 @@ export function normalizeSchemaShape<TShape extends SchemaInputShape>(shape: TSh
   return Object.freeze(Object.fromEntries(normalizedEntries)) as NormalizedSchemaShape<TShape>
 }
 
-export function createField<TOutput>(kind: FieldKind, options: Pick<FieldDefinition, 'item' | 'sensitive' | 'alternatives'> = {}): ValidationField<TOutput> {
+export function createField<TOutput>(kind: FieldKind, options: Pick<FieldDefinition, 'item' | 'sensitive' | 'alternatives' | 'typeMessage'> = {}): ValidationField<TOutput> {
+  const { typeMessage, ...definitionOptions } = options
+  const normalizedTypeMessage = normalizeMessage(typeMessage)
   return Object.freeze({
     kind: 'field' as const,
     definition: Object.freeze({
       kind,
       item: undefined,
-      ...options,
+      ...definitionOptions,
+      ...(normalizedTypeMessage ? { typeMessage: normalizedTypeMessage } : {}),
       rules: Object.freeze([]),
     }),
   })

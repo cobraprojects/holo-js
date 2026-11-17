@@ -299,20 +299,20 @@ export function arrayField<TItemInput extends ArrayFieldBuilderInput>(
 }
 
 export const field = Object.freeze({
-  string() {
-    return new ValidationFieldBuilder<string>(createField('string'))
+  string(message?: string) {
+    return new ValidationFieldBuilder<string>(createField('string', { typeMessage: message }))
   },
-  password() {
-    return new ValidationFieldBuilder<string>(createField('string', { sensitive: true }))
+  password(message?: string) {
+    return new ValidationFieldBuilder<string>(createField('string', { sensitive: true, typeMessage: message }))
   },
-  number() {
-    return new ValidationFieldBuilder<number>(createField('number'))
+  number(message?: string) {
+    return new ValidationFieldBuilder<number>(createField('number', { typeMessage: message }))
   },
-  boolean() {
-    return new ValidationFieldBuilder<boolean>(createField('boolean'))
+  boolean(message?: string) {
+    return new ValidationFieldBuilder<boolean>(createField('boolean', { typeMessage: message }))
   },
-  date() {
-    return new ValidationFieldBuilder<Date>(createField('date'))
+  date(message?: string) {
+    return new ValidationFieldBuilder<Date>(createField('date', { typeMessage: message }))
   },
   file() {
     return new ValidationFieldBuilder<WebFileLike>(createField('file'))

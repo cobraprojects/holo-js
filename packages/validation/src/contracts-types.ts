@@ -92,6 +92,7 @@ export interface FieldDefinition {
   readonly kind: FieldKind
   readonly rules: readonly FieldRule[]
   readonly sensitive?: boolean
+  readonly typeMessage?: string
   readonly item?: FieldArrayItemDefinition
   readonly alternatives?: readonly FieldDefinition[]
 }

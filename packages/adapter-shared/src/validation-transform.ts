@@ -12,6 +12,7 @@ type Definition = {
   readonly kind: string
   readonly rules: readonly Rule[]
   readonly sensitive?: true
+  readonly typeMessage?: string
 }
 
 type CompiledField = {
@@ -66,12 +67,16 @@ function compileField(node: ts.Expression, fieldName: string, runtime: string, d
   while (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
     const member = current.expression
     if (ts.isIdentifier(member.expression) && member.expression.text === fieldName) {
-      if (!primitives.has(member.name.text) || current.arguments.length !== 0) return undefined
+      if (!primitives.has(member.name.text) || current.arguments.length > 1) return undefined
+      const typeMessageArgument = current.arguments[0]
+      const typeMessage = typeMessageArgument ? literal(typeMessageArgument) : undefined
+      if (typeMessageArgument && (typeof typeMessage !== 'string' || !typeMessage.trim())) return undefined
       const kind = member.name.text === 'password' ? 'string' : member.name.text
       const definition: Definition = {
         kind,
         rules: rules.reverse(),
         ...(member.name.text === 'password' ? { sensitive: true } : {}),
+        ...(typeof typeMessage === 'string' ? { typeMessage: typeMessage.trim() } : {}),
       }
       if (kind !== 'number' && rules.some(rule => digitRules.has(rule.name))) return undefined
       const actions: string[] = []
@@ -83,7 +88,7 @@ function compileField(node: ts.Expression, fieldName: string, runtime: string, d
           actions.push(`${runtime}.${action}(${definitionReference}, ${JSON.stringify(rule.args[0])}, ${JSON.stringify(rule.message)})`)
         }
       }
-      let code = `${runtime}.${kind}Schema()`
+      let code = `${runtime}.${kind}Schema(${JSON.stringify(definition.typeMessage)})`
       if (actions.length > 0) code = `${runtime}.pipeAsync(${code}, ${actions.join(', ')})`
       const defaultRule = definition.rules.find(rule => rule.name === 'default')
       const defaultValue = defaultRule ? JSON.stringify(defaultRule.args[0]) : 'undefined'
@@ -117,7 +122,7 @@ function compileShape(node: ts.ObjectLiteralExpression, fieldName: string, runti
     const field = compileField(property.initializer, fieldName, runtime, `${path}[${JSON.stringify(key)}].definition`)
     if (!field) return undefined
     const rules = field.definition.rules.map(rule => `Object.freeze({name: ${JSON.stringify(rule.name)}, args: Object.freeze(${JSON.stringify(rule.args)})${rule.message ? `, message: ${JSON.stringify(rule.message)}` : ''}})`)
-    fields.push(`${JSON.stringify(key)}: Object.freeze({kind: 'field', definition: Object.freeze({kind: ${JSON.stringify(field.definition.kind)}, item: undefined, ${field.definition.sensitive ? 'sensitive: true,' : ''} rules: Object.freeze([${rules.join(',')}])})})`)
+    fields.push(`${JSON.stringify(key)}: Object.freeze({kind: 'field', definition: Object.freeze({kind: ${JSON.stringify(field.definition.kind)}, item: undefined, ${field.definition.sensitive ? 'sensitive: true,' : ''} ${field.definition.typeMessage ? `typeMessage: ${JSON.stringify(field.definition.typeMessage)},` : ''} rules: Object.freeze([${rules.join(',')}])})})`)
     schemas.push(`${JSON.stringify(key)}: ${runtime}.createCompiledFieldSchema(${path}[${JSON.stringify(key)}].definition, ${field.code}, ${runtime}.createExecutionNode(parentExecution, ${JSON.stringify(key)}))`)
   }
   return { fields: `Object.freeze({${fields.join(',')}})`, code: `${runtime}.createShapeExecutionSchema(${runtime}.objectAsync({${schemas.join(',')}}), parentExecution)` }
