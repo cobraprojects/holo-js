@@ -2,9 +2,17 @@
 
 ## Unreleased
 
+### Compatibility and upgrade requirements
+
+- **Upgrade Next.js first.** Next.js apps need `next` 16.4.6 or newer on the 16 line in the app's own `package.json`. See [Upgrading from 0.6.0 to 0.6.1](apps/docs/docs/getting-started/upgrading.md#upgrading-from-060-to-061).
+
 ### Fixed
 
 - Database: an untyped model's table definition, such as `AISettings.definition.table` for a model with `connectionName` set to another connection, now works as its table name does wherever it is passed: `DB.table(AISettings.definition.table, 'platform')`, `tx.table(Tenant.definition.table)`, a join, a `belongsToMany()` pivot and `defineModel()` check no column names and read the driver's values. Before, a query threw `Column "…" is not defined on table "…"` for every column, a join treated the table as having no columns, so a joined `id` could replace the model's own, a pivot skipped the key casts its table name gets, and `defineModel(AISettings.definition.table, …)` defined a model with no columns and no primary key. Table definitions from the Generated schema and `defineTable()` still reject unknown columns. See [Point a model at a connection](apps/docs/docs/database/connections.md#point-a-model-at-a-connection).
+
+### Security
+
+- Raise the Next.js peer floor to 16.4.6. Next.js 16.3.0 through 16.4.4 can disclose a `use cache` function's result across root params when it is called through `unstable_cache()` (GHSA-mfr8-8qww-v76h). Scaffolded apps get the new floor.
 
 ## 0.6.0 - 2026-11-11
 

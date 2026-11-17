@@ -1,5 +1,13 @@
 # Upgrade Guide
 
+## Upgrading from 0.6.0 to 0.6.1
+
+Next.js apps: upgrade `next` to 16.4.6 or newer on the 16 line in your app's `package.json` first. Next.js 16.3.0 through 16.4.4 can disclose a `use cache` function's result across root params when it is called through `unstable_cache()`, and Holo's Next.js packages now require the fixed release. Nuxt and SvelteKit apps need no framework change.
+
+Then update every installed `@holo-js/*` package to `0.6.1` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md) lists the release changes.
+
+0.6.1 fixes queries started from the table definition of a model on another connection. `DB.table(Model.definition.table, 'platform')`, `tx.table(Model.definition.table)`, joins, `belongsToMany()` pivots and `defineModel()` now treat it as the table name, as [Point a model at a connection](/database/connections#point-a-model-at-a-connection) describes, instead of rejecting every column.
+
 ## Upgrading from 0.5.6 to 0.6.0
 
 Update every installed `@holo-js/*` package to `0.6.0` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed: the next `npx holo migrate`, `npx holo build` or `npx holo dev` writes your types from the database you already have. 0.6.0 removes public APIs and changes how `holo build` and `migrate --isolated` work, so review the sections below before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#060---2026-11-11) lists the release changes.

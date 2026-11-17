@@ -82,7 +82,7 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "magic-string": "^1.4.5",
   "minimatch": "^11.0.3",
   "mysql2": "^3.24.6",
-  "next": "^16.4.3",
+  "next": "^16.4.6",
   "nodemailer": "^10.2.1",
   "nuxt": "^4.6.3",
   "pg": "^8.13.0",
