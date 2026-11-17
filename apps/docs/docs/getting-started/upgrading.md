@@ -2,7 +2,15 @@
 
 ## Upgrading from 0.6.0 to 0.6.1
 
-Next.js apps: upgrade `next` to 16.4.6 or newer on the 16 line in your app's `package.json` first. Next.js 16.3.0 through 16.4.4 can disclose a `use cache` function's result across root params when it is called through `unstable_cache()`, and Holo's Next.js packages now require the fixed release. Nuxt and SvelteKit apps need no framework change.
+Upgrade your framework first, in your app's `package.json`. Holo's adapters now require releases that fix published security advisories:
+
+| Adapter | Required in your app's `package.json` |
+| --- | --- |
+| `@holo-js/adapter-next` | `next` 16.4.6 or newer on the 16 line |
+| `@holo-js/adapter-nuxt` | `nuxt` 4.6.4 or newer on the 4 line |
+| `@holo-js/adapter-sveltekit` | `@sveltejs/kit` 3.1.1 or newer on the 3 line, and `@sveltejs/adapter-node` 6.0.1 or newer if you deploy with it |
+
+The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md) lists the advisories each release fixes.
 
 Then update every installed `@holo-js/*` package to `0.6.1` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md) lists the release changes.
 

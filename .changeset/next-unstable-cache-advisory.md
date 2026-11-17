@@ -1,6 +1,7 @@
 ---
 '@holo-js/adapter-next': patch
 '@holo-js/auth': patch
+'@holo-js/cli': patch
 '@holo-js/security': patch
 ---
 
