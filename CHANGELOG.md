@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Database: an untyped model's table definition, such as `AISettings.definition.table` for a model with `connectionName` set to another connection, now works as its table name does wherever it is passed: `DB.table(AISettings.definition.table, 'platform')`, `tx.table(Tenant.definition.table)`, a join, a `belongsToMany()` pivot and `defineModel()` check no column names and read the driver's values. Before, a query threw `Column "…" is not defined on table "…"` for every column, a join treated the table as having no columns, so a joined `id` could replace the model's own, a pivot skipped the key casts its table name gets, and `defineModel(AISettings.definition.table, …)` defined a model with no columns and no primary key. Table definitions from the Generated schema and `defineTable()` still reject unknown columns. See [Point a model at a connection](apps/docs/docs/database/connections.md#point-a-model-at-a-connection).
+
 ## 0.6.0 - 2026-11-11
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-056-to-060). No database migration is needed: the next `holo migrate`, `holo build` or `holo dev` writes the types from your database. This release removes public APIs and changes `holo build` and `holo migrate --isolated`, so read the guide before upgrading.

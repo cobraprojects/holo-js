@@ -8,7 +8,6 @@ import { setAutomaticEagerLoading, setPreventAccessingMissingAttributes, setPrev
 import { resolveUniqueIdConfig, validateUniqueIdConfig } from './uniqueIds'
 import {
   buildModelTable,
-  createUntypedModelTable,
   inferModelName,
   inferPrimaryKey,
   normalizeEventHandlers,
@@ -19,6 +18,7 @@ import {
 } from './defineModelHelpers'
 import type { ColumnInput } from '../schema/columns'
 import { findPendingGeneratedPrimaryKey } from '../schema/generated'
+import { createUntypedTable, typedTableOrName } from '../schema/untypedTable'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { BoundTableDefinition } from '../schema/defineTable'
 import type { TableDefinitionBuilder } from '../schema/TableDefinitionBuilder'
@@ -183,7 +183,7 @@ export function defineModel(
   options?: DefineModelOptions<TableDefinition>,
 ): unknown {
   if (typeof tableOrName !== 'string') {
-    return defineModelFromResolvedTable(tableOrName, (builderOrOptions ?? {}) as DefineModelOptions<TableDefinition>)
+    return defineModelFromTableDefinition(tableOrName, (builderOrOptions ?? {}) as DefineModelOptions<TableDefinition>)
   }
 
   if (typeof builderOrOptions === 'function') {
@@ -214,10 +214,14 @@ export function defineModelFromTable(
   table: TableDefinition,
   options?: DefineModelOptions<TableDefinition>,
 ): unknown {
-  return defineModelFromResolvedTable(
-    table,
-    (options ?? {}) as DefineModelOptions<TableDefinition>,
-  )
+  return defineModelFromTableDefinition(table, (options ?? {}) as DefineModelOptions<TableDefinition>)
+}
+
+function defineModelFromTableDefinition(table: TableDefinition, options: DefineModelOptions<TableDefinition>): unknown {
+  const reference = typedTableOrName(table)
+  return typeof reference === 'string'
+    ? defineModelFromGeneratedTableName(reference, options)
+    : defineModelFromResolvedTable(reference, options)
 }
 
 function defineModelFromGeneratedTableName<
@@ -233,7 +237,7 @@ function defineModelFromGeneratedTableName<
   const touches = validateTouches(inferredName, relations, options.touches ?? [])
 
   type ColumnName = Extract<keyof GeneratedSchemaTable<TName>['columns'], string>
-  const untypedTable = createUntypedModelTable(tableName) as GeneratedSchemaTable<TName>
+  const untypedTable = createUntypedTable(tableName) as GeneratedSchemaTable<TName>
   const resolveSchemaTable = (): GeneratedSchemaTable<TName> | undefined => (
     resolveGeneratedModelTable(tableName, options.connectionName) as GeneratedSchemaTable<TName> | undefined
   )
