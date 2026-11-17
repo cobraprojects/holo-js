@@ -230,6 +230,7 @@ async function createInstallWrapper(tempRoot) {
   await mkdir(binRoot, { recursive: true })
   await writeFile(npmPath, [
     '#!/bin/sh',
+    'case "$1" in install|i|ci) ;; *) exec "$HOLO_REAL_NPM" "$@" ;; esac',
     'node "$HOLO_SMOKE_SCRIPT" --activate-local-packages "$PWD" "$HOLO_LOCAL_PACKAGES_ROOT"',
     'status=$?',
     'if [ "$status" -ne 0 ]; then exit "$status"; fi',
