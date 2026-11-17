@@ -130,6 +130,7 @@ import {
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
 import { applyTableNameFolding } from '../schema/tableIdentityRegistry'
+import { typedTableOrName } from '../schema/untypedTable'
 import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolveTableIdentity, resolvedTableNameFolding } from './tableIdentity'
 import { currentRootTransaction } from '../core/openTransactions'
 import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalization, deferPredicateNormalization } from './deferredPredicateValues'
@@ -249,11 +250,12 @@ function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): read
 }
 
 function resolveJoinTarget(table: TableReference): Pick<QueryJoinClause, 'table' | 'alias' | 'definition'> {
-  if (typeof table !== 'string') {
-    return { table: table.tableName, definition: table }
+  const reference = typedTableOrName(table)
+  if (typeof reference !== 'string') {
+    return { table: reference.tableName, definition: reference }
   }
 
-  const { tableName, alias } = parseTableReference(table)
+  const { tableName, alias } = parseTableReference(reference)
   return alias === undefined ? { table: tableName } : { table: tableName, alias }
 }
 

@@ -1,5 +1,6 @@
 import { SecurityError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
+import { typedTableOrName } from '../schema/untypedTable'
 
 export type QueryOperator
   = | '='
@@ -409,17 +410,18 @@ export function parseTableReference(table: string): { readonly tableName: string
 }
 
 export function createTableSource(table: string | TableDefinition): QuerySource {
-  if (typeof table === 'string') {
+  const reference = typedTableOrName(table)
+  if (typeof reference === 'string') {
     return Object.freeze({
       kind: 'table',
-      ...parseTableReference(table),
+      ...parseTableReference(reference),
     })
   }
 
   return Object.freeze({
     kind: 'table',
-    tableName: table.tableName,
-    table,
+    tableName: reference.tableName,
+    table: reference,
   })
 }
 

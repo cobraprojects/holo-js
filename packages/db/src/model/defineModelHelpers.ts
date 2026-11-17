@@ -87,15 +87,6 @@ export function resolveGeneratedModelTable(tableName: string, connectionName: st
   )
 }
 
-export function createUntypedModelTable<TName extends string>(tableName: TName): TableDefinition<TName> {
-  return Object.freeze({
-    kind: 'table',
-    tableName,
-    columns: Object.freeze({}),
-    indexes: Object.freeze([]),
-  })
-}
-
 export function resolveDeletedAtColumn<TTable extends TableDefinition>(
   table: TTable,
   options: DefineModelOptions<TTable>,

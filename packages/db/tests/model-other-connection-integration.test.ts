@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { DB, belongsTo, clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, hasMany, latestOfMany, registerGeneratedTables, resetDB } from '../src'
+import { DB, belongsTo, belongsToMany, clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, hasMany, latestOfMany, registerGeneratedTables, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 async function openAnalyticsConnection() {
@@ -179,6 +179,125 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('a model on a con
     expect(counted.get('pageViews_count')).toBe(2)
     expect(counted.get('pageViews_sum_hits')).toBe(5)
     expect(latest.latestView?.get('path')).toBe('/b')
+  })
+
+  it('queries its own connection through the model\'s table definition without checking column names', async () => {
+    const { names } = await openAnalyticsConnection()
+    const PageView = defineModel(names.pageViews, { connectionName: 'analytics', fillable: ['path', 'hits'] })
+    await PageView.create({ path: '/a', hits: 3 })
+    await PageView.create({ path: '/b', hits: 5 })
+
+    await DB.table(PageView.definition.table, 'analytics').where('path', '/b').update({ hits: 8 })
+
+    expect(await DB.table(PageView.definition.table, 'analytics').where('path', '/b').value('hits')).toBe(8)
+    expect(await DB.table(PageView.definition.table, 'analytics').where('hits', '>', 1).orderBy('id').pluck('path')).toEqual(['/a', '/b'])
+    expect(await DB.table(PageView.definition.table, 'analytics').select('path', 'hits').where('id', 1).first()).toEqual({ path: '/a', hits: 3 })
+  })
+
+  it('queries a same-named default-connection table in a transaction through the model\'s table definition', async () => {
+    const { names, db } = await openAnalyticsConnection()
+    const defaultSchema = createSchemaService(db)
+    await defaultSchema.createTable(names.pageViews, (table) => {
+      table.id()
+      table.string('path')
+      table.integer('hits').default(0)
+    })
+    onTestFinished(() => defaultSchema.dropTable(names.pageViews))
+    const PageView = defineModel(names.pageViews, { connectionName: 'analytics' })
+    await DB.table(names.pageViews).insert([{ path: '/a', hits: 1 }, { path: '/b', hits: 2 }])
+
+    const hits = await DB.transaction(async (tx) => {
+      await tx.table(PageView.definition.table).where('path', '/b').update({ hits: 9 })
+      return tx.table(PageView.definition.table).where('path', '/b').lockForUpdate().value('hits')
+    })
+
+    expect(hits).toBe(9)
+    expect(await DB.table(names.pageViews).orderBy('id').pluck('hits')).toEqual([1, 9])
+  })
+
+  it('keeps a model\'s own columns when it joins a subquery that joins an untyped model\'s table definition', async () => {
+    const { names, db } = await openAnalyticsConnection()
+    const defaultSchema = createSchemaService(db)
+    const owners = `owners_${names.sites}`
+    await defaultSchema.createTable(owners, (table) => {
+      table.id()
+      table.string('name')
+    })
+    await defaultSchema.createTable(names.pageViews, (table) => {
+      table.id()
+      table.integer('owner_id')
+      table.string('path')
+    })
+    onTestFinished(async () => {
+      await defaultSchema.dropTable(names.pageViews)
+      await defaultSchema.dropTable(owners)
+    })
+    registerGeneratedTables({
+      owners: defineGeneratedTable(owners, { id: column.id(), name: column.string() }),
+    })
+    const Owner = defineModel(owners, { timestamps: false })
+    const PageView = defineModel(names.pageViews, { connectionName: 'analytics' })
+    await DB.table(owners).insert({ name: 'Ada' })
+    await DB.table(names.pageViews).insert({ id: 9, owner_id: 1, path: '/a' })
+    const views = DB.table(owners)
+      .join(PageView.definition.table, `${owners}.id`, '=', `${names.pageViews}.owner_id`)
+      .select(`${names.pageViews}.*`)
+
+    const [owner] = await Owner.joinSub(views, 'views', `${owners}.id`, '=', 'views.owner_id')
+      .select(`${owners}.*`, 'views.*')
+      .get()
+
+    expect(owner?.get('id')).toBe(1)
+    expect(owner?.get('name')).toBe('Ada')
+  })
+
+  it('reads a pivot through an untyped model\'s table definition as it reads the pivot\'s table name', async () => {
+    const { names, db } = await openAnalyticsConnection()
+    const defaultSchema = createSchemaService(db)
+    const users = `users_${names.sites}`
+    const roles = `roles_${names.sites}`
+    const roleUser = `role_user_${names.sites}`
+    await defaultSchema.createTable(users, (table) => {
+      table.id()
+      table.string('name')
+    })
+    await defaultSchema.createTable(roles, (table) => {
+      table.id()
+      table.string('name')
+    })
+    await defaultSchema.createTable(roleUser, (table) => {
+      table.string('user_id')
+      table.string('role_id')
+    })
+    onTestFinished(async () => {
+      await defaultSchema.dropTable(roleUser)
+      await defaultSchema.dropTable(roles)
+      await defaultSchema.dropTable(users)
+    })
+    registerGeneratedTables({
+      users: defineGeneratedTable(users, { id: column.id(), name: column.string() }),
+      roles: defineGeneratedTable(roles, { id: column.id(), name: column.string() }),
+    })
+    const RoleUser = defineModel(roleUser, { connectionName: 'analytics' })
+    const Role = defineModel(roles, { timestamps: false })
+    const User = defineModel(users, { timestamps: false, relations: { roles: belongsToMany(() => Role, RoleUser.definition.table, 'user_id', 'role_id') } })
+    await DB.table(users).insert([{ name: 'Ada' }, { name: 'Grace' }])
+    await DB.table(roles).insert({ name: 'admin' })
+    await DB.table(roleUser).insert({ user_id: '1', role_id: '1' })
+
+    expect(await User.whereHas('roles').count()).toBe(1)
+  })
+
+  it('defines another untyped model from an untyped model\'s table definition', async () => {
+    const { names } = await openAnalyticsConnection()
+    const PageView = defineModel(names.pageViews, { connectionName: 'analytics' })
+    const Visit = defineModel(PageView.definition.table, { connectionName: 'analytics', name: 'Visit', fillable: ['path'] })
+
+    const visit = await Visit.create({ path: '/a' })
+
+    expect(visit.get('id')).toBe(1)
+    expect(visit.get('created_at')).toBeInstanceOf(Date)
+    expect((await Visit.findOrFail(1)).get('path')).toBe('/a')
   })
 
   it('ignores a same-named Generated-schema table on the default connection', async () => {

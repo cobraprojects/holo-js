@@ -1,5 +1,21 @@
 # Upgrade Guide
 
+## Upgrading from 0.6.0 to 0.6.1
+
+Upgrade your framework first, in your app's `package.json`. Holo's adapters now require releases that fix published security advisories:
+
+| Adapter | Required in your app's `package.json` |
+| --- | --- |
+| `@holo-js/adapter-next` | `next` 16.4.6 or newer on the 16 line |
+| `@holo-js/adapter-nuxt` | `nuxt` 4.6.4 or newer on the 4 line |
+| `@holo-js/adapter-sveltekit` | `@sveltejs/kit` 3.1.1 or newer on the 3 line, and `@sveltejs/adapter-node` 6.0.1 or newer if you deploy with it |
+
+The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md) lists the advisories each release fixes.
+
+Then update every installed `@holo-js/*` package to `0.6.1` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md) lists the release changes.
+
+0.6.1 fixes queries started from the table definition of a model on another connection. `DB.table(Model.definition.table, 'platform')`, `tx.table(Model.definition.table)`, joins, `belongsToMany()` pivots and `defineModel()` now treat it as the table name, as [Point a model at a connection](/database/connections#point-a-model-at-a-connection) describes, instead of rejecting every column.
+
 ## Upgrading from 0.5.6 to 0.6.0
 
 Update every installed `@holo-js/*` package to `0.6.0` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed: the next `npx holo migrate`, `npx holo build` or `npx holo dev` writes your types from the database you already have. 0.6.0 removes public APIs and changes how `holo build` and `migrate --isolated` work, so review the sections below before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#060---2026-11-11) lists the release changes.

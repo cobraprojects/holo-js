@@ -7,6 +7,7 @@ import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { selectionOutputName } from '../query/modelRowProjection'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadTableDefinition } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition, isUnresolvedGeneratedPrimaryKey } from '../schema/generated'
+import { typedTableOrName } from '../schema/untypedTable'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
 import { normalizeDialectReadValue, storesDate, storesJson, storesText } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
@@ -1557,7 +1558,7 @@ export class ModelRepository<
 
   createTableQuery(connection: DatabaseContext = this.getConnection()): TableQueryBuilder<TTable> {
     const table = this.definition.table
-    const source = createTableSource(this.definition.untyped ? table.tableName : table)
+    const source = createTableSource(table)
     const primaryKey = resolveModelRowKey(this.definition)
     return new TableQueryBuilder(table, connection, createSelectQueryPlan(primaryKey === undefined ? source : Object.freeze({ ...source, primaryKey })))
   }
@@ -3184,8 +3185,9 @@ export class ModelRepository<
   }
 
   private resolvePivotTable(pivotTable: string | TableDefinition, connection: DatabaseContext): string | TableDefinition {
-    if (typeof pivotTable !== 'string') return pivotTable
-    return getConnectionGeneratedTableDefinition(pivotTable, connection.getConnectionName()) ?? pivotTable
+    const reference = typedTableOrName(pivotTable)
+    if (typeof reference !== 'string') return reference
+    return getConnectionGeneratedTableDefinition(reference, connection.getConnectionName()) ?? reference
   }
 
   private resolvePivotTableName(pivotTable: string | TableDefinition): string {

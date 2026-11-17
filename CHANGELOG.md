@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Compatibility and upgrade requirements
+
+- **Upgrade your framework first.** Next.js apps need `next` 16.4.6 or newer on the 16 line, Nuxt apps need `nuxt` 4.6.4 or newer on the 4 line, and SvelteKit apps need `@sveltejs/kit` 3.1.1 or newer on the 3 line and `@sveltejs/adapter-node` 6.0.1 or newer, in the app's own `package.json`. See [Upgrading from 0.6.0 to 0.6.1](apps/docs/docs/getting-started/upgrading.md#upgrading-from-060-to-061).
+
+### Fixed
+
+- Database: an untyped model's table definition, such as `AISettings.definition.table` for a model with `connectionName` set to another connection, now works as its table name does wherever it is passed: `DB.table(AISettings.definition.table, 'platform')`, `tx.table(Tenant.definition.table)`, a join, a `belongsToMany()` pivot and `defineModel()` check no column names and read the driver's values. Before, a query threw `Column "…" is not defined on table "…"` for every column, a join treated the table as having no columns, so a joined `id` could replace the model's own, a pivot skipped the key casts its table name gets, and `defineModel(AISettings.definition.table, …)` defined a model with no columns and no primary key. Table definitions from the Generated schema and `defineTable()` still reject unknown columns. See [Point a model at a connection](apps/docs/docs/database/connections.md#point-a-model-at-a-connection).
+
+### Security
+
+- Raise the Next.js peer floor to 16.4.6. Next.js 16.3.0 through 16.4.4 can disclose a `use cache` function's result across root params when it is called through `unstable_cache()` (GHSA-mfr8-8qww-v76h). Scaffolded apps get the new floor.
+- Raise the framework floors past published advisories: Nuxt 4.6.4 (and `@nuxt/kit` and `@nuxt/nitro-server`), SvelteKit 3.1.1 and `@sveltejs/adapter-node` 6.0.1. Nuxt before 4.6.4 lets an encoded slash or a leading `//` in the request path bypass route rules and `server/middleware` path checks (GHSA-f3x9-2chm-73c8, GHSA-r99w-jh2x-3mg9), exposes the message and data of unhandled server-rendering errors (GHSA-96x6-fvhx-49hg), and its dev server can serve files from a parent directory (GHSA-mjrq-cffv-q4qc). SvelteKit 3.1.0 can statically replace server secrets into the client bundle when its server-only import guard fails (GHSA-m9j8-jcmv-hp69) and can be stalled by remote function form data (GHSA-3r8g-jcqq-3p5j). `@sveltejs/adapter-node` 6.0.0 crashes when proxying certain requests through `fetch` (GHSA-rqw3-x7hx-mm3p). Scaffolded apps get the new floors.
+
 ## 0.6.0 - 2026-11-11
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-056-to-060). No database migration is needed: the next `holo migrate`, `holo build` or `holo dev` writes the types from your database. This release removes public APIs and changes `holo build` and `holo migrate --isolated`, so read the guide before upgrading.
