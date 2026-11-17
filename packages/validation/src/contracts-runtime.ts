@@ -143,7 +143,7 @@ function applyFieldChecks(
       case 'afterOrToday': {
         const dateValue = shapeRuleValue instanceof Date ? shapeRuleValue : resolveDateRuleValue(shapeRuleValue)
         if (!dateValue) {
-          pushIssue(issues, path, 'This field must be a valid date.')
+          pushIssue(issues, path, resolveRuleMessage(rule, 'This field must be a valid date.'))
           break
         }
 

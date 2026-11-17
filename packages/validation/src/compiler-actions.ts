@@ -113,10 +113,10 @@ export function asPipeItem(value: unknown): v.PipeItem<unknown, unknown, v.BaseI
   return value as v.PipeItem<unknown, unknown, v.BaseIssue<unknown>> | v.PipeItemAsync<unknown, unknown, v.BaseIssue<unknown>>
 }
 
-export function stringSchema() { return v.string('This field must be text.') }
-export function numberSchema() { return v.number('This field must be a number.') }
-export function booleanSchema() { return v.boolean('This field must be true or false.') }
-export function dateSchema() { return v.date('This field must be a valid date.') }
+export function stringSchema(message?: string) { return v.string(message ?? 'This field must be text.') }
+export function numberSchema(message?: string) { return v.number(message ?? 'This field must be a number.') }
+export function booleanSchema(message?: string) { return v.boolean(message ?? 'This field must be true or false.') }
+export function dateSchema(message?: string) { return v.date(message ?? 'This field must be a valid date.') }
 export function emailAction(message?: string) { return v.email(message ?? 'This field must be a valid email address.') }
 export function urlAction(message?: string) { return v.url(message ?? 'This field must be a valid URL.') }
 export function uuidAction(message?: string) { return v.uuid(message ?? 'This field must be a valid UUID.') }

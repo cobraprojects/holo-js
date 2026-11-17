@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Validation: `field.string()`, `field.password()`, `field.number()`, `field.boolean()` and `field.date()` take an optional message for their wrong-type check, such as `field.number('amount_not_a_number')`, in server validation and in compiled browser schemas. Without it, the default English message is unchanged. A date rule such as `before()` on a field that isn't a date now reports its own message when the value can't be read as a date. See [Field types](apps/docs/docs/basics/validation/rules.md#field-types).
+
 ### Compatibility and upgrade requirements
 
 - **Upgrade your framework first.** Next.js apps need `next` 16.4.6 or newer on the 16 line, Nuxt apps need `nuxt` 4.6.4 or newer on the 4 line, and SvelteKit apps need `@sveltejs/kit` 3.1.1 or newer on the 3 line and `@sveltejs/adapter-node` 6.0.1 or newer, in the app's own `package.json`. See [Upgrading from 0.6.0 to 0.6.1](apps/docs/docs/getting-started/upgrading.md#upgrading-from-060-to-061).

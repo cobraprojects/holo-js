@@ -297,6 +297,27 @@ describe('@holo-js/forms client', () => {
     expect(emailErrors).toEqual([])
   })
 
+  it('shows custom type messages for each field kind', async () => {
+    const client = useForm(schema({
+      title: field.string('title_not_text'),
+      secret: field.password('secret_not_text'),
+      amount: field.number('amount_not_a_number'),
+      agreed: field.boolean('agreed_not_boolean'),
+      startsAt: field.date('starts_at_invalid'),
+    }), {
+      initialValues: { title: 42, secret: 42, amount: 'abc', agreed: 'maybe', startsAt: 'not-a-date' } as never,
+    })
+
+    expect((await client.validate()).valid).toBe(false)
+    expect(client.errors.flatten()).toEqual({
+      title: ['title_not_text'],
+      secret: ['secret_not_text'],
+      amount: ['amount_not_a_number'],
+      agreed: ['agreed_not_boolean'],
+      startsAt: ['starts_at_invalid'],
+    })
+  })
+
   it('lets the newest submission own state while every caller receives its result', async () => {
     const first = createDeferred<{ ok: false, status: number, valid: false, values: { email: string }, errors: { email: string[] } }>()
     const second = createDeferred<{ ok: true, status: number, data: string }>()

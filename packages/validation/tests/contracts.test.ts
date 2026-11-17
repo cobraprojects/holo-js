@@ -1094,6 +1094,46 @@ describe('@holo-js/validation contracts', () => {
     }
   })
 
+  it('reports custom type messages for each field kind', async () => {
+    const typed = schema({
+      title: field.string('title_not_text').required('title_required'),
+      secret: field.password('secret_not_text').optional(),
+      amount: field.number('amount_not_a_number').required('amount_required'),
+      agreed: field.boolean('agreed_not_boolean').optional(),
+      startsAt: field.date('starts_at_invalid').optional(),
+    })
+
+    const invalid = await safeParse({ title: 42, secret: 42, amount: 'abc', agreed: 'maybe', startsAt: 'not-a-date' }, typed)
+
+    expect(invalid.valid).toBe(false)
+    expect(invalid.errors.flatten()).toEqual({
+      title: ['title_not_text'],
+      secret: ['secret_not_text'],
+      amount: ['amount_not_a_number'],
+      agreed: ['agreed_not_boolean'],
+      startsAt: ['starts_at_invalid'],
+    })
+    expect((await safeParse({}, typed)).errors.flatten()).toEqual({
+      title: ['title_required'],
+      amount: ['amount_required'],
+    })
+    await expect(validate({ title: 'Launch', amount: '12', agreed: 'on', startsAt: '2030-01-01' }, typed)).resolves.toEqual({
+      title: 'Launch',
+      amount: 12,
+      agreed: true,
+      startsAt: new Date('2030-01-01'),
+    })
+    expect(() => field.number('   ')).toThrow('Custom error messages must not be empty.')
+  })
+
+  it('reports a date rule message when the value cannot be read as a date', async () => {
+    const result = await safeParse({ startsAt: 'not-a-date' }, schema({
+      startsAt: field.string().before('2030-01-01', 'starts_at_invalid'),
+    }))
+
+    expect(result.errors.flatten()).toEqual({ startsAt: ['starts_at_invalid'] })
+  })
+
   it('treats empty optional file inputs as missing files', async () => {
     const postSchema = schema({
       image: field.file().optional().image('The selected file must be an image.').maxSize('2mb', 'The selected file must be 2 MB or smaller.'),

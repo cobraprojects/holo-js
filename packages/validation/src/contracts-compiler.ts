@@ -83,13 +83,13 @@ function makeListLimitSchema(definition: FieldDefinition): CompiledSchema {
 function makeBaseSchema(definition: FieldDefinition, executionFor?: (dataset: object) => FieldExecution, itemPlan?: SchemaPlan, alternatives: readonly SchemaPlan[] = []): CompiledSchema {
   switch (definition.kind) {
     case 'string':
-      return stringSchema()
+      return stringSchema(definition.typeMessage)
     case 'number':
-      return numberSchema()
+      return numberSchema(definition.typeMessage)
     case 'boolean':
-      return booleanSchema()
+      return booleanSchema(definition.typeMessage)
     case 'date':
-      return dateSchema()
+      return dateSchema(definition.typeMessage)
     case 'file':
       return v.custom<WebFileLike>(value => isWebFileLike(value), 'The selected file must be a file.')
     case 'union': {
