@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.6.1 - 2026-11-17
+
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-060-to-061). Upgrade Next.js, Nuxt or SvelteKit to the releases below before you install it. No database migration and no app code changes are needed.
+
 ### Added
 
 - Validation: `field.string()`, `field.password()`, `field.number()`, `field.boolean()` and `field.date()` take an optional message for their wrong-type check, such as `field.number('amount_not_a_number')`, in server validation and in compiled browser schemas. Without it, the default English message is unchanged. A date rule such as `before()` on a field that isn't a date now reports its own message when the value can't be read as a date. See [Field types](apps/docs/docs/basics/validation/rules.md#field-types).
