@@ -10,11 +10,13 @@ Upgrade your framework first, in your app's `package.json`. Holo's adapters now 
 | `@holo-js/adapter-nuxt` | `nuxt` 4.6.4 or newer on the 4 line |
 | `@holo-js/adapter-sveltekit` | `@sveltejs/kit` 3.1.1 or newer on the 3 line, and `@sveltejs/adapter-node` 6.0.1 or newer if you deploy with it |
 
-The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md) lists the advisories each release fixes.
+The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#061---2026-11-17) lists the advisories each release fixes.
 
-Then update every installed `@holo-js/*` package to `0.6.1` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md) lists the release changes.
+Then update every installed `@holo-js/*` package to `0.6.1` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#061---2026-11-17) lists the release changes.
 
 0.6.1 fixes queries started from the table definition of a model on another connection. `DB.table(Model.definition.table, 'platform')`, `tx.table(Model.definition.table)`, joins, `belongsToMany()` pivots and `defineModel()` now treat it as the table name, as [Point a model at a connection](/database/connections#point-a-model-at-a-connection) describes, instead of rejecting every column.
+
+`field.string()`, `field.password()`, `field.number()`, `field.boolean()` and `field.date()` also accept an optional message for their wrong-type check, such as `field.number('amount_not_a_number')`. Existing schemas keep their default messages. See [Field types](/basics/validation/rules#field-types).
 
 ## Upgrading from 0.5.6 to 0.6.0
 
