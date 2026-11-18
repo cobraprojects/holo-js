@@ -3654,6 +3654,25 @@ export function addSelectFractionalCount(
   return append(createFractionalCountSelection(column, alias))
 }
 
+export function whereStoredValuesIn<
+  TTableOrName extends TableReference,
+  TSelectedRow extends Record<string, unknown>,
+  TAvailableColumns extends Record<string, unknown>,
+>(
+  query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
+  column: string,
+  values: readonly unknown[],
+): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  const appendTrusted = trustedRawWhereAppenders.get(query)
+  const connection = query.getConnection()
+  if (!appendTrusted || !isGenuineDatabaseContext(connection)) {
+    throw new SecurityError('whereStoredValuesIn() needs a query builder and connection that Holo created.')
+  }
+  if (values.length === 0) return appendTrusted('1 = 0', []) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+  const placeholders = values.map(() => '?').join(', ')
+  return appendTrusted(`${connection.getDialect().quoteIdentifier(column)} IN (${placeholders})`, values) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+}
+
 export function whereColumnNotExpiredByDatabaseClock<
   TTableOrName extends TableReference,
   TSelectedRow extends Record<string, unknown>,
