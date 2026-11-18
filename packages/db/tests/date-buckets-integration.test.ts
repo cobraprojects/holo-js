@@ -1625,6 +1625,16 @@ describe('date buckets next to sqlite wildcards of case-variant aliases', () => 
       .get()).rejects.toThrow(CompilerError)
   })
 
+  it('rejects raw ordering in the select that declares a date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('sqlite', { security: { allowUnsafeRawSql: true } })
+
+    await expect(DB.table(events.tableName)
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .unsafeOrderBy('(SELECT bucket) ASC', [])
+      .get()).rejects.toThrow('raw ORDER BY')
+  })
+
   it('rejects raw selections and ordering in subqueries of a query with a date bucket', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable('sqlite', { security: { allowUnsafeRawSql: true } })

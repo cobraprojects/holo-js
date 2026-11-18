@@ -1017,7 +1017,7 @@ export class SQLQueryCompiler {
     }
 
     if (orderBy.kind === 'raw') {
-      if (this.inheritedBucketNames.size > 0) throw unverifiableRawFragment('ORDER BY')
+      if (this.guardedBucketNames.size > 0) throw unverifiableRawFragment('ORDER BY')
       return this.compileRawSql(orderBy.sql, orderBy.bindings, bindings)
     }
 
