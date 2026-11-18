@@ -53,6 +53,7 @@ import {
   encodeValueCursor,
   normalizePaginationParameterName,
   resolveCursorPaginationOptions,
+  type CursorOrderDefinition,
   type ValueCursor,
 } from './pagination'
 import { cursorPredicate } from './cursorPredicate'
@@ -95,7 +96,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, LogicalColumnKind, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { isAwaitingGeneratedTableIdentity, getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { unionCursorColumns } from './unionCursorColumns'
+import { assertUnambiguousUnionOutputs, unionOutputName } from './unionOutputs'
 import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
 import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
@@ -116,6 +117,7 @@ import type {
   QueryKeyCasts,
   QueryDatePart,
   QueryOperator,
+  QueryOrderBy,
   QueryPredicateNode,
   QueryPredicate,
   QueryColumnSelection,
@@ -2326,39 +2328,40 @@ export class TableQueryBuilder<
     await this.bindGeneratedTable()
     const orderedQuery = this.prepareCursorPaginationQuery()
     const cursorOrders = orderedQuery.resolveCursorOrders()
-    const unionColumns = orderedQuery.plan.unions.length === 0
+    const unionOrders = orderedQuery.plan.unions.length === 0
       ? undefined
-      : unionCursorColumns(orderedQuery.plan, cursorOrders.map(order => order.column), this.connection.getConnectionName())
+      : cursorOrders.map(order => ({ ...order, column: unionOutputName(orderedQuery.plan, order.column) }))
+    if (unionOrders) assertUnambiguousUnionOutputs(orderedQuery.plan, unionOrders.map(order => order.column), this.connection.getConnectionName())
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
     const previous = decodedCursor?.previous === true
-    const cursorValues = (row: Record<string, unknown>): readonly unknown[] => unionColumns
-      ? unionColumns.outputNames.map(name => row[name])
-      : cursorOrders.map(order => orderedQuery.readCursorColumnValue(row, order.column))
-    if (decodedCursor) {
-      const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
-      const nullsLow = !this.connection.getDialect().name.includes('postgres')
-      const filter = (branch: SelectQueryPlan, columns: readonly string[]): SelectQueryPlan => {
-        const grouped = branch.predicates.some(predicate => predicate.boolean === 'or')
-          ? withPredicate(withoutPredicates(branch, () => true), { kind: 'group', predicates: branch.predicates })
-          : branch
-        return withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map((order, index) => ({ ...order, column: columns[index]! })), nullsLow))
+    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) } : undefined
+    const nullsLow = !this.connection.getDialect().name.includes('postgres')
+    const pageOrders = (orders: readonly CursorOrderDefinition[]) => orders.map((order): QueryOrderBy => ({ kind: 'column', column: order.column, direction: previous === (order.direction === 'asc') ? 'desc' : 'asc' }))
+    let storedRows: TRow[]
+    if (unionOrders) {
+      const predicate = normalizedCursor && cursorPredicate(normalizedCursor, unionOrders, nullsLow)
+      storedRows = await orderedQuery.getCompiledRows<TRow>(() => orderedQuery.getCompiler().compileUnionCursorPage(orderedQuery.plan, predicate, pageOrders(unionOrders), perPage + 1), true, true, 'values')
+    } else {
+      if (normalizedCursor) {
+        const grouped = plan.predicates.some(predicate => predicate.boolean === 'or')
+          ? withPredicate(withoutPredicates(plan, () => true), { kind: 'group', predicates: plan.predicates })
+          : plan
+        plan = withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders, nullsLow))
       }
-      const filterUnion = (branch: SelectQueryPlan, branchColumns: (branch: SelectQueryPlan) => readonly string[]): SelectQueryPlan => Object.freeze({
-        ...filter(branch, branchColumns(branch)),
-        unions: Object.freeze(branch.unions.map(union => Object.freeze({ ...union, query: filterUnion(union.query, branchColumns) }))),
-      })
-      plan = unionColumns ? filterUnion(plan, unionColumns.branchColumns) : filter(plan, cursorOrders.map(order => order.column))
+      if (previous) plan = replaceOrderBy(plan, pageOrders(cursorOrders))
+      const pageQuery = orderedQuery.clone(plan)
+      storedRows = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true, 'values')
     }
-    if (previous) plan = replaceOrderBy(plan, cursorOrders.map(order => ({ kind: 'column', column: order.column, direction: order.direction === 'asc' ? 'desc' : 'asc' })))
-    const pageQuery = orderedQuery.clone(plan)
-    const storedRows = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true, 'values')
+    const cursorValues = (row: Record<string, unknown>): readonly unknown[] => unionOrders
+      ? unionOrders.map(order => row[order.column])
+      : cursorOrders.map(order => orderedQuery.readCursorColumnValue(row, order.column))
     const hasMorePages = storedRows.length > perPage
     const pageRows = storedRows.slice(0, perPage)
     if (previous) pageRows.reverse()
     const firstRow = pageRows.at(0)
     const lastRow = pageRows.at(-1)
-    const result = createCursorPaginator(this.readsSQLiteDates ? pageQuery.convertRows('dates', pageRows) : pageRows, {
+    const result = createCursorPaginator(this.readsSQLiteDates ? orderedQuery.convertRows('dates', pageRows) : pageRows, {
       perPage,
       cursorName,
       nextCursor: (previous ? cursor !== null : hasMorePages) && lastRow

@@ -61,19 +61,27 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     return table
   }
 
-  it('rejects a union whose other branch cannot supply the order column before any page runs', async () => {
+  it('pages unions whose branches name the order column differently by the first query\'s output names', async () => {
     const { schema } = await openDatabase(driver)
-    const left = registered(defineGeneratedTable(await createTable(schema, 'union_left', ['n', 'id'], ['value']), { n: column.integer(), id: column.integer(), value: column.string() }))
+    const left = registered(defineGeneratedTable(await createTable(schema, 'union_left', ['n'], ['value']), { n: column.integer(), value: column.string() }))
     const right = registered(defineGeneratedTable(await createTable(schema, 'union_right', ['other_n'], ['value']), { other_n: column.integer(), value: column.string() }))
+    await DB.table(left).insert([{ n: 1, value: 'a' }, { n: 3, value: 'c' }])
+    await DB.table(right).insert([{ other_n: 2, value: 'b' }, { other_n: 4, value: 'd' }])
     const aliasedFirst = DB.table(left.tableName).select('n as sort_key', 'value').unionAll(DB.table(right.tableName)).orderBy('sort_key')
-    const wildcardFirst = DB.table(left.tableName).unionAll(DB.table(right.tableName).select('other_n', 'value')).orderBy('id')
-    for (const [query, column] of [[aliasedFirst, 'sort_key'], [wildcardFirst, 'id']] as const) {
-      for (const cursor of [null, 'abc']) {
-        await expect(query.cursorPaginate(1, cursor)).rejects.toThrow(
-          new CompilerError(`Cannot cursor paginate a union by "${column}": its column position cannot be determined. Select the order column explicitly in each query without preceding wildcards.`),
-        )
-      }
-    }
+    expect((await pageThrough(aliasedFirst)).map(row => row.value)).toEqual(['a', 'b', 'c', 'd'])
+    const wildcardFirst = DB.table(left.tableName).unionAll(DB.table(right.tableName).select('other_n', 'value')).orderBy('n', 'desc')
+    expect((await pageThrough(wildcardFirst)).map(row => row.value)).toEqual(['d', 'c', 'b', 'a'])
+  })
+
+  it('pages a union by the output column even when a branch puts another column under that name', async () => {
+    const { schema } = await openDatabase(driver)
+    const users = registered(defineGeneratedTable(await createTable(schema, 'union_users', ['id', 'n']), { id: column.integer(), n: column.integer() }))
+    await DB.table(users).insert([{ id: 1, n: 100 }, { id: 2, n: 50 }, { id: 3, n: 25 }])
+    const swapped = DB.table(users.tableName).where('id', 3).unionAll(DB.table(users.tableName).select('n', 'id').where('id', '<', 3)).orderBy('id')
+    expect((await pageThrough(swapped)).map(row => row.id)).toEqual([3, 50, 100])
+    const shadowed = DB.table(users.tableName).select('id as other', 'n as id').unionAll(DB.table(users.tableName).select('id', 'n').where('id', 0)).orderBy('id')
+    expect((await shadowed.get()).map(row => row.id)).toEqual([25, 50, 100])
+    expect((await pageThrough(shadowed)).map(row => row.id)).toEqual([25, 50, 100])
   })
 
   it('pages a union whose next branch selects the wildcard order column under another name', async () => {
@@ -99,7 +107,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     expect((await pageThrough(query)).map(row => row.rank)).toEqual([1, 2, 3, 4])
   })
 
-  it.each(['first', 'second'] as const)('rejects a union cursor when the %s branch hides column positions behind an undefined joined wildcard', async wildcardBranch => {
+  it.each(['first', 'second'] as const)('handles a union cursor when the %s branch hides columns behind an undefined joined wildcard', async wildcardBranch => {
     const { schema, table } = await openDatabase(driver)
     const name = `union_notes_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     onTestFinished(() => schema.dropTable(name))
@@ -113,10 +121,14 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     const second = wildcardBranch === 'second'
       ? joined().select(`${name}.*`, `${table.tableName}.id as other_key`).where(`${table.tableName}.id`, 2)
       : joined().select(`${name}.note_id`, `${table.tableName}.id as other_key`).where(`${table.tableName}.id`, 2)
-    for (const cursor of [null, 'abc']) {
-      await expect(first.unionAll(second).orderBy('sort_key').cursorPaginate(1, cursor)).rejects.toThrow(
-        new CompilerError('Cannot cursor paginate a union by "sort_key": its column position cannot be determined. Select the order column explicitly in each query without preceding wildcards.'),
-      )
+    if (wildcardBranch === 'first') {
+      for (const cursor of [null, 'abc']) {
+        await expect(first.unionAll(second).orderBy('sort_key').cursorPaginate(1, cursor)).rejects.toThrow(
+          new CompilerError('Cannot cursor paginate a union by "sort_key": more than one of its selected columns may be named "sort_key". Select it under a name no other column has.'),
+        )
+      }
+    } else {
+      expect((await pageThrough(first.unionAll(second).orderBy('sort_key'))).map(row => row.sort_key)).toEqual([1, 2])
     }
     const explicit = joined().select(`${name}.note_id`, `${table.tableName}.id as sort_key`).where(`${table.tableName}.id`, 1)
       .unionAll(joined().select(`${name}.note_id`, `${table.tableName}.id as other_key`).where(`${table.tableName}.id`, 2)).orderBy('sort_key')

@@ -3,7 +3,7 @@ import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError, SecurityError } from '../core/errors'
 import { isInlineIntegerValue, keyCastFor, readAllColumnsSelectionTable } from './ast'
 import { validateQueryPlan } from './validator'
-import { unionOutputOrder } from './unionCursorColumns'
+import { unionOutputOrder } from './unionOutputs'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import { isTrustedRawPredicate } from './trustedRawPredicate'
 import { isTrustedRawSelection } from './trustedRawSelection'
@@ -27,6 +27,7 @@ import type {
   InsertUsingQueryPlan,
   TruncateQueryPlan,
   UpsertQueryPlan,
+  QueryOrderBy,
   QueryPlan,
   QueryPredicateNode,
   QueryPredicate,
@@ -178,6 +179,18 @@ export class SQLQueryCompiler {
       ...metadata,
       selectedShape: { mode: 'projection', columns: [], aggregates: ['__holo_count'], hasRawSelections: false, hasSubqueries: true },
     })
+  }
+
+  compileUnionCursorPage(plan: SelectQueryPlan, cursor: QueryPredicateNode | undefined, orderBy: readonly QueryOrderBy[], limit: number): CompiledStatement {
+    const statement = this.compile({ ...plan, orderBy: [], limit: undefined, offset: undefined })
+    const bindings = [...statement.bindings ?? []]
+    const whereClause = cursor ? this.compilePredicates([cursor], bindings) : ''
+    const orderClause = orderBy.map(order => this.compileOrderBy(order, bindings)).join(', ')
+    return this.withMetadata({
+      ...statement,
+      bindings,
+      sql: `SELECT * FROM (${statement.sql}) AS ${this.quoteIdentifier('__holo_union_page')}${whereClause} ORDER BY ${orderClause} LIMIT ${limit}`,
+    }, this.createSelectMetadata(plan))
   }
 
   compileExists(plan: SelectQueryPlan): CompiledStatement {
