@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
+  InvalidCursorException,
   ConfigurationError,
   DB,
   HydrationError,
@@ -909,7 +910,7 @@ describe('model core slice', () => {
     await expect(User.cursorPaginate(0)).rejects.toThrow('Per-page value must be a positive integer')
     await expect(User.cursorPaginateJson(0)).rejects.toThrow('Per-page value must be a positive integer')
     await expect(User.cursorPaginateJson(1, null, { cursorName: ' ' })).rejects.toThrow('parameter name')
-    await expect(User.cursorPaginateJson(1, 'invalid')).rejects.toThrow('Cursor is malformed')
+    await expect(User.cursorPaginateJson(1, 'invalid')).rejects.toThrow(InvalidCursorException)
     await expect(User.unsafeOrderBy('"id" ASC', []).cursorPaginate()).rejects.toThrow(
       'Cursor pagination requires column orderBy clauses',
     )
@@ -1500,12 +1501,12 @@ describe('model core slice', () => {
 
     await expect(User.paginate(0, 1)).rejects.toThrow('Per-page value must be a positive integer.')
     await expect(User.simplePaginate(1, 0)).rejects.toThrow('Page must be a positive integer.')
-    await expect(User.cursorPaginate(2, 'broken')).rejects.toThrow('Cursor is malformed.')
+    await expect(User.cursorPaginate(2, 'broken')).rejects.toThrow(InvalidCursorException)
     await expect(User.paginate(1, 1, { pageName: '' })).rejects.toThrow('Page parameter name must be a non-empty string.')
     await expect(User.cursorPaginate(1, null, { cursorName: '' })).rejects.toThrow('Cursor parameter name must be a non-empty string.')
     await expect(User.inRandomOrder().cursorPaginate(1)).rejects.toThrow('Cursor pagination cannot use random ordering.')
     const malformedCursor = Buffer.from(JSON.stringify({ offset: 'bad' }), 'utf8').toString('base64url')
-    await expect(User.cursorPaginate(2, malformedCursor)).rejects.toThrow('Cursor is malformed.')
+    await expect(User.cursorPaginate(2, malformedCursor)).rejects.toThrow(InvalidCursorException)
     await expect(User.chunk(0, () => undefined)).rejects.toThrow('Chunk size must be a positive integer.')
     await expect(User.chunkById(0, () => undefined)).rejects.toThrow('Chunk size must be a positive integer.')
   })

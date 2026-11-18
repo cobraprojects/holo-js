@@ -7,6 +7,7 @@ export default defineConfig({
     index: 'src/index.ts',
     'error-reporting': 'src/errorReporting.ts',
     'http-errors': 'src/httpErrors.ts',
+    'field-errors': 'src/fieldErrors.ts',
     'managed-resources': 'src/managedResources.ts',
     'file-content': 'src/fileContent.ts',
     'request-body': 'src/requestBody.ts',

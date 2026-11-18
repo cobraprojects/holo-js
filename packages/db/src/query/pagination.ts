@@ -1,4 +1,8 @@
+import { InvalidCursorException } from '../core/errors'
+import type { CursorPaginationOptions } from './types'
+
 type PaginationErrorFactory = (message: string) => Error
+type InvalidCursorFactory = () => InvalidCursorException
 
 export function assertPositiveInteger(
   value: number,
@@ -19,8 +23,8 @@ export function normalizePaginationParameterName(
     return fallback
   }
 
-  const trimmed = value.trim()
-  if (typeof value !== 'string' || trimmed.length === 0) {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (trimmed.length === 0) {
     throw createError(
       `${fallback === 'cursor' ? 'Cursor' : 'Page'} parameter name must be a non-empty string.`,
     )
@@ -71,22 +75,57 @@ export function encodeValueCursor(values: readonly unknown[], previous = false):
   return Buffer.from(JSON.stringify({ values: serializedValues, ...(previous ? { previous: true } : {}) }), 'utf8').toString('base64url')
 }
 
+const RESERVED_FIELD_NAMES = new Set(['__proto__', 'constructor', 'prototype'])
+
+export type ResolvedCursorPaginationOptions = {
+  readonly cursorName: string
+  readonly invalidCursor: InvalidCursorFactory
+}
+
+export function resolveCursorPaginationOptions(
+  options: CursorPaginationOptions,
+  createError: PaginationErrorFactory,
+): ResolvedCursorPaginationOptions {
+  const cursorName = normalizePaginationParameterName(options.cursorName, 'cursor', createError)
+  if (cursorName.split('.').some(segment => RESERVED_FIELD_NAMES.has(segment.trim()))) {
+    throw createError(`Cursor parameter name cannot use "__proto__", "constructor" or "prototype".`)
+  }
+  const message = options.invalidCursorMessage
+  if (message !== undefined && (typeof message !== 'string' || message.trim().length === 0)) {
+    throw createError('Invalid cursor message must be a non-empty string.')
+  }
+
+  return {
+    cursorName,
+    invalidCursor: () => new InvalidCursorException(cursorName, message),
+  }
+}
+
+const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/
+const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+
+function decodeCanonicalBase64Url(token: string): string {
+  const bytes = BASE64URL_PATTERN.test(token) ? Buffer.from(token, 'base64url') : undefined
+  if (!bytes || bytes.toString('base64url') !== token) throw new Error('invalid cursor encoding')
+  return UTF8_DECODER.decode(bytes)
+}
+
 export function decodeValueCursor(
   cursor: string | null,
-  createError: PaginationErrorFactory,
+  invalidCursor: InvalidCursorFactory,
 ): ValueCursor | null {
   if (cursor === null) {
     return null
   }
 
   try {
-    const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { values?: unknown, previous?: unknown }
+    const decoded = JSON.parse(decodeCanonicalBase64Url(cursor)) as { values?: unknown, previous?: unknown }
     if (!Array.isArray(decoded.values) || decoded.values.some(value => value !== null && typeof value !== 'string' && typeof value !== 'boolean' && (typeof value !== 'number' || !Number.isFinite(value))) || decoded.previous !== undefined && typeof decoded.previous !== 'boolean') {
       throw new Error('invalid cursor values')
     }
 
     return { values: decoded.values, ...(decoded.previous === true ? { previous: true } : {}) }
   } catch {
-    throw createError('Cursor is malformed.')
+    throw invalidCursor()
   }
 }

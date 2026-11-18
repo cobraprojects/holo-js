@@ -1,4 +1,4 @@
-import { CompilerError, ConfigurationError, SecurityError, TransactionError } from '../core/errors'
+import { CompilerError, ConfigurationError, SecurityError, TransactionError, type InvalidCursorException } from '../core/errors'
 import { NumericAdjustment } from './NumericAdjustment'
 import { redactBindings } from '../security/policy'
 import { getApplicationTimezone } from '../applicationTimezone'
@@ -52,6 +52,8 @@ import {
   decodeValueCursor,
   encodeValueCursor,
   normalizePaginationParameterName,
+  resolveCursorPaginationOptions,
+  type ValueCursor,
 } from './pagination'
 import { cursorPredicate } from './cursorPredicate'
 import {
@@ -2317,19 +2319,18 @@ export class TableQueryBuilder<
     options: CursorPaginationOptions = {},
   ): Promise<CursorPaginatedResult<TRow>> {
     assertPositiveInteger(perPage, 'Per-page value', message => new SecurityError(message))
-    const cursorName = normalizePaginationParameterName(options.cursorName, 'cursor', message => new SecurityError(message))
-    const decodedCursor = decodeValueCursor(cursor, message => new SecurityError(message))
+    const { cursorName, invalidCursor } = resolveCursorPaginationOptions(options, message => new SecurityError(message))
     await this.bindGeneratedTable()
     const orderedQuery = this.prepareCursorPaginationQuery()
     const cursorOrders = orderedQuery.resolveCursorOrders()
-    if (decodedCursor && decodedCursor.values.length !== cursorOrders.length) throw new SecurityError('Cursor does not match the query ordering.')
-    const previous = decodedCursor?.previous === true
-    const cursorValue = (row: Record<string, unknown>, column: string): unknown =>
-      orderedQuery.plan.unions.length > 0 && Object.hasOwn(row, column) ? row[column] : orderedQuery.readCursorColumnValue(row, column)
     const unionColumns = orderedQuery.plan.unions.length === 0
       ? undefined
       : unionCursorColumns(orderedQuery.plan, cursorOrders.map(order => order.column), this.connection.getConnectionName())
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
+    const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
+    const previous = decodedCursor?.previous === true
+    const cursorValue = (row: Record<string, unknown>, column: string): unknown =>
+      orderedQuery.plan.unions.length > 0 && Object.hasOwn(row, column) ? row[column] : orderedQuery.readCursorColumnValue(row, column)
     if (decodedCursor) {
       const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
       const nullsLow = !this.connection.getDialect().name.includes('postgres')
@@ -3415,6 +3416,17 @@ export class TableQueryBuilder<
         direction: orderBy.direction,
       }
     })
+  }
+
+  private decodePageCursor(cursor: string | null, orderCount: number, plan: SelectQueryPlan, invalidCursor: () => InvalidCursorException): ValueCursor | null {
+    try {
+      const decoded = decodeValueCursor(cursor, invalidCursor)
+      if (decoded && decoded.values.length !== orderCount) throw invalidCursor()
+      return decoded
+    } catch (error) {
+      this.getCompiler().compile(plan)
+      throw error
+    }
   }
 
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {

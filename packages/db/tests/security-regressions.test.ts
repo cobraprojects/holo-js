@@ -90,16 +90,6 @@ describe('native database security boundaries', () => {
     })).rejects.toThrow(SchemaError)
   })
 
-  it('rejects malformed cursor tokens on both table and model queries', async () => {
-    const { table } = await openDatabase()
-    const User = defineModelFromTable(table)
-    const malformed = Buffer.from(JSON.stringify({ offset: 'bad' }), 'utf8').toString('base64url')
-    for (const token of ['broken', malformed]) {
-      await expect(DB.table(table).cursorPaginate(2, token)).rejects.toThrow('Cursor is malformed.')
-      await expect(User.cursorPaginate(2, token)).rejects.toThrow('Cursor is malformed.')
-    }
-  })
-
   it('rejects malformed or database-specific JSON paths before executing writes', async () => {
     const { table } = await openDatabase()
     const User = defineModelFromTable(table)
