@@ -96,7 +96,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, LogicalColumnKind, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { isAwaitingGeneratedTableIdentity, getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { assertPageableUnionOutputs, unionOutputColumn, unionOutputName } from './unionOutputs'
+import { assertPageableUnionOutputs, unionOutputName, unionOutputValueColumn } from './unionOutputs'
 import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
 import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
@@ -2335,7 +2335,7 @@ export class TableQueryBuilder<
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
     const previous = decodedCursor?.previous === true
-    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizeCursorValue(unionOrders ? unionOutputColumn(orderedQuery.plan, unionOrders[index]!.column) : cursorOrders[index]!.column, value)) } : undefined
+    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizeCursorValue(unionOrders ? unionOutputValueColumn(orderedQuery.plan, cursorOrders[index]!.column, this.connection.getConnectionName()) : cursorOrders[index]!.column, value)) } : undefined
     const nullsLow = !this.connection.getDialect().name.includes('postgres')
     const pageOrders = (orders: readonly CursorOrderDefinition[]) => orders.map((order): QueryOrderBy => ({ kind: 'column', column: order.column, direction: previous === (order.direction === 'asc') ? 'desc' : 'asc' }))
     let storedRows: TRow[]

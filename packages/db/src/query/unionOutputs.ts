@@ -1,10 +1,20 @@
 import { CompilerError } from '../core/errors'
 import type { QueryOrderBy, QuerySelection, SelectQueryPlan } from './ast'
-import { knownJoinedColumns, knownTableColumns, qualifiesTable, selectionOutputName } from './modelRowProjection'
+import { knownJoinedColumns, knownTableColumns, qualifiesTable, resolveSourceColumnName, selectionOutputName } from './modelRowProjection'
+
+function sameColumnReference(plan: SelectQueryPlan, left: string, right: string): boolean {
+  if (left === right) return true
+  const source = resolveSourceColumnName(plan.source, left)
+  return source !== undefined && source === resolveSourceColumnName(plan.source, right)
+}
+
+function selectedOutput(plan: SelectQueryPlan, column: string): QuerySelection | undefined {
+  return plan.selections.find(selection => selectionOutputName(selection) === column)
+    ?? plan.selections.find(selection => selection.kind === 'column' && sameColumnReference(plan, selection.column, column))
+}
 
 export function unionOutputName(plan: SelectQueryPlan, column: string): string {
-  if (plan.selections.some(selection => selectionOutputName(selection) === column)) return column
-  const selected = plan.selections.find(selection => selection.kind === 'column' && selection.column === column)
+  const selected = selectedOutput(plan, column)
   return (selected && selectionOutputName(selected)) ?? column.slice(column.lastIndexOf('.') + 1)
 }
 
@@ -30,10 +40,14 @@ function selectionNames(plan: SelectQueryPlan, selection: QuerySelection, connec
   return join && knownJoinedColumns(join, connectionName)
 }
 
-export function unionOutputColumn(plan: SelectQueryPlan, name: string): string | undefined {
-  const selected = plan.selections.find(selection => selectionOutputName(selection) === name)
-  if (!selected) return name
-  return selected.kind === 'column' ? selected.column : undefined
+export function unionOutputValueColumn(plan: SelectQueryPlan, column: string, connectionName: string): string | undefined {
+  const selected = selectedOutput(plan, column)
+  if (selected?.kind === 'column') return selected.column
+  if (selected?.kind === 'aggregate') return selected.aggregate === 'min' || selected.aggregate === 'max' ? selected.column : undefined
+  if (selected) return undefined
+  if (column.includes('.') || sourceColumns(plan, connectionName)?.includes(column)) return column
+  const join = plan.joins.find(candidate => knownJoinedColumns(candidate, connectionName)?.includes(column))
+  return join ? `${join.alias ?? join.table}.${column}` : column
 }
 
 export function assertPageableUnionOutputs(plan: SelectQueryPlan, names: readonly string[], connectionName: string): void {

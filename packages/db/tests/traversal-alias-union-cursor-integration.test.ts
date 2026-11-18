@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { CompilerError, DB, clearGeneratedTables, column, defineGeneratedTable, registerGeneratedTables, resetDB, type TableDefinition } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
@@ -107,6 +108,47 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     await DB.table(flags).insert([{ n: 25 }, { n: 50 }, { n: 100 }])
     const query = DB.table(flags.tableName).select('n as active').where('n', 25).unionAll(DB.table(flags.tableName).select('n as active').where('n', '>', 25)).orderBy('active')
     expect((await pageThrough(query)).map(row => Number(row.active))).toEqual([25, 50, 100])
+  })
+
+  it('reads cursor values through the joined table that owns a wildcard union output', async () => {
+    const { schema } = await openDatabase(driver)
+    const ownersName = await createTable(schema, 'union_owners', ['id'])
+    await schema.table(ownersName, table => { table.boolean('active').default(false) })
+    const owners = registered(defineGeneratedTable(ownersName, { id: column.integer(), active: column.boolean() }))
+    const items = registered(defineGeneratedTable(await createTable(schema, 'union_items', ['owner_id', 'active']), { owner_id: column.integer(), active: column.integer() }))
+    await DB.table(owners).insert([{ id: 1, active: true }, { id: 2, active: false }])
+    await DB.table(items).insert([{ owner_id: 1, active: 25 }, { owner_id: 2, active: 50 }, { owner_id: 1, active: 100 }])
+    const branch = (ownerId: number) => DB.table(owners.tableName).join(items.tableName, `${items.tableName}.owner_id`, '=', `${owners.tableName}.id`).select(`${items.tableName}.*`).where(`${owners.tableName}.id`, ownerId)
+    const query = branch(1).unionAll(branch(2)).orderBy(`${items.tableName}.active`)
+    expect((await pageThrough(query)).map(row => Number(row.active))).toEqual([25, 50, 100])
+  })
+
+  it('reads MIN and MAX union outputs through their date column in the application timezone', async () => {
+    configureConfigRuntime({ app: { timezone: 'Asia/Tokyo' } } as never)
+    onTestFinished(() => resetConfigRuntime())
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_events', ['grp'])
+    await schema.table(name, table => { table.datetime('stamp') })
+    const events = registered(defineGeneratedTable(name, { grp: column.integer(), stamp: column.datetime() }))
+    await DB.table(events).insert([
+      { grp: 1, stamp: new Date('2026-01-01T01:00:00Z') },
+      { grp: 2, stamp: new Date('2026-01-02T01:00:00Z') },
+      { grp: 3, stamp: new Date('2026-01-03T01:00:00Z') },
+    ])
+    const branch = (groups: readonly number[]) => DB.table(events.tableName).select('grp').addSelectMin('min_stamp', 'stamp').whereIn('grp', groups).groupBy('grp')
+    const query = branch([1]).unionAll(branch([2, 3])).orderBy('min_stamp')
+    expect((await pageThrough(query)).map(row => Number(row.grp))).toEqual([1, 2, 3])
+  })
+
+  it('pages a union ordered by a qualified or unqualified spelling of an aliased column', async () => {
+    const { schema } = await openDatabase(driver)
+    const items = registered(defineGeneratedTable(await createTable(schema, 'union_items', ['n']), { n: column.integer() }))
+    await DB.table(items).insert([{ n: 1 }, { n: 2 }, { n: 3 }])
+    const qualifiedOrder = DB.table(items.tableName).select('n as sort_key').where('n', 1).unionAll(DB.table(items.tableName).select('n').where('n', '>', 1)).orderBy(`${items.tableName}.n`)
+    const qualifiedSelection = DB.table(items.tableName).select(`${items.tableName}.n as sort_key`).where('n', 1).unionAll(DB.table(items.tableName).select('n').where('n', '>', 1)).orderBy('n')
+    for (const query of [qualifiedOrder, qualifiedSelection]) {
+      expect((await pageThrough(query)).map(row => Number(row.sort_key))).toEqual([1, 2, 3])
+    }
   })
 
   it('pages a union whose next branch selects the wildcard order column under another name', async () => {
