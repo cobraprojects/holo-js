@@ -153,16 +153,20 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     await DB.table(owners).insert([{ id: 1 }, { id: 2 }])
     const stamps = ['2026-01-01T01:00:00Z', '2026-01-02T01:00:00Z', '2026-01-03T01:00:00Z'].map(stamp => new Date(stamp))
     await DB.table(events).insert(stamps.map((stamp, index) => ({ owner_id: index === 1 ? 2 : 1, stamp })))
-    const branch = (ownerId: number) => DB.table(owners.tableName).join(events.tableName, `${events.tableName}.owner_id`, '=', `${owners.tableName}.id`).select(`${events.tableName}.*`).where(`${owners.tableName}.id`, ownerId)
-    const query = branch(1).unionAll(branch(2)).orderBy(`${events.tableName}.stamp`)
-    const first = await query.cursorPaginate(1)
-    const second = await query.cursorPaginate(1, first.nextCursor)
-    const third = await query.cursorPaginate(1, second.nextCursor)
-    expect([first, second, third].map(page => Number(page.data[0]?.owner_id))).toEqual([1, 2, 1])
-    expect(third.nextCursor).toBeNull()
-    expect((await query.cursorPaginate(1, third.prevCursor)).data.map(row => Number(row.owner_id))).toEqual([2])
-    const later = await DB.table(owners.tableName).join(events.tableName, `${events.tableName}.owner_id`, '=', `${owners.tableName}.id`).where(`${events.tableName}.stamp`, '>=', stamps[1]!).count()
-    expect(later).toBe(2)
+    const joined = () => DB.table(owners.tableName).join(events.tableName, `${events.tableName}.owner_id`, '=', `${owners.tableName}.id`)
+    const wildcard = (ownerId: number) => joined().select(`${events.tableName}.*`).where(`${owners.tableName}.id`, ownerId)
+    const unqualified = (ownerId: number) => joined().select('owner_id', 'stamp').where(`${owners.tableName}.id`, ownerId)
+    for (const query of [wildcard(1).unionAll(wildcard(2)).orderBy(`${events.tableName}.stamp`), unqualified(1).unionAll(unqualified(2)).orderBy('stamp')]) {
+      const first = await query.cursorPaginate(1)
+      const second = await query.cursorPaginate(1, first.nextCursor)
+      const third = await query.cursorPaginate(1, second.nextCursor)
+      expect([first, second, third].map(page => Number(page.data[0]?.owner_id))).toEqual([1, 2, 1])
+      expect(third.nextCursor).toBeNull()
+      expect((await query.cursorPaginate(1, third.prevCursor)).data.map(row => Number(row.owner_id))).toEqual([2])
+    }
+    for (const stamp of [`${events.tableName}.stamp`, 'stamp']) {
+      expect(await joined().where(stamp, '>=', stamps[1]!).count()).toBe(2)
+    }
   })
 
   it('pages a union ordered by a qualified or unqualified spelling of an aliased column', async () => {
