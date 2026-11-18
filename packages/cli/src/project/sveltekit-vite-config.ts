@@ -11,6 +11,7 @@ const GENERATED_HOOKS_PATH = '.holo-js/generated/hooks'
 const VITE_CONFIG_WRAP_MESSAGE = 'Could not patch vite.config.ts with withHoloSvelteKit(). Call sveltekit() in vite.config.ts so holo prepare can manage the SvelteKit integration.'
 const VITE_PLUGIN_ADD_MESSAGE = 'Could not add holoSvelteKit() to vite.config.ts. Put sveltekit() directly in the plugins array so holo prepare can add the Holo plugin next to it.'
 const VITE_PLUGIN_CONDITIONAL_MESSAGE = 'Could not add holoSvelteKit() to vite.config.ts. Register holoSvelteKit() unconditionally in the plugins array next to sveltekit(), because the generated hooks need it in every build.'
+const LEGACY_MIGRATION_MESSAGE = 'Could not migrate holoSvelteKitRealtime in vite.config.ts. Import holoSvelteKit from @holo-js/adapter-sveltekit/vite, call holoSvelteKit() in the plugins array next to sveltekit(), and remove other uses of holoSvelteKitRealtime.'
 const CUSTOM_HOOKS_MESSAGE = 'Custom SvelteKit hook entrypoints are not supported. Remove files.hooks from the sveltekit() options and let holo prepare manage the generated hook bridge.'
 
 interface Edit {
@@ -70,34 +71,12 @@ function isCallTo(node: ts.Node, names: readonly string[]): node is ts.CallExpre
   return ts.isCallExpression(node) && ts.isIdentifier(node.expression) && names.includes(node.expression.text)
 }
 
-function createChecker(sourceFile: ts.SourceFile): ts.TypeChecker {
-  const options: ts.CompilerOptions = { noLib: true, noResolve: true, target: ts.ScriptTarget.Latest }
-  const host: ts.CompilerHost = {
-    ...ts.createCompilerHost(options),
-    getSourceFile: fileName => fileName === sourceFile.fileName ? sourceFile : undefined,
-  }
-  return ts.createProgram([sourceFile.fileName], options, host).getTypeChecker()
-}
-
-function referenceEdit(sourceFile: ts.SourceFile, checker: ts.TypeChecker, binding: ts.Symbol, node: ts.Identifier): Edit | undefined {
-  const parent = node.parent
-  const start = node.getStart(sourceFile)
-  if (ts.isShorthandPropertyAssignment(parent) && parent.name === node) {
-    return checker.getShorthandAssignmentValueSymbol(parent) === binding
-      ? { start, end: node.end, text: `${LEGACY_HOLO_VITE_PLUGIN}: ${HOLO_VITE_PLUGIN}` }
-      : undefined
-  }
-
-  return checker.getSymbolAtLocation(node) === binding ? { start, end: node.end, text: HOLO_VITE_PLUGIN } : undefined
-}
-
-function legacyReferenceEdits(sourceFile: ts.SourceFile, specifiers: readonly ts.ImportSpecifier[]): Edit[] {
-  if (specifiers.length === 0) return []
-  const checker = createChecker(sourceFile)
-  const symbols = specifiers.flatMap(specifier => checker.getSymbolAtLocation(specifier.name) ?? [])
-  return descendants(sourceFile)
+function legacyReferenceEdits(sourceFile: ts.SourceFile, renamesReferences: boolean): Edit[] {
+  if (!renamesReferences) return []
+  const references = descendants(sourceFile)
     .filter((node): node is ts.Identifier => ts.isIdentifier(node) && node.text === LEGACY_HOLO_VITE_PLUGIN && !ts.isImportSpecifier(node.parent))
-    .flatMap(node => symbols.flatMap(symbol => referenceEdit(sourceFile, checker, symbol, node) ?? []))
+  if (references.some(node => !ts.isCallExpression(node.parent) || node.parent.expression !== node)) throw new Error(LEGACY_MIGRATION_MESSAGE)
+  return references.map(node => ({ start: node.getStart(sourceFile), end: node.end, text: HOLO_VITE_PLUGIN }))
 }
 
 function renderSpecifier(element: ts.ImportSpecifier, imported: string, local: string): string {
@@ -122,8 +101,8 @@ function migrateLegacyPlugin(source: string): string {
         return renderSpecifier(element, importedName(element) === LEGACY_HOLO_VITE_PLUGIN ? HOLO_VITE_PLUGIN : importedName(element), local)
       })),
     }))
-  const unaliased = imports.flatMap(({ bindings }) => bindings.elements.filter(element => element.name.text === LEGACY_HOLO_VITE_PLUGIN && importedName(element) === LEGACY_HOLO_VITE_PLUGIN))
-  return applyEdits(source, [...edits, ...legacyReferenceEdits(sourceFile, unaliased)])
+  const renamesReferences = imports.some(({ bindings }) => bindings.elements.some(element => element.name.text === LEGACY_HOLO_VITE_PLUGIN))
+  return applyEdits(source, [...edits, ...legacyReferenceEdits(sourceFile, renamesReferences)])
 }
 
 function propertyName(name: ts.PropertyName): string | undefined {
