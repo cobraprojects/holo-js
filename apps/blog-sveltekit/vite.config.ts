@@ -1,17 +1,17 @@
 import adapter from '@holo-js/adapter-sveltekit/node'
 import { withHoloSvelteKit } from '@holo-js/adapter-sveltekit/config'
 import { sveltekit } from '@sveltejs/kit/vite'
-import { holoSvelteKitRealtime } from '@holo-js/adapter-sveltekit/vite'
+import { holoSvelteKit } from '@holo-js/adapter-sveltekit/vite'
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
 import { defineConfig } from 'vite'
 
 export default defineConfig({
   plugins: [
-    holoSvelteKitRealtime(),
     sveltekit(withHoloSvelteKit({
       adapter: adapter(),
       preprocess: vitePreprocess(),
     })),
+    holoSvelteKit(),
   ],
   server: {
     fs: {

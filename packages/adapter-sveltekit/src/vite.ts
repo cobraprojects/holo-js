@@ -4,12 +4,19 @@ import { readFileSync } from 'node:fs'
 import { extname } from 'node:path'
 import { createRealtimeClientDefinitionTransform } from './realtime-definition-transform'
 
+type ConfiguredPlugin = { readonly name: string, readonly api?: unknown }
+
 type VitePlugin = {
   readonly name: string
   readonly enforce: 'pre'
+  configResolved(config: { readonly plugins: readonly ConfiguredPlugin[] }): void
   buildStart(): void
   configureServer(server: { readonly watcher: { on(event: 'all', listener: (event: string, path: string) => void): unknown } }): void
-  load(id: string, options?: { readonly ssr?: boolean }): null | string
+  resolveId(id: string): null | string
+  readonly load: {
+    readonly order: 'pre'
+    handler(id: string, options?: { readonly ssr?: boolean }): null | string
+  }
   transform(code: string, id: string, options?: { readonly ssr?: boolean }): null | {
     readonly code: string
     readonly map: object | null
@@ -27,13 +34,30 @@ export function isRealtimeDefinitionModule(
     && realtimeFileExtensions.has(extname(id.split('?')[0] as string))
 }
 
-export function holoSvelteKitRealtime(rootDir = process.cwd()): VitePlugin {
+const SVELTEKIT_PATHS_MODULE = 'virtual:holo-sveltekit/paths'
+const RESOLVED_SVELTEKIT_PATHS_MODULE = `\0${SVELTEKIT_PATHS_MODULE}`
+
+function property(value: unknown, key: string): unknown {
+  return typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
+}
+
+function svelteKitBase(plugins: readonly ConfiguredPlugin[]): string {
+  const setup = plugins.find(plugin => plugin.name === 'vite-plugin-sveltekit-setup')
+  const base = ['options', 'paths', 'base'].reduce(property, setup?.api)
+  return typeof base === 'string' ? base : ''
+}
+
+export function holoSvelteKit(rootDir = process.cwd()): VitePlugin {
   const browserDefinitionIds = new Set<string>()
+  let base = ''
   const directories = resolveRealtimeDefinitionDirectories(rootDir)
   let realtimeTreeChanged = false
   return {
-    name: 'holo-sveltekit-realtime-client-definitions',
+    name: 'holo-sveltekit',
     enforce: 'pre',
+    configResolved(config) {
+      base = svelteKitBase(config.plugins)
+    },
     buildStart() {
       assertRealtimeDefinitionTree(rootDir)
     },
@@ -42,18 +66,25 @@ export function holoSvelteKitRealtime(rootDir = process.cwd()): VitePlugin {
         if (isInRealtimeDefinitionDirectory(directories, path)) realtimeTreeChanged = true
       })
     },
-    load(id, options) {
-      if (!options?.ssr && realtimeTreeChanged) {
-        assertRealtimeDefinitionTree(rootDir)
-        realtimeTreeChanged = false
-      }
-      const path = id.split('?')[0] as string
-      if (options?.ssr || !isRealtimeDefinitionModule(rootDir, path, directories)) {
-        return null
-      }
+    resolveId(id) {
+      return id === SVELTEKIT_PATHS_MODULE ? RESOLVED_SVELTEKIT_PATHS_MODULE : null
+    },
+    load: {
+      order: 'pre',
+      handler(id, options) {
+        if (id === RESOLVED_SVELTEKIT_PATHS_MODULE) return `export const base = ${JSON.stringify(base)}\n`
+        if (!options?.ssr && realtimeTreeChanged) {
+          assertRealtimeDefinitionTree(rootDir)
+          realtimeTreeChanged = false
+        }
+        const path = id.split('?')[0] as string
+        if (options?.ssr || !isRealtimeDefinitionModule(rootDir, path, directories)) {
+          return null
+        }
 
-      browserDefinitionIds.add(id)
-      return createRealtimeClientDefinitionTransform(readFileSync(path, 'utf8'), path).code
+        browserDefinitionIds.add(id)
+        return createRealtimeClientDefinitionTransform(readFileSync(path, 'utf8'), path).code
+      },
     },
     transform(code, id, options) {
       if (!options?.ssr && !id.includes('node_modules') && /\.[cm]?[jt]sx?$/.test(id)) {

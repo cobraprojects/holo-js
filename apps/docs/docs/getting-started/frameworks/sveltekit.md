@@ -6,11 +6,12 @@ This page explains how Holo plugs into SvelteKit and where your code goes. It as
 
 ## How Holo plugs in
 
-SvelteKit 3 reads its options from the `sveltekit()` plugin in `vite.config.ts`. Holo wraps those options with `withHoloSvelteKit()`:
+SvelteKit 3 reads its options from the `sveltekit()` plugin in `vite.config.ts`. Holo wraps those options with `withHoloSvelteKit()` and adds its own `holoSvelteKit()` plugin after it:
 
 ```ts [vite.config.ts]
 import adapter from '@sveltejs/adapter-node'
 import { withHoloSvelteKit } from '@holo-js/adapter-sveltekit/config'
+import { holoSvelteKit } from '@holo-js/adapter-sveltekit/vite'
 import { sveltekit } from '@sveltejs/kit/vite'
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
 import { defineConfig } from 'vite'
@@ -21,13 +22,20 @@ export default defineConfig({
       adapter: adapter(),
       preprocess: vitePreprocess(),
     })),
+    holoSvelteKit(),
   ],
 })
 ```
 
 The wrapper points SvelteKit's hook files at Holo-generated hooks in `.holo-js/generated/`. Those hooks start the Holo runtime, run each request with its own session and user, handle the routes Holo adds, and then call your own hooks from `src/hooks.server.ts` and `src/hooks.ts`.
 
-Edit the object inside `withHoloSvelteKit()` like the options you pass to `sveltekit()`. Leave the wrapper in place.
+Edit the object inside `withHoloSvelteKit()` like the options you pass to `sveltekit()`. Leave the wrapper and `holoSvelteKit()` in place. `holoSvelteKit()` is the only Holo plugin your app registers:
+
+- It passes your `paths.base` to those hooks, so the routes Holo adds, such as `/api/auth/*`, `/broadcasting/*` and storage URLs, and their redirects work when the app is served under a base path.
+- It compiles your [validation schemas](/basics/validation/) for the browser.
+- It sends only the client part of your [realtime](/realtime/) definitions to the browser.
+
+`holo prepare` adds it to an existing `vite.config.ts`, and needs `sveltekit()` to sit directly in the `plugins` array.
 
 SvelteKit 3 no longer reads `svelte.config.js`. If your project still has one, move its options into the `sveltekit()` call and delete the file. `holo prepare` stops with an error until you do.
 

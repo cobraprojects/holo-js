@@ -55,6 +55,11 @@
       "types": "./dist/node-server.d.ts",
       "import": "./dist/node-server.mjs",
       "default": "./dist/node-server.mjs"
+    },
+    "./internal/paths": {
+      "types": "./dist/paths.d.ts",
+      "import": "./dist/paths.mjs",
+      "default": "./dist/paths.mjs"
     }
   },
   "main": "./dist/index.mjs",

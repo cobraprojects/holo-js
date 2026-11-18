@@ -1357,6 +1357,8 @@ describe('@holo-js/auth-workos', () => {
     const logout = await logoutWithWorkos(new Request('https://app.test/logout'))
     expect(logout.status).toBe(303)
     expect(logout.headers.get('location')).toBe('https://app.test/')
+    const underBase = await logoutWithWorkos(new Request('https://app.test/dashboard/logout'), { returnTo: '/dashboard/' })
+    expect(underBase.headers.get('location')).toBe('https://app.test/dashboard/')
 
     respondWith({
       access_token: createUnsignedJwt({ sid: 'session_positive_control' }),

@@ -1985,6 +1985,8 @@ describe('@holo-js/auth-clerk', () => {
     const response = await logoutWithClerk(new Request('https://app.test/logout'))
     expect(response.status).toBe(303)
     expect(response.headers.get('location')).toBe('https://app.test/')
+    const underBase = await logoutWithClerk(new Request('https://app.test/dashboard/logout'), { returnTo: '/dashboard/' })
+    expect(underBase.headers.get('location')).toBe('https://app.test/dashboard/')
   })
 
   it('updates existing linked users on subsequent Clerk syncs and relinks missing local rows', async () => {
