@@ -12,6 +12,7 @@ const VITE_CONFIG_WRAP_MESSAGE = 'Could not patch vite.config.ts with withHoloSv
 const VITE_PLUGIN_ADD_MESSAGE = 'Could not add holoSvelteKit() to vite.config.ts. Put sveltekit() directly in the plugins array so holo prepare can add the Holo plugin next to it.'
 const VITE_PLUGIN_CONDITIONAL_MESSAGE = 'Could not add holoSvelteKit() to vite.config.ts. Register holoSvelteKit() unconditionally in the plugins array next to sveltekit(), because the generated hooks need it in every build.'
 const LEGACY_MIGRATION_MESSAGE = 'Could not migrate holoSvelteKitRealtime in vite.config.ts. Import holoSvelteKit from @holo-js/adapter-sveltekit/vite, call holoSvelteKit() in the plugins array next to sveltekit(), and remove other uses of holoSvelteKitRealtime.'
+const MULTIPLE_SVELTEKIT_MESSAGE = 'Could not patch vite.config.ts because it calls sveltekit() more than once. Call sveltekit() once in the plugins array so every build uses the same plugins.'
 const CUSTOM_HOOKS_MESSAGE = 'Custom SvelteKit hook entrypoints are not supported. Remove files.hooks from the sveltekit() options and let holo prepare manage the generated hook bridge.'
 
 interface Edit {
@@ -174,13 +175,26 @@ function importEdits(sourceFile: ts.SourceFile): Edit[] {
   return hasPluginBinding || !target ? edits : [...edits, pluginImportEdit(sourceFile, target)]
 }
 
+function isDeclarationName(node: ts.Identifier): boolean {
+  const parent = node.parent
+  return (ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isBindingElement(parent) || ts.isFunctionDeclaration(parent) || ts.isClassDeclaration(parent))
+    && parent.name === node
+}
+
+function assertNoShadowedBinding(sourceFile: ts.SourceFile, names: readonly string[]): void {
+  const shadowed = descendants(sourceFile).find((node): node is ts.Identifier => ts.isIdentifier(node) && names.includes(node.text) && isDeclarationName(node))
+  if (shadowed) throw new Error(`Could not patch vite.config.ts because a local declaration named ${shadowed.text} shadows the holoSvelteKit import. Rename the local declaration.`)
+}
+
 export function patchSvelteKitViteConfig(original: string): string {
   const source = migrateLegacyPlugin(original)
   const sourceFile = parse(source)
-  const call = descendants(sourceFile).find((node): node is ts.CallExpression => isCallTo(node, [SVELTEKIT_PLUGIN]))
+  const [call, ...extraCalls] = descendants(sourceFile).filter((node): node is ts.CallExpression => isCallTo(node, [SVELTEKIT_PLUGIN]))
   if (!call) throw new Error(VITE_CONFIG_WRAP_MESSAGE)
+  if (extraCalls.length > 0) throw new Error(MULTIPLE_SVELTEKIT_MESSAGE)
   assertNoCustomHookOverride(source, call)
   const bindings = localBindings(namedImportsFrom(sourceFile, HOLO_VITE_MODULE), HOLO_VITE_PLUGIN)
+  assertNoShadowedBinding(sourceFile, bindings.length > 0 ? bindings : [HOLO_VITE_PLUGIN])
   const edits = [wrapperEdit(source, call), pluginEdit(sourceFile, call, bindings), ...importEdits(sourceFile)]
   return applyEdits(source, edits.filter((edit): edit is Edit => edit !== undefined))
 }

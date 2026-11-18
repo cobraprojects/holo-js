@@ -11657,6 +11657,46 @@ export default defineConfig({
     )
   }, 30000)
 
+  it('fails prepare when a local declaration shadows the holoSvelteKit binding', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    linkNativeFramework(projectRoot, 'sveltekit')
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'vite.config.ts', [
+      'import { holoSvelteKit as holo } from \'@holo-js/adapter-sveltekit/vite\'',
+      'import { sveltekit } from \'@sveltejs/kit/vite\'',
+      'import { defineConfig } from \'vite\'',
+      '',
+      'export default defineConfig(() => {',
+      '  const holo = () => ({ name: \'other-plugin\' })',
+      '  return { plugins: [sveltekit(), holo()] }',
+      '})',
+      '',
+    ].join('\n'))
+
+    await expect(runProjectPrepare(projectRoot, undefined, { syncFramework: false })).rejects.toThrow(
+      'Could not patch vite.config.ts because a local declaration named holo shadows the holoSvelteKit import. Rename the local declaration.',
+    )
+  }, 30000)
+
+  it('fails prepare when vite.config.ts calls sveltekit() more than once', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    linkNativeFramework(projectRoot, 'sveltekit')
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'vite.config.ts', [
+      'import { sveltekit } from \'@sveltejs/kit/vite\'',
+      'import { defineConfig } from \'vite\'',
+      '',
+      'export default defineConfig(({ command }) => command === \'serve\' ? { plugins: [sveltekit()] } : { plugins: [sveltekit()] })',
+      '',
+    ].join('\n'))
+
+    await expect(runProjectPrepare(projectRoot, undefined, { syncFramework: false })).rejects.toThrow(
+      'Could not patch vite.config.ts because it calls sveltekit() more than once. Call sveltekit() once in the plugins array so every build uses the same plugins.',
+    )
+  }, 30000)
+
   it('fails prepare when sveltekit() is not an element of the plugins array', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
