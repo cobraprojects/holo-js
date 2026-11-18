@@ -158,19 +158,22 @@ export function columnOwner(plan: SelectQueryPlan, name: string, connectionName:
   return owner && (owner.alias ?? owner.tableName ?? plan.source.tableName)
 }
 
-export function groupedCursorKey(plan: SelectQueryPlan, column: string, connectionName: string | undefined): string {
+export type GroupedKeyContext = { readonly connectionName: string | undefined, readonly foldsColumnNames: boolean }
+
+export function groupedCursorKey(plan: SelectQueryPlan, column: string, context: GroupedKeyContext): string {
   if (dateBucketSelections(plan).has(column)) return column
+  const { connectionName } = context
   const separator = column.lastIndexOf('.')
-  const name = column.slice(separator + 1)
+  const name = context.foldsColumnNames ? column.slice(separator + 1).toLowerCase() : column.slice(separator + 1)
   if (separator === -1) {
     const owner = columnOwner(plan, column, connectionName)
-    return owner === undefined ? column : `${owner}.${name}`
+    return owner === undefined ? name : `${owner}.${name}`
   }
   const table = boundTables(visibleTables(plan, connectionName), column.slice(0, separator))[0]
-  return table ? `${table.alias ?? table.tableName ?? plan.source.tableName}.${name}` : column
+  return table ? `${table.alias ?? table.tableName ?? plan.source.tableName}.${name}` : `${column.slice(0, separator)}.${name}`
 }
 
-export function assertGroupedOrderKeysUnshadowed(plan: SelectQueryPlan, connectionName: string | undefined): void {
+export function assertGroupedOrderKeysUnshadowed(plan: SelectQueryPlan, context: GroupedKeyContext): void {
   for (const orderBy of plan.orderBy) {
     if (orderBy.kind !== 'column' || orderBy.column.includes('.') || dateBucketSelections(plan).has(orderBy.column)) continue
     const key = orderBy.column
@@ -178,7 +181,7 @@ export function assertGroupedOrderKeysUnshadowed(plan: SelectQueryPlan, connecti
       if (selection.kind === 'raw' || selection.kind === 'date-bucket') return false
       if (selection.kind !== 'column') return sameIdentifierFolded(selection.alias, key)
       return selection.alias !== undefined && sameIdentifierFolded(selection.alias, key)
-        && groupedCursorKey(plan, selection.column, connectionName) !== groupedCursorKey(plan, key, connectionName)
+        && groupedCursorKey(plan, selection.column, context) !== groupedCursorKey(plan, key, context)
     })
     if (shadowed) {
       throw new SecurityError(`Cursor pagination cannot order grouped rows by "${key}" because a selected column of that name is not the grouped column.`)

@@ -6,7 +6,7 @@ import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
 import type { QueryDateBucketSelection, QueryRawSelection, QueryRelationKeysPredicate } from './ast'
-import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, assertGroupedOrderKeysUnshadowed, groupedCursorKey, planHasDateBuckets, selectionMayOutputName } from './dateBuckets'
+import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, assertGroupedOrderKeysUnshadowed, groupedCursorKey, planHasDateBuckets, selectionMayOutputName, type GroupedKeyContext } from './dateBuckets'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -3437,12 +3437,12 @@ export class TableQueryBuilder<
 
     const primaryKeys = this.source.table ? listTablePrimaryKeyColumns(this.source.table) : []
     if (this.plan.groupBy.length > 0 && unionBranchPlans(this.plan).some(branch => dateBucketSelections(branch).size > 0)) {
-      const connectionName = this.connection.getConnectionName()
-      const identity = (column: string): string => groupedCursorKey(this.plan, column, connectionName)
+      const context = this.groupedKeyContext()
+      const identity = (column: string): string => groupedCursorKey(this.plan, column, context)
       const visibleSource = this.source.alias ?? this.source.tableName
-      const groupsByPrimaryKey = primaryKeys.length > 0 && primaryKeys.every(key => this.plan.groupBy.some(column => identity(column) === `${visibleSource}.${key}`))
+      const groupsByPrimaryKey = primaryKeys.length > 0 && primaryKeys.every(key => this.plan.groupBy.some(column => identity(column) === identity(`${visibleSource}.${key}`)))
       const ordered = groupsByPrimaryKey ? this.withPrimaryKeyTieBreakers(primaryKeys) : this
-      assertGroupedOrderKeysUnshadowed(ordered.plan, connectionName)
+      assertGroupedOrderKeysUnshadowed(ordered.plan, context)
       if (groupsByPrimaryKey && this.plan.joins.length === 0 && this.plan.unions.length === 0) return ordered
       const orderedColumns = new Set(ordered.plan.orderBy.flatMap(orderBy => orderBy.kind === 'column' ? [identity(orderBy.column)] : []))
       const groupedColumns = new Set(ordered.plan.groupBy.map(identity))
@@ -3492,15 +3492,23 @@ export class TableQueryBuilder<
     }
   }
 
+  private groupedKeyContext(): GroupedKeyContext {
+    return { connectionName: this.connection.getConnectionName(), foldsColumnNames: !this.connection.getDialect().name.startsWith('postgres') }
+  }
+
   private groupedDateBucketCursorOutput(column: string): string | undefined {
     if (this.plan.groupBy.length === 0 || dateBucketSelections(this.plan).size === 0) return undefined
-    const connectionName = this.connection.getConnectionName()
-    const key = groupedCursorKey(this.plan, column, connectionName)
-    const selection = this.plan.selections.find(candidate => candidate.kind === 'column'
-      && candidate.column !== '*'
-      && readAllColumnsSelectionTable(candidate.column) === undefined
-      && groupedCursorKey(this.plan, candidate.column, connectionName) === key)
-    return selection && selectionOutputName(selection)
+    const context = this.groupedKeyContext()
+    const key = groupedCursorKey(this.plan, column, context)
+    const selections = this.plan.selections
+    const folded = selections.map(selection => selectionOutputName(selection)?.toLowerCase())
+    const surviving = selections.flatMap((candidate, index) => {
+      if (candidate.kind !== 'column' || candidate.column === '*' || readAllColumnsSelectionTable(candidate.column) !== undefined) return []
+      if (groupedCursorKey(this.plan, candidate.column, context) !== key) return []
+      const output = selectionOutputName(candidate)
+      return output !== undefined && !folded.slice(index + 1).includes(output.toLowerCase()) ? [output] : []
+    })
+    return surviving[0]
   }
 
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
