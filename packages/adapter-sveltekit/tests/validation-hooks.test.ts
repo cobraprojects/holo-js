@@ -139,6 +139,31 @@ describe('SvelteKit validation hooks', () => {
     expect(flashed.size).toBe(0)
   })
 
+  it('answers a POST validation failure on an API route spelled with route escapes with 422 JSON', async () => {
+    const { event } = createEvent('invalid-email', 'text/html', '/dashboard/api/login', { routeId: '/a[x+70]i/login' })
+    const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
+    const response = await hooks.handle({ event, resolve: async (event) => {
+      await validate(await event.request.formData(), loginSchema)
+      return new Response('success')
+    } })
+    expect(response.status).toBe(422)
+  })
+
+  it.each([
+    ['a parameter whose value contains an encoded slash', 'POST', 'text/html', '/dashboard/api%2Fadmin/posts', '/[section]/posts', { section: 'api/admin' }],
+    ['a GET that accepts JSON but still lets SvelteKit pick the page', 'GET', 'application/json,text/html;q=0.5', '/dashboard/posts', '/posts', {}],
+    ['a GET that accepts anything', 'GET', '*/*', '/dashboard/posts', '/posts', {}],
+  ])('keeps the flash redirect for %s', async (_label, method, accept, path, routeId, params) => {
+    (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
+    const { event } = createEvent('ignored', accept, path, { method, routeId, params })
+    const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
+    const response = await hooks.handle({ event, resolve: async (event) => {
+      await hooks.handleError({ event, kind: 'unknown', error: new InvalidCursorException('after', 'Reload the feed.') })
+      return new Response('native failure', { status: 500 })
+    } })
+    expect(response.status).toBe(303)
+  })
+
   it('cleans failures after handler errors and ignores late validation reports', async () => {
     const { event, flashed } = createEvent('invalid-email')
     const ordinaryError = new Error('ordinary failure')

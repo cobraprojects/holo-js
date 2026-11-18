@@ -75,20 +75,32 @@ function toSvelteKitErrorStatus(status: number): SvelteKitErrorStatus {
 }
 
 const ROUTE_GROUP_SEGMENT = /^\(.+\)$/
-const ROUTE_PARAMETER = /\[{1,2}(?:\.\.\.)?([^\]=]+)(?:=[^\]]+)?\]{1,2}/g
+const REST_ROUTE_SEGMENT = /^\[\.\.\.(\w+)(?:=\w+)?\]$/
+const ESCAPED_ROUTE_CHARACTER = /\[([xu])\+([0-9a-f]+)\]/gi
+const ROUTE_PARAMETER = /\[{1,2}(\w+)(?:=\w+)?\]{1,2}/g
 
-function routePath(event: SvelteKitRequestEvent): string | undefined {
-  const routeId = event.route?.id
-  if (typeof routeId !== 'string') return undefined
-  return routeId.split('/')
-    .filter(segment => !ROUTE_GROUP_SEGMENT.test(segment))
-    .map(segment => segment.replace(ROUTE_PARAMETER, (_parameter, name: string) => event.params?.[name] ?? ''))
-    .join('/')
+function routeSegmentPath(segment: string, params: Readonly<Record<string, string | undefined>>): string {
+  return segment
+    .replace(ESCAPED_ROUTE_CHARACTER, (_escape, _kind: string, code: string) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(ROUTE_PARAMETER, (_parameter, name: string) => params[name] ?? '')
+}
+
+function firstAppPathSegment(routeId: string, params: Readonly<Record<string, string | undefined>>): string | undefined {
+  for (const segment of routeId.split('/')) {
+    if (segment === '' || ROUTE_GROUP_SEGMENT.test(segment)) continue
+    const rest = REST_ROUTE_SEGMENT.exec(segment)
+    const path = rest ? (params[rest[1]!] ?? '').split('/').find(part => part !== '') : routeSegmentPath(segment, params)
+    if (path) return path
+  }
+  return undefined
 }
 
 function isApiRoute(event: SvelteKitRequestEvent): boolean {
-  const path = routePath(event) ?? event.url?.pathname ?? ''
-  return path.split('/').find(segment => segment !== '') === 'api'
+  const routeId = event.route?.id
+  const first = typeof routeId === 'string'
+    ? firstAppPathSegment(routeId, event.params ?? {})
+    : event.url?.pathname.split('/').find(segment => segment !== '')
+  return first === 'api'
 }
 
 function acceptsJson(event: SvelteKitRequestEvent): boolean {
@@ -107,19 +119,17 @@ function acceptedMediaRanges(accept: string): readonly AcceptedMediaRange[] {
     || left.index - right.index)
 }
 
-function prefersJson(event: SvelteKitRequestEvent): boolean {
-  const preferred = acceptedMediaRanges(event.request.headers.get('accept') ?? '*/*').find(range =>
-    (range.type === 'application' && (range.subtype === 'json' || range.subtype === '*'))
-    || (range.type === 'text' && (range.subtype === 'html' || range.subtype === '*'))
-    || range.type === '*')
-  return preferred?.type === 'application'
+function svelteKitSelectsEndpoint(event: SvelteKitRequestEvent): boolean {
+  const htmlRange = acceptedMediaRanges(event.request.headers.get('accept') ?? '*/*')
+    .find(range => (range.type === 'text' || range.type === '*') && (range.subtype === 'html' || range.subtype === '*'))
+  return htmlRange?.type !== 'text'
 }
 
 function isEndpointRequest(event: SvelteKitRequestEvent): boolean {
   if (event.isDataRequest === true) return false
   const method = event.request.method?.toUpperCase() ?? 'GET'
   if (method === 'POST') return false
-  if (method === 'GET' || method === 'HEAD') return prefersJson(event)
+  if (method === 'GET' || method === 'HEAD') return acceptsJson(event) && svelteKitSelectsEndpoint(event)
   return true
 }
 
