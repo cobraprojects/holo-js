@@ -204,8 +204,14 @@ export function dateBucketStorage(plan: SelectQueryPlan, bucket: QueryDateBucket
   throw new SecurityError(`selectDate() needs a date, datetime or timestamp column, but "${bucket.column}" is a ${definition.kind} column.`)
 }
 
+const UTC_TIME_ZONES: ReadonlySet<string> = new Set(['UTC', 'Etc/UTC', 'Etc/UCT', 'Etc/Universal', 'Etc/Zulu', 'Etc/GMT', 'Etc/GMT0', 'Etc/GMT+0', 'Etc/GMT-0', 'Etc/Greenwich'])
+
 export function mysqlTimeZoneName(timeZone: string): string {
-  return timeZone === 'UTC' ? '+00:00' : timeZone
+  return UTC_TIME_ZONES.has(timeZone) ? '+00:00' : timeZone
+}
+
+export function sameMySQLTimeZone(left: string, right: string): boolean {
+  return mysqlTimeZoneName(left) === mysqlTimeZoneName(right)
 }
 
 const convertibleMySQLTimeZones = new WeakMap<DatabaseContext, Set<string>>()
@@ -235,7 +241,7 @@ function convertedMySQLTimeZones(plan: SelectQueryPlan, connectionName: string):
     const timeZone = bucket.timeZone ?? applicationTimeZone
     const storage = dateBucketStorage(owner, bucket, connectionName)
     if (storage === 'timestamp') return [timeZone]
-    return storage === 'datetime' && timeZone !== applicationTimeZone ? [applicationTimeZone, timeZone] : []
+    return storage === 'datetime' && !sameMySQLTimeZone(timeZone, applicationTimeZone) ? [applicationTimeZone, timeZone] : []
   }))
   return [...zones].filter(zone => mysqlTimeZoneName(zone) === zone)
 }

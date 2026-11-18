@@ -951,6 +951,19 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .get()).rejects.toThrow(SecurityError)
   })
 
+  it('tells a joined table that reuses the source name apart from the aliased source in grouped cursors', async () => {
+    useAppTimezone('UTC')
+    const { events, facts } = await createFactsTable(driver)
+
+    await expect(DB.table(`${events.tableName} as e`)
+      .join(`${facts} as ${events.tableName}`, `${events.tableName}.id`, '>=', 'e.id')
+      .select('e.id')
+      .addSelectDate('day', 'e.occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .groupBy(`${events.tableName}.id`)
+      .orderBy('e.id')
+      .cursorPaginate(1)).rejects.toThrow(SecurityError)
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)
@@ -1229,6 +1242,16 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
     })
 
     expect(day).toBeNull()
+  })
+
+  it('treats UTC aliases as UTC without converting', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('mysql')
+    await DB.connection().executeCompiled({ sql: `INSERT INTO \`${events.tableName}\` (tenant_id, occurred_at) VALUES (11, '1969-07-20 20:17:00')`, source: 'test' })
+    const dayIn = (timeZone: string) => DB.table(events).where('tenant_id', 11).selectDate('day', 'occurred_at', { as: 'day', timeZone }).value('day')
+
+    await expect(dayIn('UTC')).resolves.toBe('1969-07-20')
+    await expect(dayIn('Etc/UTC')).resolves.toBe('1969-07-20')
   })
 
   it('gives a null bucket for a datetime its server cannot convert', async () => {

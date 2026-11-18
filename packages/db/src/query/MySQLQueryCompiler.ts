@@ -7,7 +7,7 @@ import type { CompiledStatement } from '../core/types'
 import type { TableNameFolding } from '../schema/tableIdentityRegistry'
 import { formatWallClockSeconds } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
-import { mysqlTimeZoneName, type DateBucketStorage } from './dateBuckets'
+import { mysqlTimeZoneName, sameMySQLTimeZone, type DateBucketStorage } from './dateBuckets'
 import type { DeleteQueryPlan, InsertStatementOptions, QueryDateBucketSelection, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
 const MYSQL_DECIMAL_DIGITS = 65
@@ -161,7 +161,7 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
     const timeZone = bucket.timeZone ?? applicationTimeZone
     const wallClock = storage === 'timestamp'
       ? `CONVERT_TZ(${this.compileUtcWallClock(column)}, '+00:00', ${this.createSqlStringLiteral(mysqlTimeZoneName(timeZone))})`
-      : storage === 'calendar' || timeZone === applicationTimeZone
+      : storage === 'calendar' || sameMySQLTimeZone(timeZone, applicationTimeZone)
         ? column
         : this.compileConvertedWallClock(column, mysqlTimeZoneName(applicationTimeZone), mysqlTimeZoneName(timeZone))
     return `CASE WHEN ${wallClock} >= '0001-01-01' THEN DATE_FORMAT(${wallClock}, '${MYSQL_DATE_BUCKET_FORMATS[bucket.unit]}') END`

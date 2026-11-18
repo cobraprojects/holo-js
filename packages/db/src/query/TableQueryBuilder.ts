@@ -3436,7 +3436,14 @@ export class TableQueryBuilder<
 
     const primaryKeys = this.source.table ? listTablePrimaryKeyColumns(this.source.table) : []
     if (this.plan.groupBy.length > 0 && unionBranchPlans(this.plan).some(branch => dateBucketSelections(branch).size > 0)) {
-      const identity = (column: string): string => this.resolveSourceColumnName(column) ?? column
+      const visibleSource = this.source.alias ?? this.source.tableName
+      const identity = (column: string): string => {
+        const separator = column.lastIndexOf('.')
+        if (separator === -1) return column
+        const qualifier = column.slice(0, separator)
+        const namesSource = qualifier === visibleSource || (this.source.alias === undefined && qualifier === splitTablePath(this.source.tableName).table)
+        return namesSource ? column.slice(separator + 1) : column
+      }
       const groupsByPrimaryKey = primaryKeys.length > 0 && primaryKeys.every(key => this.plan.groupBy.some(column => identity(column) === key))
       const ordered = groupsByPrimaryKey ? this.withPrimaryKeyTieBreakers(primaryKeys) : this
       if (groupsByPrimaryKey && this.plan.joins.length === 0 && this.plan.unions.length === 0) return ordered
