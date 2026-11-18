@@ -3,6 +3,7 @@ import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError, SecurityError } from '../core/errors'
 import { isInlineIntegerValue, keyCastFor, readAllColumnsSelectionTable } from './ast'
 import { validateQueryPlan } from './validator'
+import { unionOutputOrder } from './unionCursorColumns'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import { isTrustedRawPredicate } from './trustedRawPredicate'
 import { isTrustedRawSelection } from './trustedRawSelection'
@@ -238,7 +239,7 @@ export class SQLQueryCompiler {
     const havingClause = this.compileHaving(plan.having, bindings)
     const orderClause = plan.orderBy.length === 0
       ? ''
-      : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', ')}`
+      : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(plan.unions.length > 0 ? unionOutputOrder(plan, orderBy) : orderBy, bindings)).join(', ')}`
     const lockOf = plan.joins.some(join => join.subquery !== undefined && isOneOfManyAggregatePlan(join.subquery))
       ? this.quoteIdentifier(plan.source.alias ?? splitTablePath(plan.source.tableName).table)
       : undefined

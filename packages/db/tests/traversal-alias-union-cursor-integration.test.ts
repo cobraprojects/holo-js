@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { CompilerError, DB, column, defineGeneratedTable, resetDB } from '../src'
+import { CompilerError, DB, clearGeneratedTables, column, defineGeneratedTable, registerGeneratedTables, resetDB, type TableDefinition } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal aliases and union cursors on %s', driver => {
@@ -32,6 +32,71 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     if (method === 'chunk') await query.chunk(1, batch => { rows.push(...batch) })
     else for await (const row of query.lazy(1)) rows.push(row)
     expect(rows).toEqual([{ id: 1, __holo_chunk_0: 'first' }, { id: 2, __holo_chunk_0: 'second' }])
+  })
+
+  async function pageThrough<TRow extends Record<string, unknown>>(query: { cursorPaginate(perPage: number, cursor?: string | null): Promise<{ data: readonly TRow[], nextCursor: string | null, prevCursor: string | null }> }) {
+    const pages: TRow[][] = []
+    let cursor: string | null = null
+    do {
+      const page = await query.cursorPaginate(1, cursor)
+      pages.push([...page.data])
+      cursor = page.nextCursor
+    } while (cursor !== null && pages.length < 10)
+    return pages.flat()
+  }
+
+  async function createTable(schema: Awaited<ReturnType<typeof openDatabase>>['schema'], prefix: string, integers: readonly string[], strings: readonly string[] = []) {
+    const name = `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(() => schema.dropTable(name))
+    await schema.createTable(name, table => {
+      for (const columnName of integers) table.integer(columnName)
+      for (const columnName of strings) table.string(columnName)
+    })
+    return name
+  }
+
+  function registered<TTable extends TableDefinition>(table: TTable): TTable {
+    registerGeneratedTables({ [table.tableName]: table })
+    onTestFinished(() => clearGeneratedTables())
+    return table
+  }
+
+  it('rejects a union whose other branch cannot supply the order column before any page runs', async () => {
+    const { schema } = await openDatabase(driver)
+    const left = registered(defineGeneratedTable(await createTable(schema, 'union_left', ['n', 'id'], ['value']), { n: column.integer(), id: column.integer(), value: column.string() }))
+    const right = registered(defineGeneratedTable(await createTable(schema, 'union_right', ['other_n'], ['value']), { other_n: column.integer(), value: column.string() }))
+    const aliasedFirst = DB.table(left.tableName).select('n as sort_key', 'value').unionAll(DB.table(right.tableName)).orderBy('sort_key')
+    const wildcardFirst = DB.table(left.tableName).unionAll(DB.table(right.tableName).select('other_n', 'value')).orderBy('id')
+    for (const [query, column] of [[aliasedFirst, 'sort_key'], [wildcardFirst, 'id']] as const) {
+      for (const cursor of [null, 'abc']) {
+        await expect(query.cursorPaginate(1, cursor)).rejects.toThrow(
+          new CompilerError(`Cannot cursor paginate a union by "${column}": its column position cannot be determined. Select the order column explicitly in each query without preceding wildcards.`),
+        )
+      }
+    }
+  })
+
+  it('pages a union whose next branch selects the wildcard order column under another name', async () => {
+    const { schema } = await openDatabase(driver)
+    const left = registered(defineGeneratedTable(await createTable(schema, 'union_left', ['id'], ['label']), { id: column.integer(), label: column.string() }))
+    await DB.table(left).insert([{ id: 1, label: 'a' }, { id: 3, label: 'c' }])
+    const query = DB.table(left.tableName).where('id', 3).unionAll(DB.table(left.tableName).select('id as user_id', 'label').where('id', 1)).orderBy('id')
+    expect((await pageThrough(query)).map(row => row.label)).toEqual(['a', 'c'])
+  })
+
+  it('pages a union of differently aliased joined wildcards ordered by a qualified column', async () => {
+    const { schema } = await openDatabase(driver)
+    const owners = registered(defineGeneratedTable(await createTable(schema, 'union_owners', ['id']), { id: column.integer() }))
+    const items = registered(defineGeneratedTable(await createTable(schema, 'union_items', ['owner_id', 'rank']), { owner_id: column.integer(), rank: column.integer() }))
+    await DB.table(owners).insert([{ id: 1 }, { id: 2 }])
+    await DB.table(items).insert([{ owner_id: 1, rank: 1 }, { owner_id: 2, rank: 2 }, { owner_id: 1, rank: 3 }, { owner_id: 2, rank: 4 }])
+    const branch = (alias: string, ownerId: number) => DB.table(owners.tableName)
+      .join(`${items.tableName} as ${alias}`, `${alias}.owner_id`, '=', `${owners.tableName}.id`)
+      .select(`${alias}.*`)
+      .where(`${owners.tableName}.id`, ownerId)
+    const query = branch('a', 1).unionAll(branch('b', 2)).orderBy('a.rank')
+    expect((await query.get()).map(row => row.rank)).toEqual([1, 2, 3, 4])
+    expect((await pageThrough(query)).map(row => row.rank)).toEqual([1, 2, 3, 4])
   })
 
   it.each(['first', 'second'] as const)('rejects a union cursor when the %s branch hides column positions behind an undefined joined wildcard', async wildcardBranch => {

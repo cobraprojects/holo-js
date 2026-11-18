@@ -2332,8 +2332,9 @@ export class TableQueryBuilder<
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
     const previous = decodedCursor?.previous === true
-    const cursorValue = (row: Record<string, unknown>, column: string): unknown =>
-      orderedQuery.plan.unions.length > 0 && Object.hasOwn(row, column) ? row[column] : orderedQuery.readCursorColumnValue(row, column)
+    const cursorValues = (row: Record<string, unknown>): readonly unknown[] => unionColumns
+      ? unionColumns.outputNames.map(name => row[name])
+      : cursorOrders.map(order => orderedQuery.readCursorColumnValue(row, order.column))
     if (decodedCursor) {
       const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
       const nullsLow = !this.connection.getDialect().name.includes('postgres')
@@ -2347,7 +2348,7 @@ export class TableQueryBuilder<
         ...filter(branch, branchColumns(branch)),
         unions: Object.freeze(branch.unions.map(union => Object.freeze({ ...union, query: filterUnion(union.query, branchColumns) }))),
       })
-      plan = unionColumns ? filterUnion(plan, unionColumns) : filter(plan, cursorOrders.map(order => order.column))
+      plan = unionColumns ? filterUnion(plan, unionColumns.branchColumns) : filter(plan, cursorOrders.map(order => order.column))
     }
     if (previous) plan = replaceOrderBy(plan, cursorOrders.map(order => ({ kind: 'column', column: order.column, direction: order.direction === 'asc' ? 'desc' : 'asc' })))
     const pageQuery = orderedQuery.clone(plan)
@@ -2361,10 +2362,10 @@ export class TableQueryBuilder<
       perPage,
       cursorName,
       nextCursor: (previous ? cursor !== null : hasMorePages) && lastRow
-        ? encodeValueCursor(cursorOrders.map(order => cursorValue(lastRow, order.column)))
+        ? encodeValueCursor(cursorValues(lastRow))
         : null,
       prevCursor: (previous ? hasMorePages : cursor !== null) && firstRow
-        ? encodeValueCursor(cursorOrders.map(order => cursorValue(firstRow, order.column)), true)
+        ? encodeValueCursor(cursorValues(firstRow), true)
         : null,
     })
 
