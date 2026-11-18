@@ -1,9 +1,11 @@
 import type { AsyncLocalStorage } from 'node:async_hooks'
 
+export type SvelteKitParamValue = string | number | boolean | bigint
+
 export type SvelteKitRequestEvent = {
   readonly url?: URL
   readonly route?: { readonly id: string | null }
-  readonly params?: Readonly<Record<string, string | undefined>>
+  readonly params?: Readonly<Record<string, SvelteKitParamValue | undefined>>
   readonly isDataRequest?: boolean
   readonly cookies: {
     get(name: string): string | undefined

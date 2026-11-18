@@ -129,6 +129,8 @@ describe('SvelteKit validation hooks', () => {
     ['a hyphenated parameter that resolves to api/', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[api-section]/posts', { 'api-section': 'api' }],
     ['a multi-codepoint route escape spelling api/', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[u+0061-0070-0069]/posts', {}],
     ['a GET whose Accept header names HTML in upper case', 'GET', 'application/json,TEXT/HTML', '/posts.json?after=abc', '/posts.json', {}],
+    ['a GET whose Accept header has a malformed quality', 'GET', '*/*;q=.,text/html,application/json', '/posts.json?after=abc', '/posts.json', {}],
+    ['an API route whose numeric matcher value precedes api/', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[[version=integer]]/api/posts', {}],
   ])('answers an invalid cursor on %s with 422 JSON and no flash cookie', async (_label, method, accept, path, routeId, params) => {
     (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
     const { event, flashed } = createEvent('ignored', accept, path, { method, routeId, params })
@@ -158,6 +160,7 @@ describe('SvelteKit validation hooks', () => {
     ['a GET that accepts anything', 'GET', '*/*', '/dashboard/posts', '/posts', {}],
     ['an escaped literal bracket segment before api/', 'POST', 'text/html', '/dashboard/[section]/api/posts', '/[x+5b]section[x+5d]/api/posts', {}],
     ['a GET that prefers HTML through a */html range', 'GET', 'application/json;q=0.5,*/html', '/dashboard/posts', '/posts', {}],
+    ['a route whose numeric matcher value comes first', 'POST', 'text/html', '/dashboard/7/api/posts', '/[id=integer]/api/posts', { id: '7' }],
   ])('keeps the flash redirect for %s', async (_label, method, accept, path, routeId, params) => {
     (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
     const { event } = createEvent('ignored', accept, path, { method, routeId, params })

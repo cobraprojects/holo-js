@@ -1,4 +1,4 @@
-import { getCurrentSvelteKitRequestEvent, runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitRequestEvent } from '@holo-js/adapter-shared/sveltekit/request-context'
+import { getCurrentSvelteKitRequestEvent, runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitParamValue, type SvelteKitRequestEvent } from '@holo-js/adapter-shared/sveltekit/request-context'
 import { serializeRateLimitError } from '@holo-js/adapter-shared/server-errors'
 import { error as svelteKitError } from '@sveltejs/kit'
 import type { Handle, HandleServerError } from '@sveltejs/kit/hooks'
@@ -78,13 +78,13 @@ const ROUTE_GROUP_SEGMENT = /^\([^)]+\)$/
 const REST_ROUTE_SEGMENT = /^\[\.\.\.[\w-]+?(?:=[\w-]+)?\]$/
 const ROUTE_SEGMENT_PART = /\[([ux])\+([^\]]+)\]|\[(\[)?(\.\.\.)?([\w-]+?)(?:=([\w-]+))?\]\]?/g
 
-function routeSegmentPath(segment: string, params: Readonly<Record<string, string | undefined>>): string {
+function routeSegmentPath(segment: string, params: Readonly<Record<string, SvelteKitParamValue | undefined>>): string {
   return segment.replace(ROUTE_SEGMENT_PART, (_part, escapeType: string | undefined, escapeCode: string | undefined, _optional, _rest, name: string | undefined) => escapeType
     ? String.fromCodePoint(...(escapeCode ?? '').split('-').map(codepoint => Number.parseInt(codepoint, 16)))
-    : params[name ?? ''] ?? '')
+    : String(params[name ?? ''] ?? ''))
 }
 
-function firstAppPathSegment(routeId: string, params: Readonly<Record<string, string | undefined>>): string | undefined {
+function firstAppPathSegment(routeId: string, params: Readonly<Record<string, SvelteKitParamValue | undefined>>): string | undefined {
   for (const segment of routeId.slice(1).split('/')) {
     if (segment === '' || ROUTE_GROUP_SEGMENT.test(segment)) continue
     const path = routeSegmentPath(segment, params)
@@ -112,10 +112,14 @@ function acceptedMediaRanges(accept: string): readonly AcceptedMediaRange[] {
   return accept.split(',').flatMap((range, index) => {
     const match = /^[ \t]*([^/ \t]+)\/([^; \t]+)[ \t]*(?:;[ \t]*q=([0-9.]+))?/.exec(range)
     return match ? [{ type: match[1]!, subtype: match[2]!, quality: Number(match[3] ?? '1'), index }] : []
-  }).sort((left, right) => right.quality - left.quality
-    || Number(left.subtype === '*') - Number(right.subtype === '*')
-    || Number(left.type === '*') - Number(right.type === '*')
-    || left.index - right.index)
+  }).sort(compareMediaRanges)
+}
+
+function compareMediaRanges(left: AcceptedMediaRange, right: AcceptedMediaRange): number {
+  if (left.quality !== right.quality) return right.quality - left.quality
+  if ((left.subtype === '*') !== (right.subtype === '*')) return left.subtype === '*' ? 1 : -1
+  if ((left.type === '*') !== (right.type === '*')) return left.type === '*' ? 1 : -1
+  return left.index - right.index
 }
 
 function svelteKitSelectsEndpoint(event: SvelteKitRequestEvent): boolean {
