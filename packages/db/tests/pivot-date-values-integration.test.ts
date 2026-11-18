@@ -21,6 +21,7 @@ async function openPivots(driver: Driver, logger?: NonNullable<Parameters<typeof
     table.integer('owner_id')
     table.datetime('starts_at')
     table.string('note').nullable()
+    table.string('holo_matching_values').nullable()
   })
   await schema.createTable(names.tags, (table) => { table.integer('id').primaryKey() })
   await schema.createTable(names.ownerTags, (table) => {
@@ -238,6 +239,14 @@ describe.each(drivers)('pivot rows that repeat a date key on %s', (driver) => {
 
     expect(await owner.sync('slots', ['2026-01-01 10:00:00' as never])).toEqual({ attached: [], detached: [new Date('2026-01-02T10:00:00Z')].map(date => driver === 'sqlite' ? '2026-01-02 10:00:00' : date), updated: [] })
     expect((await DB.table(ownerSlots).orderBy('note').pluck('note'))).toEqual(['a', 'b'])
+  })
+
+  it('keeps matching keys when the pivot has a column named like an internal selection', async () => {
+    const { db, names, owner, ownerSlots } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`INSERT INTO ${quote(driver, names.ownerSlots)} (${quote(driver, 'owner_id')}, ${quote(driver, 'starts_at')}, ${quote(driver, 'holo_matching_values')}) VALUES (1, '2026-01-01 10:00:00', 'custom')`))
+
+    expect(await owner.sync('slots', ['2026-01-01 10:00:00' as never])).toEqual({ attached: [], detached: [], updated: [] })
+    expect(await DB.table(ownerSlots).count()).toBe(1)
   })
 
   it.runIf(driver !== 'sqlite')('matches many keys without a query per key', async () => {

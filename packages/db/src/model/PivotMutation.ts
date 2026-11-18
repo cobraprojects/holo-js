@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder, selectMatchingValues, selectStoredText, whereStoredValuesDiffer, whereStoredValuesIn } from '../query/TableQueryBuilder'
@@ -32,8 +33,6 @@ type Context = {
 type PivotQuery = TableQueryBuilder<string | TableDefinition>
 
 const bindingBudget = 900
-const storedKeyTextAlias = 'holo_stored_key_text'
-const matchingValuesAlias = 'holo_matching_values'
 const CALENDAR_DATE = /^\d{4,}-\d{2}-\d{2}$/
 
 function bindableId(id: unknown): unknown {
@@ -45,6 +44,10 @@ function isScalarObjectId(id: unknown): id is Date | ArrayBufferView {
 }
 
 export class PivotMutation {
+  private readonly aliasSuffix = randomUUID().replaceAll('-', '')
+  private readonly storedKeyTextAlias = `holo_stored_key_${this.aliasSuffix}`
+  private readonly matchingValuesAlias = `holo_matching_${this.aliasSuffix}`
+
   constructor(private readonly context: Context, private readonly connection: DatabaseContext) {
     assertQueryTablePath(typeof context.table === 'string' ? context.table : context.table.tableName)
   }
@@ -216,7 +219,7 @@ export class PivotMutation {
   }
 
   private storedKey(row: Attributes): unknown {
-    return this.comparesKeysInDatabase() ? row[storedKeyTextAlias] : row[this.context.relatedColumn]
+    return this.comparesKeysInDatabase() ? row[this.storedKeyTextAlias] : row[this.context.relatedColumn]
   }
 
   private storedKeyIdentity(row: Attributes): unknown {
@@ -255,12 +258,14 @@ export class PivotMutation {
           this.query(connection).where(this.context.relatedColumn, 'in', ids) as never,
           this.context.relatedColumn,
           ids.map(id => this.comparedKey(id)),
-          matchingValuesAlias,
+          this.matchingValuesAlias,
         ) as unknown as PivotQuery
         for (const row of await this.readWithStoredText(query)) {
-          for (const index of String(row[matchingValuesAlias] ?? '').split(',').filter(Boolean)) {
+          for (const index of String(row[this.matchingValuesAlias] ?? '').split(',').filter(Boolean)) {
             const entry = batch[Number(index)]!
-            byEntry.set(entry, [...byEntry.get(entry) ?? [], row])
+            const rows = byEntry.get(entry)
+            if (rows) rows.push(row)
+            else byEntry.set(entry, [row])
           }
         }
       }
@@ -268,8 +273,8 @@ export class PivotMutation {
         rowsFor: entry => byEntry.get(entry),
         missing: async () => {
           if (!readAll) return []
-          const kept = new Set([...byEntry.values()].flat().map(row => String(row[storedKeyTextAlias])))
-          return [(await this.readWithStoredText(this.query(connection))).filter(row => row[this.context.relatedColumn] != null && !kept.has(String(row[storedKeyTextAlias])))]
+          const kept = new Set([...byEntry.values()].flat().map(row => String(row[this.storedKeyTextAlias])))
+          return [(await this.readWithStoredText(this.query(connection))).filter(row => row[this.context.relatedColumn] != null && !kept.has(String(row[this.storedKeyTextAlias])))]
         },
       }
     }
@@ -289,7 +294,7 @@ export class PivotMutation {
   }
 
   private readWithStoredText(query: PivotQuery): Promise<Attributes[]> {
-    return selectStoredText(query.addSelect(`${this.tableName()}.*` as never) as PivotQuery, this.context.relatedColumn, storedKeyTextAlias).get<Attributes>()
+    return selectStoredText(query.addSelect(`${this.tableName()}.*` as never) as PivotQuery, this.context.relatedColumn, this.storedKeyTextAlias).get<Attributes>()
   }
 
   private writeKey(value: unknown): unknown {
