@@ -65,6 +65,7 @@ export class SQLQueryCompiler {
   private dateBucketPlan: SelectQueryPlan | undefined = undefined
   private dateBucketsFolded: ReadonlyMap<string, ResolvedDateBucket> = NO_DATE_BUCKETS
   private guardedBucketNames: ReadonlySet<string> = NO_GUARDED_BUCKET_NAMES
+  private outerGuardedBucketNames: ReadonlySet<string> = NO_GUARDED_BUCKET_NAMES
   private dateBucketAliasMode: DateBucketAliasMode = 'column'
 
   constructor(
@@ -214,6 +215,8 @@ export class SQLQueryCompiler {
     const enclosingDateBucketPlan = this.dateBucketPlan
     const enclosingDateBucketsFolded = this.dateBucketsFolded
     const enclosingGuardedBucketNames = this.guardedBucketNames
+    const enclosingOuterGuardedBucketNames = this.outerGuardedBucketNames
+    this.outerGuardedBucketNames = enclosingGuardedBucketNames
     try {
       const selections = dateBucketSelections(plan)
       if (selections.size === 0) {
@@ -234,6 +237,7 @@ export class SQLQueryCompiler {
       this.dateBucketPlan = enclosingDateBucketPlan
       this.dateBucketsFolded = enclosingDateBucketsFolded
       this.guardedBucketNames = enclosingGuardedBucketNames
+      this.outerGuardedBucketNames = enclosingOuterGuardedBucketNames
     }
   }
 
@@ -657,10 +661,16 @@ export class SQLQueryCompiler {
   protected compileUnions(unions: SelectQueryPlan['unions'], bindings: unknown[]): string {
     if (unions.length === 0) return ''
 
-    return unions.map((union) => {
-      const keyword = union.all ? ' UNION ALL ' : ' UNION '
-      return `${keyword}${this.compileSelectSql(union.query, bindings)}`
-    }).join('')
+    const branchGuardedBucketNames = this.guardedBucketNames
+    this.guardedBucketNames = this.outerGuardedBucketNames
+    try {
+      return unions.map((union) => {
+        const keyword = union.all ? ' UNION ALL ' : ' UNION '
+        return `${keyword}${this.compileSelectSql(union.query, bindings)}`
+      }).join('')
+    } finally {
+      this.guardedBucketNames = branchGuardedBucketNames
+    }
   }
 
   protected compileHaving(
@@ -1089,7 +1099,7 @@ export class SQLQueryCompiler {
       throw new CompilerError(`Refer to the date bucket "${dateBucket.bucket.alias}" by its exact name, not "${reference}".`)
     }
     if (dateBucket && this.dateBucketAliasMode === 'expression') return this.compileDateBucketExpression(dateBucket)
-    if (this.dateBucketAliasMode === 'column' && this.dateBucketPlan && !reference.includes('.') && this.guardedBucketNames.has(reference.toLowerCase())) {
+    if ((this.dateBucketAliasMode === 'column' || !dateBucket) && this.dateBucketPlan && !reference.includes('.') && this.guardedBucketNames.has(reference.toLowerCase())) {
       return `${this.compileTableReference(bareColumnOwner(this.dateBucketPlan, reference, this.connectionName, this.foldsColumnNames()))}.${this.quoteIdentifier(reference)}`
     }
     const { schema: table, table: column } = splitTablePath(reference)

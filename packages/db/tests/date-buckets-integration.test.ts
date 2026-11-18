@@ -1608,6 +1608,34 @@ describe('date buckets next to sqlite wildcards of case-variant aliases', () => 
       .get()).resolves.toEqual([{ day: '2026-11-03' }])
   })
 
+  it('keeps subquery GROUP BY and HAVING from reading the outer date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('sqlite')
+    const lookups = await createKeyedTable('bucket_lookups', 'code', [{ id: 1, value: 1 }])
+    registerGeneratedTables({ events, lookups })
+
+    await expect(DB.table(events)
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .whereExists(DB.table(lookups.tableName).select('code').groupBy('code').having('day', '2026-11-03'))
+      .get()).rejects.toThrow(CompilerError)
+  })
+
+  it('lets a union arm reach an outer column that a sibling arm names as a date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('sqlite')
+    const lookups = await createKeyedTable('bucket_lookups', 'code', [{ id: 1, value: 2 }])
+    const reports = await createKeyedTable('bucket_reports', 'day', [{ id: 1, value: 2 }])
+    registerGeneratedTables({ events, lookups, reports })
+    const inner = DB.table(events.tableName)
+      .where('tenant_id', 99)
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .unionAll(DB.table(lookups.tableName).select('code as day').whereColumn('day', '=', `${lookups.tableName}.code`))
+
+    const rows = await DB.table(reports.tableName).select('id').addSelectSub(inner, 'value').get()
+
+    expect(rows).toEqual([{ id: 1, value: 2 }])
+  })
+
   it('checks a joined subquery whose wildcard SQLite matches regardless of case', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable('sqlite')
