@@ -1117,6 +1117,9 @@ describe('type system contracts', () => {
       // @ts-expect-error string relation targets must match the registered model names
       hasMany('MissingModel', 'user_id')
     }
+
+    expectTypeOf(NamedUser.definition.relations.posts).toMatchTypeOf<HasManyRelationDefinition<NamedPostModel>>()
+    expectTypeOf(NamedPost.definition.relations.user).toMatchTypeOf<BelongsToRelationDefinition<NamedUserModel>>()
   })
 
   it('supports self-referential eager-load paths', () => {

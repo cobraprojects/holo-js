@@ -77,16 +77,13 @@ export type RegisteredModelName = Extract<keyof RegisteredModels, string>
 export type RegisteredModelReference<TName extends RegisteredModelName> = RegisteredModels[TName]
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- declaration merging hook for app model registries
 export interface RegisteredModelDefinitions {}
-declare const registeredModelName: unique symbol
-export type NamedModelReference<TName extends RegisteredModelName> = ModelDefinitionLike & { readonly [registeredModelName]?: TName }
+export type NamedModelReference<TName extends RegisteredModelName> = RegisteredModelReference<TName> & { readonly '~registeredModelName'?: TName }
 type NamedModelReferenceName<TReference>
-  = TReference extends { readonly [registeredModelName]?: infer TName extends RegisteredModelName } ? TName : never
-type ResolveModelReference<TReference>
-  = [NamedModelReferenceName<TReference>] extends [never] ? TReference : RegisteredModelReference<NamedModelReferenceName<TReference>>
+  = TReference extends { readonly '~registeredModelName'?: infer TName extends RegisteredModelName } ? TName : never
 type ResolveModelDefinition<TReference>
   = NamedModelReferenceName<TReference> extends infer TName extends keyof RegisteredModelDefinitions
-    ? [TName] extends [never] ? ResolveModelReference<TReference> : RegisteredModelDefinitions[TName]
-    : ResolveModelReference<TReference>
+    ? [TName] extends [never] ? TReference : RegisteredModelDefinitions[TName]
+    : TReference
 export type ModelDefinitionLike<TTable extends TableDefinition = TableDefinition>
   = | (AnyModelDefinition & { readonly table: TTable })
     | { readonly definition: AnyModelDefinition & { readonly table: TTable } }
@@ -119,9 +116,9 @@ export interface ScopedRelationDefinition {
 }
 
 export type ModelDefinitionTable<TReference extends ModelDefinitionLike>
-  = ResolveModelReference<TReference> extends { readonly definition: { readonly table: infer TTable extends TableDefinition } }
+  = TReference extends { readonly definition: { readonly table: infer TTable extends TableDefinition } }
     ? TTable
-    : ResolveModelReference<TReference> extends { readonly table: infer TTable extends TableDefinition }
+    : TReference extends { readonly table: infer TTable extends TableDefinition }
       ? TTable
       : TableDefinition
 

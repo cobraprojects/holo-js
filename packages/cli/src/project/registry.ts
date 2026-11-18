@@ -204,7 +204,7 @@ export function renderGeneratedModelTypes(models: readonly GeneratedModelRegistr
     : []
   const typedModels = models.flatMap((entry, index) => isTypeScriptSource(entry.sourcePath) ? [{ entry, importName: `holoModelModule${index}` }] : [])
   const moduleImports = typedModels.map(({ entry, importName }) => {
-    return `import type * as ${importName} from '${relativeImportPath(GENERATED_MODEL_TYPES_PATH, entry.sourcePath)}'`
+    return `import type * as ${importName} from '${typeImportPath(GENERATED_MODEL_TYPES_PATH, entry.sourcePath)}'`
   })
   const imports = [...modelTypeImports, ...moduleImports]
   const registryEntries = models.map((entry, index) => {
@@ -233,8 +233,14 @@ export function renderGeneratedModelTypes(models: readonly GeneratedModelRegistr
   ].join('\n')
 }
 
+const TYPE_IMPORT_EXTENSIONS: Readonly<Record<string, string>> = { '.ts': '', '.mts': '.mjs', '.cts': '.cjs' }
+
 function isTypeScriptSource(sourcePath: string): boolean {
-  return ['.ts', '.mts', '.cts'].includes(extname(sourcePath))
+  return extname(sourcePath) in TYPE_IMPORT_EXTENSIONS
+}
+
+function typeImportPath(fromFile: string, sourcePath: string): string {
+  return `${relativeImportPath(fromFile, sourcePath)}${TYPE_IMPORT_EXTENSIONS[extname(sourcePath)] ?? ''}`
 }
 
 function renderAugmentationInterface(
@@ -278,10 +284,10 @@ export function renderGeneratedBroadcastTypes(
   }
   imports.push(
     ...typedBroadcastEntries.map((entry, index) => {
-      return `import type * as holoBroadcastModule${index} from '${relativeImportPath(GENERATED_BROADCAST_TYPES_PATH, entry.sourcePath)}'`
+      return `import type * as holoBroadcastModule${index} from '${typeImportPath(GENERATED_BROADCAST_TYPES_PATH, entry.sourcePath)}'`
     }),
     ...typedChannelEntries.map((entry, index) => {
-      return `import type * as holoChannelModule${index} from '${relativeImportPath(GENERATED_BROADCAST_TYPES_PATH, entry.sourcePath)}'`
+      return `import type * as holoChannelModule${index} from '${typeImportPath(GENERATED_BROADCAST_TYPES_PATH, entry.sourcePath)}'`
     }),
   )
 

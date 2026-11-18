@@ -7527,7 +7527,7 @@ export default defineMigration({
   },
 })
 `)
-    await writeProjectFile(projectRoot, 'server/models/Tenant.ts', `
+    await writeProjectFile(projectRoot, 'server/models/Tenant.mts', `
 import { defineModel, hasMany } from '@holo-js/db'
 
 export default defineModel('tenants', { relations: { rewards: hasMany('Reward', 'tenant_id') } })
@@ -7555,7 +7555,10 @@ export const CampaignRewardAllocation = defineModel('campaign_reward_allocations
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
     await writeProjectFile(projectRoot, 'check-model-types.ts', `
 import './.holo-js/generated/model-registry'
+import { belongsTo } from '@holo-js/db'
 import { CampaignRewardAllocation } from './server/models/CampaignRewardAllocation'
+
+export const rewardRelation = belongsTo('Reward', 'reward_id')
 
 export async function tenantName(): Promise<string | undefined> {
   const rows = await CampaignRewardAllocation.query().with('reward.tenant.rewards.allocations').get()
@@ -7566,7 +7569,8 @@ export async function tenantName(): Promise<string | undefined> {
 `)
     const program = ts.createProgram([join(projectRoot, 'check-model-types.ts')], {
       strict: true,
-      noEmit: true,
+      declaration: true,
+      emitDeclarationOnly: true,
       skipLibCheck: true,
       module: ts.ModuleKind.ESNext,
       moduleResolution: ts.ModuleResolutionKind.Bundler,
