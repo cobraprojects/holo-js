@@ -10,6 +10,7 @@ import { assertQueryTablePath } from '../query/validator'
 import { normalizeDialectWriteValue, parseStoredDate, readsAsInteger, storesDate } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
+import { parseSQLiteDateTime } from '../sqliteDateTime'
 import { assertColumnWritable, canonicalStoredKey, ownEntry } from './entityRuntime'
 
 type Attributes = Record<string, unknown>
@@ -35,6 +36,7 @@ type Context = {
 type PivotQuery = TableQueryBuilder<string | TableDefinition>
 
 const bindingBudget = 900
+const SECONDS_FRACTION = /\d{2}:\d{2}:\d{2}\.(\d+)/
 const CALENDAR_DATE = /^\d{4,}-\d{2}-\d{2}$/
 
 function bindableId(id: unknown): unknown {
@@ -265,8 +267,19 @@ export class PivotMutation {
   }
 
   private incomingKeyIdentity(value: unknown): unknown {
-    if (this.storesSQLiteDateKeys() && this.dateKeyColumn()?.kind === 'date') return this.calendarDayIdentity(this.writeKey(value))
+    if (this.storesSQLiteDateKeys()) {
+      return this.dateKeyColumn()?.kind === 'date' ? this.calendarDayIdentity(this.writeKey(value)) : this.sqliteInstantIdentity(value)
+    }
     return this.keyIdentity(this.readKey(this.writeKey(value)))
+  }
+
+  private sqliteInstantIdentity(value: unknown): unknown {
+    const written = this.writeKey(value)
+    if (typeof written !== 'string') return this.keyIdentity(written)
+    const instant = parseSQLiteDateTime(written)
+    if (!instant) return this.keyIdentity(written)
+    const fraction = SECONDS_FRACTION.exec(written)?.[1] ?? ''
+    return `instant:${instant.getTime()}|${fraction.slice(3).replace(/0+$/, '')}`
   }
 
   private calendarDayIdentity(value: unknown): unknown {
@@ -375,7 +388,9 @@ export class PivotMutation {
   }
 
   private dedupeIdentity(id: unknown): unknown {
-    return this.comparesKeysInDatabase() ? this.keyIdentity(this.comparedKey(id)) : this.keyIdentity(this.writeKey(id))
+    return this.comparesKeysInDatabase()
+      ? this.keyIdentity(normalizeQueryWriteValue(this.writtenTableDefinition(), this.context.dialect, this.context.relatedColumn, id))
+      : this.keyIdentity(this.writeKey(id))
   }
 
   private dedupe(entries: readonly Entry[]): Entry[] {

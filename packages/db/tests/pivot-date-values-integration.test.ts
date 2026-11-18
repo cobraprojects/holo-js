@@ -233,6 +233,15 @@ describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as S
     expect(await DB.table(ownerTags.tableName).unsafeSelect('"expires_at" AS "stored"', []).first()).toEqual({ stored: '2026-01-01T10:00:00Z' })
   })
 
+  it('matches a key stored as offset-free text with a zero fraction', async () => {
+    const { db, names, owner, ownerSlots } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") VALUES (1, '2026-01-01 10:00:00.000', 'old')`))
+
+    expect(await owner.updateExistingPivot('slots', new Date('2026-01-01T10:00:00Z'), { note: 'new' })).toBe(1)
+    expect(await DB.table(ownerSlots).pluck('note')).toEqual(['new'])
+    expect(await owner.detach('slots', new Date('2026-01-01T10:00:00Z'))).toBe(1)
+  })
+
   it('updates every row stored for an instant when any of them differs', async () => {
     const { db, names, owner, ownerSlots } = await openPivots(driver)
     await db.unsafeExecute(unsafeSql(`INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") VALUES (1, '2026-01-01T10:00:00Z', 'old'), (1, '2026-01-01 10:00:00', 'new')`))
@@ -345,6 +354,13 @@ describe.each(drivers)('pivot rows that repeat a date id many times on %s', (dri
 })
 
 describe.each(drivers)('pivot rows keyed by a calendar date on %s', (driver) => {
+  it('keeps two different times of one day passed to an empty pivot as two inputs, as Laravel does', async () => {
+    const { owner, ownerDays } = await openPivots(driver)
+
+    await owner.sync('days', [new Date('2026-01-01T00:00:00Z'), new Date('2026-01-01T12:00:00Z')])
+    expect(await DB.table(ownerDays).count()).toBe(2)
+  })
+
   it('matches a day key given as a Date or as text for that day', async () => {
     const { owner, ownerDays } = await openPivots(driver)
     await owner.attach('days', new Date('2026-01-01T00:00:00Z'), { note: 'attached' })
