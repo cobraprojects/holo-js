@@ -180,6 +180,34 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     }
   })
 
+  it.skipIf(driver === 'postgres')('pages a union whose branches return different types under one output name', async () => {
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_mixed', ['n'])
+    await schema.table(name, table => { table.boolean('active').default(false) })
+    const mixed = registered(defineGeneratedTable(name, { n: column.integer(), active: column.boolean() }))
+    await DB.table(mixed).insert([{ n: 2, active: false }, { n: 3, active: false }])
+    const query = DB.table(mixed.tableName).select('active as k').where('n', 2).unionAll(DB.table(mixed.tableName).select('n as k')).orderBy('k')
+    const all = (await query.get()).map(row => Number(row.k))
+    expect(all).toHaveLength(3)
+    expect((await pageThrough(query)).map(row => Number(row.k))).toEqual(all)
+  })
+
+  it('compares union output names the way the database compares identifiers', async () => {
+    const { schema } = await openDatabase(driver)
+    const users = registered(defineGeneratedTable(await createTable(schema, 'union_users', ['id', 'n']), { id: column.integer(), n: column.integer() }))
+    await DB.table(users).insert([{ id: 1, n: 10 }, { id: 2, n: 20 }])
+    const query = DB.table(users.tableName).select('id', 'n as label', 'n as LABEL').where('id', 1).unionAll(DB.table(users.tableName).select('id', 'n', 'n').where('id', 2)).orderBy('id')
+    if (driver === 'postgres') {
+      expect((await pageThrough(query)).map(row => Number(row.id))).toEqual([1, 2])
+      return
+    }
+    for (const cursor of [null, 'abc']) {
+      await expect(query.cursorPaginate(1, cursor)).rejects.toThrow(
+        new CompilerError('Cannot cursor paginate a union whose first query selects more than one column named "label". Select each column under a name no other column has.'),
+      )
+    }
+  })
+
   it('pages a union whose next branch selects the wildcard order column under another name', async () => {
     const { schema } = await openDatabase(driver)
     const left = registered(defineGeneratedTable(await createTable(schema, 'union_left', ['id'], ['label']), { id: column.integer(), label: column.string() }))

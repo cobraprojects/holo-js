@@ -61,19 +61,20 @@ function wildcardOwnerColumn(plan: SelectQueryPlan, name: string, connectionName
   return undefined
 }
 
-export function assertPageableUnionOutputs(plan: SelectQueryPlan, names: readonly string[], connectionName: string): void {
+export function assertPageableUnionOutputs(plan: SelectQueryPlan, names: readonly string[], connectionName: string, caseSensitiveNames: boolean): void {
   const selections: readonly QuerySelection[] = plan.selections.length === 0 ? [{ kind: 'column', column: '*' }] : plan.selections
   const outputs = selections.map(selection => selectionNames(plan, selection, connectionName))
   if (outputs.some(output => output === undefined)) {
     const name = names[0]!
     throw new CompilerError(`Cannot cursor paginate a union by "${name}": more than one of its selected columns may be named "${name}". Select it under a name no other column has.`)
   }
-  const known = outputs.flat()
-  const duplicate = known.find((output, index) => output !== undefined && known.indexOf(output) !== index)
+  const identifier = (name: string) => caseSensitiveNames ? name : name.toLowerCase()
+  const known = outputs.flat().flatMap(output => output === undefined ? [] : [identifier(output)])
+  const duplicate = known.find((output, index) => known.indexOf(output) !== index)
   if (duplicate !== undefined) {
     throw new CompilerError(`Cannot cursor paginate a union whose first query selects more than one column named "${duplicate}". Select each column under a name no other column has.`)
   }
-  const missing = names.find(name => !known.includes(name))
+  const missing = names.find(name => !known.includes(identifier(name)))
   if (missing !== undefined) {
     throw new CompilerError(`Cannot cursor paginate a union by "${missing}": the first query in the union doesn't select it. Select the order column in each query.`)
   }

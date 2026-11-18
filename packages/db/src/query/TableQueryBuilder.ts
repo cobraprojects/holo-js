@@ -2331,11 +2331,11 @@ export class TableQueryBuilder<
     const unionOrders = orderedQuery.plan.unions.length === 0
       ? undefined
       : cursorOrders.map(order => ({ ...order, column: unionOutputName(orderedQuery.plan, order.column) }))
-    if (unionOrders) assertPageableUnionOutputs(orderedQuery.plan, unionOrders.map(order => order.column), this.connection.getConnectionName())
+    if (unionOrders) assertPageableUnionOutputs(orderedQuery.plan, unionOrders.map(order => order.column), this.connection.getConnectionName(), this.connection.getDialect().name.includes('postgres'))
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
     const previous = decodedCursor?.previous === true
-    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizeCursorValue(unionOrders ? unionOutputValueColumn(orderedQuery.plan, cursorOrders[index]!.column, this.connection.getConnectionName()) : cursorOrders[index]!.column, value)) } : undefined
+    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => unionOrders ? this.normalizeUnionCursorValue(unionOutputValueColumn(orderedQuery.plan, cursorOrders[index]!.column, this.connection.getConnectionName()), value) : this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) } : undefined
     const nullsLow = !this.connection.getDialect().name.includes('postgres')
     const pageOrders = (orders: readonly CursorOrderDefinition[]) => orders.map((order): QueryOrderBy => ({ kind: 'column', column: order.column, direction: previous === (order.direction === 'asc') ? 'desc' : 'asc' }))
     let storedRows: TRow[]
@@ -3424,8 +3424,8 @@ export class TableQueryBuilder<
     })
   }
 
-  private normalizeCursorValue(column: string | undefined, value: unknown): unknown {
-    return column === undefined ? value : this.normalizePredicateValueForColumn(column, value)
+  private normalizeUnionCursorValue(column: string | undefined, value: unknown): unknown {
+    return column === undefined || value === null || typeof value === 'number' ? value : this.normalizePredicateValueForColumn(column, value)
   }
 
   private decodePageCursor(cursor: string | null, orderCount: number, plan: SelectQueryPlan, invalidCursor: () => InvalidCursorException): ValueCursor | null {
