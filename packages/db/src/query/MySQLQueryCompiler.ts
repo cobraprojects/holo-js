@@ -170,7 +170,7 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
   }
 
   private compileUtcWallClock(timestampColumn: string): string {
-    return `DATE_ADD('1970-01-01 00:00:00', INTERVAL ROUND(UNIX_TIMESTAMP(${timestampColumn}) * 1000000) MICROSECOND)`
+    return `DATE_ADD('1970-01-01 00:00:00', INTERVAL ROUND(NULLIF(UNIX_TIMESTAMP(${timestampColumn}), 0) * 1000000) MICROSECOND)`
   }
 
   private compileConvertedWallClock(column: string, from: string, to: string): string {

@@ -365,21 +365,38 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect([...first.data, ...second.data].map(row => row.id)).toEqual([1, 2, 3, 4, 5, 6, 8])
   })
 
-  it('counts the date bucket in a HAVING aggregate spelled in another case', async () => {
+  it('rejects a date bucket reference spelled in another case', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
     const notes = await createKeyedTable('bucket_notes', 'bucket', [{ id: 1, value: null }, { id: 2, value: null }])
     registerGeneratedTables({ events, notes })
 
-    const rows = await DB.table(events.tableName)
+    await expect(DB.table(events.tableName)
       .join(notes.tableName, `${notes.tableName}.id`, '=', `${events.tableName}.id`)
       .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
       .addSelectCount('total')
       .groupBy('bucket')
       .having('COUNT(BUCKET)', '>', 0)
-      .get()
+      .get()).rejects.toThrow(CompilerError)
+    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'bucket' }).groupBy('BUCKET').get()).rejects.toThrow(CompilerError)
+  })
 
-    expect(rows).toEqual([{ bucket: '2026-11-03', total: 2 }])
+  it('cursor-paginates a join grouped by the source primary key and source columns', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const notes = await createKeyedTable('bucket_notes', 'bucket', [{ id: 1, value: null }, { id: 2, value: null }, { id: 3, value: null }])
+    registerGeneratedTables({ events, notes })
+    const page = (cursor: string | null) => DB.table(events.tableName)
+      .join(notes.tableName, `${notes.tableName}.id`, '=', `${events.tableName}.id`)
+      .select(`${events.tableName}.id`, `${events.tableName}.tenant_id`)
+      .groupBy(`${events.tableName}.id`, `${events.tableName}.tenant_id`)
+      .orderBy(`${events.tableName}.id`)
+      .cursorPaginate(2, cursor)
+
+    const first = await page(null)
+    const second = await page(first.nextCursor)
+
+    expect([...first.data, ...second.data]).toEqual([{ id: 1, tenant_id: 1 }, { id: 2, tenant_id: 1 }, { id: 3, tenant_id: 1 }])
   })
 
   it('adds the grouped primary key as a tie-breaker to an explicit order', async () => {
@@ -930,6 +947,28 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
     const hours = await DB.table(stamps).selectDate('hour', 'at', { as: 'hour', timeZone: 'UTC' }).orderBy('id').pluck('hour')
 
     expect(hours).toEqual(['2026-11-01 05:00', '2026-11-01 06:00'])
+  })
+
+  it('gives a null bucket for a zero timestamp', async () => {
+    useAppTimezone('UTC')
+    const { schema, db } = await openDatabase('mysql')
+    const name = `bucket_stamps_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(name)
+    })
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.timestamp('at').nullable()
+    })
+    const stamps = defineGeneratedTable(name, { id: column.id(), at: column.timestamp().nullable() })
+
+    const day = await db.transaction(async (tx) => {
+      await tx.executeCompiled({ sql: `SET SESSION sql_mode = ''`, source: 'test' })
+      await tx.executeCompiled({ sql: `INSERT INTO \`${name}\` (at) VALUES ('0000-00-00 00:00:00')`, source: 'test' })
+      return tx.table(stamps).selectDate('day', 'at', { as: 'day', timeZone: 'UTC' }).value('day')
+    })
+
+    expect(day).toBeNull()
   })
 
   it('reads timestamp columns from the stored instant whatever the session time zone', async () => {

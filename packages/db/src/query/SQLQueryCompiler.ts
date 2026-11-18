@@ -1060,6 +1060,9 @@ export class SQLQueryCompiler {
 
   protected compileColumnReference(reference: string): string {
     const dateBucket = reference.includes('.') ? undefined : this.dateBucketsFolded.get(reference.toLowerCase())
+    if (dateBucket && this.dateBucketAliasMode !== 'column' && dateBucket.bucket.alias !== reference) {
+      throw new CompilerError(`Refer to the date bucket "${dateBucket.bucket.alias}" by its exact name, not "${reference}".`)
+    }
     if (dateBucket && this.dateBucketAliasMode === 'expression') return this.compileDateBucketExpression(dateBucket)
     if (this.dateBucketAliasMode === 'column' && this.dateBucketPlan && dateBucket) {
       return `${this.compileTableReference(bareColumnOwner(this.dateBucketPlan, reference, this.connectionName))}.${this.quoteIdentifier(reference)}`

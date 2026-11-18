@@ -3434,7 +3434,10 @@ export class TableQueryBuilder<
       const identity = (column: string): string => this.resolveSourceColumnName(column) ?? column
       const groupsByPrimaryKey = primaryKeys.length > 0 && primaryKeys.every(key => this.plan.groupBy.some(column => identity(column) === key))
       const ordered = groupsByPrimaryKey ? this.withPrimaryKeyTieBreakers(primaryKeys) : this
-      if (groupsByPrimaryKey && this.plan.joins.length === 0 && this.plan.unions.length === 0) return ordered
+      const sourceTable = this.source.alias ?? this.source.tableName
+      const groupsSourceRowsOnly = this.plan.unions.length === 0 && (this.plan.joins.length === 0
+        || this.plan.groupBy.every(column => column.includes('.') && qualifiesTable(column.slice(0, column.lastIndexOf('.')), sourceTable, undefined)))
+      if (groupsByPrimaryKey && groupsSourceRowsOnly) return ordered
       const orderedColumns = new Set(ordered.plan.orderBy.flatMap(orderBy => orderBy.kind === 'column' ? [identity(orderBy.column)] : []))
       if (!ordered.plan.groupBy.every(column => orderedColumns.has(identity(column)))) {
         throw new SecurityError('Cursor pagination over grouped rows must order by every groupBy column.')

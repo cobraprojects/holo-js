@@ -63,6 +63,17 @@ it('keeps date bucket aliases usable after an unsafe selection', () => {
   }
 })
 
+it('keeps the date bucket type next to a wildcard of a table joined by name', async () => {
+  if (false) {
+    const row = await DB.table(events)
+      .join('bucket_labels', 'bucket_labels.id', '=', 'bucket_events.id')
+      .selectDate('day', 'occurred_at', { as: 'bucket' })
+      .addSelect('bucket_labels.*')
+      .first()
+    expectTypeOf(row!.bucket).toEqualTypeOf<DateBucket<'day'> | null>()
+  }
+})
+
 it('rejects date buckets on non-date columns, unknown units and aliases that shadow a column', () => {
   if (false) {
     // @ts-expect-error only date, datetime and timestamp columns can be bucketed

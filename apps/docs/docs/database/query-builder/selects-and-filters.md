@@ -184,7 +184,7 @@ const rows = await DB.table('products')
 
 ### Selecting date buckets
 
-Select the calendar year, month, day, or hour of a date column as a named string column. Once selected, the alias works in `groupBy()`, `orderBy()`, `orderByDesc()`, and [cursor pagination](/database/pagination#cursor-pagination), on every database.
+Select the calendar year, month, day, or hour of a date column as a named string column. Once selected, the alias works in `groupBy()`, `orderBy()`, `orderByDesc()`, `having()`, and [cursor pagination](/database/pagination#cursor-pagination), on every database. Spell it exactly as you declared it.
 
 ```ts
 const perDay = await DB.table(events)

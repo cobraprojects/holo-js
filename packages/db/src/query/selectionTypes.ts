@@ -24,8 +24,10 @@ export type DateBucketAlias<TRow extends Record<string, unknown>> = keyof {
 
 export type SelectedDateBuckets<TRow extends Record<string, unknown>> = { [TColumn in DateBucketAlias<TRow>]: TRow[TColumn] }
 
+type LiteralKeys<TKey extends PropertyKey> = TKey extends string ? string extends TKey ? never : TKey : TKey
+
 export type WithoutSelected<TRow extends Record<string, unknown>, TSelected extends PropertyKey> = {
-  [TColumn in keyof TRow as TColumn extends TSelected ? never : TColumn]: TRow[TColumn]
+  [TColumn in keyof TRow as TColumn extends LiteralKeys<TSelected> ? never : TColumn]: TRow[TColumn]
 }
 
 export type DateBucketAliasName<TAlias extends string, TColumns extends Record<string, unknown>> = string extends keyof TColumns
