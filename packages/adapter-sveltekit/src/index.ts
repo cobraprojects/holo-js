@@ -475,7 +475,7 @@ function takeValidationActionFailure(event: SvelteKitRequestEvent): SerializedVa
 function rememberValidationActionFailure(event: SvelteKitRequestEvent, payload: SerializedValidationException): void {
   const state = validationRequests.get(event.request)
   if (state && !state.active) return
-  flashValidationPayload(event, payload)
+  if (!isApiEvent(event)) flashValidationPayload(event, payload)
   if (state) state.payload = payload
   else validationRequests.set(event.request, { active: true, payload })
 }

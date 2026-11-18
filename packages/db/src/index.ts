@@ -58,6 +58,7 @@ export {
   TransactionError,
   HydrationError,
   ModelNotFoundException,
+  InvalidCursorException,
   SerializationError,
 } from './core/errors'
 export { createSecurityPolicy, DEFAULT_SECURITY_POLICY, redactBindings, redactSql } from './security/policy'

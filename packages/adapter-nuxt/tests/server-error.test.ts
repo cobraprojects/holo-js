@@ -2,6 +2,8 @@ import { createApp, createError, defineEventHandler } from 'h3'
 import { expect, it, onTestFinished } from 'vitest'
 import { requestUrlInternals } from '@holo-js/kernel'
 import { field, isValidationException, schema, validate, ValidationException, validationInternals } from '@holo-js/validation'
+import { createSQLiteAdapter } from '../../db-sqlite/src'
+import { DB, configureDB, createConnectionManager, createDialect, resetDB } from '../../db/src'
 import handleValidationError from '../src/runtime/server/error'
 import { serve } from './support/http'
 
@@ -25,6 +27,22 @@ it('serializes wrapped validation failures through a real HTTP response', async 
   expect(response.status).toBe(422)
   expect(response.headers.get('content-type')).toContain('application/json')
   expect(await response.json()).toMatchObject({ status: 422, errors: { email: ['Invalid email.'] } })
+})
+
+it('answers a malformed pagination cursor with a 422 on the cursor parameter', async () => {
+  const adapter = createSQLiteAdapter({ filename: ':memory:' })
+  await adapter.initialize()
+  onTestFinished(async () => {
+    resetDB()
+    await adapter.disconnect()
+  })
+  await adapter.execute('CREATE TABLE posts (id INTEGER PRIMARY KEY)')
+  configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('sqlite') } } }))
+  const app = createApp({ onError: handleValidationError })
+  app.use(defineEventHandler(() => DB.table('posts').orderBy('id').cursorPaginate(10, 'abc', { cursorName: 'after' })))
+  const response = await fetch(await serve(app) + '/posts?after=abc', { headers: { accept: 'application/json' } })
+  expect(response.status).toBe(422)
+  expect(await response.json()).toMatchObject({ status: 422, errors: { after: ['The cursor is invalid.'] } })
 })
 
 it('redirects a real browser form request back to its page with flashed validation errors', async () => {

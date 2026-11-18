@@ -12,6 +12,7 @@ import { RequestCookies } from 'next/dist/server/web/spec-extension/cookies'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { field, schema, validate } from '@holo-js/validation'
 import { resetHoloRuntime } from '../../core/src/portable/holo'
+import { InvalidCursorException } from '../../db/src/core/errors'
 import { adapterNextRuntimeInternals, createNextHoloHelpers, createNextRequestContext, runWithNextRequest } from '../src/runtime'
 
 const projectRoot = resolve(import.meta.dirname, '../../../apps/blog-next')
@@ -45,6 +46,25 @@ describe('Next native runtime', () => {
     const body = await response.text()
     expect(JSON.parse(body)).toMatchObject({ status: 422, values: { email: 'invalid' } })
     expect(body).not.toContain('next-password')
+  })
+
+  it('answers route handler invalid cursors with a 422 on the cursor parameter', async () => {
+    const handler = adapterNextRuntimeInternals.routeHandler(async (_request: Request) => {
+      throw new InvalidCursorException('after', 'Reload the first page.')
+    })
+
+    const response = await handler(new Request('https://app.test/api/posts?after=abc'))
+
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({
+      ok: false,
+      status: 422,
+      valid: false,
+      message: 'Reload the first page.',
+      bag: 'default',
+      values: {},
+      errors: { after: ['Reload the first page.'] },
+    })
   })
 
   it('reads native Next cookies and standard HTTP cookies without inventing missing values', () => {

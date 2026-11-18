@@ -9,8 +9,8 @@ import {
 } from '../query/paginator'
 import {
   assertPositiveInteger,
-  decodeValueCursor,
   normalizePaginationParameterName,
+  resolveCursorPaginationOptions,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
 import { aliasTableSource, projectModelRows, resolveAggregateSource, TableQueryBuilder, whereResolvedColumn } from '../query/TableQueryBuilder'
@@ -1584,8 +1584,7 @@ class ModelQueryBuilderBase<
 
   private async cursorPage(perPage: number, cursor: string | null, options: CursorPaginationOptions, hiddenColumns: readonly string[] = []) {
     assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
-    normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
-    decodeValueCursor(cursor, message => new HydrationError(message))
+    resolveCursorPaginationOptions(options, message => new HydrationError(message))
     await this.repository.resolveTableIdentity()
     const ordered = this.tableQuery.getPlan().orderBy.length === 0
       ? this.orderBy(this.repository.definition.primaryKey as never)

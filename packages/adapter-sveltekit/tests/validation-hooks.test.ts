@@ -1,6 +1,7 @@
 import type { RequestEvent } from '@sveltejs/kit'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ValidationException, field, schema, validate } from '@holo-js/validation'
+import { InvalidCursorException } from '../../db/src/core/errors'
 import { adapterSvelteKitInternals, createSvelteKitHoloHooks } from '../src'
 
 function createEvent(value: string, accept = 'application/json', path = '/login') {
@@ -86,6 +87,19 @@ describe('SvelteKit validation hooks', () => {
     const body = await response.text()
     expect(JSON.parse(body)).toMatchObject({ valid: false, status: 422, values: { email: 'invalid-email' } })
     expect(body).not.toContain('private-password')
+  })
+
+  it('answers an invalid pagination cursor reported through native errors with a 422 on the cursor key', async () => {
+    (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
+    const { event, flashed } = createEvent('ignored', 'application/json', '/api/posts')
+    const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
+    const response = await hooks.handle({ event, resolve: async (event) => {
+      await hooks.handleError({ event, kind: 'unknown', error: new InvalidCursorException('after', 'Reload the feed.') })
+      return new Response('native failure', { status: 500 })
+    } })
+    expect(response.status).toBe(422)
+    expect(await response.json()).toMatchObject({ status: 422, message: 'Reload the feed.', errors: { after: ['Reload the feed.'] } })
+    expect(flashed.size).toBe(0)
   })
 
   it('cleans failures after handler errors and ignores late validation reports', async () => {

@@ -78,4 +78,5 @@ export interface PaginationOptions {
 
 export interface CursorPaginationOptions {
   readonly cursorName?: string
+  readonly invalidCursorMessage?: string
 }
