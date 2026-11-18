@@ -1173,7 +1173,7 @@ export async function logoutWithClerk(
     }
     const clerkSession = await readCurrentClerkLogoutSession(guard, providerName)
     if (!clerkSession) {
-      return Response.redirect(new URL('/', request.url), 303)
+      return Response.redirect(createClerkReturnUrl(request, options.returnTo), 303)
     }
 
     await revokeClerkSession(providerConfig, clerkSession.sessionId)

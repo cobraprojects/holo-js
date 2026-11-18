@@ -658,7 +658,7 @@ function renderSvelteServerUserHooks(): string {
   ].join('\n')
 }
 
-export function renderSvelteViteConfig(_storageEnabled: boolean, realtimeEnabled = false): string {
+export function renderSvelteViteConfig(_storageEnabled: boolean): string {
   const externals = [
     '      \'@holo-js/adapter-sveltekit\',',
     '      \'@holo-js/auth\',',
@@ -703,17 +703,15 @@ export function renderSvelteViteConfig(_storageEnabled: boolean, realtimeEnabled
     'import adapter from \'@holo-js/adapter-sveltekit/node\'',
     'import { withHoloSvelteKit } from \'@holo-js/adapter-sveltekit/config\'',
     'import { sveltekit } from \'@sveltejs/kit/vite\'',
-    ...(realtimeEnabled
-      ? ['import { holoSvelteKitRealtime } from \'@holo-js/adapter-sveltekit/vite\'']
-      : []),
+    'import { holoSvelteKit } from \'@holo-js/adapter-sveltekit/vite\'',
     'import { vitePreprocess } from \'@sveltejs/vite-plugin-svelte\'',
     'import { defineConfig, searchForWorkspaceRoot } from \'vite\'',
     '',
     'export default defineConfig({',
-    `  plugins: [${realtimeEnabled ? 'holoSvelteKitRealtime(), ' : ''}sveltekit(withHoloSvelteKit({`,
+    '  plugins: [sveltekit(withHoloSvelteKit({',
     '    adapter: adapter(),',
     '    preprocess: vitePreprocess(),',
-    '  }))],',
+    '  })), holoSvelteKit()],',
     '  server: {',
     '    fs: {',
     '      allow: [searchForWorkspaceRoot(process.cwd()), \'.holo-js/generated\'],',
@@ -946,10 +944,8 @@ const FRAMEWORK_RENDERERS = {
       const optionalPackages = normalizeScaffoldOptionalPackages(options.optionalPackages)
       const storageEnabled = optionalPackages.includes('storage')
       const authEnabled = optionalPackages.includes('auth')
-      const realtimeEnabled = optionalPackages.includes('realtime')
-
       return [
-        { path: 'vite.config.ts', contents: renderSvelteViteConfig(storageEnabled, realtimeEnabled) },
+        { path: 'vite.config.ts', contents: renderSvelteViteConfig(storageEnabled) },
         { path: 'src/hooks.ts', contents: renderSvelteUserHooks() },
         { path: 'src/hooks.server.ts', contents: renderSvelteServerUserHooks() },
         { path: 'src/app.html', contents: renderSvelteAppHtml() },

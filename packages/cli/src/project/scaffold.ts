@@ -165,61 +165,6 @@ async function resolveExistingModelPath(modelsRoot: string, modelName: string): 
   return undefined
 }
 
-type SvelteRealtimeVitePluginInjectionResult = string | undefined | {
-  readonly error: string
-}
-
-function injectSvelteRealtimeVitePlugin(viteConfigContents: string): SvelteRealtimeVitePluginInjectionResult {
-  if (/\bholoSvelteKitRealtime\b/.test(viteConfigContents)) {
-    return undefined
-  }
-
-  const adapterImportPattern = /import\s*\{([^}]*)\}\s*from\s*(['"])@holo-js\/adapter-sveltekit\/vite\2/
-  const svelteKitImportPattern = /(import\s*\{[^}]*\bsveltekit\b[^}]*\}\s*from\s*(['"])@sveltejs\/kit\/vite\2)/
-  const existingAdapterImport = adapterImportPattern.exec(viteConfigContents)
-  let withImport: string
-
-  if (existingAdapterImport) {
-    const imports = existingAdapterImport[1]
-      ?.split(',')
-      .map(value => value.trim())
-      .filter(Boolean) ?? []
-    withImport = viteConfigContents.replace(adapterImportPattern, `import { ${['holoSvelteKitRealtime', ...imports].join(', ')} } from ${existingAdapterImport[2]}@holo-js/adapter-sveltekit/vite${existingAdapterImport[2]}`)
-  } else {
-    withImport = viteConfigContents.replace(
-      svelteKitImportPattern,
-      [
-        '$1',
-        'import { holoSvelteKitRealtime } from \'@holo-js/adapter-sveltekit/vite\'',
-      ].join('\n'),
-    )
-  }
-
-  if (withImport === viteConfigContents && !existingAdapterImport) {
-    return {
-      error: 'Unable to add holoSvelteKitRealtime() to vite.config.ts because the SvelteKit Vite import could not be found.',
-    }
-  }
-
-  const withPlugin = withImport.replace(/plugins\s*:\s*\[([\s\S]*?)\]/, (_match, plugins: string) => {
-    const separator = plugins.trim() ? ' ' : ''
-    return `plugins: [holoSvelteKitRealtime(),${separator}${plugins}]`
-  })
-
-  if (withPlugin === withImport) {
-    if (/\bplugins\s*:\s*(?!\[)|\bplugins\s*(?:,|})/.test(withImport)) {
-      return {
-        error: 'Unable to add holoSvelteKitRealtime() to vite.config.ts because the plugins option is not an inline array.',
-      }
-    }
-
-    return {
-      error: 'Unable to add holoSvelteKitRealtime() to vite.config.ts because no plugins array was found.',
-    }
-  }
-
-  return withPlugin
-}
 
 async function resolveExistingAuthMigrationFiles(migrationsRoot: string): Promise<Map<AuthMigrationSlug, string>> {
   const entries = await readdir(migrationsRoot).catch(() => [] as string[])
@@ -613,18 +558,9 @@ export async function installRealtimeIntoProject(
 
   if (framework === 'sveltekit') {
     const viteConfigPath = resolve(projectRoot, 'vite.config.ts')
-    if (await pathExists(viteConfigPath)) {
-      const existingViteConfig = await readTextFile(viteConfigPath)
-      const viteConfigContents = existingViteConfig ? injectSvelteRealtimeVitePlugin(existingViteConfig) : undefined
-      if (typeof viteConfigContents === 'string') {
-        createdFrameworkSetup = true
-        await writeTextFile(viteConfigPath, viteConfigContents)
-      } else if (viteConfigContents) {
-        throw new Error(viteConfigContents.error)
-      }
-    } else {
+    if (!await pathExists(viteConfigPath)) {
       createdFrameworkSetup = true
-      await writeTextFile(viteConfigPath, renderSvelteViteConfig(false, true))
+      await writeTextFile(viteConfigPath, renderSvelteViteConfig(false))
     }
   }
 

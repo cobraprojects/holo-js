@@ -1153,7 +1153,7 @@ export async function logoutWithWorkos(
     }
     const workosSession = await readCurrentWorkosLogoutSession(guard, providerName)
     if (!workosSession) {
-      return Response.redirect(new URL('/', request.url), 303)
+      return Response.redirect(createWorkosReturnUrl(options.returnTo?.trim() || '/', request), 303)
     }
 
     const local = await getAuthRuntime().guard(guard).logout()

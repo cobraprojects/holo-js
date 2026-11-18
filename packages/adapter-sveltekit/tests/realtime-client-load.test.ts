@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { holoSvelteKitRealtime } from '../src/vite'
+import { holoSvelteKit } from '../src/vite'
 
 const roots: string[] = []
 
@@ -30,21 +30,21 @@ describe('SvelteKit realtime client definitions', () => {
   it('serves the browser definition of a server realtime module before the server-only guard runs', async () => {
     const root = await realtimeProject({ 'server/realtime/posts.ts': definitionsModule })
     const file = join(root, 'server/realtime/posts.ts')
-    const plugin = holoSvelteKitRealtime(root)
+    const plugin = holoSvelteKit(root)
 
-    const browserCode = await plugin.load?.(file, { ssr: false })
+    const browserCode = await plugin.load.handler(file, { ssr: false })
 
     expect(browserCode).toEqual(expect.stringContaining('posts.list'))
     expect(browserCode).not.toContain('async () => []')
-    expect(await plugin.load?.(file, { ssr: true })).toBeNull()
+    expect(await plugin.load.handler(file, { ssr: true })).toBeNull()
   })
 
   it('does not transform a module twice after serving its browser definition', async () => {
     const root = await realtimeProject({ 'server/realtime/posts.ts': definitionsModule })
     const file = join(root, 'server/realtime/posts.ts')
-    const plugin = holoSvelteKitRealtime(root)
+    const plugin = holoSvelteKit(root)
 
-    const browserCode = await plugin.load?.(file, { ssr: false })
+    const browserCode = await plugin.load.handler(file, { ssr: false })
 
     expect(plugin.transform(browserCode ?? '', file)).toBeNull()
   })
@@ -59,9 +59,9 @@ describe('SvelteKit realtime client definitions', () => {
       ].join('\n'),
     })
     const file = join(root, 'server/realtime/admin.ts')
-    const plugin = holoSvelteKitRealtime(root)
+    const plugin = holoSvelteKit(root)
 
-    expect(() => plugin.load?.(file, { ssr: false })).toThrow('server/realtime/admin.ts')
+    expect(() => plugin.load.handler(file, { ssr: false })).toThrow('server/realtime/admin.ts')
   })
 
   it('keeps extra server code and secret constants out of the browser stub', async () => {
@@ -76,9 +76,9 @@ describe('SvelteKit realtime client definitions', () => {
       ].join('\n'),
     })
     const file = join(root, 'server/realtime/posts.ts')
-    const plugin = holoSvelteKitRealtime(root)
+    const plugin = holoSvelteKit(root)
 
-    const browserCode = await plugin.load?.(file, { ssr: false }) ?? ''
+    const browserCode = await plugin.load.handler(file, { ssr: false }) ?? ''
 
     expect(browserCode).toEqual(expect.stringContaining('posts.list'))
     expect(browserCode).not.toContain('sk_live_example')
@@ -96,8 +96,8 @@ describe('SvelteKit realtime client definitions', () => {
       ].join('\n'),
     })
     const file = join(root, 'server/realtime/posts.ts')
-    const plugin = holoSvelteKitRealtime(root)
+    const plugin = holoSvelteKit(root)
 
-    expect(() => plugin.load?.(file, { ssr: false })).toThrow('server/realtime/posts.ts')
+    expect(() => plugin.load.handler(file, { ssr: false })).toThrow('server/realtime/posts.ts')
   })
 })

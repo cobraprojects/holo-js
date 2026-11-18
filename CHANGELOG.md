@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-061-to-070).
+
+### Changed
+
+- SvelteKit: apps register one Holo Vite plugin, `holoSvelteKit()` from `@holo-js/adapter-sveltekit/vite`, after `sveltekit()`. It replaces `holoSvelteKitRealtime()`, which is removed, and `holo prepare` rewrites existing `vite.config.ts` files. Browser validation schemas are now compiled in apps without realtime too.
+
+### Fixed
+
+- SvelteKit: Holo's built-in routes (auth, broadcasting, storage, realtime) and their redirects work under `paths.base`. `holoSvelteKit()` reads the base path from your SvelteKit config.
+- `logoutWithClerk()` and `logoutWithWorkos()` honor `returnTo` when there is no provider session to end.
+
 ## 0.6.1 - 2026-11-17
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-060-to-061). Upgrade Next.js, Nuxt or SvelteKit to the releases below before you install it. No database migration and no app code changes are needed.
