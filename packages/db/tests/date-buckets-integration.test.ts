@@ -1528,6 +1528,9 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
 
     await Promise.all([days(), days()])
     await days()
+    for (const _attempt of [1, 2]) {
+      await DB.connection().transaction(tx => tx.table(events).where('tenant_id', 1).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'Asia/Tokyo' }).get())
+    }
 
     expect(probes).toBe(1)
   })

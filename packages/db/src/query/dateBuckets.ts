@@ -5,6 +5,7 @@ import { splitTablePath } from '../schema/identifiers'
 import { knownJoinedColumns } from './modelRowProjection'
 import { dateBucketSelections, readAllColumnsSelectionTable } from './ast'
 import type { DatabaseContext } from '../core/DatabaseContext'
+import { getRootDatabaseContext } from '../core/contextOwnership'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryDateBucketSelection, QueryDateBucketUnit, QueryPredicateNode, SelectQueryPlan } from './ast'
 
@@ -276,7 +277,8 @@ export function sameMySQLTimeZone(left: string, right: string): boolean {
   return canonicalTimeZone(left) === canonicalTimeZone(right)
 }
 
-const convertibleMySQLTimeZones = new WeakMap<DatabaseContext, Map<string, Promise<void>>>()
+const convertibleMySQLTimeZones = new WeakMap<DatabaseContext, Set<string>>()
+const inFlightMySQLTimeZoneChecks = new WeakMap<DatabaseContext, Map<string, Promise<void>>>()
 
 type PlannedDateBucket = { readonly plan: SelectQueryPlan, readonly bucket: QueryDateBucketSelection }
 
@@ -316,10 +318,13 @@ function convertedMySQLTimeZones(plan: SelectQueryPlan, connectionName: string):
 
 export async function assertDateBucketTimeZonesConvertible(connection: DatabaseContext, plan: SelectQueryPlan): Promise<void> {
   if (connection.getDialect().name !== 'mysql' || !planHasDateBuckets(plan)) return
-  const checks = convertibleMySQLTimeZones.get(connection) ?? new Map<string, Promise<void>>()
-  convertibleMySQLTimeZones.set(connection, checks)
-  const zones = convertedMySQLTimeZones(plan, connection.getConnectionName())
-  const unchecked = zones.filter(zone => !checks.has(zone))
+  const root = getRootDatabaseContext(connection)
+  const convertible = convertibleMySQLTimeZones.get(root) ?? new Set<string>()
+  convertibleMySQLTimeZones.set(root, convertible)
+  const inFlight = inFlightMySQLTimeZoneChecks.get(connection) ?? new Map<string, Promise<void>>()
+  inFlightMySQLTimeZoneChecks.set(connection, inFlight)
+  const zones = convertedMySQLTimeZones(plan, connection.getConnectionName()).filter(zone => !convertible.has(zone))
+  const unchecked = zones.filter(zone => !inFlight.has(zone))
   if (unchecked.length > 0) {
     const probe = probeMySQLTimeZones(connection, unchecked)
     for (const zone of unchecked) {
@@ -327,12 +332,13 @@ export async function assertDateBucketTimeZonesConvertible(connection: DatabaseC
         if (missing.includes(zone)) {
           throw new CapabilityError(`MySQL can't convert dates to the "${zone}" time zone because its time zone tables are empty. Load them with mysql_tzinfo_to_sql.`)
         }
+        convertible.add(zone)
       })
-      checks.set(zone, check)
-      check.catch(() => checks.delete(zone))
+      inFlight.set(zone, check)
+      check.then(() => inFlight.delete(zone), () => inFlight.delete(zone))
     }
   }
-  await Promise.all(zones.map(zone => checks.get(zone)))
+  await Promise.all(zones.map(zone => inFlight.get(zone)))
 }
 
 async function probeMySQLTimeZones(connection: DatabaseContext, zones: readonly string[]): Promise<readonly string[]> {
