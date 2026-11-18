@@ -1076,6 +1076,48 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect([...first.data, ...second.data].map(row => row.event_id)).toEqual([1, 2])
   })
 
+  it('pages grouped date buckets by keys a wildcard selection overwrites', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const tenants = await createKeyedTable('bucket_tenants', 'code', [{ id: 30, value: 1 }])
+    registerGeneratedTables({ events, tenants })
+    const page = (cursor: string | null) => DB.table(events.tableName)
+      .join(tenants.tableName, `${tenants.tableName}.code`, '=', `${events.tableName}.tenant_id`)
+      .whereIn(`${events.tableName}.id`, [1, 2])
+      .select(`${events.tableName}.*`, `${tenants.tableName}.id`)
+      .addSelectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
+      .groupBy(`${events.tableName}.id`, `${tenants.tableName}.id`, 'day')
+      .orderBy(`${events.tableName}.id`)
+      .orderBy(`${tenants.tableName}.id`)
+      .orderBy('day')
+      .cursorPaginate(1, cursor)
+
+    const first = await page(null)
+    const second = await page(first.nextCursor)
+
+    expect([...first.data, ...second.data].map(row => row.occurred_at)).toHaveLength(2)
+    expect(Object.keys(first.data[0]!).some(key => key.startsWith('__holo_cursor'))).toBe(false)
+  })
+
+  it('resolves a bare grouped key past a joined subquery whose wildcard is known', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const tenants = await createKeyedTable('bucket_tenants', 'code', [{ id: 1, value: 1 }])
+    registerGeneratedTables({ events, tenants })
+
+    const page = await DB.table(events.tableName)
+      .joinSub(DB.table(tenants.tableName), 'tenant_rows', 'tenant_rows.id', '=', `${events.tableName}.tenant_id`)
+      .whereNotNull(`${events.tableName}.occurred_at`)
+      .select(`${events.tableName}.tenant_id`)
+      .addSelectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
+      .groupBy(`${events.tableName}.tenant_id`, 'day')
+      .orderBy('tenant_id')
+      .orderBy('day')
+      .cursorPaginate(10)
+
+    expect(page.data.map(row => row.day)).toEqual(['2026-11-03', '2026-11-04', '2026-11-05', '2026-12-31'])
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)
@@ -1569,6 +1611,46 @@ describe.runIf(postgresIntegration)('grouped date bucket cursors on postgres col
       .cursorPaginate(5)
 
     expect(page.data).toEqual([{ tenant_id: 1, day: '2026-11-05' }])
+  })
+})
+
+describe.runIf(postgresIntegration)('grouped date bucket cursors on postgres output names', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('pages past output names PostgreSQL truncates to the same name', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('postgres')
+    const alias = `k${'e'.repeat(62)}`
+    const page = (cursor: string | null) => DB.table(events)
+      .where('tenant_id', 1)
+      .whereNotNull('occurred_at')
+      .select(`id as ${alias}`, `tenant_id as ${alias}x`)
+      .addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .groupBy('id', 'day')
+      .orderBy('id')
+      .cursorPaginate(3, cursor)
+
+    const first = await page(null)
+    const second = await page(first.nextCursor)
+
+    expect([...first.data, ...second.data].map(row => row.day)).toEqual(['2026-11-03', '2026-11-03', '2026-11-04', '2026-11-04', '2026-11-05', '2026-12-31'])
+  })
+
+  it('orders by a key that differs from an output alias only in case', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('postgres')
+
+    const page = await DB.table(events)
+      .whereIn('id', [1, 2])
+      .select('id', 'tenant_id as ID')
+      .addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .groupBy('id', 'day')
+      .orderBy('id')
+      .cursorPaginate(5)
+
+    expect(page.data.map(row => row.id)).toEqual([1, 2])
   })
 })
 

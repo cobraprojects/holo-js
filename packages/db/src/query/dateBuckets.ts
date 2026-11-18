@@ -97,21 +97,29 @@ function visibleTables(plan: SelectQueryPlan, connectionName: string | undefined
       tableName: join.table,
       alias: join.alias,
       definition: join.definition ?? generatedDefinition(join.table, connectionName),
-      columns: () => join.subquery ? explicitOutputNames(join.subquery) : connectionName === undefined ? undefined : knownJoinedColumns(join, connectionName),
+      columns: () => join.subquery ? subqueryOutputNames(join.subquery, connectionName) : connectionName === undefined ? undefined : knownJoinedColumns(join, connectionName),
     })),
   ]
 }
 
-function explicitOutputNames(plan: SelectQueryPlan): readonly string[] | undefined {
-  const names = plan.selections.map((selection) => {
+function wildcardOutputNames(plan: SelectQueryPlan, column: string, connectionName: string | undefined): readonly string[] | undefined {
+  const qualifier = column === '*' ? undefined : readAllColumnsSelectionTable(column)
+  const tables = boundTables(visibleTables(plan, connectionName), qualifier)
+  if (tables.length === 0) return undefined
+  const columns = tables.map(table => table.columns())
+  return columns.every((names): names is readonly string[] => names !== undefined) ? columns.flat() : undefined
+}
+
+function subqueryOutputNames(plan: SelectQueryPlan, connectionName: string | undefined): readonly string[] | undefined {
+  const selections: readonly SelectQueryPlan['selections'][number][] = plan.selections.length === 0 ? [{ kind: 'column', column: '*' }] : plan.selections
+  const names = selections.map((selection): readonly string[] | undefined => {
     if (selection.kind === 'raw') return undefined
-    if (selection.kind !== 'column') return selection.alias
-    if (selection.alias) return selection.alias
-    if (selection.column === '*' || readAllColumnsSelectionTable(selection.column) !== undefined) return undefined
-    return selection.column.slice(selection.column.lastIndexOf('.') + 1)
+    if (selection.kind !== 'column') return [selection.alias]
+    if (selection.alias) return [selection.alias]
+    if (selection.column === '*' || readAllColumnsSelectionTable(selection.column) !== undefined) return wildcardOutputNames(plan, selection.column, connectionName)
+    return [selection.column.slice(selection.column.lastIndexOf('.') + 1)]
   })
-  if (plan.selections.length === 0 || names.some(name => name === undefined)) return undefined
-  return names.filter((name): name is string => name !== undefined)
+  return names.every((group): group is readonly string[] => group !== undefined) ? names.flat() : undefined
 }
 
 function boundTables(visible: readonly VisibleTable[], qualifier: string | undefined): readonly VisibleTable[] {
@@ -177,10 +185,11 @@ export function assertGroupedOrderKeysUnshadowed(plan: SelectQueryPlan, context:
   for (const orderBy of plan.orderBy) {
     if (orderBy.kind !== 'column' || orderBy.column.includes('.') || dateBucketSelections(plan).has(orderBy.column)) continue
     const key = orderBy.column
+    const names: IdentifierMatch = context.foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly
     const shadowed = plan.selections.some((selection) => {
       if (selection.kind === 'raw' || selection.kind === 'date-bucket') return false
-      if (selection.kind !== 'column') return sameIdentifierFolded(selection.alias, key)
-      return selection.alias !== undefined && sameIdentifierFolded(selection.alias, key)
+      if (selection.kind !== 'column') return names(selection.alias, key)
+      return selection.alias !== undefined && names(selection.alias, key)
         && groupedCursorKey(plan, selection.column, context) !== groupedCursorKey(plan, key, context)
     })
     if (shadowed) {

@@ -6,7 +6,7 @@ import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
 import type { QueryDateBucketSelection, QueryRawSelection, QueryRelationKeysPredicate } from './ast'
-import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, assertGroupedOrderKeysUnshadowed, groupedCursorKey, planHasDateBuckets, selectionMayOutputName, type GroupedKeyContext } from './dateBuckets'
+import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, assertGroupedOrderKeysUnshadowed, effectiveOutputName, groupedCursorKey, planHasDateBuckets, selectionMayOutputName, type GroupedKeyContext } from './dateBuckets'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -70,7 +70,6 @@ import {
   appendAggregateSelection,
   appendDateBucketSelection,
   dateBucketSelections,
-  readAllColumnsSelectionTable,
   unionBranchPlans,
   withDateBucketSelection,
   appendRawSelection,
@@ -2365,13 +2364,21 @@ export class TableQueryBuilder<
     const cursorOrders = orderedQuery.resolveCursorOrders()
     if (decodedCursor && decodedCursor.values.length !== cursorOrders.length) throw new SecurityError('Cursor does not match the query ordering.')
     const previous = decodedCursor?.previous === true
-    const cursorValue = (row: Record<string, unknown>, column: string): unknown =>
-      orderedQuery.plan.unions.length > 0 && Object.hasOwn(row, column) ? row[column] : orderedQuery.readCursorColumnValue(row, column)
+    const hiddenCursorColumns = orderedQuery.hiddenGroupedCursorColumns(cursorOrders)
+    const cursorValue = (row: Record<string, unknown>, column: string, index: number): unknown => {
+      const hidden = hiddenCursorColumns[index]
+      if (hidden !== undefined) return row[hidden]
+      return orderedQuery.plan.unions.length > 0 && Object.hasOwn(row, column) ? row[column] : orderedQuery.readCursorColumnValue(row, column)
+    }
     const unionColumns = orderedQuery.plan.unions.length === 0
       ? undefined
       : unionCursorColumns(orderedQuery.plan, cursorOrders.map(order => order.column), this.connection.getConnectionName())
     if (unionColumns) assertUnionCursorDistinguishesGroups(orderedQuery.plan)
-    let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
+    const hiddenSelections = cursorOrders.flatMap((order, index) => {
+      const hidden = hiddenCursorColumns[index]
+      return hidden === undefined ? [] : [`${order.column} as ${hidden}`]
+    })
+    let plan = withOffset(withLimit(hiddenSelections.length === 0 ? orderedQuery.plan : appendSelections(orderedQuery.plan, hiddenSelections), perPage + 1), undefined)
     if (decodedCursor) {
       const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
       const nullsLow = !this.connection.getDialect().name.includes('postgres')
@@ -2399,18 +2406,20 @@ export class TableQueryBuilder<
     const rows = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true)
     const pageRows = rows
     const hasMorePages = pageRows.length > perPage
-    const data = pageRows.slice(0, perPage)
-    if (previous) data.reverse()
-    const firstRow = data.at(0)
-    const lastRow = data.at(-1)
+    const pageData = pageRows.slice(0, perPage)
+    if (previous) pageData.reverse()
+    const firstRow = pageData.at(0)
+    const lastRow = pageData.at(-1)
+    const hiddenNames = hiddenCursorColumns.filter((name): name is string => name !== undefined)
+    const data = hiddenNames.length === 0 ? pageData : pageData.map(row => withoutKeys(row, hiddenNames))
     const result = createCursorPaginator(data, {
       perPage,
       cursorName,
       nextCursor: (previous ? cursor !== null : hasMorePages) && lastRow
-        ? encodeValueCursor(cursorOrders.map(order => cursorValue(lastRow, order.column)))
+        ? encodeValueCursor(cursorOrders.map((order, index) => cursorValue(lastRow, order.column, index)))
         : null,
       prevCursor: (previous ? hasMorePages : cursor !== null) && firstRow
-        ? encodeValueCursor(cursorOrders.map(order => cursorValue(firstRow, order.column)), true)
+        ? encodeValueCursor(cursorOrders.map((order, index) => cursorValue(firstRow, order.column, index)), true)
         : null,
     })
 
@@ -3492,47 +3501,28 @@ export class TableQueryBuilder<
     }
   }
 
-  private readOutputValue(row: Record<string, unknown>, output: string): unknown {
-    if (Object.hasOwn(row, output) || !this.groupedKeyContext().foldsColumnNames) return row[output]
-    const key = Object.keys(row).find(candidate => candidate.toLowerCase() === output.toLowerCase())
-    return key === undefined ? undefined : row[key]
+  private hiddenGroupedCursorColumns(orders: readonly CursorOrderDefinition[]): readonly (string | undefined)[] {
+    const dateBuckets = dateBucketSelections(this.plan)
+    if (this.plan.unions.length > 0 || this.plan.groupBy.length === 0 || dateBuckets.size === 0) return orders.map(() => undefined)
+    const taken = new Set(this.plan.selections.flatMap((selection) => {
+      const output = selectionOutputName(selection)
+      return output === undefined ? [] : [effectiveOutputName(output)]
+    }))
+    return orders.map((order, index) => {
+      if (dateBuckets.has(order.column)) return undefined
+      let alias = `__holo_cursor_${index}`
+      while (taken.has(effectiveOutputName(alias))) alias = `${alias}_`
+      taken.add(effectiveOutputName(alias))
+      return alias
+    })
   }
 
   private groupedKeyContext(): GroupedKeyContext {
     return { connectionName: this.connection.getConnectionName(), foldsColumnNames: !this.connection.getDialect().name.startsWith('postgres') }
   }
 
-  private groupedDateBucketCursorOutput(column: string): string | undefined {
-    if (this.plan.groupBy.length === 0 || dateBucketSelections(this.plan).size === 0) return undefined
-    const context = this.groupedKeyContext()
-    const key = groupedCursorKey(this.plan, column, context)
-    const selections = this.plan.selections
-    const matching = selections.flatMap((candidate, index) => {
-      if (candidate.kind !== 'column' || candidate.column === '*' || readAllColumnsSelectionTable(candidate.column) !== undefined) return []
-      if (groupedCursorKey(this.plan, candidate.column, context) !== key) return []
-      const output = selectionOutputName(candidate)
-      return output === undefined ? [] : [{ output, index }]
-    })
-    if (matching.length === 0) return undefined
-    const isWildcard = (selection: QuerySelection) => selection.kind === 'column' && !selection.alias
-      && (selection.column === '*' || readAllColumnsSelectionTable(selection.column) !== undefined)
-    const overwrites = (output: string, index: number) => selections.slice(index + 1).some((later) => {
-      if (later.kind === 'raw' || isWildcard(later)) {
-        return selectionMayOutputName(this.plan, later, output, context.connectionName, { raw: true, wildcard: true })
-      }
-      return selectionOutputName(later)?.toLowerCase() === output.toLowerCase()
-    })
-    const surviving = matching.find(({ output, index }) => !overwrites(output, index))
-    if (!surviving) {
-      throw new SecurityError(`Cursor pagination by "${column}" needs a selected column that holds its value, but later selections overwrite every one.`)
-    }
-    return surviving.output
-  }
-
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
     if (dateBucketSelections(this.plan).has(column)) return row[column]
-    const groupedOutput = this.groupedDateBucketCursorOutput(column)
-    if (groupedOutput !== undefined) return this.readOutputValue(row, groupedOutput)
     const sourceColumn = this.resolveSourceColumnName(column)
     const selections = this.plan.selections
     const ownColumns = Object.keys(this.source.table?.columns ?? {})
@@ -3730,6 +3720,12 @@ export function whereRelationKeys<TQuery extends TableQueryBuilder<TableReferenc
     ? definition.idStrategy === 'autoIncrement' ? 'integer' : definition.idStrategy === 'uuid' ? 'uuid' : undefined
     : definition ? RELATION_KEY_VALUE_TYPES[definition.kind] : undefined
   return query.withPredicates([...query.getPlan().predicates, { kind: 'relation-keys', column, values: predicate.value, valueType }]) as TQuery
+}
+
+function withoutKeys<TRow extends Record<string, unknown>>(row: TRow, keys: readonly string[]): TRow {
+  const copy = { ...row }
+  for (const key of keys) delete copy[key]
+  return copy
 }
 
 function assertUnionCursorDistinguishesGroups(plan: SelectQueryPlan): void {
