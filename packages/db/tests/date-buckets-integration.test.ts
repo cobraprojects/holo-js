@@ -1604,7 +1604,7 @@ describe('date buckets next to sqlite wildcards of case-variant aliases', () => 
     await expect(DB.table(events)
       .where('id', 1)
       .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
-      .whereExists(DB.table(dayLookups.tableName).where('day', 1))
+      .whereExists(DB.table(dayLookups.tableName).where(`${dayLookups.tableName}.day`, 1))
       .get()).resolves.toEqual([{ day: '2026-11-03' }])
   })
 
@@ -1620,7 +1620,7 @@ describe('date buckets next to sqlite wildcards of case-variant aliases', () => 
       .get()).rejects.toThrow(CompilerError)
   })
 
-  it('keeps a subquery ordering by its own output alias named like an outer date bucket', async () => {
+  it('asks to rename or qualify a subquery reference named like an outer date bucket', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable('sqlite')
     const schema = createSchemaService(DB.connection())
@@ -1637,9 +1637,8 @@ describe('date buckets next to sqlite wildcards of case-variant aliases', () => 
     await DB.table(codes).insert([{ id: 1, code: 1, day: 200 }, { id: 2, code: 2, day: 100 }])
     const first = DB.table(codes).select('code as day').orderBy('day').limit(1)
 
-    const rows = await DB.table(events).where('id', 1).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).addSelectSub(first, 'first_code').get()
-
-    expect(rows).toEqual([{ day: '2026-11-03', first_code: 1 }])
+    await expect(DB.table(events).where('id', 1).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).addSelectSub(first, 'first_code').get()).rejects.toThrow(CompilerError)
+    await expect(DB.table(events).where('id', 1).selectDate('day', 'occurred_at', { as: 'event_day', timeZone: 'UTC' }).addSelectSub(first, 'first_code').get()).resolves.toEqual([{ event_day: '2026-11-03', first_code: 1 }])
   })
 
   it('lets a union arm reach an outer column that a sibling arm names as a date bucket', async () => {
