@@ -2,20 +2,18 @@ import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder, whereStoredValuesIn } from '../query/TableQueryBuilder'
 import { assertQueryTablePath } from '../query/validator'
-import { normalizeDialectWriteValue, parseStoredDate, storesDate } from '../schema/normalization'
+import { normalizeDialectWriteValue, parseStoredDate, readsAsSQLiteDate, storesDate } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import { assertColumnWritable, canonicalStoredKey, ownEntry } from './entityRuntime'
 
 type Attributes = Record<string, unknown>
 type Entry = { id: unknown, attributes: Attributes }
-type Action = Entry & {
-  kind: 'insert' | 'update' | 'delete'
-  readonly key?: unknown
-  readonly onlyWhereDatesDiffer?: readonly string[]
-  readonly onUpdated?: () => void
-}
-type PivotUpdate = { readonly onlyWhereDatesDiffer?: readonly string[] }
+type PivotUpdate = { readonly when: 'always' } | { readonly when: 'datesDiffer', readonly columns: readonly string[] }
+type InsertAction = Entry & { readonly kind: 'insert' }
+type UpdateAction = Entry & { readonly kind: 'update', readonly keys: readonly unknown[], readonly update: PivotUpdate, readonly onUpdated: () => void }
+type DeleteAction = { readonly kind: 'delete', readonly keys: readonly unknown[] }
+type Action = InsertAction | UpdateAction | DeleteAction
 type Result = { attached: unknown[], detached: unknown[], updated: unknown[] }
 type Context = {
   table: string | TableDefinition
@@ -27,6 +25,7 @@ type Context = {
   timestamps: boolean
   relationName: string
 }
+type PivotQuery = TableQueryBuilder<string | TableDefinition>
 
 const bindingBudget = 900
 
@@ -36,6 +35,12 @@ function bindableId(id: unknown): unknown {
 
 function isScalarObjectId(id: unknown): id is Date | ArrayBufferView {
   return id instanceof Date || ArrayBuffer.isView(id)
+}
+
+function orWhereDiffers(query: PivotQuery, column: string, value: unknown): PivotQuery {
+  return query.orWhere(match => value == null
+    ? match.whereNotNull(column)
+    : match.where(column, '!=', value).orWhereNull(column))
 }
 
 export class PivotMutation {
@@ -61,9 +66,10 @@ export class PivotMutation {
       if (ids == null) return this.delete(connection)
       const entries = this.normalize(ids)
       if (entries.length === 0) return 0
-      if (!this.readsAllRows()) return this.delete(connection, entries.map(entry => entry.id))
-      const wanted = new Set(entries.map(entry => this.incomingKeyIdentity(entry.id)))
-      const keys = (await this.read(connection)).filter(row => wanted.has(this.storedKeyIdentity(row))).map(row => row[this.context.relatedColumn])
+      if (!this.storesSQLiteDateKeys()) return this.delete(connection, entries.map(entry => entry.id))
+      const current = this.groupByKey(await this.read(connection))
+      const keys = [...new Set(entries.map(entry => this.incomingKeyIdentity(entry.id)))]
+        .flatMap(identity => this.storedKeys(current.get(identity) ?? []))
       return keys.length === 0 ? 0 : this.delete(connection, keys)
     })
   }
@@ -73,13 +79,12 @@ export class PivotMutation {
     if (Object.keys(attributes).length === 0) return 0
     const key = bindableId(id)
     const rows = await this.read(this.connection, [key])
-    const existing = this.readsAllRows() ? rows.find(row => this.storedKeyIdentity(row) === this.incomingKeyIdentity(key)) : rows[0]
-    const update = existing && this.updateFor(existing, attributes)
-    if (!existing || !update) return 0
+    const existing = this.storesSQLiteDateKeys() ? this.groupByKey(rows).get(this.incomingKeyIdentity(key)) ?? [] : rows.slice(0, 1)
+    const update = existing.length === 0 ? undefined : this.updateFor(existing, attributes)
+    if (!update) return 0
     const values = this.timestampAttributes(attributes, false)
     this.assertColumnsWritable(Object.keys(values))
-    const result = await this.updateRow(this.connection, existing[this.context.relatedColumn], values, update.onlyWhereDatesDiffer)
-    return update.onlyWhereDatesDiffer && !((result.affectedRows ?? 0) > 0) ? 0 : 1
+    return await this.updateRows(this.connection, this.storedKeys(existing), values, update) ? 1 : 0
   }
 
   private async mutate(kind: 'attach' | 'sync' | 'toggle', ids: unknown, attributes: Attributes = {}, detachMissing = false): Promise<Result> {
@@ -91,30 +96,28 @@ export class PivotMutation {
     if (kind !== 'sync' && entries.length === 0) return result
 
     await this.connection.transaction(async connection => {
-      const rows = await this.read(connection, kind === 'sync' ? undefined : entries.map(entry => entry.id))
-      const current = new Map(rows.map(row => [this.storedKeyIdentity(row), row]))
+      const current = this.groupByKey(await this.read(connection, kind === 'sync' ? undefined : entries.map(entry => entry.id)))
       const actions: Action[] = []
       for (const entry of entries) {
         const existing = current.get(this.incomingKeyIdentity(entry.id))
         if (kind === 'toggle' && existing) {
-          actions.push({ ...entry, kind: 'delete', key: existing[this.context.relatedColumn] })
+          actions.push({ kind: 'delete', keys: this.storedKeys(existing) })
           result.detached.push(entry.id)
         } else if (!existing) {
           actions.push({ ...entry, kind: 'insert' })
           result.attached.push(entry.id)
         } else if (kind !== 'toggle') {
           const update = this.updateFor(existing, entry.attributes)
-          if (update) actions.push({ ...entry, ...update, kind: 'update', key: existing[this.context.relatedColumn], onUpdated: () => result.updated.push(entry.id) })
+          if (update) actions.push({ ...entry, kind: 'update', keys: this.storedKeys(existing), update, onUpdated: () => result.updated.push(entry.id) })
         }
       }
       if (detachMissing) {
         const desired = new Set(entries.map(entry => this.incomingKeyIdentity(entry.id)))
-        for (const row of rows) {
-          const id = row[this.context.relatedColumn]
-          if (!desired.has(this.storedKeyIdentity(row)) && typeof id !== 'undefined') {
-            actions.push({ kind: 'delete', id, key: id, attributes: {} })
-            result.detached.push(this.readKey(id))
-          }
+        for (const [identity, rows] of current) {
+          const keys = this.storedKeys(rows)
+          if (desired.has(identity) || keys.length === 0) continue
+          actions.push({ kind: 'delete', keys })
+          result.detached.push(...keys.map(key => this.readKey(key)))
         }
       }
       await this.execute(connection, actions)
@@ -132,34 +135,37 @@ export class PivotMutation {
     let offset = 0
     while (offset < timestamped.length) {
       const action = timestamped[offset]!
+      offset++
       if (action.kind === 'update') {
-        const updated = await this.updateRow(connection, action.key, action.attributes, action.onlyWhereDatesDiffer)
-        if (!action.onlyWhereDatesDiffer || (updated.affectedRows ?? 0) > 0) action.onUpdated?.()
-        offset++
+        if (await this.updateRows(connection, action.keys, action.attributes, action.update)) action.onUpdated()
+        continue
+      }
+      if (action.kind === 'delete') {
+        const keys = [...action.keys]
+        while (offset < timestamped.length && timestamped[offset]!.kind === 'delete' && keys.length < this.idBatchSize()) {
+          keys.push(...(timestamped[offset] as DeleteAction).keys)
+          offset++
+        }
+        await this.delete(connection, keys)
         continue
       }
       const columns = Object.keys(action.attributes)
       const rowWidth = Object.keys(this.context.scope).length + 1 + columns.length
-      const limit = action.kind === 'insert' ? Math.max(1, Math.floor(bindingBudget / rowWidth)) : this.idBatchSize()
-      const batch: Action[] = [action]
-      offset++
+      const limit = Math.max(1, Math.floor(bindingBudget / rowWidth))
+      const batch: InsertAction[] = [action]
       while (offset < timestamped.length && batch.length < limit) {
         const next = timestamped[offset]!
-        if (next.kind !== action.kind) break
+        if (next.kind !== 'insert') break
         const keys = Object.keys(next.attributes)
-        if (action.kind === 'insert' && (keys.length !== columns.length || !columns.every(column => keys.includes(column)))) break
+        if (keys.length !== columns.length || !columns.every(column => keys.includes(column))) break
         batch.push(next)
         offset++
       }
-      if (action.kind === 'delete') {
-        await this.delete(connection, batch.map(entry => 'key' in entry ? entry.key : entry.id))
-      } else {
-        await new TableQueryBuilder(this.context.table, connection).insert(batch.map(entry => ({
-          ...this.context.scope,
-          [this.context.relatedColumn]: entry.id,
-          ...entry.attributes,
-        })))
-      }
+      await new TableQueryBuilder(this.context.table, connection).insert(batch.map(entry => ({
+        ...this.context.scope,
+        [this.context.relatedColumn]: entry.id,
+        ...entry.attributes,
+      })))
     }
   }
 
@@ -190,8 +196,17 @@ export class PivotMutation {
     return [{ id: bindableId(ids), attributes: { ...attributes } }]
   }
 
-  private storedKeyIdentity(row: Attributes): unknown {
-    return this.incomingKeyIdentity(row[this.context.relatedColumn])
+  private groupByKey(rows: readonly Attributes[]): Map<unknown, Attributes[]> {
+    const groups = new Map<unknown, Attributes[]>()
+    for (const row of rows) {
+      const identity = this.incomingKeyIdentity(row[this.context.relatedColumn])
+      groups.set(identity, [...groups.get(identity) ?? [], row])
+    }
+    return groups
+  }
+
+  private storedKeys(rows: readonly Attributes[]): unknown[] {
+    return rows.map(row => row[this.context.relatedColumn]).filter(key => typeof key !== 'undefined')
   }
 
   private incomingKeyIdentity(value: unknown): unknown {
@@ -215,7 +230,12 @@ export class PivotMutation {
 
   private dateKeyColumn(): AnyColumnDefinition | undefined {
     const column = this.context.relatedKey
-    return column?.kind === 'date' || column?.kind === 'datetime' || column?.kind === 'timestamp' ? column : undefined
+    return column && storesDate(column) ? column : undefined
+  }
+
+  private storesSQLiteDateKeys(): boolean {
+    const column = this.context.relatedKey
+    return column !== undefined && readsAsSQLiteDate(this.context.dialect, column)
   }
 
   private dedupe(entries: readonly Entry[]): Entry[] {
@@ -239,10 +259,11 @@ export class PivotMutation {
     for (const column of new Set(columns)) assertColumnWritable(column, ownEntry(table.columns, column), 'computed')
   }
 
-  private updateFor(existing: Attributes, attributes: Attributes): PivotUpdate | undefined {
+  private updateFor(existing: readonly Attributes[], attributes: Attributes): PivotUpdate | undefined {
     const dates = Object.keys(attributes).filter(column => this.storesDateAttribute(column))
-    if (Object.entries(attributes).some(([column, value]) => !dates.includes(column) && existing[column] !== value)) return {}
-    return dates.length === 0 ? undefined : { onlyWhereDatesDiffer: dates }
+    const others = Object.entries(attributes).filter(([column]) => !dates.includes(column))
+    if (existing.some(row => others.some(([column, value]) => row[column] !== value))) return { when: 'always' }
+    return dates.length === 0 ? undefined : { when: 'datesDiffer', columns: dates }
   }
 
   private storesDateAttribute(column: string): boolean {
@@ -250,25 +271,21 @@ export class PivotMutation {
     return definition !== undefined && storesDate(definition)
   }
 
-  private updateRow(connection: DatabaseContext, key: unknown, values: Attributes, onlyWhereDatesDiffer?: readonly string[]) {
-    const row = this.whereKeys(this.query(connection), [key])
-    const query = onlyWhereDatesDiffer
-      ? row.where(group => onlyWhereDatesDiffer.reduce((differs, column) => differs.orWhere(match => values[column] == null
-        ? match.whereNotNull(column)
-        : match.where(column, '!=', values[column]).orWhereNull(column)), group))
-      : row
-    return query.update(values)
+  private async updateRows(connection: DatabaseContext, keys: readonly unknown[], values: Attributes, update: PivotUpdate): Promise<boolean> {
+    const rows = this.whereKeys(this.query(connection), keys)
+    if (update.when === 'always') {
+      await rows.update(values)
+      return true
+    }
+    const changed = rows.where(group => update.columns.reduce((differs, column) => orWhereDiffers(differs, column, values[column]), group))
+    return ((await changed.update(values)).affectedRows ?? 0) > 0
   }
 
-  private readsAllRows(): boolean {
-    return this.context.dialect === 'sqlite' && this.dateKeyColumn() !== undefined
+  private whereKeys(query: PivotQuery, keys: readonly unknown[]): PivotQuery {
+    return this.storesSQLiteDateKeys() ? whereStoredValuesIn(query, this.context.relatedColumn, keys) : query.where(this.context.relatedColumn, 'in', keys)
   }
 
-  private whereKeys(query: TableQueryBuilder<string | TableDefinition>, keys: readonly unknown[]): TableQueryBuilder<string | TableDefinition> {
-    return this.readsAllRows() ? whereStoredValuesIn(query, this.context.relatedColumn, keys) : query.where(this.context.relatedColumn, 'in', keys)
-  }
-
-  private query(connection: DatabaseContext): TableQueryBuilder<string | TableDefinition> {
+  private query(connection: DatabaseContext): PivotQuery {
     let query = new TableQueryBuilder(this.context.table, connection)
     for (const [column, value] of Object.entries(this.context.scope)) query = query.where(column, value)
     return query
@@ -279,7 +296,7 @@ export class PivotMutation {
   }
 
   private async read(connection: DatabaseContext, ids?: readonly unknown[]): Promise<Attributes[]> {
-    if (!ids || this.readsAllRows()) return this.query(connection).get<Attributes>()
+    if (!ids || this.storesSQLiteDateKeys()) return this.query(connection).get<Attributes>()
     const rows: Attributes[] = []
     const unique = [...new Set(ids)]
     for (let offset = 0; offset < unique.length; offset += this.idBatchSize()) {
@@ -288,11 +305,11 @@ export class PivotMutation {
     return rows
   }
 
-  private async delete(connection: DatabaseContext, ids?: readonly unknown[]): Promise<number> {
-    if (!ids) return (await this.query(connection).delete()).affectedRows ?? 0
+  private async delete(connection: DatabaseContext, keys?: readonly unknown[]): Promise<number> {
+    if (!keys) return (await this.query(connection).delete()).affectedRows ?? 0
     let count = 0
-    for (let offset = 0; offset < ids.length; offset += this.idBatchSize()) {
-      const result = await this.whereKeys(this.query(connection), ids.slice(offset, offset + this.idBatchSize())).delete()
+    for (let offset = 0; offset < keys.length; offset += this.idBatchSize()) {
+      const result = await this.whereKeys(this.query(connection), keys.slice(offset, offset + this.idBatchSize())).delete()
       count += result.affectedRows ?? 0
     }
     return count

@@ -3668,6 +3668,9 @@ export function whereStoredValuesIn<
   if (!appendTrusted || !isGenuineDatabaseContext(connection)) {
     throw new SecurityError('whereStoredValuesIn() needs a query builder and connection that Holo created.')
   }
+  if (!/^[A-Za-z_]\w*$/.test(column)) {
+    throw new SecurityError(`Stored-value predicates need a plain column name, received "${column}".`)
+  }
   if (values.length === 0) return appendTrusted('1 = 0', []) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
   const placeholders = values.map(() => '?').join(', ')
   return appendTrusted(`${connection.getDialect().quoteIdentifier(column)} IN (${placeholders})`, values) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
