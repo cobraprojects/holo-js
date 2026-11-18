@@ -65,7 +65,7 @@ All of these are exported from `@holo-js/db`.
 
 You can name the related model in two ways.
 
-**By model name (string).** `belongsTo`, `hasOne`, `hasMany`, and `belongsToMany` accept the model's name, such as `'User'`. This avoids circular imports between model files, and you still get autocomplete because `holo prepare` registers your models' types.
+**By model name (string).** `belongsTo`, `hasOne`, `hasMany`, and `belongsToMany` accept the model's name, such as `'User'`. This avoids circular imports between model files, and you still get full types because `holo prepare` registers your models' types. Models loaded through a named relation keep their own relations and scopes, so a nested load such as `with('reward.tenant')` is typed all the way down, even when models reference each other in a cycle.
 
 ```ts
 author: belongsTo('User', { foreignKey: 'user_id' })
@@ -174,6 +174,8 @@ export default defineModel('users', {
 ```
 
 `publishedPosts` works everywhere a relation does: `with()`, `has()`, `withCount()`, and so on.
+
+When the relation names its model with a string, the callback's query knows the related table's columns but not that model's scopes or relations. This keeps model files that reference each other from depending on each other's types. Use `() => Model` when the callback needs the related model's scopes.
 
 ::: tip Return the query from constraint callbacks
 Query builders are immutable: `query.where(...)` returns a new builder. Always return it from your callback (`query => query.where(...)`). A callback with a block body that doesn't return anything applies no constraint.

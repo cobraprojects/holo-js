@@ -1122,6 +1122,9 @@ describe('type system contracts', () => {
       type LoadedPosts = Result['posts']
       type LoadedUser = LoadedPosts[number]['user']
       expectTypeOf<LoadedUser>().toMatchTypeOf<Entity<typeof namedUsersTable> | null>()
+      const inverse = NamedPost.with('user.posts')
+      type InversePosts = NonNullable<NonNullable<Awaited<ReturnType<typeof inverse.first>>>['user']>['posts']
+      expectTypeOf<InversePosts[number]['title']>().toEqualTypeOf<string>()
 
       // @ts-expect-error string relation targets must match the registered model names
       hasMany('MissingModel', 'user_id')

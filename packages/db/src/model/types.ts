@@ -75,6 +75,17 @@ export type AnyModelQueryBuilder = ModelQueryBuilder<TableDefinition>
 export interface RegisteredModels {}
 export type RegisteredModelName = Extract<keyof RegisteredModels, string>
 export type RegisteredModelReference<TName extends RegisteredModelName> = RegisteredModels[TName]
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- declaration merging hook for app model registries
+export interface RegisteredModelDefinitions {}
+export type NamedModelReference<TName extends RegisteredModelName> = RegisteredModelReference<TName> & { readonly '~registeredModelName'?: TName }
+type NamedModelReferenceName<TReference>
+  = TReference extends { readonly '~registeredModelName'?: infer TName extends RegisteredModelName } ? TName : never
+type ResolveModelDefinition<TReference>
+  = TReference extends unknown
+    ? NamedModelReferenceName<TReference> extends infer TName extends keyof RegisteredModelDefinitions
+      ? [TName] extends [never] ? TReference : RegisteredModelDefinitions[TName]
+      : TReference
+    : never
 export type ModelDefinitionLike<TTable extends TableDefinition = TableDefinition>
   = | (AnyModelDefinition & { readonly table: TTable })
     | { readonly definition: AnyModelDefinition & { readonly table: TTable } }
@@ -88,6 +99,13 @@ export type RelationConstraintDefinition = (query: ModelQueryBuilder<TableDefini
 type RelationConstraintCallback<TQuery> = { bivarianceHack(query: TQuery): unknown }['bivarianceHack']
 
 export type ScopedRelationConstraint<TRelation extends RelationDefinition>
+  = TRelation extends { readonly related: () => infer TReference }
+    ? [NamedModelReferenceName<TReference>] extends [never]
+      ? ScopedModelRelationConstraint<TRelation>
+      : RelationConstraintCallback<ModelQueryBuilder<RelatedTableOfRelation<TRelation>>>
+    : ScopedModelRelationConstraint<TRelation>
+
+type ScopedModelRelationConstraint<TRelation extends RelationDefinition>
   = RelationConstraintCallback<ModelQueryBuilder<
     RelatedTableOfRelation<TRelation>,
     RelatedRelationsOfRelation<TRelation>,
@@ -454,7 +472,9 @@ type NestedRelationPath<TRelations extends RelationMap, TDepth extends number>
             TRelations[K] extends { readonly kind: 'morphTo' }
               ? `${K}.${string}`
               : TRelations[K] extends { readonly related: () => infer TRef }
-                ? `${K}.${InternalRelationPath<RelatedRelationsOfDefinition<TRef>, Prev[TDepth]>}`
+                ? [NamedModelReferenceName<TRef>] extends [never]
+                    ? `${K}.${InternalRelationPath<RelatedRelationsOfDefinition<TRef>, Prev[TDepth]>}`
+                    : `${K}.${string}`
                 : never
         }[ModelRelationName<TRelations>]
 
@@ -558,7 +578,9 @@ export type RelationConstraintMapGuarded<
  * relation. This enables recursive type resolution for nested eager loads
  * like `'posts.comments'`.
  */
-export type RelatedRelationsOfDefinition<TRef>
+export type RelatedRelationsOfDefinition<TRef> = ModelRelationsOf<ResolveModelDefinition<TRef>>
+
+type ModelRelationsOf<TRef>
   = TRef extends { readonly relations: infer R extends RelationMap } ? R
     : TRef extends { readonly definition: { readonly relations: infer R extends RelationMap } } ? R
       : RelationMap
@@ -568,7 +590,9 @@ export type RelatedRelationsOfRelation<TRelation extends RelationDefinition>
     ? RelatedRelationsOfDefinition<TRef>
     : RelationMap
 
-export type RelatedScopesOfDefinition<TRef>
+export type RelatedScopesOfDefinition<TRef> = ModelScopesOf<ResolveModelDefinition<TRef>>
+
+type ModelScopesOf<TRef>
   = TRef extends { readonly scopes: infer S extends ModelScopesDefinition } ? S
     : TRef extends { readonly definition: { readonly scopes: infer S extends ModelScopesDefinition } } ? S
       : EmptyScopeMap
