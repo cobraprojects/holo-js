@@ -1510,6 +1510,16 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
     await expect(dayIn('etc/utc')).resolves.toBe('1969-07-20')
   })
 
+  it('skips conversion for another spelling of the app time zone', async () => {
+    useAppTimezone('America/New_York')
+    const events = await createEventsTable('mysql')
+    await DB.connection().executeCompiled({ sql: `INSERT INTO \`${events.tableName}\` (tenant_id, occurred_at) VALUES (13, '1960-06-01 12:00:00')`, source: 'test' })
+    const dayIn = (timeZone: string) => DB.table(events).where('tenant_id', 13).selectDate('day', 'occurred_at', { as: 'day', timeZone }).value('day')
+
+    await expect(dayIn('US/Eastern')).resolves.toBe('1960-06-01')
+    await expect(dayIn('america/new_york')).resolves.toBe('1960-06-01')
+  })
+
   it('gives a null bucket for a datetime its server cannot convert', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable('mysql')

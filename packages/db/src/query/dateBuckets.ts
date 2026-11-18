@@ -262,8 +262,18 @@ export function mysqlTimeZoneName(timeZone: string): string {
   return UTC_TIME_ZONES.has(timeZone.toLowerCase()) ? '+00:00' : timeZone
 }
 
+function canonicalTimeZone(timeZone: string): string {
+  const name = mysqlTimeZoneName(timeZone)
+  if (name === '+00:00') return name
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: name }).resolvedOptions().timeZone.toLowerCase()
+  } catch {
+    return name.toLowerCase()
+  }
+}
+
 export function sameMySQLTimeZone(left: string, right: string): boolean {
-  return mysqlTimeZoneName(left) === mysqlTimeZoneName(right)
+  return canonicalTimeZone(left) === canonicalTimeZone(right)
 }
 
 const convertibleMySQLTimeZones = new WeakMap<DatabaseContext, Set<string>>()
