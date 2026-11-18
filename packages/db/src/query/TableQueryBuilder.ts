@@ -139,6 +139,7 @@ import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolv
 import { currentRootTransaction } from '../core/openTransactions'
 import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalization, deferPredicateNormalization } from './deferredPredicateValues'
 import { assertQueryTablePath, validateQueryPlan } from './validator'
+import { UNION_CURSOR_STORAGE_TYPE_PREFIX } from './SQLQueryCompiler'
 import { requalifyAliasedSource } from './requalifyAliasedSource'
 
 import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
@@ -2340,9 +2341,15 @@ export class TableQueryBuilder<
     const nullsLow = !this.connection.getDialect().name.includes('postgres')
     const pageOrders = (orders: readonly CursorOrderDefinition[]) => orders.map((order): QueryOrderBy => ({ kind: 'column', column: order.column, direction: previous === (order.direction === 'asc') ? 'desc' : 'asc' }))
     let storedRows: TRow[]
+    const unionCursorValues = new WeakMap<Record<string, unknown>, readonly unknown[]>()
     if (unionOrders) {
       const predicate = normalizedCursor && cursorPredicate(normalizedCursor, unionOrders, nullsLow)
-      storedRows = await orderedQuery.getCompiledRows<TRow>(() => orderedQuery.getCompiler().compileUnionCursorPage(orderedQuery.plan, predicate, pageOrders(unionOrders), perPage + 1), true, true, 'values')
+      const unionRows = await orderedQuery.getCompiledRows<TRow>(() => orderedQuery.getCompiler().compileUnionCursorPage(orderedQuery.plan, predicate, pageOrders(unionOrders), perPage + 1), true, true, 'values')
+      storedRows = unionRows.map((row) => {
+        const page = withoutUnionCursorStorageTypes(row, unionOrders.length)
+        unionCursorValues.set(page, unionOrders.map((order, index) => unionCursorStorageValue(row[order.column], row[`${UNION_CURSOR_STORAGE_TYPE_PREFIX}${index}`])))
+        return page
+      })
     } else {
       if (normalizedCursor) {
         const grouped = plan.predicates.some(predicate => predicate.boolean === 'or')
@@ -2354,9 +2361,8 @@ export class TableQueryBuilder<
       const pageQuery = orderedQuery.clone(plan)
       storedRows = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true, 'values')
     }
-    const cursorValues = (row: Record<string, unknown>): readonly unknown[] => unionOrders
-      ? unionOrders.map(order => row[order.column])
-      : cursorOrders.map(order => orderedQuery.readCursorColumnValue(row, order.column))
+    const cursorValues = (row: Record<string, unknown>): readonly unknown[] => unionCursorValues.get(row)
+      ?? cursorOrders.map(order => orderedQuery.readCursorColumnValue(row, order.column))
     const hasMorePages = storedRows.length > perPage
     const pageRows = storedRows.slice(0, perPage)
     if (previous) pageRows.reverse()
@@ -3614,6 +3620,16 @@ export class TableQueryBuilder<
       })
     return owners.length === 1 ? { table: owners[0]!, column: name } : undefined
   }
+}
+
+function withoutUnionCursorStorageTypes<TRow extends Record<string, unknown>>(row: TRow, count: number): TRow {
+  const page = { ...row }
+  for (let index = 0; index < count; index += 1) delete page[`${UNION_CURSOR_STORAGE_TYPE_PREFIX}${index}`]
+  return page
+}
+
+function unionCursorStorageValue(value: unknown, storageType: unknown): unknown {
+  return storageType === 'integer' && typeof value === 'string' ? BigInt(value) : value
 }
 
 const DATE_COLUMN_KINDS: ReadonlySet<LogicalColumnKind> = new Set(['date', 'datetime', 'timestamp'])

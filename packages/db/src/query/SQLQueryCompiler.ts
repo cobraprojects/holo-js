@@ -52,6 +52,9 @@ const UNKNOWN_KIND_KEY_ALIAS = '__holo_key'
 
 const UNKNOWN_KIND_KEYS_ALIAS = '__holo_keys'
 
+const UNION_CURSOR_OPERATORS: ReadonlySet<unknown> = new Set(['>', '<', '='])
+export const UNION_CURSOR_STORAGE_TYPE_PREFIX = '__holo_cursor_type_'
+
 export class SQLQueryCompiler {
   protected readonly dialect: SchemaDialectName | undefined = undefined
   protected readonly caseSensitiveIdentifiers: boolean = false
@@ -185,13 +188,32 @@ export class SQLQueryCompiler {
   compileUnionCursorPage(plan: SelectQueryPlan, cursor: QueryPredicateNode | undefined, orderBy: readonly QueryOrderBy[], limit: number): CompiledStatement {
     const statement = this.compile({ ...plan, orderBy: [], limit: undefined, offset: undefined })
     const bindings = [...statement.bindings ?? []]
-    const whereClause = cursor ? this.compilePredicates([cursor], bindings) : ''
+    const whereClause = cursor ? this.compilePredicates([this.unionCursorPredicate(cursor)], bindings) : ''
     const orderClause = orderBy.map(order => this.compileOrderBy(order, bindings)).join(', ')
     return this.withMetadata({
       ...statement,
       bindings,
-      sql: `SELECT * FROM (${statement.sql}) AS ${this.quoteIdentifier('__holo_union_page')}${whereClause} ORDER BY ${orderClause} LIMIT ${limit}`,
+      sql: `SELECT *${this.compileUnionCursorStorageTypes(orderBy)} FROM (${statement.sql}) AS ${this.quoteIdentifier('__holo_union_page')}${whereClause} ORDER BY ${orderClause} LIMIT ${limit}`,
     }, this.createSelectMetadata(plan))
+  }
+
+  private unionCursorPredicate(predicate: QueryPredicateNode): QueryPredicateNode {
+    if (predicate.kind === 'group') return { ...predicate, predicates: predicate.predicates.map(nested => this.unionCursorPredicate(nested)) }
+    if (predicate.kind !== 'comparison' || !UNION_CURSOR_OPERATORS.has(predicate.operator)) return predicate
+    return {
+      kind: 'raw',
+      ...(predicate.boolean === undefined ? {} : { boolean: predicate.boolean }),
+      sql: `${this.compileUnionCursorOperand(predicate.column)} ${predicate.operator} ?`,
+      bindings: [predicate.value],
+    }
+  }
+
+  protected compileUnionCursorOperand(output: string): string {
+    return this.quoteIdentifier(output)
+  }
+
+  protected compileUnionCursorStorageTypes(_orderBy: readonly QueryOrderBy[]): string {
+    return ''
   }
 
   compileExists(plan: SelectQueryPlan): CompiledStatement {

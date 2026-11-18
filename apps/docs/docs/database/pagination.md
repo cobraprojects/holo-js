@@ -192,7 +192,7 @@ Holo throws a `SecurityError` for random, raw, or missing ordering, and a `Compi
 The cursor comes from the client, so it can be garbled, truncated, or left over from a page that ordered by different columns. Holo checks it before it runs the query and throws an `InvalidCursorException` when:
 
 - it isn't canonical base64url-encoded UTF-8 JSON,
-- its `values` aren't a list of strings, finite numbers, booleans and `null`,
+- its `values` aren't a list of strings, finite numbers, booleans, `null` and `{ "bigint": "<digits>" }` big integers,
 - its `previous` flag is present but isn't a boolean, or
 - it holds a different number of values than the query orders by.
 

@@ -1,4 +1,4 @@
-import { SQLQueryCompiler } from './SQLQueryCompiler'
+import { SQLQueryCompiler, UNION_CURSOR_STORAGE_TYPE_PREFIX } from './SQLQueryCompiler'
 import { compileSQLiteWallClock, formatSQLiteDateTime } from '../sqliteDateTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type { CompiledStatement } from '../core/types'
@@ -7,7 +7,7 @@ import { CompilerError } from '../core/errors'
 import { splitTablePath } from '../schema/identifiers'
 import { sameIdentifier } from '../schema/introspection/sqliteTokens'
 import { SQLITE_DECIMAL_TEXT_FUNCTION } from '../schema/normalization'
-import type { InsertStatementOptions, QueryColumnPredicate, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate, SelectQueryPlan } from './ast'
+import type { InsertStatementOptions, QueryColumnPredicate, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryOrderBy, QueryPredicate, SelectQueryPlan } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
   return `json_extract(${column}, ${pathLiteral})`
@@ -69,6 +69,16 @@ const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
   protected override readonly dialect = 'sqlite'
+
+  protected override compileUnionCursorOperand(output: string): string {
+    return `+${this.quoteIdentifier(output)}`
+  }
+
+  protected override compileUnionCursorStorageTypes(orderBy: readonly QueryOrderBy[]): string {
+    return orderBy.map((order, index) => order.kind === 'column'
+      ? `, typeof(${this.compileUnionCursorOperand(order.column)}) AS ${this.quoteIdentifier(`${UNION_CURSOR_STORAGE_TYPE_PREFIX}${index}`)}`
+      : '').join('')
+  }
 
   protected override createDateLiteral(value: Date): string {
     return this.createSqlStringLiteral(formatSQLiteDateTime(value))

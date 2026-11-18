@@ -14,6 +14,7 @@ const clientCursors = {
   'JSON without values': encodeCursor({ offset: 2 }),
   'a non-array values field': encodeCursor({ values: 'Ava' }),
   'an object value': encodeCursor({ values: [{}] }),
+  'a malformed big integer value': encodeCursor({ values: [{ bigint: '1x' }] }),
   'a non-boolean previous flag': encodeCursor({ values: [1], previous: 'yes' }),
   'more values than the ordering': encodeCursor({ values: [1, 2] }),
   'fewer values than the ordering': encodeCursor({ values: [] }),

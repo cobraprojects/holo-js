@@ -204,6 +204,26 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     }
   })
 
+  it.skipIf(driver === 'postgres')('pages a union of integers and numeric-looking text in the database\'s own order', async () => {
+    const { schema } = await openDatabase(driver)
+    const values = registered(defineGeneratedTable(await createTable(schema, 'union_values', ['n'], ['label']), { n: column.integer(), label: column.string() }))
+    await DB.table(values).insert([{ n: 2, label: 'x' }, { n: 9, label: '10' }, { n: 9, label: '20' }, { n: 9, label: '3' }])
+    const query = DB.table(values.tableName).select('n as k').where('n', 2).unionAll(DB.table(values.tableName).select('label as k').where('n', 9)).orderBy('k')
+    const all = (await query.get()).map(row => String(row.k))
+    expect(all).toHaveLength(4)
+    expect((await pageThrough(query)).map(row => String(row.k))).toEqual(all)
+  })
+
+  it('pages a union of big integers beyond the safe integer range', async () => {
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_bigints', ['grp'])
+    await schema.table(name, table => { table.bigInteger('big') })
+    const bigs = [9007199254740993n, 9007199254740995n, 9007199254740997n]
+    await DB.table(name).insert(bigs.map((big, index) => ({ grp: index === 1 ? 2 : 1, big })))
+    const query = DB.table(name).select('big').where('grp', 1).unionAll(DB.table(name).select('big').where('grp', 2)).orderBy('big')
+    expect((await pageThrough(query)).map(row => String(row.big))).toEqual(bigs.map(String))
+  })
+
   it('pages a union by the first query\'s exact output spelling', async () => {
     const { schema } = await openDatabase(driver)
     const users = registered(defineGeneratedTable(await createTable(schema, 'union_users', ['id']), { id: column.integer() }))
