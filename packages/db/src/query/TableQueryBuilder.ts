@@ -3593,7 +3593,20 @@ export class TableQueryBuilder<
   }
 
   private normalizePredicateValueForColumn(columnName: string, value: unknown, operator: unknown = '='): unknown {
-    return normalizeQueryPredicateValue(this.source.table, this.connection.getDriver(), this.resolveSourceColumnName(columnName) ?? columnName, value, operator)
+    const sourceColumn = this.resolveSourceColumnName(columnName)
+    const joined = sourceColumn === undefined ? this.joinedColumnTable(columnName) : undefined
+    return joined
+      ? normalizeQueryPredicateValue(joined.table, this.connection.getDriver(), joined.column, value, operator)
+      : normalizeQueryPredicateValue(this.source.table, this.connection.getDriver(), sourceColumn ?? columnName, value, operator)
+  }
+
+  private joinedColumnTable(column: string): { readonly table: TableDefinition, readonly column: string } | undefined {
+    const separator = column.lastIndexOf('.')
+    if (separator === -1) return undefined
+    const join = this.plan.joins.find(candidate => qualifiesTable(column.slice(0, separator), candidate.table, candidate.alias))
+    const table = join?.definition ?? (join?.table ? getConnectionGeneratedTableDefinition(join.table, this.connection.getConnectionName()) : undefined)
+    const name = column.slice(separator + 1)
+    return table && Object.hasOwn(table.columns, name) ? { table, column: name } : undefined
   }
 }
 
