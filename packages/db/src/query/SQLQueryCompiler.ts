@@ -53,6 +53,10 @@ const UNKNOWN_KIND_KEY_ALIAS = '__holo_key'
 const UNKNOWN_KIND_KEYS_ALIAS = '__holo_keys'
 
 const NO_DATE_BUCKETS: ReadonlyMap<string, ResolvedDateBucket> = new Map()
+
+function unverifiableRawFragment(fragment: string): CompilerError {
+  return new CompilerError(`A raw ${fragment} can't be checked against the date bucket names in scope, so SQLite might read a date bucket instead of a column. Use the query builder methods or move the raw SQL out of queries with date buckets.`)
+}
 const NO_GUARDED_BUCKET_NAMES: ReadonlySet<string> = new Set()
 
 export type DateBucketAliasMode = 'expression' | 'output' | 'column'
@@ -271,6 +275,7 @@ export class SQLQueryCompiler {
           }
 
           if (selection.kind === 'raw') {
+            if (this.inheritedBucketNames.size > 0 && !isTrustedRawSelection(selection)) throw unverifiableRawFragment('selection')
             return this.compileRawSql(selection.sql, selection.bindings, bindings)
           }
 
@@ -725,9 +730,7 @@ export class SQLQueryCompiler {
     }
 
     if (predicate.kind === 'raw') {
-      if (this.guardedBucketNames.size > 0 && !isTrustedRawPredicate(predicate)) {
-        throw new CompilerError('A raw where clause can\'t be checked against the date bucket names in scope, so SQLite might read a bucket instead of a column. Use where() or give the date bucket an alias no raw clause uses.')
-      }
+      if (this.guardedBucketNames.size > 0 && !isTrustedRawPredicate(predicate)) throw unverifiableRawFragment('where clause')
       return this.compileRawSql(predicate.sql, predicate.bindings, bindings)
     }
 
@@ -1006,6 +1009,7 @@ export class SQLQueryCompiler {
     }
 
     if (orderBy.kind === 'raw') {
+      if (this.inheritedBucketNames.size > 0) throw unverifiableRawFragment('ORDER BY')
       return this.compileRawSql(orderBy.sql, orderBy.bindings, bindings)
     }
 
