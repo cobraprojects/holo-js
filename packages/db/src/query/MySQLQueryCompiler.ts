@@ -161,10 +161,10 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
     const column = this.compileColumnReference(bucket.column)
     const applicationTimeZone = getApplicationTimezone()
     const timeZone = bucket.timeZone ?? applicationTimeZone
-    const wallClock = storage === 'calendar' || timeZone === applicationTimeZone
-      ? column
-      : storage === 'timestamp'
-        ? `CONVERT_TZ(${this.compileUtcWallClock(column)}, '+00:00', ${this.createSqlStringLiteral(mysqlTimeZoneName(timeZone))})`
+    const wallClock = storage === 'timestamp'
+      ? `CONVERT_TZ(${this.compileUtcWallClock(column)}, '+00:00', ${this.createSqlStringLiteral(mysqlTimeZoneName(timeZone))})`
+      : storage === 'calendar' || timeZone === applicationTimeZone
+        ? column
         : this.compileConvertedWallClock(column, mysqlTimeZoneName(applicationTimeZone), mysqlTimeZoneName(timeZone))
     return `CASE WHEN ${wallClock} >= '0001-01-01' THEN DATE_FORMAT(${wallClock}, '${MYSQL_DATE_BUCKET_FORMATS[bucket.unit]}') END`
   }

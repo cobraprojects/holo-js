@@ -176,9 +176,12 @@ function planDateBuckets(plan: SelectQueryPlan): readonly PlannedDateBucket[] {
 
 function convertedMySQLTimeZones(plan: SelectQueryPlan, connectionName: string): readonly string[] {
   const applicationTimeZone = getApplicationTimezone()
-  const converted = planDateBuckets(plan)
-    .filter(({ plan: owner, bucket }) => bucket.timeZone !== undefined && bucket.timeZone !== applicationTimeZone && dateBucketStorage(owner, bucket, connectionName) !== 'calendar')
-  const zones = new Set(converted.flatMap(({ bucket }) => [applicationTimeZone, bucket.timeZone!]))
+  const zones = new Set(planDateBuckets(plan).flatMap(({ plan: owner, bucket }) => {
+    const timeZone = bucket.timeZone ?? applicationTimeZone
+    const storage = dateBucketStorage(owner, bucket, connectionName)
+    if (storage === 'timestamp') return [timeZone]
+    return storage === 'datetime' && timeZone !== applicationTimeZone ? [applicationTimeZone, timeZone] : []
+  }))
   return [...zones].filter(zone => mysqlTimeZoneName(zone) === zone)
 }
 

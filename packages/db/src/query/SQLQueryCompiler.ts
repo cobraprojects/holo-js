@@ -60,7 +60,7 @@ export class SQLQueryCompiler {
   protected readonly dialect: SchemaDialectName | undefined = undefined
   private dateBuckets: ReadonlyMap<string, ResolvedDateBucket> = new Map()
   private dateBucketPlan: SelectQueryPlan | undefined = undefined
-  private dateBucketFoldedAliases: ReadonlySet<string> = new Set()
+  private dateBucketsFolded: ReadonlyMap<string, ResolvedDateBucket> = new Map()
   private dateBucketAliasMode: DateBucketAliasMode = 'column'
 
   constructor(
@@ -208,17 +208,17 @@ export class SQLQueryCompiler {
   ): string {
     const enclosingDateBuckets = this.dateBuckets
     const enclosingDateBucketPlan = this.dateBucketPlan
-    const enclosingDateBucketFoldedAliases = this.dateBucketFoldedAliases
+    const enclosingDateBucketsFolded = this.dateBucketsFolded
     this.dateBuckets = new Map([...dateBucketSelections(plan)].map(([alias, bucket]) => [alias, { bucket, storage: dateBucketStorage(plan, bucket, this.connectionName) }]))
     this.dateBucketPlan = plan
-    this.dateBucketFoldedAliases = new Set([...this.dateBuckets.keys()].map(alias => alias.toLowerCase()))
+    this.dateBucketsFolded = new Map([...this.dateBuckets].map(([alias, resolved]) => [alias.toLowerCase(), resolved]))
     assertDateBucketOutputsUnshadowed(plan, this.connectionName)
     try {
       return this.compileSelectSqlWithinDateBuckets(plan, bindings, projection)
     } finally {
       this.dateBuckets = enclosingDateBuckets
       this.dateBucketPlan = enclosingDateBucketPlan
-      this.dateBucketFoldedAliases = enclosingDateBucketFoldedAliases
+      this.dateBucketsFolded = enclosingDateBucketsFolded
     }
   }
 
@@ -1059,9 +1059,9 @@ export class SQLQueryCompiler {
   }
 
   protected compileColumnReference(reference: string): string {
-    const dateBucket = this.dateBuckets.get(reference)
+    const dateBucket = reference.includes('.') ? undefined : this.dateBucketsFolded.get(reference.toLowerCase())
     if (dateBucket && this.dateBucketAliasMode === 'expression') return this.compileDateBucketExpression(dateBucket)
-    if (this.dateBucketAliasMode === 'column' && this.dateBucketPlan && !reference.includes('.') && this.dateBucketFoldedAliases.has(reference.toLowerCase())) {
+    if (this.dateBucketAliasMode === 'column' && this.dateBucketPlan && dateBucket) {
       return `${this.compileTableReference(bareColumnOwner(this.dateBucketPlan, reference, this.connectionName))}.${this.quoteIdentifier(reference)}`
     }
     const { schema: table, table: column } = splitTablePath(reference)

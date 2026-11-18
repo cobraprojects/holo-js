@@ -143,7 +143,7 @@ import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalizatio
 import { assertQueryTablePath, validateQueryPlan } from './validator'
 import { requalifyAliasedSource } from './requalifyAliasedSource'
 
-import type { AvailableTableColumns, ColumnSelection, DateBucketAlias, DateBucketAliasName, DateBucketOptions, DateBucketSelectionResult, DateBucketUnit, DateColumnName, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
+import type { AvailableTableColumns, ColumnSelection, DateBucketAlias, SelectedDateBuckets, WithoutSelected, DateBucketAliasName, DateBucketOptions, DateBucketSelectionResult, DateBucketUnit, DateColumnName, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
 
 type SelectRow<TTableOrName extends string | TableDefinition>
   = TTableOrName extends TableDefinition ? InferSelect<TTableOrName> : Record<string, unknown>
@@ -412,7 +412,7 @@ export class TableQueryBuilder<
 
   addSelect<const TColumns extends readonly ColumnSelection<TAvailableColumns>[]>(
     ...columns: TColumns
-  ): TableQueryBuilder<TTableOrName, Omit<TSelectedRow, keyof SelectedColumns<TAvailableColumns, TColumns>> & SelectedColumns<TAvailableColumns, TColumns>, TAvailableColumns> {
+  ): TableQueryBuilder<TTableOrName, WithoutSelected<TSelectedRow, keyof SelectedColumns<TAvailableColumns, TColumns>> & SelectedColumns<TAvailableColumns, TColumns>, TAvailableColumns> {
     return this.clone(appendSelections(this.plan, columns))
   }
 
@@ -537,7 +537,7 @@ export class TableQueryBuilder<
   addUnsafeSelect(
     sql: string,
     bindings: readonly unknown[],
-  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, TAvailableColumns> {
+  ): TableQueryBuilder<TTableOrName, SelectedDateBuckets<TSelectedRow> & Record<string, unknown>, TAvailableColumns> {
     return this.clone(appendRawSelection(this.plan, {
       kind: 'raw',
       sql,
@@ -555,7 +555,7 @@ export class TableQueryBuilder<
   addSelectSub(
     query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
     alias: string,
-  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, TAvailableColumns> {
+  ): TableQueryBuilder<TTableOrName, SelectedDateBuckets<TSelectedRow> & Record<string, unknown>, TAvailableColumns> {
     return this.clone(appendSubquerySelection(this.plan, query.getPlan(), alias))
   }
 
@@ -3434,6 +3434,7 @@ export class TableQueryBuilder<
       const identity = (column: string): string => this.resolveSourceColumnName(column) ?? column
       const groupsByPrimaryKey = primaryKeys.length > 0 && primaryKeys.every(key => this.plan.groupBy.some(column => identity(column) === key))
       const ordered = groupsByPrimaryKey ? this.withPrimaryKeyTieBreakers(primaryKeys) : this
+      if (groupsByPrimaryKey && this.plan.joins.length === 0 && this.plan.unions.length === 0) return ordered
       const orderedColumns = new Set(ordered.plan.orderBy.flatMap(orderBy => orderBy.kind === 'column' ? [identity(orderBy.column)] : []))
       if (!ordered.plan.groupBy.every(column => orderedColumns.has(identity(column)))) {
         throw new SecurityError('Cursor pagination over grouped rows must order by every groupBy column.')
