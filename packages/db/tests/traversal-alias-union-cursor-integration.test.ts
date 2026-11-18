@@ -182,14 +182,29 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
 
   it.skipIf(driver === 'postgres')('pages a union whose branches return different types under one output name', async () => {
     const { schema } = await openDatabase(driver)
-    const name = await createTable(schema, 'union_mixed', ['n'])
+    const name = await createTable(schema, 'union_mixed', ['n'], ['label'])
     await schema.table(name, table => { table.boolean('active').default(false) })
-    const mixed = registered(defineGeneratedTable(name, { n: column.integer(), active: column.boolean() }))
-    await DB.table(mixed).insert([{ n: 2, active: false }, { n: 3, active: false }])
-    const query = DB.table(mixed.tableName).select('active as k').where('n', 2).unionAll(DB.table(mixed.tableName).select('n as k')).orderBy('k')
-    const all = (await query.get()).map(row => Number(row.k))
-    expect(all).toHaveLength(3)
-    expect((await pageThrough(query)).map(row => Number(row.k))).toEqual(all)
+    const mixed = registered(defineGeneratedTable(name, { n: column.integer(), label: column.string(), active: column.boolean() }))
+    await DB.table(mixed).insert([{ n: 2, label: 'c', active: false }, { n: 3, label: 'b', active: false }, { n: 4, label: 'a', active: false }])
+    const numbers = DB.table(mixed.tableName).select('active as k').where('n', 2).unionAll(DB.table(mixed.tableName).select('n as k').where('n', '<', 4)).orderBy('k')
+    const strings = DB.table(mixed.tableName).select('active as k').where('n', 2).unionAll(DB.table(mixed.tableName).select('label as k').where('n', '>', 2)).orderBy('k')
+    for (const query of [numbers, strings]) {
+      const all = (await query.get()).map(row => String(row.k))
+      expect(all).toHaveLength(3)
+      expect((await pageThrough(query)).map(row => String(row.k))).toEqual(all)
+    }
+  })
+
+  it('pages a union by the first query\'s exact output spelling', async () => {
+    const { schema } = await openDatabase(driver)
+    const users = registered(defineGeneratedTable(await createTable(schema, 'union_users', ['id']), { id: column.integer() }))
+    await DB.table(users).insert([{ id: 1 }, { id: 2 }])
+    const query = DB.table(users.tableName).select('id').where('id', 1).unionAll(DB.table(users.tableName).select('id').where('id', 2)).orderBy('ID')
+    if (driver === 'postgres') {
+      await expect(query.cursorPaginate(1)).rejects.toThrow(CompilerError)
+      return
+    }
+    expect((await pageThrough(query)).map(row => Number(row.id))).toEqual([1, 2])
   })
 
   it('compares union output names the way the database compares identifiers', async () => {

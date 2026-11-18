@@ -96,7 +96,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, LogicalColumnKind, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { isAwaitingGeneratedTableIdentity, getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { assertPageableUnionOutputs, unionOutputName, unionOutputValueColumn } from './unionOutputs'
+import { pageableUnionOutputNames, unionOutputName, unionOutputValueColumn } from './unionOutputs'
 import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
 import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
@@ -2328,10 +2328,10 @@ export class TableQueryBuilder<
     await this.bindGeneratedTable()
     const orderedQuery = this.prepareCursorPaginationQuery()
     const cursorOrders = orderedQuery.resolveCursorOrders()
-    const unionOrders = orderedQuery.plan.unions.length === 0
+    const unionOutputNames = orderedQuery.plan.unions.length === 0
       ? undefined
-      : cursorOrders.map(order => ({ ...order, column: unionOutputName(orderedQuery.plan, order.column) }))
-    if (unionOrders) assertPageableUnionOutputs(orderedQuery.plan, unionOrders.map(order => order.column), this.connection.getConnectionName(), this.connection.getDialect().name.includes('postgres'))
+      : pageableUnionOutputNames(orderedQuery.plan, cursorOrders.map(order => unionOutputName(orderedQuery.plan, order.column)), this.connection.getConnectionName(), this.connection.getDialect().name.includes('postgres'))
+    const unionOrders = unionOutputNames && cursorOrders.map((order, index) => ({ ...order, column: unionOutputNames[index]! }))
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
     const previous = decodedCursor?.previous === true
@@ -3425,7 +3425,9 @@ export class TableQueryBuilder<
   }
 
   private normalizeUnionCursorValue(column: string | undefined, value: unknown): unknown {
-    return column === undefined || value === null || typeof value === 'number' ? value : this.normalizePredicateValueForColumn(column, value)
+    if (column === undefined || value === null) return value
+    const definition = this.joinedColumnTable(column)?.table.columns[column.slice(column.lastIndexOf('.') + 1)] ?? this.getSourceColumnDefinition(column)
+    return readsAsColumnValue(definition, value) ? this.normalizePredicateValueForColumn(column, value) : value
   }
 
   private decodePageCursor(cursor: string | null, orderCount: number, plan: SelectQueryPlan, invalidCursor: () => InvalidCursorException): ValueCursor | null {
@@ -3611,6 +3613,15 @@ export class TableQueryBuilder<
       })
     return owners.length === 1 ? { table: owners[0]!, column: name } : undefined
   }
+}
+
+const DATE_COLUMN_KINDS: ReadonlySet<LogicalColumnKind> = new Set(['date', 'datetime', 'timestamp'])
+
+function readsAsColumnValue(definition: AnyColumnDefinition | undefined, value: unknown): boolean {
+  if (!definition) return typeof value === 'boolean'
+  if (definition.kind === 'boolean') return typeof value === 'boolean'
+  if (DATE_COLUMN_KINDS.has(definition.kind)) return typeof value === 'string' && !Number.isNaN(Date.parse(value))
+  return typeof value !== 'number'
 }
 
 function internalSelectionContext(query: TableQueryBuilder<string, Record<string, unknown>>) {
