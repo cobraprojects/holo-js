@@ -4,7 +4,7 @@ import { redactBindings } from '../security/policy'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
-import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
+import { createDateExtremaSelection, createFractionalCountSelection, createMatchingValuesSelection, createStoredTextSelection } from './trustedRawSelection'
 import type { QueryRawSelection, QueryRelationKeysPredicate } from './ast'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
@@ -3652,6 +3652,96 @@ export function addSelectFractionalCount(
     throw new SecurityError('addSelectFractionalCount() only supports SQLite.')
   }
   return append(createFractionalCountSelection(column, alias))
+}
+
+export function whereStoredValuesIn<
+  TTableOrName extends TableReference,
+  TSelectedRow extends Record<string, unknown>,
+  TAvailableColumns extends Record<string, unknown>,
+>(
+  query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
+  column: string,
+  values: readonly unknown[],
+): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  const appendTrusted = trustedRawWhereAppenders.get(query)
+  const connection = query.getConnection()
+  if (!appendTrusted || !isGenuineDatabaseContext(connection)) {
+    throw new SecurityError('whereStoredValuesIn() needs a query builder and connection that Holo created.')
+  }
+  if (!/^[A-Za-z_]\w*$/.test(column)) {
+    throw new SecurityError(`Stored-value predicates need a plain column name, received "${column}".`)
+  }
+  if (values.length === 0) return appendTrusted('1 = 0', []) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+  const placeholders = values.map(() => '?').join(', ')
+  return appendTrusted(`${connection.getDialect().quoteIdentifier(column)} IN (${placeholders})`, values) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+}
+
+export function selectStoredText<TTableOrName extends TableReference>(
+  query: TableQueryBuilder<TTableOrName, Record<string, unknown>>,
+  column: string,
+  alias: string,
+): TableQueryBuilder<TTableOrName, Record<string, unknown>> {
+  const { connection, append } = internalSelectionContext(query as unknown as TableQueryBuilder<string, Record<string, unknown>>)
+  const dialect = connection.getDialect().name
+  if (dialect !== 'postgres' && dialect !== 'mysql') {
+    throw new SecurityError('selectStoredText() only supports PostgreSQL and MySQL.')
+  }
+  return append(createStoredTextSelection(dialect, column, alias)) as unknown as TableQueryBuilder<TTableOrName, Record<string, unknown>>
+}
+
+export function selectMatchingValues<TTableOrName extends TableReference>(
+  query: TableQueryBuilder<TTableOrName, Record<string, unknown>>,
+  column: string,
+  values: readonly unknown[],
+  alias: string,
+): TableQueryBuilder<TTableOrName, Record<string, unknown>> {
+  const { connection, append } = internalSelectionContext(query as unknown as TableQueryBuilder<string, Record<string, unknown>>)
+  const dialect = connection.getDialect().name
+  if (dialect !== 'postgres' && dialect !== 'mysql') {
+    throw new SecurityError('selectMatchingValues() only supports PostgreSQL and MySQL.')
+  }
+  return append(createMatchingValuesSelection(dialect, column, values, alias)) as unknown as TableQueryBuilder<TTableOrName, Record<string, unknown>>
+}
+
+const MYSQL_DATE_TYPE = /^(date|datetime|timestamp)(\([0-6]\))?$/i
+const POSTGRES_DATE_TYPE = /^(?:date|(?:timestamp|time)(?:\([0-6]\))?(?: with(?:out)? time zone)?)$/
+
+export function whereStoredValuesDiffer<
+  TTableOrName extends TableReference,
+  TSelectedRow extends Record<string, unknown>,
+  TAvailableColumns extends Record<string, unknown>,
+>(
+  query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
+  values: Readonly<Record<string, unknown>>,
+  calendarDateColumns: readonly string[] = [],
+  sqlTypes: ReadonlyMap<string, string> = new Map(),
+): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  const appendTrusted = trustedRawWhereAppenders.get(query)
+  const connection = query.getConnection()
+  if (!appendTrusted || !isGenuineDatabaseContext(connection)) {
+    throw new SecurityError('whereStoredValuesDiffer() needs a query builder and connection that Holo created.')
+  }
+  const columns = Object.keys(values)
+  const invalid = columns.find(column => !/^[A-Za-z_]\w*$/.test(column))
+  if (invalid !== undefined) {
+    throw new SecurityError(`Stored-value predicates need a plain column name, received "${invalid}".`)
+  }
+  if (columns.length === 0) return appendTrusted('1 = 0', []) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+  const dialect = connection.getDialect()
+  const differs = (column: string) => {
+    const quoted = dialect.quoteIdentifier(column)
+    if (dialect.name === 'postgres') {
+      const type = sqlTypes.get(column)
+      return type && POSTGRES_DATE_TYPE.test(type) ? `${quoted} IS DISTINCT FROM CAST(? AS ${type})` : `${quoted} IS DISTINCT FROM ?`
+    }
+    if (dialect.name === 'mysql') {
+      const type = MYSQL_DATE_TYPE.exec(sqlTypes.get(column) ?? '')
+      if (type) return `NOT (${quoted} <=> CAST(? AS ${type[1]!.toLowerCase() === 'date' ? 'DATE' : `DATETIME${type[2] ?? ''}`}))`
+      return calendarDateColumns.includes(column) ? `NOT (${quoted} <=> DATE(?))` : `NOT (${quoted} <=> ?)`
+    }
+    return `${quoted} IS NOT ?`
+  }
+  return appendTrusted(`(${columns.map(differs).join(' OR ')})`, columns.map(column => values[column])) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
 }
 
 export function whereColumnNotExpiredByDatabaseClock<

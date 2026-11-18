@@ -57,6 +57,10 @@ async function sessionTimeZone(options?: string): Promise<unknown> {
   return (await adapter.query('SHOW TimeZone')).rows[0]?.TimeZone
 }
 
+// CREATE/DROP DATABASE copies or removes a whole database on disk, which takes longer than the default
+// hook budget while the rest of the suite runs against the same server.
+const DATABASE_DDL_TIMEOUT_MS = 60_000
+
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL session time zone follows app.timezone', () => {
   let admin: DriverAdapter
 
@@ -64,12 +68,12 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL sessi
     admin = createPostgresAdapter({ config: postgresTestConnection() })
     await admin.execute(`CREATE DATABASE ${database}`)
     await admin.execute(`ALTER DATABASE ${database} SET timezone = 'Etc/GMT-2'`)
-  })
+  }, DATABASE_DDL_TIMEOUT_MS)
 
   afterAll(async () => {
     await admin.execute(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`)
     await admin.disconnect()
-  })
+  }, DATABASE_DDL_TIMEOUT_MS)
 
   it.each([
     { mode: 'url', connection: () => ({ url: connectionUrl() }) },
