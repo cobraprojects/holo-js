@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 
 export function toPosixSlashes(value: string): string {
   return value.replaceAll('\\', '/')
@@ -25,7 +25,7 @@ export function isVanishedEntryUnderWatchRoot(error: unknown, watchRoot: string)
   const path = error instanceof Error && 'code' in error && error.code === 'ENOENT' && 'path' in error ? error.path : undefined
   if (typeof path !== 'string') return false
   const entry = relative(resolve(watchRoot), resolve(path))
-  return entry !== '' && !entry.startsWith('..') && !isAbsolute(entry)
+  return entry !== '' && entry !== '..' && !entry.startsWith(`..${sep}`) && !isAbsolute(entry)
 }
 
 export function normalizeWatchedFilePath(

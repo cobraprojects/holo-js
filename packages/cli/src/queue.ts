@@ -668,7 +668,7 @@ export async function runQueueListen(
 
                 rerunPrepare()
               })
-              watcher.on('error', keepWatchingPast(projectRoot))
+              watcher.on('error', keepWatchingPast(watchRoot))
               watchers.push(watcher)
             } catch (watchError) {
               if (!isIgnorableWatchError(watchError)) {

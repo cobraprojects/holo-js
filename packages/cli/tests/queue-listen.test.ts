@@ -356,3 +356,37 @@ it('keeps listening past a folder that vanished under the watched root and fails
     await rm(projectRoot, { recursive: true, force: true })
   }
 })
+
+it('fails on an error for a fallback watcher\'s own root when recursive watching is unavailable', async () => {
+  const projectRoot = await createQueueListenProject()
+  await mkdir(join(projectRoot, 'server/jobs'), { recursive: true })
+  try {
+    const handles: { root: string, handle: EventEmitter }[] = []
+    let resolveWatching = () => {}
+    const watching = new Promise<void>(resolve => { resolveWatching = resolve })
+    const createWatcher: NonNullable<Parameters<typeof runQueueListen>[4]> = (path, options) => {
+      if (options.recursive) throw Object.assign(new Error('recursive watch unavailable'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' })
+      const handle = createFakeWatcher()
+      handles.push({ root: String(path), handle: handle as unknown as EventEmitter })
+      resolveWatching()
+      return handle
+    }
+    let worker: ReturnType<typeof spawn> | undefined
+    const spawnWorker: NonNullable<Parameters<typeof runQueueListen>[3]> = (command) => {
+      worker = spawn(command, ['-e', "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000)"], { stdio: ['pipe', 'pipe', 'pipe'] })
+      return worker
+    }
+    const listening = runQueueListen({ cwd: projectRoot, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }, projectRoot, {}, spawnWorker, createWatcher, async () => {})
+
+    await watching
+    const nested = handles.find(entry => entry.root !== projectRoot)
+    if (!nested) throw new Error(`no nested fallback watcher among ${handles.map(entry => entry.root).join(', ')}`)
+    const missing = (path: string) => Object.assign(new Error(`ENOENT: scandir '${path}'`), { code: 'ENOENT', path, syscall: 'scandir' })
+    expect(() => nested.handle.emit('error', missing(join(nested.root, 'tmp')))).not.toThrow()
+    expect(() => nested.handle.emit('error', missing(nested.root))).toThrow('ENOENT')
+    process.emit('SIGTERM')
+    await expect(listening).resolves.toBeUndefined()
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true })
+  }
+})
