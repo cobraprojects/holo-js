@@ -4,7 +4,7 @@ import { redactBindings } from '../security/policy'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
-import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
+import { createDateExtremaSelection, createFractionalCountSelection, createStoredTextSelection } from './trustedRawSelection'
 import type { QueryRawSelection, QueryRelationKeysPredicate } from './ast'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
@@ -3676,28 +3676,17 @@ export function whereStoredValuesIn<
   return appendTrusted(`${connection.getDialect().quoteIdentifier(column)} IN (${placeholders})`, values) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
 }
 
-export function whereMillisecondInstantsIn<
-  TTableOrName extends TableReference,
-  TSelectedRow extends Record<string, unknown>,
-  TAvailableColumns extends Record<string, unknown>,
->(
-  query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
+export function selectStoredText<TTableOrName extends TableReference>(
+  query: TableQueryBuilder<TTableOrName, Record<string, unknown>>,
   column: string,
-  instants: readonly Date[],
-): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-  const appendTrusted = trustedRawWhereAppenders.get(query)
-  const connection = query.getConnection()
-  if (!appendTrusted || !isGenuineDatabaseContext(connection)) {
-    throw new SecurityError('whereMillisecondInstantsIn() needs a query builder and connection that Holo created.')
+  alias: string,
+): TableQueryBuilder<TTableOrName, Record<string, unknown>> {
+  const { connection, append } = internalSelectionContext(query as unknown as TableQueryBuilder<string, Record<string, unknown>>)
+  const dialect = connection.getDialect().name
+  if (dialect !== 'postgres' && dialect !== 'mysql') {
+    throw new SecurityError('selectStoredText() only supports PostgreSQL and MySQL.')
   }
-  if (!/^[A-Za-z_]\w*$/.test(column)) {
-    throw new SecurityError(`Stored-value predicates need a plain column name, received "${column}".`)
-  }
-  const dialect = connection.getDialect()
-  if (dialect.name !== 'postgres') throw new SecurityError('whereMillisecondInstantsIn() only supports PostgreSQL.')
-  if (instants.length === 0) return appendTrusted('1 = 0', []) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
-  const placeholders = instants.map(() => '?').join(', ')
-  return appendTrusted(`date_trunc('milliseconds', ${dialect.quoteIdentifier(column)}) IN (${placeholders})`, instants) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+  return append(createStoredTextSelection(dialect, column, alias)) as unknown as TableQueryBuilder<TTableOrName, Record<string, unknown>>
 }
 
 export function whereStoredValuesDiffer<

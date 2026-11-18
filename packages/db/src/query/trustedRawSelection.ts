@@ -11,6 +11,13 @@ export function createFractionalCountSelection(column: string, alias: string): Q
   return trustedSelection(`SUM(CASE WHEN ${identifier} <> ROUND(${identifier}) THEN 1 ELSE 0 END) AS ${quoteIdentifierSegment(alias, '"')}`)
 }
 
+export function createStoredTextSelection(dialect: 'postgres' | 'mysql', column: string, alias: string): QueryRawSelection {
+  assertValidIdentifierSegment(column, 'Stored text column')
+  assertValidIdentifierSegment(alias, 'Stored text alias')
+  if (dialect === 'mysql') return trustedSelection(`CAST(${quoteIdentifierSegment(column, '`')} AS CHAR) AS ${quoteIdentifierSegment(alias, '`')}`)
+  return trustedSelection(`${quoteIdentifierSegment(column, '"')}::text AS ${quoteIdentifierSegment(alias, '"')}`)
+}
+
 export function createDateExtremaSelection(dialect: Dialect, column: string, minAlias: string, maxAlias: string): QueryRawSelection {
   assertValidIdentifierSegment(column, 'Date extrema column')
   assertValidIdentifierSegment(minAlias, 'Date extrema alias')

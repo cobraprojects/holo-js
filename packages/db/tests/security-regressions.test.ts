@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { DB, SchemaError, SecurityError, TableQueryBuilder, holoRuntimeInternals, onDatabaseDependencyInvalidated, resetDB } from '../src'
 import { defineModelFromTable } from './support/internal'
-import { whereMillisecondInstantsIn, whereStoredValuesDiffer, whereStoredValuesIn } from '../src/query/TableQueryBuilder'
+import { selectStoredText, whereStoredValuesDiffer, whereStoredValuesIn } from '../src/query/TableQueryBuilder'
 import { integrationDrivers, mysqlIntegration, openDatabase, postgresIntegration } from './support/database'
 
 describe('native database security boundaries', () => {
@@ -194,14 +194,14 @@ describe('native database security boundaries', () => {
     expect(await whereStoredValuesDiffer(db.table(table), { name: null }).orderBy('id').pluck('id')).toEqual([1, 2])
     expect(() => whereStoredValuesDiffer(db.table(table), { 'name" OR 1=1 --': 'x' })).toThrow(SecurityError)
     expect(() => whereStoredValuesDiffer(duck as never, { name: 'x' })).toThrow(SecurityError)
-    expect(() => whereMillisecondInstantsIn(db.table(table), 'name', [new Date()])).toThrow('only supports PostgreSQL')
-    expect(() => whereMillisecondInstantsIn(duck as never, 'name', [new Date()])).toThrow(SecurityError)
+    expect(() => selectStoredText(db.table(table) as never, 'name', 'stored')).toThrow('only supports PostgreSQL and MySQL')
   })
 
-  it.runIf(postgresIntegration)('keeps the millisecond-instant predicate to plain column names on postgres', async () => {
+  it.runIf(postgresIntegration)('selects a column as its stored text on postgres and rejects other column names', async () => {
     const { db, table } = await openDatabase('postgres')
-    expect(() => whereMillisecondInstantsIn(db.table(table), 'name" OR 1=1 --', [new Date()])).toThrow(SecurityError)
-    expect(await whereMillisecondInstantsIn(db.table(table), 'name', []).count()).toBe(0)
+    await db.table(table).insert({ id: 7, name: 'Safe' })
+    expect(await selectStoredText(db.table(table).select('id' as never) as never, 'id', 'stored').first()).toEqual({ id: 7, stored: '7' })
+    expect(() => selectStoredText(db.table(table) as never, 'id" OR 1=1 --', 'stored')).toThrow(SchemaError)
   })
 
   it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('rejects a non-identifier column in the database-clock expiry predicate on %s', async driver => {
