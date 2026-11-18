@@ -216,6 +216,32 @@ describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as S
     expect(await DB.table(ownerSlots).where('note', 'new').count()).toBe(10000)
   }, 60000)
 
+  it('compares and writes ISO text attributes of an unregistered pivot as given', async () => {
+    const { names, ownerTags } = await openPivots(driver)
+    clearGeneratedTables()
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
+    const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey() })
+    registerGeneratedTables({ owners, tags })
+    const Tag = defineModel(tags, { timestamps: false })
+    const Untyped = defineModel(owners, { timestamps: false, relations: { tags: belongsToMany(() => Tag, names.ownerTags, 'owner_id', 'tag_id').withPivot('expires_at') } })
+    const owner = await Untyped.findOrFail(1)
+    await owner.attach('tags', 1, { expires_at: '2026-01-01T10:00:00Z' })
+
+    expect(await owner.updateExistingPivot('tags', 1, { expires_at: '2026-01-01T10:00:00Z' })).toBe(0)
+    expect(await owner.updateExistingPivot('tags', 1, { expires_at: '2026-01-01 11:00:00' })).toBe(1)
+    expect(await owner.updateExistingPivot('tags', 1, { expires_at: '2026-01-01T10:00:00Z' })).toBe(1)
+    expect(await DB.table(ownerTags.tableName).unsafeSelect('"expires_at" AS "stored"', []).first()).toEqual({ stored: '2026-01-01T10:00:00Z' })
+  })
+
+  it('rolls back every chunk of an update when a later chunk fails', async () => {
+    const { db, names, owner, ownerSlots } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 905) INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, '2026-01-01T10:00:00.000' || printf('%05d', i) || 'Z', 'old' FROM n`))
+    await db.unsafeExecute(unsafeSql(`CREATE TRIGGER "reject_last_${names.ownerSlots}" BEFORE UPDATE ON "${names.ownerSlots}" WHEN OLD."starts_at" = '2026-01-01T10:00:00.00000905Z' BEGIN SELECT RAISE(ABORT, 'rejected'); END`))
+
+    await expect(owner.updateExistingPivot('slots', new Date('2026-01-01T10:00:00Z'), { note: 'new' })).rejects.toThrow('rejected')
+    expect(await DB.table(ownerSlots).where('note', 'new').count()).toBe(0)
+  })
+
   it('detaches many rows for one instant when the same id is passed many times', async () => {
     const { db, names, owner, ownerSlots } = await openPivots(driver)
     await db.unsafeExecute(unsafeSql(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000) INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, '2026-01-01 10:00:00', 'old' FROM n`))

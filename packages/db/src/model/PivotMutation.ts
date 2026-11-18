@@ -103,14 +103,16 @@ export class PivotMutation {
     this.validate(attributes)
     if (Object.keys(attributes).length === 0) return 0
     const entry = { id: bindableId(id), attributes }
-    const existing = this.dateKeyColumn()
-      ? (await this.match(this.connection, [entry], false)).rowsFor(entry) ?? []
-      : (await this.read(this.connection, [entry.id])).slice(0, 1)
-    const update = existing.length === 0 ? undefined : this.updateFor(existing, attributes)
-    if (!update) return 0
-    const values = this.timestampAttributes(attributes, false)
-    this.assertColumnsWritable(Object.keys(values))
-    return await this.updateRows(this.connection, this.targetKeys(existing, entry.id), values, update) ? 1 : 0
+    return this.connection.transaction(async (connection) => {
+      const existing = this.dateKeyColumn()
+        ? (await this.match(connection, [entry], false)).rowsFor(entry) ?? []
+        : (await this.read(connection, [entry.id])).slice(0, 1)
+      const update = existing.length === 0 ? undefined : this.updateFor(existing, attributes)
+      if (!update) return 0
+      const values = this.timestampAttributes(attributes, false)
+      this.assertColumnsWritable(Object.keys(values))
+      return await this.updateRows(connection, this.targetKeys(existing, entry.id), values, update) ? 1 : 0
+    })
   }
 
   private async mutate(kind: 'attach' | 'sync' | 'toggle', ids: unknown, attributes: Attributes = {}, detachMissing = false): Promise<Result> {
@@ -415,6 +417,11 @@ export class PivotMutation {
     return typeof this.context.table === 'string' ? this.context.table : this.context.table.tableName
   }
 
+  private writtenTableDefinition(): TableDefinition | undefined {
+    const table = this.context.table
+    return typeof table === 'string' ? getConnectionGeneratedTableDefinition(table, this.connection.getConnectionName()) : table
+  }
+
   private tableDefinition(): TableDefinition | undefined {
     const table = this.context.table
     return typeof table === 'string' ? getConnectionGeneratedTableDefinition(table, this.connection.getConnectionName()) ?? this.loadedTable : table
@@ -422,7 +429,7 @@ export class PivotMutation {
 
   private async updateRows(connection: DatabaseContext, keys: readonly unknown[], values: Attributes, update: PivotUpdate): Promise<boolean> {
     const compared = update.when === 'datesDiffer'
-      ? Object.fromEntries(update.columns.map(column => [column, normalizeQueryWriteValue(this.tableDefinition(), this.context.dialect, column, values[column])]))
+      ? Object.fromEntries(update.columns.map(column => [column, normalizeQueryWriteValue(this.writtenTableDefinition(), this.context.dialect, column, values[column])]))
       : {}
     const sqlTypes = update.when === 'datesDiffer' && this.context.dialect === 'postgres' ? await this.context.loadColumnSqlTypes?.() : undefined
     const batchSize = Math.max(1, this.idBatchSize() - Object.keys(values).length - Object.keys(compared).length)
