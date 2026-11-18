@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { holoSveltePreprocess, sveltePreprocessInternals, transformSvelteUseFormReactivity } from '../src/preprocess'
 import { createReactiveView } from '../src/reactive-view'
 import { applyReplacements, skipBlockComment, skipLineComment, skipString } from '../src/transform-utils'
-import { holoSvelteKitRealtime, isRealtimeDefinitionModule } from '../src/vite'
+import { holoSvelteKit, isRealtimeDefinitionModule } from '../src/vite'
 
 describe('SvelteKit transform internals', () => {
   it('handles strings, comments, and ordered replacements', () => {
@@ -65,7 +65,7 @@ const post = form<{ title: string }>({ title: ')' })
     expect(isRealtimeDefinitionModule('/app', '/app/server/realtime/posts.txt')).toBe(false)
     expect(isRealtimeDefinitionModule('/app', '/app/server/models/Post.ts')).toBe(false)
 
-    const plugin = holoSvelteKitRealtime('/app')
+    const plugin = holoSvelteKit('/app')
     const code = `import { query } from '@holo-js/realtime'\nexport const posts = query({ name: 'posts.list' })`
     expect(plugin.transform(code, '/app/server/realtime/posts.ts', { ssr: true })).toBeNull()
     expect(plugin.transform(code, '/app/server/models/Post.ts')).toBeNull()

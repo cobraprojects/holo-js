@@ -426,6 +426,7 @@ export const GENERATED_TSCONFIG_PATH = join(GENERATED_ROOT, 'tsconfig.json')
 export const GENERATED_GITIGNORE_PATH = join(GENERATED_ROOT, '.gitignore')
 export const GENERATED_SVELTE_HOOKS_PATH = join(GENERATED_ROOT, 'hooks.ts')
 export const GENERATED_SVELTE_SERVER_HOOKS_PATH = join(GENERATED_ROOT, 'hooks.server.ts')
+export const GENERATED_SVELTE_PATHS_TYPES_PATH = join(GENERATED_ROOT, 'sveltekit', 'paths.d.ts')
 export const SUPPORTED_SCAFFOLD_FRAMEWORKS = SUPPORTED_FRAMEWORK_IDS
 export const SUPPORTED_SCAFFOLD_PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'bun'] as const
 export const SUPPORTED_SCAFFOLD_STORAGE_DISKS = ['local', 'public'] as const

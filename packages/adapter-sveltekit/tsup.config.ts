@@ -12,6 +12,7 @@ export default defineConfig({
     realtime: 'src/realtime.ts',
     transport: 'src/transport.ts',
     vite: 'src/vite.ts',
+    paths: 'src/paths.ts',
   },
   format: ['esm'],
   dts: true,

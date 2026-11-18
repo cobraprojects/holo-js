@@ -1,5 +1,30 @@
 # Upgrade Guide
 
+## Upgrading from 0.6.1 to 0.7.0
+
+### SvelteKit: one Holo Vite plugin
+
+SvelteKit apps now register a single Holo Vite plugin, `holoSvelteKit()`. It replaces `holoSvelteKitRealtime()`, which is removed. Run `holo prepare` and it updates `vite.config.ts` for you: it renames `holoSvelteKitRealtime` to `holoSvelteKit` in place, keeping its position in the `plugins` array. If your app has no Holo plugin yet, it adds `holoSvelteKit()` after `sveltekit()`. To make the change by hand:
+
+```ts [vite.config.ts]
+import { holoSvelteKitRealtime } from '@holo-js/adapter-sveltekit/vite' // [!code --]
+import { holoSvelteKit } from '@holo-js/adapter-sveltekit/vite' // [!code ++]
+
+export default defineConfig({
+  plugins: [
+    holoSvelteKitRealtime(), // [!code --]
+    sveltekit(withHoloSvelteKit({ adapter: adapter() })),
+    holoSvelteKit(), // [!code ++]
+  ],
+})
+```
+
+`holo prepare` needs `sveltekit()` to sit directly in the `plugins` array to add the plugin.
+
+With `holoSvelteKit()` in place, Holo's built-in routes (`/api/auth/*`, `/broadcasting/*`, storage URLs and realtime) and their redirects work when your app sets `paths.base`, and browser validation schemas are compiled in apps without realtime too. See [Using Holo with SvelteKit](/getting-started/frameworks/sveltekit#how-holo-plugs-in).
+
+`logoutWithClerk()` and `logoutWithWorkos()` now honor `returnTo` when there is no provider session to end, instead of always redirecting to `/`.
+
 ## Upgrading from 0.6.0 to 0.6.1
 
 Upgrade your framework first, in your app's `package.json`. Holo's adapters now require releases that fix published security advisories:

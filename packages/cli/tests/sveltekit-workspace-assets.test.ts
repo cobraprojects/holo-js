@@ -55,4 +55,28 @@ describe('SvelteKit scaffold workspace assets', () => {
       process.chdir(originalDirectory)
     }
   }, 30_000)
+
+  it('serves the configured kit.paths.base to the generated hooks', async () => {
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), 'holo-svelte-base-')))
+    directories.push(workspace)
+    const project = join(workspace, 'apps/web')
+    await mkdir(join(project, 'src/routes'), { recursive: true })
+    await writeFile(join(workspace, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }))
+    await writeFile(join(project, 'package.json'), JSON.stringify({ name: 'scaffold-base-test', private: true, type: 'module' }))
+    await symlink(resolve(import.meta.dirname, '../node_modules'), join(workspace, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
+    await writeFile(join(project, 'vite.config.ts'), renderSvelteViteConfig(false).replace('    adapter: adapter(),', '    adapter: adapter(),\n    paths: { base: \'/dashboard\' },'))
+    await writeFile(join(project, 'src/routes/+page.svelte'), '<h1>Base path</h1>')
+    const originalDirectory = process.cwd()
+    process.chdir(project)
+    try {
+      const server = await createServer({ root: project, configFile: join(project, 'vite.config.ts'), logLevel: 'silent', server: { middlewareMode: true, ws: false } })
+      try {
+        expect((await server.ssrLoadModule('virtual:holo-sveltekit/paths')).base).toBe('/dashboard')
+      } finally {
+        await server.close()
+      }
+    } finally {
+      process.chdir(originalDirectory)
+    }
+  }, 30_000)
 })

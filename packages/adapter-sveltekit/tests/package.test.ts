@@ -36,6 +36,8 @@ describe('@holo-js/adapter-sveltekit package boundaries', () => {
     expect(packageJson.dependencies?.['@holo-js/auth']).toBeUndefined()
     expect(packageJson.exports?.['./config']).toBeDefined()
     expect(packageJson.exports?.['./realtime']).toBeDefined()
+    expect(packageJson.exports?.['./internal/paths']).toBeDefined()
+    expect(packageJson.exports?.['./paths']).toBeUndefined()
     expect(packageJson.peerDependencies?.['@holo-js/auth']).toBeUndefined()
     expect(packageJson.dependencies?.['@holo-js/forms']).toBeUndefined()
     expect(packageJson.dependencies?.['@holo-js/realtime']).toBeUndefined()
