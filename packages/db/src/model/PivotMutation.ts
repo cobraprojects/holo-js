@@ -191,7 +191,7 @@ export class PivotMutation {
   }
 
   private readKey(value: unknown): unknown {
-    if (!this.dateKeyColumn() || this.context.dialect === 'sqlite') return value
+    if (!this.dateKeyColumn()) return value
     const parsed = parseStoredDate(this.context.dialect, value)
     return parsed instanceof Date && Number.isNaN(parsed.getTime()) ? value : parsed
   }

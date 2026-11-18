@@ -46,7 +46,7 @@ function useTokyoAppAt(now: Date, timezone = 'Asia/Tokyo'): void {
 }
 
 async function createDatePostsTable(driver: typeof drivers[number]) {
-  const { schema } = await openDatabase(driver)
+  const { schema } = await openDatabase(driver, { security: { allowUnsafeRawSql: true } })
   const name = `date_posts_${randomUUID().replaceAll('-', '').slice(0, 12)}`
   onTestFinished(async () => {
     await schema.dropTable(name)
@@ -229,7 +229,7 @@ describe.each(drivers)('soft deleting a model on %s', (driver) => {
     for (const impossible of ['2025-02-30', '2025-13-01', '2025-02-30T03:04:05Z', '2025-02-28 24:30:00']) {
       if (driver === 'sqlite') {
         const post = await Post.create({ title: impossible, created_at: impossible as never })
-        expect((await DB.table(table).where('id', post.id).first())?.created_at).toBe(impossible)
+        expect((await DB.table(table).where('id', post.id).unsafeSelect('"created_at" AS "stored"', []).first())?.stored).toBe(impossible)
       } else {
         await expect(Post.create({ title: impossible, created_at: impossible as never })).rejects.toThrow()
       }

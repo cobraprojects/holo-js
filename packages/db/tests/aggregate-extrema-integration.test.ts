@@ -45,7 +45,7 @@ async function openRedemptionsFixture(driver: 'sqlite' | 'postgres' | 'mysql') {
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('selected extrema on %s', driver => {
   it('returns extrema exactly as the driver returns the selected column', async () => {
-    const { redemptions } = await openRedemptionsFixture(driver)
+    const { redemptions, early, late } = await openRedemptionsFixture(driver)
     const [lowest, highest] = await DB.table(redemptions).select('redeemed_at', 'code', 'points', 'amount').orderBy('id', 'desc').get()
 
     const rows = await DB.table(redemptions).where('tenant_id', 1).groupBy('actor_user_id')
@@ -68,7 +68,9 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('selected ext
       lowest_amount: '3.25',
       highest_amount: '12.50',
     }])
-    if (driver !== 'sqlite') expect(rows[0]!.last_redeemed_at).toBeInstanceOf(Date)
+    expect(lowest!.redeemed_at).toEqual(early)
+    expect(highest!.redeemed_at).toEqual(late)
+    expect(rows[0]!.last_redeemed_at).toBeInstanceOf(Date)
   })
 
   it('keeps numeric extrema numeric when a union widens their SQL type', async () => {
