@@ -218,7 +218,7 @@ export class SQLQueryCompiler {
         this.dateBucketPlan = undefined
         this.dateBucketsFolded = NO_DATE_BUCKETS
       } else {
-        this.dateBuckets = new Map([...selections].map(([alias, bucket]) => [alias, { bucket, storage: dateBucketStorage(plan, bucket, this.connectionName) }]))
+        this.dateBuckets = new Map([...selections].map(([alias, bucket]) => [alias, { bucket, storage: dateBucketStorage(plan, bucket, this.connectionName, this.foldsColumnNames()) }]))
         this.dateBucketPlan = plan
         this.dateBucketsFolded = new Map([...this.dateBuckets].map(([alias, resolved]) => [alias.toLowerCase(), resolved]))
         assertDateBucketOutputsUnshadowed(plan, this.connectionName)

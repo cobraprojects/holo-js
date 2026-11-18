@@ -342,7 +342,7 @@ describe.each(drivers)('date buckets on %s', (driver) => {
 
     const rows = await DB.table(events.tableName)
       .join(extras, `${extras}.id`, '=', `${events.tableName}.id`)
-      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
       .where('bucket', 'first')
       .get()
 
@@ -461,7 +461,7 @@ describe.each(drivers)('date buckets on %s', (driver) => {
 
     await expect(DB.table(events.tableName)
       .join(legacy, `${legacy}.id`, '=', `${events.tableName}.id`)
-      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
       .addSelect(`${legacy}.*`)
       .get()).rejects.toThrow(SecurityError)
   })
@@ -517,13 +517,13 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     })
 
     await expect(DB.table(events.tableName)
-      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
       .where('bucket', 'first')
       .get()).rejects.toThrow(CompilerError)
     await expect(DB.table(events.tableName)
       .join(facts, `${facts}.id`, '=', `${events.tableName}.id`)
       .join(extras, `${extras}.id`, '=', `${events.tableName}.id`)
-      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
       .where('bucket', 'first')
       .get()).rejects.toThrow(CompilerError)
   })
@@ -2013,6 +2013,26 @@ describe.runIf(postgresIntegration)('date buckets next to postgres domains and v
 describe.runIf(postgresIntegration)('date buckets next to postgres columns named alike in another case', () => {
   afterEach(() => {
     resetDB()
+  })
+
+  it('needs metadata from the table that owns a bare bucket column with its exact spelling', async () => {
+    useAppTimezone('UTC')
+    const { db } = await openDatabase('postgres')
+    const source = `bucket_cased_source_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const joined = `bucket_cased_join_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await createSchemaService(db).dropTable(source)
+      await createSchemaService(db).dropTable(joined)
+    })
+    await db.executeCompiled({ sql: `CREATE TABLE "${source}" (id integer PRIMARY KEY, "At" date)`, source: 'test' })
+    await db.executeCompiled({ sql: `CREATE TABLE "${joined}" (id integer PRIMARY KEY, at timestamptz)`, source: 'test' })
+    registerGeneratedTables({ casedSource: defineGeneratedTable(source, { id: column.id(), At: column.date() }) })
+    onTestFinished(() => clearGeneratedTables())
+
+    await expect(DB.table(source)
+      .join(joined, `${joined}.id`, '=', `${source}.id`)
+      .selectDate('day', 'at', { as: 'bucket', timeZone: 'Asia/Tokyo' })
+      .get()).rejects.toThrow(ConfigurationError)
   })
 
   it('resolves a bare where column to the table with its exact spelling', async () => {

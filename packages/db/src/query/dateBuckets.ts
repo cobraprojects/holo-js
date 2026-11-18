@@ -139,15 +139,24 @@ function boundTables(visible: readonly VisibleTable[], qualifier: string | undef
   return qualifier === undefined ? visible : visible.filter(table => isVisibleAs(qualifier, table))
 }
 
-function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectionName: string | undefined): AnyColumnDefinition | undefined {
+function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectionName: string | undefined, foldsColumnNames: boolean): AnyColumnDefinition | undefined {
   const separator = column.lastIndexOf('.')
   const name = column.slice(separator + 1)
-  const qualifier = separator === -1 ? undefined : column.slice(0, separator)
-  const tables = boundTables(visibleTables(plan, connectionName), qualifier)
-  const find = (matches: IdentifierMatch) => tables
-    .map(table => matchingColumnDefinition(table.definition, name, matches))
+  const matches = foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly
+  const tables = separator === -1
+    ? ownerTables(plan, name, connectionName, matches)
+    : boundTables(visibleTables(plan, connectionName), column.slice(0, separator))
+  return tables
+    .map(table => matchingColumnDefinition(table.definition, name, sameIdentifierExactly) ?? matchingColumnDefinition(table.definition, name, matches))
     .find(definition => definition !== undefined)
-  return find(sameIdentifierExactly) ?? find(sameIdentifierFolded)
+}
+
+function ownerTables(plan: SelectQueryPlan, name: string, connectionName: string | undefined, matches: IdentifierMatch): readonly VisibleTable[] {
+  const candidates = visibleTables(plan, connectionName).filter((table) => {
+    const columns = table.columns()
+    return columns === undefined || columns.some(column => matches(column, name))
+  })
+  return candidates.length === 1 ? candidates : []
 }
 
 export function selectionMayOutputName(
@@ -171,11 +180,7 @@ export function selectionMayOutputName(
 }
 
 export function columnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined, matches: IdentifierMatch = sameIdentifierFolded): string | undefined {
-  const candidates = visibleTables(plan, connectionName).filter((table) => {
-    const columns = table.columns()
-    return columns === undefined || columns.some(column => matches(column, name))
-  })
-  const owner = candidates.length === 1 ? candidates[0] : undefined
+  const [owner] = ownerTables(plan, name, connectionName, matches)
   return owner && (owner.alias ?? owner.tableName ?? plan.source.tableName)
 }
 
@@ -249,8 +254,8 @@ export function assertDateBucketOutputsUnshadowed(plan: SelectQueryPlan, connect
   }
 }
 
-export function dateBucketStorage(plan: SelectQueryPlan, bucket: QueryDateBucketSelection, connectionName: string | undefined): DateBucketStorage {
-  const definition = bucketColumnDefinition(plan, bucket.column, connectionName)
+export function dateBucketStorage(plan: SelectQueryPlan, bucket: QueryDateBucketSelection, connectionName: string | undefined, foldsColumnNames: boolean): DateBucketStorage {
+  const definition = bucketColumnDefinition(plan, bucket.column, connectionName, foldsColumnNames)
   if (!definition) {
     throw new ConfigurationError(`selectDate() can't tell whether "${bucket.column}" holds a date or a timestamp. Pass a table definition to DB.table() or generate the schema.`)
   }
@@ -311,7 +316,7 @@ function convertedMySQLTimeZones(plan: SelectQueryPlan, connectionName: string):
   const applicationTimeZone = getApplicationTimezone()
   const zones = new Set(planDateBuckets(plan).flatMap(({ plan: owner, bucket }) => {
     const timeZone = bucket.timeZone ?? applicationTimeZone
-    const storage = dateBucketStorage(owner, bucket, connectionName)
+    const storage = dateBucketStorage(owner, bucket, connectionName, true)
     if (storage === 'timestamp') return [timeZone]
     return storage === 'datetime' && !sameMySQLTimeZone(timeZone, applicationTimeZone) ? [applicationTimeZone, timeZone] : []
   }))
