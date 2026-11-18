@@ -3445,7 +3445,11 @@ export class TableQueryBuilder<
     }
 
     const primaryKeys = this.source.table ? listTablePrimaryKeyColumns(this.source.table) : []
-    if (this.plan.groupBy.length > 0 && unionBranchPlans(this.plan).some(branch => dateBucketSelections(branch).size > 0)) {
+    const hasDateBuckets = unionBranchPlans(this.plan).some(branch => dateBucketSelections(branch).size > 0)
+    if (hasDateBuckets && this.plan.unions.length === 0 && this.plan.groupBy.length === 0 && groupsRows(this.plan)) {
+      throw new SecurityError('Cursor pagination cannot page an aggregated date bucket query without groupBy(), because the cursor would filter rows before they are aggregated.')
+    }
+    if (this.plan.groupBy.length > 0 && hasDateBuckets) {
       const context = this.groupedKeyContext()
       const identity = (column: string): string => groupedCursorKey(this.plan, column, context)
       const visibleSource = this.source.alias ?? this.source.tableName
@@ -3742,11 +3746,15 @@ function withoutKeys<TRow extends Record<string, unknown>>(row: TRow, keys: read
   return copy
 }
 
+function groupsRows(plan: SelectQueryPlan): boolean {
+  return plan.groupBy.length > 0 || plan.having.length > 0 || plan.selections.some(selection => selection.kind === 'aggregate')
+}
+
 function assertDateBucketUnionCursor(plan: SelectQueryPlan, unionColumns: (branch: SelectQueryPlan) => readonly UnionCursorColumn[]): void {
   const branches = unionBranchPlans(plan)
   if (!branches.some(branch => dateBucketSelections(branch).size > 0)) return
-  if (branches.some(branch => branch.groupBy.length > 0)) {
-    throw new SecurityError('Cursor pagination cannot page a union with date buckets that has a grouped query, because its order cannot always tell the groups apart.')
+  if (branches.some(groupsRows)) {
+    throw new SecurityError('Cursor pagination cannot page a union with date buckets that has a grouped or aggregated query, because its order cannot always tell the groups apart.')
   }
   const columns = branches.map(unionColumns)
   const mixesBuckets = (columns[0] ?? []).some((_column, index) => new Set(columns.map(branch => branch[index]?.selectionAlias)).size > 1)

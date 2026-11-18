@@ -1203,6 +1203,19 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .cursorPaginate(1)).rejects.toThrow(SecurityError)
   })
 
+  it('rejects cursor pagination of aggregated date bucket queries without groupBy()', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const branch = (tenantId: number) => DB.table(events.tableName)
+      .where('tenant_id', tenantId)
+      .select('id')
+      .addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .addSelectMin('first_id', 'id')
+
+    await expect(branch(1).unionAll(branch(2)).orderBy('id').cursorPaginate(1)).rejects.toThrow(SecurityError)
+    await expect(branch(1).orderBy('id').cursorPaginate(1)).rejects.toThrow(SecurityError)
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)
