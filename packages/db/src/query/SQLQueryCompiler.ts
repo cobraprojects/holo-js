@@ -280,11 +280,11 @@ export class SQLQueryCompiler {
         }).join(', '))
     const joinClause = this.compileJoins(plan.joins, bindings)
     const whereClause = this.compilePredicates(plan.predicates.map(predicate => this.dateBucketPredicate(predicate, buckets)), bindings)
-    const unionClause = this.compileUnions(plan.unions, bindings)
     const groupByClause = plan.groupBy.length === 0
       ? ''
       : ` GROUP BY ${plan.groupBy.map(column => buckets.get(column) ?? this.compileColumnReference(column)).join(', ')}`
     const havingClause = this.compileHaving(plan.having, bindings, buckets)
+    const unionClause = this.compileUnions(plan.unions, bindings)
     const orderClause = plan.orderBy.length === 0
       ? ''
       : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileSelectOrderBy(plan, orderBy, buckets, bindings)).join(', ')}`

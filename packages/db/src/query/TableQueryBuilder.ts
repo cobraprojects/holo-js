@@ -3675,7 +3675,6 @@ export class TableQueryBuilder<
 
 function aggregatesRows(plan: SelectQueryPlan): boolean {
   return plan.groupBy.length > 0
-    || plan.having.length > 0
     || plan.selections.some(selection => selection.kind === 'aggregate')
     || plan.unions.some(union => aggregatesRows(union.query))
 }

@@ -150,6 +150,16 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect([...first.data, ...second.data, ...third.data].map(row => row.id)).toEqual([1, 2, 3, 4, 5])
   })
 
+  it('binds a having() filter on the first query of a union before the union', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const daysOf = (tenantId: number) => DB.table(events).where('tenant_id', tenantId).whereNotNull('occurred_at').selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).groupBy('day')
+
+    const rows = await daysOf(1).having('day', '<', '2026-12-01').unionAll(daysOf(2)).orderBy('day').get()
+
+    expect(rows.map(row => row.day)).toEqual(['2026-11-03', '2026-11-04', '2026-11-04'])
+  })
+
   it('cursor-paginates a union by its date bucket', async () => {
     useAppTimezone('UTC')
     const events = await createEvents(driver)
@@ -259,6 +269,24 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     clearGeneratedTables()
 
     await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).get()).rejects.toThrow(ConfigurationError)
+  })
+})
+
+describe.runIf(mysqlIntegration)('date buckets filtered by having() without groupBy() on mysql', () => {
+  it('pages rows that share a day by the primary key', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents('mysql')
+    const page = (cursor: string | null) => DB.table(events).select('id').addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).having('day', '<', '2026-12-01').orderBy('day').cursorPaginate(1, cursor)
+
+    const ids: unknown[] = []
+    let cursor: string | null = null
+    do {
+      const result = await page(cursor)
+      ids.push(...result.data.map(row => row.id))
+      cursor = result.nextCursor
+    } while (cursor !== null)
+
+    expect(ids).toEqual([1, 2, 3, 4])
   })
 })
 
