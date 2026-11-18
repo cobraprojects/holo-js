@@ -281,5 +281,6 @@ describe.runIf(mysqlIntegration)('date buckets on mysql without time zone tables
     await expect(DB.table(events).insertUsing(['billed_on'], DB.table(events).selectDate('day', 'seen_at', { as: 'day', timeZone: 'Asia/Tokyo' }))).rejects.toThrow(CapabilityError)
     await expect(DB.table(events).whereIn('billed_on', DB.table(events).selectDate('day', 'seen_at', { as: 'day', timeZone: 'Asia/Tokyo' })).delete()).rejects.toThrow(CapabilityError)
     expect(await DB.table(events).count()).toBe(6)
+    expect((await DB.table(events).where('id', 1).addSelectDate('day', 'seen_at', { as: 'day', timeZone: 'Asia/Tokyo' }).update({ tenant_id: 3 })).affectedRows).toBe(1)
   })
 })

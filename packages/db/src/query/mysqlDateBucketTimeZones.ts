@@ -3,7 +3,7 @@ import { getApplicationTimezone } from '../applicationTimezone'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import { dateBucketStorage, mysqlTimeZoneName, sameMySQLTimeZone } from './dateBuckets'
 import type { DatabaseContext } from '../core/DatabaseContext'
-import type { QueryDateBucketSelection, QueryPredicateNode, SelectQueryPlan } from './ast'
+import type { DeleteQueryPlan, InsertUsingQueryPlan, QueryDateBucketSelection, QueryPredicateNode, SelectQueryPlan, UpdateQueryPlan } from './ast'
 
 const convertibleTimeZones = new WeakMap<DatabaseContext, Set<string>>()
 
@@ -26,9 +26,17 @@ function planDateBuckets(plan: SelectQueryPlan): readonly PlannedDateBucket[] {
   ]
 }
 
-function convertedTimeZones(plan: SelectQueryPlan, connectionName: string): readonly string[] {
+type ExecutedPlan = SelectQueryPlan | UpdateQueryPlan | DeleteQueryPlan | InsertUsingQueryPlan
+
+function executedDateBuckets(plan: ExecutedPlan): readonly PlannedDateBucket[] {
+  if (plan.kind === 'select') return planDateBuckets(plan)
+  if (plan.kind === 'insert-using') return planDateBuckets(plan.query)
+  return plan.predicates.flatMap(predicateDateBuckets)
+}
+
+function convertedTimeZones(plan: ExecutedPlan, connectionName: string): readonly string[] {
   const applicationTimeZone = getApplicationTimezone()
-  const zones = new Set(planDateBuckets(plan).flatMap(({ plan: owner, bucket }) => {
+  const zones = new Set(executedDateBuckets(plan).flatMap(({ plan: owner, bucket }) => {
     const timeZone = bucket.timeZone ?? applicationTimeZone
     const storage = dateBucketStorage(owner, bucket, connectionName)
     if (storage === 'timestamp') return [timeZone]
@@ -37,7 +45,7 @@ function convertedTimeZones(plan: SelectQueryPlan, connectionName: string): read
   return [...zones].filter(zone => mysqlTimeZoneName(zone) === zone)
 }
 
-export async function assertDateBucketTimeZonesConvertible(connection: DatabaseContext, plan: SelectQueryPlan): Promise<void> {
+export async function assertDateBucketTimeZonesConvertible(connection: DatabaseContext, plan: ExecutedPlan): Promise<void> {
   if (connection.getDialect().name !== 'mysql') return
   const root = getRootDatabaseContext(connection)
   const convertible = convertibleTimeZones.get(root) ?? new Set<string>()

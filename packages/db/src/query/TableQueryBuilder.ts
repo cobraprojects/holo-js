@@ -372,7 +372,6 @@ export class TableQueryBuilder<
 
   private async prepareMutation(): Promise<void> {
     await this.bindGeneratedTable()
-    await assertDateBucketTimeZonesConvertible(this.connection, this.plan)
     if (!currentRootTransaction(this.connection)?.schemaChanged && (getDatabaseQueryCacheBridge() || hasDatabaseDependencyInvalidationListeners() || hasDatabaseDependencyInvalidationPublisher())) {
       await resolveTableIdentity(this.connection, this.ownSource.tableName)
     }
@@ -2925,6 +2924,7 @@ export class TableQueryBuilder<
         internalPlanHandoff,
       ).update(values))
     }
+    await assertDateBucketTimeZonesConvertible(this.connection, createUpdateQueryPlan(this.source, this.plan.predicates, normalizedValues))
     const previousKeys = needsDecimalRows
       ? await this.readDecimalUpdateKeys(normalizedValues)
       : undefined
@@ -2958,6 +2958,7 @@ export class TableQueryBuilder<
 
   async delete(): Promise<DriverExecutionResult> {
     await this.prepareMutation()
+    await assertDateBucketTimeZonesConvertible(this.connection, createDeleteQueryPlan(this.source, this.plan.predicates))
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createDeleteQueryPlan(this.source, this.plan.predicates),
     ))
