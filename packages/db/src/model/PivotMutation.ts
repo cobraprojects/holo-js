@@ -1,6 +1,8 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
-import { TableQueryBuilder, whereStoredValuesIn } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, whereStoredValuesDiffer, whereStoredValuesIn } from '../query/TableQueryBuilder'
+import { normalizeQueryWriteValue } from '../query/queryValueNormalizer'
+import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { assertQueryTablePath } from '../query/validator'
 import { normalizeDialectWriteValue, parseStoredDate, readsAsSQLiteDate, storesDate } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -35,12 +37,6 @@ function bindableId(id: unknown): unknown {
 
 function isScalarObjectId(id: unknown): id is Date | ArrayBufferView {
   return id instanceof Date || ArrayBuffer.isView(id)
-}
-
-function orWhereDiffers(query: PivotQuery, column: string, value: unknown): PivotQuery {
-  return query.orWhere(match => value == null
-    ? match.whereNotNull(column)
-    : match.where(column, '!=', value).orWhereNull(column))
 }
 
 export class PivotMutation {
@@ -260,25 +256,35 @@ export class PivotMutation {
   }
 
   private updateFor(existing: readonly Attributes[], attributes: Attributes): PivotUpdate | undefined {
-    const dates = Object.keys(attributes).filter(column => this.storesDateAttribute(column))
+    const dates = Object.entries(attributes).filter(([column, value]) => this.comparesInDatabase(column, value)).map(([column]) => column)
     const others = Object.entries(attributes).filter(([column]) => !dates.includes(column))
     if (existing.some(row => others.some(([column, value]) => row[column] !== value))) return { when: 'always' }
     return dates.length === 0 ? undefined : { when: 'datesDiffer', columns: dates }
   }
 
-  private storesDateAttribute(column: string): boolean {
-    const definition = typeof this.context.table === 'string' ? undefined : ownEntry(this.context.table.columns, column)
-    return definition !== undefined && storesDate(definition)
+  private comparesInDatabase(column: string, value: unknown): boolean {
+    const definition = this.tableDefinition()
+    const columnDefinition = definition ? ownEntry(definition.columns, column) : undefined
+    return columnDefinition ? storesDate(columnDefinition) : value instanceof Date
+  }
+
+  private tableDefinition(): TableDefinition | undefined {
+    const table = this.context.table
+    return typeof table === 'string' ? getConnectionGeneratedTableDefinition(table, this.connection.getConnectionName()) : table
   }
 
   private async updateRows(connection: DatabaseContext, keys: readonly unknown[], values: Attributes, update: PivotUpdate): Promise<boolean> {
-    const rows = this.whereKeys(this.query(connection), keys)
-    if (update.when === 'always') {
-      await rows.update(values)
-      return true
+    const compared = update.when === 'datesDiffer'
+      ? Object.fromEntries(update.columns.map(column => [column, normalizeQueryWriteValue(this.tableDefinition(), this.context.dialect, column, values[column])]))
+      : {}
+    const batchSize = Math.max(1, this.idBatchSize() - Object.keys(values).length - Object.keys(compared).length)
+    let changed = false
+    for (let offset = 0; offset < keys.length; offset += batchSize) {
+      const rows = this.whereKeys(this.query(connection), keys.slice(offset, offset + batchSize))
+      const result = await (update.when === 'always' ? rows : whereStoredValuesDiffer(rows, compared)).update(values)
+      changed = changed || update.when === 'always' || (result.affectedRows ?? 0) > 0
     }
-    const changed = rows.where(group => update.columns.reduce((differs, column) => orWhereDiffers(differs, column, values[column]), group))
-    return ((await changed.update(values)).affectedRows ?? 0) > 0
+    return changed
   }
 
   private whereKeys(query: PivotQuery, keys: readonly unknown[]): PivotQuery {

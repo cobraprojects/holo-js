@@ -107,6 +107,40 @@ describe.each(integrationDrivers(['sqlite']))('pivot rows that store one instant
   })
 })
 
+describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as SQLite text on %s', (driver) => {
+  it('writes a new time into a date column even on the same calendar day', async () => {
+    const { owner, ownerTags } = await openPivots(driver)
+    await owner.attach('tags', 1, { due_on: '2026-05-06 10:00:00' as never })
+
+    expect(await owner.updateExistingPivot('tags', 1, { due_on: '2026-05-06 10:00:00' as never })).toBe(0)
+    expect(await owner.updateExistingPivot('tags', 1, { due_on: '2026-05-06 11:00:00' as never })).toBe(1)
+    expect(await DB.table(ownerTags).unsafeSelect('"due_on" AS "stored"', []).first()).toEqual({ stored: '2026-05-06 11:00:00' })
+  })
+
+  it('updates more rows stored for one instant than one statement can bind', async () => {
+    const { db, names, owner, ownerSlots } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 33000) INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, '2026-01-01T10:00:00.000' || printf('%05d', i) || 'Z', 'old' FROM n`))
+
+    expect(await owner.updateExistingPivot('slots', new Date('2026-01-01T10:00:00Z'), { note: 'new' })).toBe(1)
+    expect(await DB.table(ownerSlots).where('note', 'new').count()).toBe(33000)
+  })
+
+  it('compares Date attributes of a pivot referenced only by an unregistered table name', async () => {
+    const { names, owner } = await openPivots(driver)
+    clearGeneratedTables()
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
+    const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey() })
+    registerGeneratedTables({ owners, tags })
+    const Tag = defineModel(tags, { timestamps: false })
+    const Untyped = defineModel(owners, { timestamps: false, relations: { tags: belongsToMany(() => Tag, names.ownerTags, 'owner_id', 'tag_id').withPivot('expires_at') } })
+    const untyped = await Untyped.findOrFail(owner.get('id'))
+    await untyped.attach('tags', 1, { expires_at: new Date('2026-01-01T10:00:00Z') })
+
+    expect(await untyped.updateExistingPivot('tags', 1, { expires_at: new Date('2026-01-01T10:00:00Z') })).toBe(0)
+    expect(await untyped.updateExistingPivot('tags', 1, { expires_at: new Date('2026-01-01T11:00:00Z') })).toBe(1)
+  })
+})
+
 describe.each(drivers)('pivot date attributes written again on %s', (driver) => {
   it('leaves a row alone when a date attribute is given the instant it already holds', async () => {
     const { owner } = await openPivots(driver)
@@ -133,7 +167,7 @@ describe.each(drivers)('pivot date attributes written again on %s', (driver) => 
     expect(await updatedAt()).not.toEqual(new Date('2000-01-01T00:00:00Z'))
   })
 
-  it('compares a date attribute by calendar day and detaches missing rows while syncing date attributes', async () => {
+  it('compares a date column by the value it stores and detaches missing rows while syncing date attributes', async () => {
     const { owner, ownerTags } = await openPivots(driver)
     await owner.attach('tags', [1, 2], { due_on: new Date('2026-05-06T00:00:00Z') })
 

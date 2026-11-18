@@ -3676,6 +3676,35 @@ export function whereStoredValuesIn<
   return appendTrusted(`${connection.getDialect().quoteIdentifier(column)} IN (${placeholders})`, values) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
 }
 
+export function whereStoredValuesDiffer<
+  TTableOrName extends TableReference,
+  TSelectedRow extends Record<string, unknown>,
+  TAvailableColumns extends Record<string, unknown>,
+>(
+  query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
+  values: Readonly<Record<string, unknown>>,
+): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  const appendTrusted = trustedRawWhereAppenders.get(query)
+  const connection = query.getConnection()
+  if (!appendTrusted || !isGenuineDatabaseContext(connection)) {
+    throw new SecurityError('whereStoredValuesDiffer() needs a query builder and connection that Holo created.')
+  }
+  const columns = Object.keys(values)
+  const invalid = columns.find(column => !/^[A-Za-z_]\w*$/.test(column))
+  if (invalid !== undefined) {
+    throw new SecurityError(`Stored-value predicates need a plain column name, received "${invalid}".`)
+  }
+  if (columns.length === 0) return appendTrusted('1 = 0', []) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+  const dialect = connection.getDialect()
+  const differs = (column: string) => {
+    const quoted = dialect.quoteIdentifier(column)
+    if (dialect.name === 'postgres') return `${quoted} IS DISTINCT FROM ?`
+    if (dialect.name === 'mysql') return `NOT (${quoted} <=> ?)`
+    return `${quoted} IS NOT ?`
+  }
+  return appendTrusted(`(${columns.map(differs).join(' OR ')})`, columns.map(column => values[column])) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+}
+
 export function whereColumnNotExpiredByDatabaseClock<
   TTableOrName extends TableReference,
   TSelectedRow extends Record<string, unknown>,

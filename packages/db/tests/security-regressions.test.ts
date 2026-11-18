@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { DB, SchemaError, SecurityError, TableQueryBuilder, holoRuntimeInternals, onDatabaseDependencyInvalidated, resetDB } from '../src'
 import { defineModelFromTable } from './support/internal'
-import { whereStoredValuesIn } from '../src/query/TableQueryBuilder'
+import { whereStoredValuesDiffer, whereStoredValuesIn } from '../src/query/TableQueryBuilder'
 import { integrationDrivers, mysqlIntegration, openDatabase, postgresIntegration } from './support/database'
 
 describe('native database security boundaries', () => {
@@ -189,6 +189,11 @@ describe('native database security boundaries', () => {
     const external = new TableQueryBuilder(table.tableName, db, whereStoredValuesIn(db.table(table), 'name', ['Other']).getPlan())
     await expect(external.delete()).rejects.toThrow('Unsafe raw SQL is disabled')
     expect(await db.table(table).count()).toBe(2)
+
+    expect(await whereStoredValuesDiffer(db.table(table), { name: 'Other' }).pluck('id')).toEqual([1])
+    expect(await whereStoredValuesDiffer(db.table(table), { name: null }).orderBy('id').pluck('id')).toEqual([1, 2])
+    expect(() => whereStoredValuesDiffer(db.table(table), { 'name" OR 1=1 --': 'x' })).toThrow(SecurityError)
+    expect(() => whereStoredValuesDiffer(duck as never, { name: 'x' })).toThrow(SecurityError)
   })
 
   it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('rejects a non-identifier column in the database-clock expiry predicate on %s', async driver => {
