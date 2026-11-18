@@ -119,8 +119,10 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     await DB.table(owners).insert([{ id: 1, active: true }, { id: 2, active: false }])
     await DB.table(items).insert([{ owner_id: 1, active: 25 }, { owner_id: 2, active: 50 }, { owner_id: 1, active: 100 }])
     const branch = (ownerId: number) => DB.table(owners.tableName).join(items.tableName, `${items.tableName}.owner_id`, '=', `${owners.tableName}.id`).select(`${items.tableName}.*`).where(`${owners.tableName}.id`, ownerId)
-    const query = branch(1).unionAll(branch(2)).orderBy(`${items.tableName}.active`)
-    expect((await pageThrough(query)).map(row => Number(row.active))).toEqual([25, 50, 100])
+    for (const order of [`${items.tableName}.active`, 'active']) {
+      const query = branch(1).unionAll(branch(2)).orderBy(order)
+      expect((await pageThrough(query)).map(row => Number(row.active))).toEqual([25, 50, 100])
+    }
   })
 
   it('reads MIN and MAX union outputs through their date column in the application timezone', async () => {

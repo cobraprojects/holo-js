@@ -45,9 +45,20 @@ export function unionOutputValueColumn(plan: SelectQueryPlan, column: string, co
   if (selected?.kind === 'column') return selected.column
   if (selected?.kind === 'aggregate') return selected.aggregate === 'min' || selected.aggregate === 'max' ? selected.column : undefined
   if (selected) return undefined
-  if (column.includes('.') || sourceColumns(plan, connectionName)?.includes(column)) return column
-  const join = plan.joins.find(candidate => knownJoinedColumns(candidate, connectionName)?.includes(column))
-  return join ? `${join.alias ?? join.table}.${column}` : column
+  return column.includes('.') ? column : wildcardOwnerColumn(plan, column, connectionName) ?? column
+}
+
+function wildcardOwnerColumn(plan: SelectQueryPlan, name: string, connectionName: string): string | undefined {
+  const selections: readonly QuerySelection[] = plan.selections.length === 0 ? [{ kind: 'column', column: '*' }] : plan.selections
+  for (const selection of selections) {
+    if (selection.kind !== 'column' || (selection.column !== '*' && !selection.column.endsWith('.*'))) continue
+    const qualifier = selection.column === '*' ? undefined : selection.column.slice(0, -2)
+    const ownsSource = (qualifier === undefined || qualifiesTable(qualifier, plan.source.tableName, plan.source.alias)) && sourceColumns(plan, connectionName)?.includes(name)
+    if (ownsSource) return plan.joins.length === 0 ? name : `${plan.source.alias ?? plan.source.tableName}.${name}`
+    const join = plan.joins.find(candidate => (qualifier === undefined || qualifiesTable(qualifier, candidate.table, candidate.alias)) && knownJoinedColumns(candidate, connectionName)?.includes(name))
+    if (join) return `${join.alias ?? join.table}.${name}`
+  }
+  return undefined
 }
 
 export function assertPageableUnionOutputs(plan: SelectQueryPlan, names: readonly string[], connectionName: string): void {
