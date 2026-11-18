@@ -52,6 +52,7 @@ export class PivotMutation {
   private relatedKey: AnyColumnDefinition | undefined
   private loadedTable: TableDefinition | undefined
   private readonly targetKeyCache = new WeakMap<readonly Attributes[], unknown[]>()
+  private readonly othersDifferCache = new WeakMap<readonly Attributes[], Map<string, boolean>>()
   private relatedKeyLoaded = false
 
   constructor(private readonly context: Context, private readonly connection: DatabaseContext) {
@@ -290,7 +291,7 @@ export class PivotMutation {
       const representatives = new Map<unknown, Entry>()
       const shared = new Map<Entry, Entry>()
       for (const entry of entries) {
-        const identity = this.keyIdentity(this.comparedKey(entry.id))
+        const identity = this.dedupeIdentity(entry.id)
         const representative = representatives.get(identity)
         if (representative) shared.set(entry, representative)
         else representatives.set(identity, entry)
@@ -373,8 +374,12 @@ export class PivotMutation {
     return column && storesDate(column) ? column : undefined
   }
 
+  private dedupeIdentity(id: unknown): unknown {
+    return this.comparesKeysInDatabase() ? this.keyIdentity(this.comparedKey(id)) : this.keyIdentity(this.writeKey(id))
+  }
+
   private dedupe(entries: readonly Entry[]): Entry[] {
-    return [...new Map(entries.map(entry => [this.keyIdentity(this.writeKey(entry.id)), entry])).values()]
+    return [...new Map(entries.map(entry => [this.dedupeIdentity(entry.id), entry])).values()]
   }
 
   private validate(attributes: Attributes): void {
@@ -399,8 +404,19 @@ export class PivotMutation {
     if (!last || Object.keys(attributes).length === 0) return undefined
     const dates = Object.entries(attributes).filter(([column, value]) => this.comparesInDatabase(column, value, last)).map(([column]) => column)
     const others = Object.entries(attributes).filter(([column]) => !dates.includes(column))
-    if (others.some(([column, value]) => last[column] !== value)) return { when: 'always' }
+    if (others.length > 0 && this.othersDiffer(this.dateKeyColumn() ? existing : [last], others)) return { when: 'always' }
     return dates.length === 0 ? undefined : { when: 'datesDiffer', columns: dates }
+  }
+
+  private othersDiffer(rows: readonly Attributes[], others: readonly (readonly [string, unknown])[]): boolean {
+    const key = JSON.stringify(others.map(([column, value]) => [column, typeof value, value instanceof Date ? value.getTime() : String(value)]))
+    const cached = this.othersDifferCache.get(rows)?.get(key)
+    if (cached !== undefined) return cached
+    const differs = rows.some(row => others.some(([column, value]) => row[column] !== value))
+    const byKey = this.othersDifferCache.get(rows) ?? new Map<string, boolean>()
+    byKey.set(key, differs)
+    this.othersDifferCache.set(rows, byKey)
+    return differs
   }
 
   private comparesInDatabase(column: string, value: unknown, existing: Attributes): boolean {

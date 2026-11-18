@@ -233,6 +233,14 @@ describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as S
     expect(await DB.table(ownerTags.tableName).unsafeSelect('"expires_at" AS "stored"', []).first()).toEqual({ stored: '2026-01-01T10:00:00Z' })
   })
 
+  it('updates every row stored for an instant when any of them differs', async () => {
+    const { db, names, owner, ownerSlots } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") VALUES (1, '2026-01-01T10:00:00Z', 'old'), (1, '2026-01-01 10:00:00', 'new')`))
+
+    expect(await owner.updateExistingPivot('slots', new Date('2026-01-01T10:00:00Z'), { note: 'new' })).toBe(1)
+    expect(await DB.table(ownerSlots).pluck('note')).toEqual(['new', 'new'])
+  })
+
   it('rolls back every chunk of an update when a later chunk fails', async () => {
     const { db, names, owner, ownerSlots } = await openPivots(driver)
     await db.unsafeExecute(unsafeSql(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 905) INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, '2026-01-01T10:00:00.000' || printf('%05d', i) || 'Z', 'old' FROM n`))
@@ -417,6 +425,17 @@ describe.each(drivers)('pivot keys of an unregistered pivot table on %s', (drive
 
     expect(await owner.detach('slots', '2026-01-01 10:00:00.123456' as never)).toBe(1)
     expect(await DB.table(ownerSlots).count()).toBe(0)
+  })
+
+  it.runIf(driver === 'mysql')('keeps distinct fractional keys the column keeps apart', async () => {
+    const { db, names, owner, ownerSlots } = await openUnregistered()
+    await db.unsafeExecute(unsafeSql(`ALTER TABLE ${quote(driver, names.ownerSlots)} MODIFY ${quote(driver, 'starts_at')} DATETIME(6)`))
+    const keys = ['2026-01-01 10:00:00.123456', '2026-01-01 10:00:00.654321'] as never[]
+    await owner.attach('slots', keys)
+
+    expect(await owner.sync('slots', keys)).toEqual({ attached: [], detached: [], updated: [] })
+    expect(await DB.table(ownerSlots).count()).toBe(2)
+    expect(await owner.detach('slots', keys)).toBe(2)
   })
 
   it('detaches before it attaches, so a replacement the database stores as the same day survives', async () => {
