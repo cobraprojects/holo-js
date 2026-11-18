@@ -1,8 +1,8 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
-import { readStoredRows, TableQueryBuilder } from '../query/TableQueryBuilder'
+import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { assertQueryTablePath } from '../query/validator'
-import { normalizeDialectWriteValue, parseStoredDate, storesDate } from '../schema/normalization'
+import { normalizeDialectWriteValue, parseStoredDate } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import { assertColumnWritable, canonicalStoredKey, ownEntry } from './entityRuntime'
@@ -26,10 +26,6 @@ const bindingBudget = 900
 
 function bindableId(id: unknown): unknown {
   return ArrayBuffer.isView(id) && !(id instanceof Uint8Array) ? new Uint8Array(id.buffer, id.byteOffset, id.byteLength) : id
-}
-
-function sameValue(left: unknown, right: unknown): boolean {
-  return left instanceof Date && right instanceof Date ? left.getTime() === right.getTime() : left === right
 }
 
 function isScalarObjectId(id: unknown): id is Date | ArrayBufferView {
@@ -195,11 +191,7 @@ export class PivotMutation {
   }
 
   private readKey(value: unknown): unknown {
-    return this.readDate(this.dateKeyColumn(), value)
-  }
-
-  private readDate(column: AnyColumnDefinition | undefined, value: unknown): unknown {
-    if (!column || this.context.dialect === 'sqlite') return value
+    if (!this.dateKeyColumn() || this.context.dialect === 'sqlite') return value
     const parsed = parseStoredDate(this.context.dialect, value)
     return parsed instanceof Date && Number.isNaN(parsed.getTime()) ? value : parsed
   }
@@ -231,17 +223,7 @@ export class PivotMutation {
   }
 
   private changed(existing: Attributes, attributes: Attributes): boolean {
-    return Object.entries(attributes).some(([key, value]) => {
-      const column = this.dateAttributeColumn(key)
-      return column
-        ? !sameValue(this.readDate(column, existing[key]), this.readDate(column, normalizeDialectWriteValue(this.context.dialect, column, value)))
-        : existing[key] !== value
-    })
-  }
-
-  private dateAttributeColumn(column: string): AnyColumnDefinition | undefined {
-    const definition = typeof this.context.table === 'string' ? undefined : ownEntry(this.context.table.columns, column)
-    return definition && storesDate(definition) ? definition : undefined
+    return Object.entries(attributes).some(([key, value]) => existing[key] !== value)
   }
 
   private query(connection: DatabaseContext): TableQueryBuilder<string | TableDefinition> {
@@ -255,11 +237,11 @@ export class PivotMutation {
   }
 
   private async read(connection: DatabaseContext, ids?: readonly unknown[]): Promise<Attributes[]> {
-    if (!ids) return this.query(connection)[readStoredRows]<Attributes>()
+    if (!ids) return this.query(connection).get<Attributes>()
     const rows: Attributes[] = []
     const unique = [...new Set(ids)]
     for (let offset = 0; offset < unique.length; offset += this.idBatchSize()) {
-      rows.push(...await this.query(connection).where(this.context.relatedColumn, 'in', unique.slice(offset, offset + this.idBatchSize()))[readStoredRows]<Attributes>())
+      rows.push(...await this.query(connection).where(this.context.relatedColumn, 'in', unique.slice(offset, offset + this.idBatchSize())).get<Attributes>())
     }
     return rows
   }

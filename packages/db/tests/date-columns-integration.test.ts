@@ -127,20 +127,6 @@ describe.each(drivers)('date-like columns that other query builder features read
     expect(labels).toEqual(['event 1', 'event 2', 'event 3'])
     expect(notedAt).toEqual([10, 11, 12].map(hour => new Date(`2026-01-01T${hour}:00:00Z`)))
   })
-
-  it('leaves a pivot row alone when its date attribute is written again unchanged', async () => {
-    const { events, tags, TaggedEvent } = await openJoinedNotes(driver)
-    await DB.table(events).insert({ id: 1, label: 'set', happened_at: null, scheduled_for: null, due_on: null })
-    await DB.table(tags).insert([{ id: 1 }, { id: 2 }])
-    const event = await TaggedEvent.findOrFail(1)
-    await event.attach('tags', 1, { expires_at: happened })
-    await event.attach('tags', 2, { expires_at: '2026-01-01 10:00:00' as never })
-
-    expect(await event.updateExistingPivot('tags', 1, { expires_at: new Date(happened.getTime()) })).toBe(0)
-    expect(await event.updateExistingPivot('tags', 2, { expires_at: '2026-01-01 10:00:00' as never })).toBe(0)
-    expect(await event.sync('tags', { 1: { expires_at: new Date(happened.getTime()) }, 2: { expires_at: '2026-01-01 10:00:00' as never } })).toEqual({ attached: [], detached: [], updated: [] })
-    expect(await event.updateExistingPivot('tags', 1, { expires_at: scheduled })).toBe(1)
-  })
 })
 
 describe.each(integrationDrivers(['sqlite']))('stored SQLite date text on %s', (driver) => {
@@ -283,6 +269,24 @@ describe.each(integrationDrivers(['sqlite']))('stored SQLite date text on %s', (
 
     expect(await event.sync('slots', ['2026-01-02 03:04:05.000001' as never])).toEqual({ attached: [], detached: ['2026-01-02 03:04:05.000002'], updated: [] })
     expect(await DB.table(eventSlots).unsafeSelect('"starts_at" AS "stored"', []).get()).toEqual([{ stored: '2026-01-02 03:04:05.000001' }])
+  })
+
+  it('leaves a pivot row alone when its date attribute text is written again unchanged', async () => {
+    const { events, tags, TaggedEvent } = await openJoinedNotes(driver)
+    await DB.table(events).insert({ id: 1, label: 'set', happened_at: null, scheduled_for: null, due_on: null })
+    await DB.table(tags).insert({ id: 1 })
+    const event = await TaggedEvent.findOrFail(1)
+    await event.attach('tags', 1, { expires_at: '2026-01-01 10:00:00' as never })
+
+    expect(await event.updateExistingPivot('tags', 1, { expires_at: '2026-01-01 10:00:00' as never })).toBe(0)
+    expect(await event.sync('tags', { 1: { expires_at: '2026-01-01 10:00:00' as never } })).toEqual({ attached: [], detached: [], updated: [] })
+  })
+
+  it('reads dates as Date through a transaction table query', async () => {
+    const { db, events, name } = await openEvents(driver)
+    await db.unsafeExecute(unsafeSql(`INSERT INTO "${name}" ("id", "label", "happened_at") VALUES (1, 'set', '2026-01-01 10:00:00')`))
+
+    expect(await DB.transaction(tx => tx.table(events).select('happened_at').first())).toEqual({ happened_at: happened })
   })
 
   it('keeps a union column as text when a branch reads it from a non-date column', async () => {

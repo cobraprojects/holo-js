@@ -41,7 +41,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { readConvertedResultColumns, readInsertedKey, readIntegerColumns, readsAsNumericAggregate, resolveConvertedResultColumns, withResolvedDefinitions } from './resultColumns'
+import { type ResultReads, readConvertedResultColumns, readInsertedKey, readIntegerColumns, readsAsNumericAggregate, resolveConvertedResultColumns, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -167,7 +167,6 @@ export const hasQueryCache = Symbol('hasQueryCache')
 export const whereResolvedColumn = Symbol('whereResolvedColumn')
 export const resolveAggregateSource = Symbol('resolveAggregateSource')
 export const projectModelRows = Symbol('projectModelRows')
-export const readStoredRows = Symbol('readStoredRows')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -289,6 +288,7 @@ export class TableQueryBuilder<
     plan?: SelectQueryPlan,
     private readonly queryCacheConfig?: NormalizedQueryCacheConfig,
     handoff?: symbol,
+    private readonly readsSQLiteDates = false,
   ) {
     const source = plan?.source ?? createTableSource(table)
     this.ownSource = source
@@ -395,6 +395,7 @@ export class TableQueryBuilder<
       withSource(this.plan, this.sourceHasRowKey(source.tableName) ? Object.freeze({ ...source, primaryKey: this.source.primaryKey }) : source),
       this.queryCacheConfig,
       internalPlanHandoff,
+      this.readsSQLiteDates,
     )
   }
 
@@ -2073,6 +2074,7 @@ export class TableQueryBuilder<
       this.plan,
       normalizeQueryCacheConfig(config),
       internalPlanHandoff,
+      this.readsSQLiteDates,
     )
   }
 
@@ -2080,15 +2082,11 @@ export class TableQueryBuilder<
     return this.getCompiledRows<TRow>(() => this.toSQL())
   }
 
-  async [readStoredRows]<TRow extends Record<string, unknown>>(): Promise<TRow[]> {
-    return this.getCompiledRows<TRow>(() => this.toSQL(), true, false, false)
-  }
-
   private async getCompiledRows<TRow extends Record<string, unknown>>(
     compileStatement: () => CompiledStatement,
     collectObservation = true,
     scopeCacheKey = false,
-    convertColumns = true,
+    reads: ResultReads | false = this.readsSQLiteDates ? 'valuesAndDates' : 'values',
   ): Promise<TRow[]> {
     await this.bindGeneratedTable()
     const statement = compileStatement()
@@ -2116,7 +2114,7 @@ export class TableQueryBuilder<
     recordDatabaseQueryDependencies(observationDependencies)
     const expired = cacheConfig?.ttl instanceof Date && cacheConfig.ttl.getTime() <= Date.now()
     if (!cacheConfig || this.plan.lockMode || expired || !canUseQueryCache(this.connection) || currentRootTransaction(this.connection)?.schemaChanged) {
-      const rows = this.convertRows(convertColumns, await this.queryRows<TRow>(statement))
+      const rows = this.convertRows(reads, await this.queryRows<TRow>(statement))
       this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
         observationDependencies,
@@ -2136,7 +2134,7 @@ export class TableQueryBuilder<
 
     const flexible = cacheConfig.flexible
     if (flexible) {
-      const rows = this.convertRows(convertColumns, await runQueryCacheOperation(runSource => bridge.flexible(
+      const rows = this.convertRows(reads, await runQueryCacheOperation(runSource => bridge.flexible(
         cacheKey,
         flexible,
         () => runSource(() => this.queryRows<TRow>(statement)),
@@ -2158,7 +2156,7 @@ export class TableQueryBuilder<
     }
 
     const ttl = normalizeAtomicQueryCacheTtl(cacheConfig.ttl)
-    const rows = this.convertRows(convertColumns, await runQueryCacheOperation(runSource => bridge.flexible(
+    const rows = this.convertRows(reads, await runQueryCacheOperation(runSource => bridge.flexible(
       cacheKey,
       ttl,
       () => runSource(() => this.queryRows<TRow>(statement)),
@@ -2175,10 +2173,10 @@ export class TableQueryBuilder<
     return rows
   }
 
-  private convertRows<TRow extends Record<string, unknown>>(convertColumns: boolean, rows: TRow[]): TRow[] {
-    if (!convertColumns) return rows
+  private convertRows<TRow extends Record<string, unknown>>(reads: ResultReads | false, rows: TRow[]): TRow[] {
+    if (!reads) return rows
     const plan = withResolvedDefinitions(this.plan, this.connection.getConnectionName())
-    const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan)
+    const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan, reads)
     if (convertedColumns.size === 0) return rows
     return rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
   }
@@ -2352,13 +2350,13 @@ export class TableQueryBuilder<
     }
     if (previous) plan = replaceOrderBy(plan, cursorOrders.map(order => ({ kind: 'column', column: order.column, direction: order.direction === 'asc' ? 'desc' : 'asc' })))
     const pageQuery = orderedQuery.clone(plan)
-    const storedRows = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true, false)
+    const storedRows = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true, 'values')
     const hasMorePages = storedRows.length > perPage
     const pageRows = storedRows.slice(0, perPage)
     if (previous) pageRows.reverse()
     const firstRow = pageRows.at(0)
     const lastRow = pageRows.at(-1)
-    const result = createCursorPaginator(pageQuery.convertRows(true, pageRows), {
+    const result = createCursorPaginator(this.readsSQLiteDates ? pageQuery.convertRows('dates', pageRows) : pageRows, {
       perPage,
       cursorName,
       nextCursor: (previous ? cursor !== null : hasMorePages) && lastRow
@@ -2938,7 +2936,7 @@ export class TableQueryBuilder<
     plan: SelectQueryPlan,
   ): TableQueryBuilder<TTableOrName, TRow, TNextColumns> {
     const table = (this.source.table ?? this.source.tableName) as TTableOrName
-    return new TableQueryBuilder<TTableOrName, TRow, TNextColumns>(table, this.connection, plan, this.queryCacheConfig, internalPlanHandoff)
+    return new TableQueryBuilder<TTableOrName, TRow, TNextColumns>(table, this.connection, plan, this.queryCacheConfig, internalPlanHandoff, this.readsSQLiteDates)
   }
 
   private async readDecimalUpdateKeys(values: Readonly<Record<string, unknown>>): Promise<readonly Readonly<Record<string, unknown>>[] | undefined> {
@@ -3474,6 +3472,7 @@ export class TableQueryBuilder<
       projected.getPlan(),
       { ...cacheConfig, key },
       internalPlanHandoff,
+      this.readsSQLiteDates,
     )
   }
 
