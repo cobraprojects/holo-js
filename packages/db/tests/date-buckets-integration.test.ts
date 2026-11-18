@@ -996,6 +996,38 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect(page.data).toEqual([{ rank: 1, day: '2026-11-03' }, { rank: 2, day: '2026-11-03' }])
   })
 
+  it('rejects a primary key order key that a selected alias shadows in a single-table group', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events)
+      .select('id as event_id', 'tenant_id as id')
+      .addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .groupBy('id', 'day')
+      .orderBy('id')
+      .cursorPaginate(1)).rejects.toThrow(SecurityError)
+  })
+
+  it('reads a grouped cursor key from the selection of its qualified spelling', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const ranks = await createKeyedTable('bucket_ranks', 'rank', [{ id: 1, value: 1 }, { id: 2, value: 2 }])
+    registerGeneratedTables({ events, ranks })
+    const page = (cursor: string | null) => DB.table(events.tableName)
+      .join(ranks.tableName, `${ranks.tableName}.id`, '=', `${events.tableName}.id`)
+      .select(`${ranks.tableName}.rank as sort_rank`)
+      .addSelectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
+      .groupBy(`${ranks.tableName}.rank`, 'day')
+      .orderBy('rank')
+      .orderBy('day')
+      .cursorPaginate(1, cursor)
+
+    const first = await page(null)
+    const second = await page(first.nextCursor)
+
+    expect([...first.data, ...second.data]).toEqual([{ sort_rank: 1, day: '2026-11-03' }, { sort_rank: 2, day: '2026-11-03' }])
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)

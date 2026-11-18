@@ -70,6 +70,7 @@ import {
   appendAggregateSelection,
   appendDateBucketSelection,
   dateBucketSelections,
+  readAllColumnsSelectionTable,
   unionBranchPlans,
   withDateBucketSelection,
   appendRawSelection,
@@ -3441,13 +3442,13 @@ export class TableQueryBuilder<
       const visibleSource = this.source.alias ?? this.source.tableName
       const groupsByPrimaryKey = primaryKeys.length > 0 && primaryKeys.every(key => this.plan.groupBy.some(column => identity(column) === `${visibleSource}.${key}`))
       const ordered = groupsByPrimaryKey ? this.withPrimaryKeyTieBreakers(primaryKeys) : this
+      assertGroupedOrderKeysUnshadowed(ordered.plan, connectionName)
       if (groupsByPrimaryKey && this.plan.joins.length === 0 && this.plan.unions.length === 0) return ordered
       const orderedColumns = new Set(ordered.plan.orderBy.flatMap(orderBy => orderBy.kind === 'column' ? [identity(orderBy.column)] : []))
       const groupedColumns = new Set(ordered.plan.groupBy.map(identity))
       if (!ordered.plan.groupBy.every(column => orderedColumns.has(identity(column))) || ![...orderedColumns].every(column => groupedColumns.has(column))) {
         throw new SecurityError('Cursor pagination over grouped rows must order by exactly the groupBy columns.')
       }
-      assertGroupedOrderKeysUnshadowed(ordered.plan, connectionName)
       return ordered
     }
 
@@ -3491,8 +3492,21 @@ export class TableQueryBuilder<
     }
   }
 
+  private groupedDateBucketCursorOutput(column: string): string | undefined {
+    if (this.plan.groupBy.length === 0 || dateBucketSelections(this.plan).size === 0) return undefined
+    const connectionName = this.connection.getConnectionName()
+    const key = groupedCursorKey(this.plan, column, connectionName)
+    const selection = this.plan.selections.find(candidate => candidate.kind === 'column'
+      && candidate.column !== '*'
+      && readAllColumnsSelectionTable(candidate.column) === undefined
+      && groupedCursorKey(this.plan, candidate.column, connectionName) === key)
+    return selection && selectionOutputName(selection)
+  }
+
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
     if (dateBucketSelections(this.plan).has(column)) return row[column]
+    const groupedOutput = this.groupedDateBucketCursorOutput(column)
+    if (groupedOutput !== undefined) return row[groupedOutput]
     const sourceColumn = this.resolveSourceColumnName(column)
     const selections = this.plan.selections
     const ownColumns = Object.keys(this.source.table?.columns ?? {})
