@@ -112,18 +112,6 @@ afterEach(async () => {
 })
 
 describe('@holo-js/adapter-nuxt module setup', () => {
-  it.each([
-    ['/dashboard/', '"/dashboard"'],
-    ['/', '""'],
-  ])('defines app.baseURL %s as the app base for Holo browser clients', async (baseURL, expected) => {
-    const root = await createProject()
-    const nuxt = await createNuxtHarness(root)
-    nuxt.options.app.baseURL = baseURL
-    const { module } = await loadAdapterModule()
-    await module.setup({}, nuxt)
-    expect(nuxt.options.vite.define?.__HOLO_APP_BASE__).toBe(expected)
-  })
-
   it('loads root configuration when Nuxt uses a separate application source directory', async () => {
     const root = await createProject()
     await mkdir(join(root, 'app'))

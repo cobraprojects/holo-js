@@ -280,7 +280,6 @@ type ViteOptimizeDepsOptions = {
 type NuxtViteOptions = {
   optimizeDeps?: ViteOptimizeDepsOptions
   plugins?: unknown[]
-  define?: Record<string, string>
   [key: string]: unknown
 }
 
@@ -317,7 +316,6 @@ interface NuxtOptionsWithNitro {
     [key: string]: unknown
   }
   build: { transpile: string[] }
-  app: { baseURL: string }
   css?: string[]
   vite?: NuxtViteOptions
   srcDir: string
@@ -579,11 +577,6 @@ function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
   }
 }
 
-function defineAppBase(opts: NuxtOptionsWithNitro): void {
-  const base = opts.app.baseURL.replace(/\/+$/, '')
-  opts.vite = { ...opts.vite, define: { ...opts.vite?.define, __HOLO_APP_BASE__: JSON.stringify(base) } }
-}
-
 function addVitePlugin(vite: NuxtViteOptions, plugin: unknown): void {
   vite.plugins = [...(vite.plugins ?? []), plugin]
 }
@@ -785,7 +778,7 @@ const holoNuxtModule: NuxtModule<ModuleOptions> = defineNuxtModule<ModuleOptions
     const modelRegistryTypesPath = resolve(rootDir, '.holo-js/generated/model-registry.d.ts')
     const pluginTypesPaths = await pluginGeneratedTypePaths(rootDir)
     addViteOptimizeDeps(opts, resolveClientOptimizeDeps(rootDir))
-    defineAppBase(opts)
+    addPlugin({ src: resolver.resolve('./runtime/plugins/app-base.client'), mode: 'client' })
     const storageModule = await importOptionalStorageModule()
     const loaded = await loadConfigDirectory(rootDir, {
       processEnv: process.env,

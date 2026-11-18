@@ -1,3 +1,4 @@
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { connection } from 'next/server.js'
 import type { HoloAuthUser } from '../contracts'
@@ -141,7 +142,7 @@ function createRouteProtectionProxy(
 ): NextRouteProtectionProxy {
   return async function proxy(request) {
     const requestUrl = request.nextUrl ?? new URL(request.url)
-    if (!matchesRoutes(options.routes, requestUrl.pathname)) {
+    if (!matchesRoutes(options.routes, requestAppBaseInternals.decodePath(requestUrl.pathname))) {
       return undefined
     }
 

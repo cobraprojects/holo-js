@@ -1,5 +1,5 @@
 import type { RequestEvent } from '@sveltejs/kit'
-import { requestAppBaseInternals } from '@holo-js/kernel'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import { createServer, type Plugin } from 'vite'
 import { describe, expect, it } from 'vitest'
 import { createSvelteKitHoloHooks } from '../src'

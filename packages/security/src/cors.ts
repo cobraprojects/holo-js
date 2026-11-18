@@ -1,6 +1,6 @@
 import type { NormalizedHoloCorsConfig } from './config'
 import type { SecurityCorsFacade } from './contracts'
-import { requestAppBaseInternals } from '@holo-js/kernel'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import { getSecurityRuntime } from './runtime'
 
 function matchesPathPattern(pathname: string, pattern: string): boolean {

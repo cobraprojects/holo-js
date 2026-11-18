@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type * as HoloCoreModule from '@holo-js/core'
 import { errorReportingInternals } from '@holo-js/kernel/error-reporting'
-import { requestAppBaseInternals } from '@holo-js/kernel'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import type { H3Event } from 'h3'
 
 type CloseHandler = () => Promise<void>

@@ -16,16 +16,32 @@ function base(owner: object): string {
   return requestAppBases().get(owner) ?? ''
 }
 
-function pathname(request: Request): string {
-  const path = new URL(request.url).pathname
-  const prefix = base(request)
+function withoutBase(path: string, prefix: string): string {
   if (!prefix) return path
   if (path === prefix || path === `${prefix}/`) return '/'
   return path.startsWith(`${prefix}/`) ? path.slice(prefix.length) : path
+}
+
+function decodePath(path: string): string {
+  return path.split('%25').map((part) => {
+    try {
+      return decodeURI(part)
+    } catch {
+      return part
+    }
+  }).join('%25')
+}
+
+function pathname(request: Request): string {
+  return withoutBase(new URL(request.url).pathname, base(request))
+}
+
+function routePathname(request: Request): string {
+  return withoutBase(decodePath(new URL(request.url).pathname), decodePath(base(request)))
 }
 
 function withBase(request: Request, path: string): string {
   return `${base(request)}${path}`
 }
 
-export const requestAppBaseInternals = { set, base, pathname, withBase }
+export const requestAppBaseInternals = { set, base, decodePath, pathname, routePathname, withBase }

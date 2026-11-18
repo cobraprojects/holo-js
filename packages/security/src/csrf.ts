@@ -1,4 +1,5 @@
-import { cookieEncryptionInternals, HoloRequestBodyTooLargeError, readBoundedRequestBody, requestAppBaseInternals, resolveRequestUrl } from '@holo-js/kernel'
+import { cookieEncryptionInternals, HoloRequestBodyTooLargeError, readBoundedRequestBody, resolveRequestUrl } from '@holo-js/kernel'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import {
   SecurityCsrfError,

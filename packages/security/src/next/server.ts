@@ -1,4 +1,5 @@
-import { HoloRequestBodyTooLargeError, readBoundedRequestFormData, requestAppBaseInternals } from '@holo-js/kernel'
+import { HoloRequestBodyTooLargeError, readBoundedRequestFormData } from '@holo-js/kernel'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import { protect } from '../index'
 import { cors } from '../cors'
 import { getSecurityRuntime } from '../runtime'

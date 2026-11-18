@@ -7,7 +7,7 @@ import {
   resetSecurityRuntime,
 } from '../src'
 import { SECURITY_CLIENT_CONFIG_COOKIE } from '../src/client-config'
-import { requestAppBaseInternals } from '@holo-js/kernel'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import { csrfProtection } from '../src/sveltekit/server'
 import { memoryCsrfSessions, type MemoryCsrfSessions } from './support/csrf-session'
 

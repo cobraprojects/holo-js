@@ -5,7 +5,7 @@ import { readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, onTestFinished } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
-import { requestAppBaseInternals } from '@holo-js/kernel'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import auth, { configureAuthRuntime, createAsyncAuthContext, resetAuthRuntime, type AuthProviderAdapter } from '../src'
 import type NativeUser from './support/models/User'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
@@ -164,6 +164,23 @@ it('protects routes and redirects inside the app base path', async () => {
   expect(response.headers.get('location')).toBe('https://app.test/dashboard/login')
   const external = await app.run(nextRequest, () => svelteAuthOnly({ routes: ['/admin/*'], redirectTo: 'https://other.test/login' })({ event: { url: new URL(request.url), request }, resolve }))
   expect(external.headers.get('location')).toBe('https://other.test/login')
+})
+
+it('protects routes reached through encoded paths', async () => {
+  const app = await nativeAuth()
+  const resolve = () => new Response('Native continuation')
+  const guard = svelteAuthOnly({ routes: ['/admin/*'], redirectTo: '/login' })
+  for (const [url, base] of [['https://app.test/dashboard/%61dmin/posts', '/dashboard'], ['https://app.test/%64ashboard/admin/posts', '/dashboard'], ['https://app.test/%61dmin/posts', '']] as const) {
+    const request = new Request(url)
+    requestAppBaseInternals.set(request, base)
+    const response = await app.run(app.request('/'), () => guard({ event: { url: new URL(url), request }, resolve }))
+    expect(response.status).toBe(303)
+  }
+  for (const path of ['/dashboard/%61dmin/posts', '/%61dmin/posts']) {
+    const request = new NextRequest(new URL(path, 'https://app.test'), path.startsWith('/dashboard') ? { nextConfig: { basePath: '/dashboard' } } : {})
+    const response = await app.run(request, () => authOnly({ routes: ['/admin/*'], redirectTo: '/login' })(request))
+    expect(response?.status).toBe(303)
+  }
 })
 
 it('deduplicates Svelte client refreshes over real HTTP outside component initialization and refreshes persisted auth again', async () => {

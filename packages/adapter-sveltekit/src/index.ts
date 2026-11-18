@@ -9,7 +9,8 @@ import {
 } from '@holo-js/core'
 import { type SerializedValidationException, validationInternals } from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
-import { cookieEncryptionInternals, responseCookieInternals, createCookieWriteUnavailableError, requestAppBaseInternals, requestUrlInternals, sameOriginRedirectPath } from '@holo-js/kernel'
+import { cookieEncryptionInternals, responseCookieInternals, createCookieWriteUnavailableError, requestUrlInternals, sameOriginRedirectPath } from '@holo-js/kernel'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import { reportError } from '@holo-js/kernel/error-reporting'
 export {
   holoSvelteKitTransport,

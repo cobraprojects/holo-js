@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { requestAppBaseInternals } from '../src'
+import { requestAppBaseInternals } from '../src/appBase'
 
 describe('request app base', () => {
   it('reads the path inside the app base a framework integration records', () => {
@@ -30,6 +30,16 @@ describe('request app base', () => {
     requestAppBaseInternals.set(event, '/dashboard/')
     expect(requestAppBaseInternals.base(event)).toBe('/dashboard')
     expect(requestAppBaseInternals.base({})).toBe('')
+  })
+
+  it.each([
+    ['https://app.test/dashboard/%61dmin/posts', '/admin/posts'],
+    ['https://app.test/%64ashboard/admin/posts', '/admin/posts'],
+    ['https://app.test/dashboard/100%25/report', '/100%25/report'],
+  ])('reads the route %s decoded the way framework routers decode it', (url, expected) => {
+    const request = new Request(url)
+    requestAppBaseInternals.set(request, '/dashboard')
+    expect(requestAppBaseInternals.routePathname(request)).toBe(expected)
   })
 
   it('uses the request path unchanged when no base was recorded', () => {

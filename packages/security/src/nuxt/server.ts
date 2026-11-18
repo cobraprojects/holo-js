@@ -1,4 +1,5 @@
-import { readBoundedBufferedBody, readBoundedNodeRequestBody, requestAppBaseInternals, requestBodyLimitFor, type BufferedRequestBody } from '@holo-js/kernel'
+import { readBoundedBufferedBody, readBoundedNodeRequestBody, requestBodyLimitFor, type BufferedRequestBody } from '@holo-js/kernel'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import {
   createError,
   defineEventHandler,
