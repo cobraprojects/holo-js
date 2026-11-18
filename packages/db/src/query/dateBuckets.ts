@@ -197,7 +197,8 @@ export function groupedCursorKey(plan: SelectQueryPlan, column: string, context:
     const owner = columnOwner(plan, column, connectionName, context.foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly)
     return owner === undefined ? name : `${owner}.${name}`
   }
-  const table = boundTables(visibleTables(plan, connectionName), column.slice(0, separator))[0]
+  const qualifierMatches = context.foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly
+  const table = boundTables(visibleTables(plan, connectionName, qualifierMatches), column.slice(0, separator), qualifierMatches)[0]
   return table ? `${table.alias ?? table.tableName ?? plan.source.tableName}.${name}` : `${column.slice(0, separator)}.${name}`
 }
 
@@ -220,12 +221,18 @@ export function assertGroupedOrderKeysUnshadowed(plan: SelectQueryPlan, context:
   }
 }
 
-export function bareColumnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined, foldsColumnNames: boolean): string {
-  const owner = columnOwner(plan, name, connectionName, foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly)
-  if (owner === undefined) {
-    throw new CompilerError(`Column "${name}" shares its name with a date bucket and Holo can't tell which table owns it. Qualify it with its table.`)
+export function bareColumnOwner(scopes: readonly SelectQueryPlan[], name: string, connectionName: string | undefined, foldsColumnNames: boolean): string {
+  const matches = foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly
+  for (const plan of scopes) {
+    const candidates = visibleTables(plan, connectionName, matches).filter((table) => {
+      const columns = table.columns()
+      return columns === undefined || columns.some(column => matches(column, name))
+    })
+    const [owner] = candidates
+    if (candidates.length === 1 && owner) return owner.alias ?? owner.tableName ?? plan.source.tableName
+    if (candidates.length > 1) break
   }
-  return owner
+  throw new CompilerError(`Column "${name}" shares its name with a date bucket and Holo can't tell which table owns it. Qualify it with its table.`)
 }
 
 export function assertDateBucketSpelling(plan: SelectQueryPlan, dateBuckets: ReadonlyMap<string, QueryDateBucketSelection> = dateBucketSelections(plan)): void {

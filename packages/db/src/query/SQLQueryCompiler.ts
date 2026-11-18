@@ -62,6 +62,7 @@ export class SQLQueryCompiler {
   protected readonly dialect: SchemaDialectName | undefined = undefined
   private dateBuckets: ReadonlyMap<string, ResolvedDateBucket> = NO_DATE_BUCKETS
   private dateBucketPlan: SelectQueryPlan | undefined = undefined
+  private readonly selectScopes: SelectQueryPlan[] = []
   private dateBucketsFolded: ReadonlyMap<string, ResolvedDateBucket> = NO_DATE_BUCKETS
   private dateBucketAliasMode: DateBucketAliasMode = 'column'
 
@@ -211,6 +212,7 @@ export class SQLQueryCompiler {
     const enclosingDateBuckets = this.dateBuckets
     const enclosingDateBucketPlan = this.dateBucketPlan
     const enclosingDateBucketsFolded = this.dateBucketsFolded
+    this.selectScopes.push(plan)
     try {
       const selections = dateBucketSelections(plan)
       if (selections.size === 0) {
@@ -228,6 +230,7 @@ export class SQLQueryCompiler {
       this.dateBuckets = enclosingDateBuckets
       this.dateBucketPlan = enclosingDateBucketPlan
       this.dateBucketsFolded = enclosingDateBucketsFolded
+      this.selectScopes.pop()
     }
   }
 
@@ -1084,7 +1087,7 @@ export class SQLQueryCompiler {
     }
     if (dateBucket && this.dateBucketAliasMode === 'expression') return this.compileDateBucketExpression(dateBucket)
     if (this.dateBucketAliasMode === 'column' && this.dateBucketPlan && dateBucket && this.resolvesSelectAliasesInColumnReferences()) {
-      return `${this.compileTableReference(bareColumnOwner(this.dateBucketPlan, reference, this.connectionName, this.foldsColumnNames()))}.${this.quoteIdentifier(reference)}`
+      return `${this.compileTableReference(bareColumnOwner([this.dateBucketPlan, ...this.selectScopes.slice(0, -1).reverse()], reference, this.connectionName, this.foldsColumnNames()))}.${this.quoteIdentifier(reference)}`
     }
     const { schema: table, table: column } = splitTablePath(reference)
     return table === undefined

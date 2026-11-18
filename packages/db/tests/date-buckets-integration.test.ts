@@ -1558,6 +1558,39 @@ describe('date buckets next to sqlite wildcards of case-variant aliases', () => 
     expect(days).toEqual(['2026-11-03'])
   })
 
+  it('treats table qualifiers in another case as the same grouped cursor key', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('sqlite')
+    const channels = await createKeyedTable('bucket_channels', 'slug', [{ id: 1, value: 7 }, { id: 2, value: 8 }])
+    registerGeneratedTables({ events, channels })
+
+    const page = await DB.table(events.tableName)
+      .join(channels.tableName, `${channels.tableName}.id`, '=', `${events.tableName}.id`)
+      .select(`${channels.tableName}.slug`)
+      .addSelectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
+      .groupBy(`${channels.tableName.toUpperCase()}.slug`, 'bucket')
+      .orderBy(`${channels.tableName}.slug`)
+      .orderBy('bucket')
+      .cursorPaginate(5)
+
+    expect(page.data).toEqual([{ slug: 7, bucket: '2026-11-03' }, { slug: 8, bucket: '2026-11-03' }])
+  })
+
+  it('resolves a bare correlated column named like the date bucket to the outer query', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('sqlite')
+    const reports = await createKeyedTable('bucket_reports', 'day', [{ id: 1, value: 2 }])
+    registerGeneratedTables({ events, reports })
+    const inner = DB.table(events.tableName)
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .whereColumn('day', '=', `${events.tableName}.tenant_id`)
+      .limit(1)
+
+    const rows = await DB.table(reports.tableName).select('id').addSelectSub(inner, 'inner_day').get()
+
+    expect(rows).toEqual([{ id: 1, inner_day: '2026-11-04' }])
+  })
+
   it('checks a joined subquery whose wildcard SQLite matches regardless of case', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable('sqlite')
