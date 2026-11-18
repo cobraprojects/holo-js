@@ -39,7 +39,7 @@ import { getGlobalModel } from '../src/model/ModelRegistry'
 import { listMorphModels, registerMorphModel, resolveMorphModel, resolveMorphSelector } from '../src/model/morphRegistry'
 import { defineModelFromTable, defineTable } from './support/internal'
 import { createTestTable } from './support/schema'
-import { openDatabase, postgresIntegration } from './support/database'
+import { ensureVectorExtension, openDatabase, postgresIntegration } from './support/database'
 
 type Row = Record<string, unknown>
 type TestEntity = Entity<TableDefinition>
@@ -1734,6 +1734,7 @@ describe('model core slice', () => {
 
   it.runIf(postgresIntegration)('runs model vector similarity queries on PostgreSQL with pgvector', async () => {
     const { db, table, schema } = await openDatabase('postgres')
+    await ensureVectorExtension()
     await schema.table(table.tableName, table => { table.vector('embedding', { dimensions: 3 }).nullable() })
     const documents = defineTable(table.tableName, { ...table.columns, embedding: column.vector({ dimensions: 3 }).nullable() })
     const Document = defineModelFromTable(documents)

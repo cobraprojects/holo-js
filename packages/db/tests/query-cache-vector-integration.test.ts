@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { DB, clearGeneratedTables, column, defineGeneratedTable, registerGeneratedTables } from '../src'
-import { integrationDrivers, openDatabase } from './support/database'
+import { ensureVectorExtension, integrationDrivers, openDatabase } from './support/database'
 
 const gated = integrationDrivers(['postgres'] as const).length > 0
 
@@ -18,6 +18,7 @@ async function createEmbeddings() {
     resetCacheRuntime()
     await schema.dropTable(name)
   })
+  await ensureVectorExtension()
   await db.executeCompiled({ sql: `CREATE TABLE ${name} (id INTEGER PRIMARY KEY, embedding vector(3))`, source: 'schema' })
   registerGeneratedTables({ embeddings: defineGeneratedTable(name, { id: column.id(), embedding: column.text() }) })
   await DB.table(name).insert([{ id: 1, embedding: '[1,0,0]' }, { id: 2, embedding: '[0,0,1]' }])

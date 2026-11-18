@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { clearGeneratedTables, defineModel, holoRuntimeInternals, registerGeneratedTables, renderGeneratedSchemaModule, SchemaError } from '../src'
-import { integrationDrivers, openDatabase } from './support/database'
+import { ensureVectorExtension, integrationDrivers, openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
 
@@ -301,6 +301,7 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
       const { db, schema } = await openDatabase(driver)
       const name = uniqueName('holo_read_vectors')
       onTestFinished(() => schema.dropTable(name))
+      await ensureVectorExtension()
       await schema.createTable(name, table => {
         table.uuid('id').primaryKey()
         table.vector('embedding', { dimensions: 3 }).nullable()

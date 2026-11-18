@@ -5,7 +5,7 @@ import { CapabilityError, CompilerError, ConfigurationError, DB, DatabaseError, 
 import { encodeValueCursor } from '../src/query/pagination'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
-import { integrationDrivers, mysqlIntegration, mysqlTestConnection, openDatabase, postgresIntegration, postgresTestConnection } from './support/database'
+import { ensureVectorExtension, integrationDrivers, mysqlIntegration, mysqlTestConnection, openDatabase, postgresIntegration, postgresTestConnection } from './support/database'
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)
 
@@ -2327,6 +2327,7 @@ describe.runIf(postgresIntegration)('date buckets next to postgres domains and v
     onTestFinished(async () => {
       await createSchemaService(connection).dropTable(name)
     })
+    await ensureVectorExtension()
     await connection.executeCompiled({ sql: `CREATE TABLE "${name}" (id integer PRIMARY KEY, embedding vector(2))`, source: 'test' })
     await connection.executeCompiled({ sql: `INSERT INTO "${name}" (id, embedding) VALUES (3, '[1,2]'), (1, '[9,9]')`, source: 'test' })
     registerGeneratedTables({ events, vectors: defineGeneratedTable(name, { id: column.id(), embedding: column.vector({ dimensions: 2 }) }) })

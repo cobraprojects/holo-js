@@ -67,3 +67,20 @@ export function tableSpellings(driver: TestDriver, tableName: string) {
   const schema = driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : mysqlTestConnection().database
   return { bare, qualified: `${schema}.${bare}` }
 }
+
+export async function ensurePostgresObject(create: string, exists: string): Promise<void> {
+  const adapter = createTestAdapter('postgres', postgresTestConnection())
+  try {
+    await adapter.initialize()
+    await adapter.execute(create).catch(async (error: unknown) => {
+      const found = await adapter.query(exists)
+      if (found.rows.length === 0) throw error
+    })
+  } finally {
+    await adapter.disconnect()
+  }
+}
+
+export function ensureVectorExtension(): Promise<void> {
+  return ensurePostgresObject('CREATE EXTENSION IF NOT EXISTS vector', `SELECT 1 FROM pg_extension WHERE extname = 'vector'`)
+}

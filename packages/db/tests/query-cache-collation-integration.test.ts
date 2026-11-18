@@ -5,21 +5,9 @@ import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { DB, clearGeneratedTables, column, queryCacheInternals, registerGeneratedTables, resetDatabaseDependencyInvalidationListeners } from '../src'
 import { resolveCaseInsensitiveColumns } from '../src/schema/caseInsensitiveColumns'
 import { defineTable } from './support/internal'
-import { mysqlIntegration, openDatabase, postgresIntegration } from './support/database'
+import { ensurePostgresObject, mysqlIntegration, openDatabase, postgresIntegration } from './support/database'
 
 type Driver = 'sqlite' | 'postgres' | 'mysql'
-
-async function ensurePostgresObject(create: string, exists: string) {
-  const { adapter } = await openDatabase('postgres')
-  try {
-    await adapter.execute(create)
-  } catch (error) {
-    const found = await adapter.query(exists)
-    if (found.rows.length === 0) {
-      throw error
-    }
-  }
-}
 
 const ensureCitext = () => ensurePostgresObject('CREATE EXTENSION IF NOT EXISTS citext', `SELECT 1 FROM pg_extension WHERE extname = 'citext'`)
 const ensureCaseInsensitiveCollation = () => ensurePostgresObject(
