@@ -42,7 +42,11 @@ function isRegionTimeZone(timeZone: string): boolean {
 type QueryTable = { readonly name: string | undefined, readonly definition: TableDefinition | undefined, readonly columns: readonly string[] | undefined }
 
 function visibleName(tableName: string | undefined, alias: string | undefined): string | undefined {
-  return alias ?? (tableName === undefined ? undefined : splitTablePath(tableName).table)
+  return alias ?? tableName
+}
+
+function namesTable(qualifier: string, name: string | undefined): boolean {
+  return name !== undefined && (qualifier === name || (!qualifier.includes('.') && qualifier === splitTablePath(name).table))
 }
 
 function queryTables(plan: SelectQueryPlan, connectionName: string): readonly QueryTable[] {
@@ -68,7 +72,7 @@ export function dateBucketStorage(plan: SelectQueryPlan, bucket: QueryDateBucket
   const qualifier = bucket.column.slice(0, separator)
   const owners = separator === -1
     ? tables.filter(table => table.columns === undefined || table.columns.includes(name))
-    : tables.filter(table => table.name === qualifier || table.name === splitTablePath(qualifier).table)
+    : tables.filter(table => namesTable(qualifier, table.name))
   if (owners.length > 1) {
     throw new CompilerError(`selectDate() column "${bucket.column}" may belong to more than one table of the query. Qualify it with its table or alias.`)
   }

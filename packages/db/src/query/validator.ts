@@ -2,7 +2,6 @@ import { rawSqlPlaceholders } from './rawSql'
 import { SecurityError } from '../core/errors'
 import { dateBucketSelections, isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
 import { assertDateBucketAlias, assertDateBucketTimeZone, assertDateBucketUnit } from './dateBuckets'
-import { selectionOutputName } from './modelRowProjection'
 import { storesJson } from '../schema/normalization'
 import { tablePathSegments } from '../schema/identifiers'
 import type { TableColumnsShape } from '../schema/types'
@@ -207,16 +206,12 @@ function assertColumnReference(
   assertKnownColumn(column, tableName, allowedColumns)
 }
 
-function assertDateBucketSelection(plan: SelectQueryPlan, selection: QueryDateBucketSelection, dialect: SchemaDialectName | undefined, allowedColumns?: Set<string>): void {
+function assertDateBucketSelection(plan: SelectQueryPlan, selection: QueryDateBucketSelection, allowedColumns?: Set<string>): void {
   assertIdentifier(selection.alias, 'Date bucket alias')
   assertDateBucketAlias(selection.alias)
   assertDateBucketUnit(selection.unit)
   if (selection.timeZone !== undefined) assertDateBucketTimeZone(selection.timeZone)
   assertColumnReference(selection.column, plan.source.tableName, allowedColumns)
-  const fold = (name: string | undefined) => dialect === 'postgres' ? name : name?.toLowerCase()
-  if (plan.selections.some(other => other !== selection && fold(selectionOutputName(other)) === fold(selection.alias))) {
-    throw new SecurityError(`Date bucket alias "${selection.alias}" is already the name of another selected column.`)
-  }
 }
 
 function assertColumnSelection(
@@ -488,7 +483,8 @@ function assertPredicate(
     return
   }
 
-  assertColumnReference(predicate.column, tableName, allowedColumns)
+  const comparesDateBucket = (predicate.kind === 'comparison' || predicate.kind === 'null') && predicate.dateBucket === true
+  assertColumnReference(predicate.column, tableName, comparesDateBucket ? undefined : allowedColumns)
 
   if (predicate.kind === 'null') {
     return
@@ -643,7 +639,7 @@ export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName):
         }
 
         if (selection.kind === 'date-bucket') {
-          assertDateBucketSelection(plan, selection, dialect, allowedColumns)
+          assertDateBucketSelection(plan, selection, allowedColumns)
           continue
         }
 
@@ -661,7 +657,7 @@ export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName):
       }
 
       for (const predicate of plan.predicates) {
-        assertPredicate(predicate, plan.source.tableName, columnsOrBuckets, plan.source.table?.columns)
+        assertPredicate(predicate, plan.source.tableName, allowedColumns, plan.source.table?.columns)
       }
 
       for (const column of plan.groupBy) {

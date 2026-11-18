@@ -5,6 +5,7 @@ import { dateBucketSelections, isInlineIntegerValue, keyCastFor, readAllColumnsS
 import { dateBucketStorage, queryColumnNames, type DateBucketStorage } from './dateBuckets'
 import { validateQueryPlan } from './validator'
 import { unionOutputOrder } from './unionOutputs'
+import { selectionOutputName } from './modelRowProjection'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import { isTrustedRawPredicate } from './trustedRawPredicate'
 import { isTrustedRawSelection } from './trustedRawSelection'
@@ -998,8 +999,13 @@ export class SQLQueryCompiler {
     if (buckets.size === 0) return new Map()
     const fold = (name: string) => this.caseSensitiveIdentifiers ? name : name.toLowerCase()
     const columns = new Set(queryColumnNames(plan, this.connectionName).map(fold))
+    const outputs = plan.selections.flatMap((selection) => {
+      const name = selectionOutputName(selection)
+      return name === undefined ? [] : [fold(name)]
+    })
     return new Map([...buckets].map(([alias, bucket]) => {
       if (columns.has(fold(alias))) throw new SecurityError(`Date bucket alias "${alias}" is the name of a column of the query, so the database could read the column instead. Choose another alias.`)
+      if (outputs.filter(output => output === fold(alias)).length > 1) throw new SecurityError(`Date bucket alias "${alias}" is already the name of another selected column.`)
       return [alias, this.compileDateBucket(bucket, dateBucketStorage(plan, bucket, this.connectionName))]
     }))
   }

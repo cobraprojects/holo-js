@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { CapabilityError, ConfigurationError, DB, SecurityError, clearGeneratedTables, column, defineGeneratedTable, registerGeneratedTables } from '../src'
-import { integrationDrivers, mysqlIntegration, openDatabase } from './support/database'
+import { integrationDrivers, mysqlIntegration, openDatabase, postgresIntegration } from './support/database'
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)
 
@@ -209,6 +209,22 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect(day).toBe('2026-11-04')
   })
 
+  it('treats a where() name on a defined table as a column, never as a date bucket alias', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+
+    await expect(DB.table(events).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).where('day' as 'id', '2026-11-03').get()).rejects.toThrow(SecurityError)
+  })
+
+  it('rejects an alias that names another selected column the way the database compares names', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const query = () => DB.table(events.tableName).where('id', 2).select('tenant_id as day').addSelectDate('day', 'occurred_at', { as: 'Day', timeZone: 'UTC' }).get()
+
+    if (driver === 'postgres') await expect(query()).resolves.toEqual([{ day: 1, Day: '2026-11-03' }])
+    else await expect(query()).rejects.toThrow(SecurityError)
+  })
+
   it('rejects an unknown unit and a time zone abbreviation', async () => {
     const events = await createEvents(driver)
 
@@ -222,6 +238,24 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     clearGeneratedTables()
 
     await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).get()).rejects.toThrow(ConfigurationError)
+  })
+})
+
+describe.runIf(postgresIntegration)('date buckets next to schema-qualified tables', () => {
+  it('reads a column qualified with its schema when another schema\'s table of the same name is joined', async () => {
+    useAppTimezone('UTC')
+    await openDatabase('postgres')
+    const reporting = defineGeneratedTable('reporting.events', { id: column.id(), at: column.datetime() })
+    const archive = defineGeneratedTable('archive.events', { id: column.id(), at: column.date() })
+    registerGeneratedTables({ reporting, archive })
+    onTestFinished(() => clearGeneratedTables())
+
+    const statement = DB.table(reporting)
+      .join(archive.tableName, 'archive.events.id', '=', 'reporting.events.id')
+      .selectDate('day', 'reporting.events.at', { as: 'day', timeZone: 'Asia/Tokyo' })
+      .toSQL()
+
+    expect(statement.sql).toContain('Asia/Tokyo')
   })
 })
 
@@ -245,6 +279,7 @@ describe.runIf(mysqlIntegration)('date buckets on mysql without time zone tables
 
     await expect(DB.table(events).selectDate('day', 'seen_at', { as: 'day', timeZone: 'Asia/Tokyo' }).get()).rejects.toThrow(CapabilityError)
     await expect(DB.table(events).insertUsing(['billed_on'], DB.table(events).selectDate('day', 'seen_at', { as: 'day', timeZone: 'Asia/Tokyo' }))).rejects.toThrow(CapabilityError)
+    await expect(DB.table(events).whereIn('billed_on', DB.table(events).selectDate('day', 'seen_at', { as: 'day', timeZone: 'Asia/Tokyo' })).delete()).rejects.toThrow(CapabilityError)
     expect(await DB.table(events).count()).toBe(6)
   })
 })

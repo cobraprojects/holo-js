@@ -372,6 +372,7 @@ export class TableQueryBuilder<
 
   private async prepareMutation(): Promise<void> {
     await this.bindGeneratedTable()
+    await assertDateBucketTimeZonesConvertible(this.connection, this.plan)
     if (!currentRootTransaction(this.connection)?.schemaChanged && (getDatabaseQueryCacheBridge() || hasDatabaseDependencyInvalidationListeners() || hasDatabaseDependencyInvalidationPublisher())) {
       await resolveTableIdentity(this.connection, this.ownSource.tableName)
     }
