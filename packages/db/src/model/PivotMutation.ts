@@ -104,7 +104,7 @@ export class PivotMutation {
     await this.loadRelatedKey()
     this.validate(attributes)
     if (Object.keys(attributes).length === 0) return 0
-    const entry = { id: bindableId(id), attributes }
+    const entry = { id: this.castId(bindableId(id)), attributes }
     return this.connection.transaction(async (connection) => {
       const existing = this.dateKeyColumn()
         ? (await this.match(connection, [entry], false)).rowsFor(entry) ?? []
@@ -260,7 +260,7 @@ export class PivotMutation {
   private objectKey(id: string): unknown {
     const column = this.relatedKeyLoaded ? this.relatedKey : this.context.relatedKey
     if (column && !readsAsInteger(column)) return id
-    if (!/^-?\d+$/.test(id)) return id
+    if (!/^\s*[+-]?\d+\s*$/.test(id)) return id
     const integer = Number(id)
     if (Number.isSafeInteger(integer)) return integer
     this.assertReadableInteger(id)

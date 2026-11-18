@@ -543,7 +543,12 @@ describe.each(drivers)('pivot ids given as object keys on %s', (driver) => {
     await expect(owner.attach('items', { '9007199254740993': { note: 'new' } } as never)).rejects.toThrow(HydrationError)
     await expect(owner.attach('items', 9007199254740992 as never)).rejects.toThrow(HydrationError)
     await expect(owner.sync('items', [1, 9007199254740992] as never)).rejects.toThrow(HydrationError)
+    await expect(owner.attach('items', ['+9007199254740993'] as never)).rejects.toThrow(HydrationError)
+    await expect(owner.attach('items', { ' 9007199254740993 ': {} } as never)).rejects.toThrow(HydrationError)
+    await expect(owner.updateExistingPivot('items', 9007199254740992n as never, { note: 'new' })).rejects.toThrow(HydrationError)
     expect(await DB.table(ownerItems.tableName).count()).toBe(0)
+    await owner.attach('items', ['+12'] as never)
+    expect(await DB.table(ownerItems.tableName).pluck('item_id')).toEqual([12])
   })
 
   it('keeps a leading-zero string key as text, as Laravel does', async () => {
