@@ -16,6 +16,10 @@ import { postgresIntegration, postgresTestConnection, testConnectionUrl } from '
 
 registerDatabaseDriverFactory(postgresDatabaseDriverFactory)
 
+// CREATE/DROP DATABASE copies or removes a whole database on disk, which takes longer than the default
+// hook budget while the rest of the suite runs against the same server.
+const DATABASE_DDL_TIMEOUT_MS = 60_000
+
 const database = `holo_search_path_${randomUUID().replaceAll('-', '').slice(0, 12)}`
 
 function searchPathConnection() {
@@ -27,14 +31,14 @@ beforeAll(async () => {
   const admin = createPostgresAdapter({ config: postgresTestConnection() })
   await admin.execute(`CREATE DATABASE ${database}`)
   await admin.disconnect()
-})
+}, DATABASE_DDL_TIMEOUT_MS)
 
 afterAll(async () => {
   if (!postgresIntegration) return
   const admin = createPostgresAdapter({ config: postgresTestConnection() })
   await admin.execute(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`)
   await admin.disconnect()
-})
+}, DATABASE_DDL_TIMEOUT_MS)
 
 function structuredConnection() {
   const { user, ...connection } = searchPathConnection()
