@@ -10,8 +10,8 @@ type Driver = typeof drivers[number]
 
 const quote = (driver: Driver, identifier: string) => driver === 'mysql' ? `\`${identifier}\`` : `"${identifier}"`
 
-async function openPivots(driver: Driver) {
-  const { db, schema } = await openDatabase(driver, { security: { allowUnsafeRawSql: true } })
+async function openPivots(driver: Driver, logger?: NonNullable<Parameters<typeof openDatabase>[1]>['logger']) {
+  const { db, schema } = await openDatabase(driver, { security: { allowUnsafeRawSql: true }, ...(logger ? { logger } : {}) })
   onTestFinished(() => resetDB())
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
   const names = { owners: `holo_owners_${suffix}`, slots: `holo_slots_${suffix}`, ownerSlots: `holo_owner_slots_${suffix}`, tags: `holo_tags_${suffix}`, ownerTags: `holo_owner_tags_${suffix}`, ownerBadges: `holo_owner_badges_${suffix}`, days: `holo_days_${suffix}`, ownerDays: `holo_owner_days_${suffix}` }
@@ -228,6 +228,27 @@ describe.each(integrationDrivers(['sqlite']))('pivot rows keyed by a SQLite cale
     expect(await DB.table(ownerDays).pluck('note')).toEqual(['new'])
     expect(await owner.detach('days', new Date('2026-01-01T00:00:00Z'))).toBe(1)
     expect(await DB.table(ownerDays).count()).toBe(0)
+  })
+})
+
+describe.each(drivers)('pivot rows that repeat a date key on %s', (driver) => {
+  it('keeps every row of a key that sync keeps', async () => {
+    const { db, names, owner, ownerSlots } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`INSERT INTO ${quote(driver, names.ownerSlots)} (${quote(driver, 'owner_id')}, ${quote(driver, 'starts_at')}, ${quote(driver, 'note')}) VALUES (1, '2026-01-01 10:00:00', 'a'), (1, '2026-01-01 10:00:00', 'b'), (1, '2026-01-02 10:00:00', 'gone')`))
+
+    expect(await owner.sync('slots', ['2026-01-01 10:00:00' as never])).toEqual({ attached: [], detached: [new Date('2026-01-02T10:00:00Z')].map(date => driver === 'sqlite' ? '2026-01-02 10:00:00' : date), updated: [] })
+    expect((await DB.table(ownerSlots).orderBy('note').pluck('note'))).toEqual(['a', 'b'])
+  })
+
+  it.runIf(driver !== 'sqlite')('matches many keys without a query per key', async () => {
+    let queries = 0
+    const { owner } = await openPivots(driver, { onQuerySuccess: () => { queries++ } })
+    const keys = Array.from({ length: 100 }, (_, index) => new Date(Date.UTC(2026, 0, 1, 0, index)))
+    await owner.attach('slots', keys)
+
+    queries = 0
+    expect(await owner.syncWithoutDetaching('slots', keys)).toEqual({ attached: [], detached: [], updated: [] })
+    expect(queries).toBeLessThanOrEqual(4)
   })
 })
 

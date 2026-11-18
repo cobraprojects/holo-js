@@ -18,6 +18,17 @@ export function createStoredTextSelection(dialect: 'postgres' | 'mysql', column:
   return trustedSelection(`${quoteIdentifierSegment(column, '"')}::text AS ${quoteIdentifierSegment(alias, '"')}`)
 }
 
+export function createMatchingValuesSelection(dialect: 'postgres' | 'mysql', column: string, values: readonly unknown[], alias: string): QueryRawSelection {
+  assertValidIdentifierSegment(column, 'Matching values column')
+  assertValidIdentifierSegment(alias, 'Matching values alias')
+  const quote = dialect === 'mysql' ? '`' : '"'
+  const identifier = quoteIdentifierSegment(column, quote)
+  const list = dialect === 'mysql'
+    ? `CONCAT_WS(',', ${values.map((_value, index) => `CASE WHEN ${identifier} = ? THEN '${index}' END`).join(', ')})`
+    : `(${values.map((_value, index) => `COALESCE(CASE WHEN ${identifier} = ? THEN '${index},' END, '')`).join(' || ')})`
+  return trustedSelection(`${list} AS ${quoteIdentifierSegment(alias, quote)}`, values)
+}
+
 export function createDateExtremaSelection(dialect: Dialect, column: string, minAlias: string, maxAlias: string): QueryRawSelection {
   assertValidIdentifierSegment(column, 'Date extrema column')
   assertValidIdentifierSegment(minAlias, 'Date extrema alias')
@@ -27,11 +38,11 @@ export function createDateExtremaSelection(dialect: Dialect, column: string, min
   return trustedSelection(`MIN(${identifier}) AS ${quoteIdentifierSegment(minAlias, quote)}, MAX(${identifier}) AS ${quoteIdentifierSegment(maxAlias, quote)}`)
 }
 
-function trustedSelection(sql: string): QueryRawSelection {
+function trustedSelection(sql: string, bindings: readonly unknown[] = []): QueryRawSelection {
   const selection: QueryRawSelection = Object.freeze({
     kind: 'raw',
     sql,
-    bindings: Object.freeze([]),
+    bindings: Object.freeze([...bindings]),
   })
   trustedRawSelections.add(selection)
   return selection

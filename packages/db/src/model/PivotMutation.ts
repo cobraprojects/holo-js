@@ -1,7 +1,7 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
-import { TableQueryBuilder, selectStoredText, whereStoredValuesDiffer, whereStoredValuesIn } from '../query/TableQueryBuilder'
-import { normalizeQueryWriteValue } from '../query/queryValueNormalizer'
+import { TableQueryBuilder, selectMatchingValues, selectStoredText, whereStoredValuesDiffer, whereStoredValuesIn } from '../query/TableQueryBuilder'
+import { normalizeDateColumnPredicateValue, normalizeQueryPredicateValue, normalizeQueryWriteValue } from '../query/queryValueNormalizer'
 import { formatCalendarDate } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
@@ -33,6 +33,7 @@ type PivotQuery = TableQueryBuilder<string | TableDefinition>
 
 const bindingBudget = 900
 const storedKeyTextAlias = 'holo_stored_key_text'
+const matchingValuesAlias = 'holo_matching_values'
 const CALENDAR_DATE = /^\d{4,}-\d{2}-\d{2}$/
 
 function bindableId(id: unknown): unknown {
@@ -112,9 +113,7 @@ export class PivotMutation {
         }
       }
       if (detachMissing) {
-        const kept = new Set(entries.flatMap(entry => matches.rowsFor(entry) ?? []))
-        for (const rows of matches.groups()) {
-          const missing = rows.filter(row => !kept.has(row))
+        for (const missing of await matches.missing()) {
           const keys = this.storedKeys(missing)
           if (keys.length === 0) continue
           actions.push({ kind: 'delete', keys })
@@ -245,24 +244,52 @@ export class PivotMutation {
     return this.context.dialect !== 'sqlite' && this.dateKeyColumn() !== undefined
   }
 
-  private async match(connection: DatabaseContext, entries: readonly Entry[], readAll: boolean): Promise<{ rowsFor(entry: Entry): Attributes[] | undefined, groups(): Iterable<Attributes[]> }> {
+  private async match(connection: DatabaseContext, entries: readonly Entry[], readAll: boolean): Promise<{ rowsFor(entry: Entry): Attributes[] | undefined, missing(): Promise<Attributes[][]> }> {
     if (this.comparesKeysInDatabase()) {
       const byEntry = new Map<Entry, Attributes[]>()
-      for (const entry of entries) byEntry.set(entry, await this.readWithStoredText(this.query(connection).where(this.context.relatedColumn, entry.id)))
-      const all = readAll ? await this.readWithStoredText(this.query(connection)) : []
-      const sameRow = (row: Attributes) => all.find(candidate => candidate[storedKeyTextAlias] === row[storedKeyTextAlias]) ?? row
-      for (const [entry, rows] of byEntry) byEntry.set(entry, rows.map(sameRow))
+      const batchSize = Math.max(1, Math.floor(this.idBatchSize() / 2))
+      for (let offset = 0; offset < entries.length; offset += batchSize) {
+        const batch = entries.slice(offset, offset + batchSize)
+        const ids = batch.map(entry => entry.id)
+        const query = selectMatchingValues(
+          this.query(connection).where(this.context.relatedColumn, 'in', ids) as never,
+          this.context.relatedColumn,
+          ids.map(id => this.comparedKey(id)),
+          matchingValuesAlias,
+        ) as unknown as PivotQuery
+        for (const row of await this.readWithStoredText(query)) {
+          for (const index of String(row[matchingValuesAlias] ?? '').split(',').filter(Boolean)) {
+            const entry = batch[Number(index)]!
+            byEntry.set(entry, [...byEntry.get(entry) ?? [], row])
+          }
+        }
+      }
       return {
-        rowsFor: entry => (byEntry.get(entry)?.length ?? 0) > 0 ? byEntry.get(entry) : undefined,
-        groups: () => [all],
+        rowsFor: entry => byEntry.get(entry),
+        missing: async () => {
+          if (!readAll) return []
+          const kept = new Set([...byEntry.values()].flat().map(row => String(row[storedKeyTextAlias])))
+          return [(await this.readWithStoredText(this.query(connection))).filter(row => row[this.context.relatedColumn] != null && !kept.has(String(row[storedKeyTextAlias])))]
+        },
       }
     }
     const current = this.groupByKey(await this.read(connection, readAll ? undefined : entries.map(entry => entry.id)))
-    return { rowsFor: entry => current.get(this.incomingKeyIdentity(entry.id)), groups: () => current.values() }
+    const desired = new Set(entries.map(entry => this.incomingKeyIdentity(entry.id)))
+    return {
+      rowsFor: entry => current.get(this.incomingKeyIdentity(entry.id)),
+      missing: async () => [...current].filter(([identity]) => !desired.has(identity)).map(([, rows]) => rows),
+    }
+  }
+
+  private comparedKey(id: unknown): unknown {
+    const table = this.tableDefinition()
+    return this.dateKeyColumn()?.kind === 'date'
+      ? normalizeDateColumnPredicateValue(table, this.context.dialect, this.context.relatedColumn, id, '=').value
+      : normalizeQueryPredicateValue(table, this.context.dialect, this.context.relatedColumn, id)
   }
 
   private readWithStoredText(query: PivotQuery): Promise<Attributes[]> {
-    return selectStoredText(query.select(`${this.tableName()}.*` as never) as PivotQuery, this.context.relatedColumn, storedKeyTextAlias).get<Attributes>()
+    return selectStoredText(query.addSelect(`${this.tableName()}.*` as never) as PivotQuery, this.context.relatedColumn, storedKeyTextAlias).get<Attributes>()
   }
 
   private writeKey(value: unknown): unknown {

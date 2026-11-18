@@ -4,7 +4,7 @@ import { redactBindings } from '../security/policy'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
-import { createDateExtremaSelection, createFractionalCountSelection, createStoredTextSelection } from './trustedRawSelection'
+import { createDateExtremaSelection, createFractionalCountSelection, createMatchingValuesSelection, createStoredTextSelection } from './trustedRawSelection'
 import type { QueryRawSelection, QueryRelationKeysPredicate } from './ast'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
@@ -3687,6 +3687,20 @@ export function selectStoredText<TTableOrName extends TableReference>(
     throw new SecurityError('selectStoredText() only supports PostgreSQL and MySQL.')
   }
   return append(createStoredTextSelection(dialect, column, alias)) as unknown as TableQueryBuilder<TTableOrName, Record<string, unknown>>
+}
+
+export function selectMatchingValues<TTableOrName extends TableReference>(
+  query: TableQueryBuilder<TTableOrName, Record<string, unknown>>,
+  column: string,
+  values: readonly unknown[],
+  alias: string,
+): TableQueryBuilder<TTableOrName, Record<string, unknown>> {
+  const { connection, append } = internalSelectionContext(query as unknown as TableQueryBuilder<string, Record<string, unknown>>)
+  const dialect = connection.getDialect().name
+  if (dialect !== 'postgres' && dialect !== 'mysql') {
+    throw new SecurityError('selectMatchingValues() only supports PostgreSQL and MySQL.')
+  }
+  return append(createMatchingValuesSelection(dialect, column, values, alias)) as unknown as TableQueryBuilder<TTableOrName, Record<string, unknown>>
 }
 
 export function whereStoredValuesDiffer<
