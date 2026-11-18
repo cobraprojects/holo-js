@@ -179,11 +179,19 @@ export class SQLQueryCompiler {
       && !plan.lockMode
     ) {
       validateQueryPlan(plan, this.dialect)
-      this.compile({ ...plan, orderBy: [] })
-      return this.compile({
-        ...plan,
-        orderBy: [],
-        selections: [{ kind: 'aggregate', aggregate: 'count', column: '*', alias: '__holo_count' }],
+      const statement = this.compile({ ...plan, orderBy: [] })
+      if (dateBucketSelections(plan).size === 0) {
+        return this.compile({
+          ...plan,
+          orderBy: [],
+          selections: [{ kind: 'aggregate', aggregate: 'count', column: '*', alias: '__holo_count' }],
+        })
+      }
+      const bindings: unknown[] = []
+      const sql = this.compileSelectSql({ ...plan, orderBy: [] }, bindings, `COUNT(*) AS ${this.quoteIdentifier('__holo_count')}`)
+      return this.withMetadata({ ...statement, sql, bindings }, {
+        ...this.createSelectMetadata(plan),
+        selectedShape: { mode: 'projection', columns: [], aggregates: ['__holo_count'], hasRawSelections: false, hasSubqueries: false },
       })
     }
     const statement = this.compile(plan)

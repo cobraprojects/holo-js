@@ -583,13 +583,14 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     const second = await createKeyedTable('bucket_second', 'day', [{ id: 1, value: 7 }])
     registerGeneratedTables({ events, first, second })
 
-    const rows = await DB.table(events.tableName)
+    const query = () => DB.table(events.tableName)
       .join(first.tableName, 'day', '=', `${events.tableName}.id`)
       .join(second.tableName, `${second.tableName}.id`, '=', `${events.tableName}.id`)
       .selectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
-      .get()
 
-    expect(rows).toEqual([{ day: '2026-11-03' }])
+    await expect(query().get()).resolves.toEqual([{ day: '2026-11-03' }])
+    await expect(query().count()).resolves.toBe(1)
+    await expect(query().paginate(10, 1).then(page => page.meta.total)).resolves.toBe(1)
   })
 
   it('rejects a joined wildcard spelled in another case whose column shares the date bucket alias', async () => {
