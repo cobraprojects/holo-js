@@ -1620,6 +1620,28 @@ describe('date buckets next to sqlite wildcards of case-variant aliases', () => 
       .get()).rejects.toThrow(CompilerError)
   })
 
+  it('keeps a subquery ordering by its own output alias named like an outer date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('sqlite')
+    const schema = createSchemaService(DB.connection())
+    const codes = `bucket_codes_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(codes)
+    })
+    await schema.createTable(codes, (table) => {
+      table.id()
+      table.integer('code')
+      table.integer('day')
+    })
+    registerGeneratedTables({ events, codesTable: defineGeneratedTable(codes, { id: column.id(), code: column.integer(), day: column.integer() }) })
+    await DB.table(codes).insert([{ id: 1, code: 1, day: 200 }, { id: 2, code: 2, day: 100 }])
+    const first = DB.table(codes).select('code as day').orderBy('day').limit(1)
+
+    const rows = await DB.table(events).where('id', 1).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).addSelectSub(first, 'first_code').get()
+
+    expect(rows).toEqual([{ day: '2026-11-03', first_code: 1 }])
+  })
+
   it('lets a union arm reach an outer column that a sibling arm names as a date bucket', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable('sqlite')

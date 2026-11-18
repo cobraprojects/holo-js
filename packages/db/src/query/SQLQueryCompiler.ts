@@ -66,6 +66,7 @@ export class SQLQueryCompiler {
   private dateBucketsFolded: ReadonlyMap<string, ResolvedDateBucket> = NO_DATE_BUCKETS
   private guardedBucketNames: ReadonlySet<string> = NO_GUARDED_BUCKET_NAMES
   private outerGuardedBucketNames: ReadonlySet<string> = NO_GUARDED_BUCKET_NAMES
+  private orderByOutputs: ReadonlySet<string> = NO_GUARDED_BUCKET_NAMES
   private dateBucketAliasMode: DateBucketAliasMode = 'column'
 
   constructor(
@@ -216,7 +217,9 @@ export class SQLQueryCompiler {
     const enclosingDateBucketsFolded = this.dateBucketsFolded
     const enclosingGuardedBucketNames = this.guardedBucketNames
     const enclosingOuterGuardedBucketNames = this.outerGuardedBucketNames
+    const enclosingOrderByOutputs = this.orderByOutputs
     this.outerGuardedBucketNames = enclosingGuardedBucketNames
+    this.orderByOutputs = NO_GUARDED_BUCKET_NAMES
     try {
       const selections = dateBucketSelections(plan)
       if (selections.size === 0) {
@@ -238,6 +241,7 @@ export class SQLQueryCompiler {
       this.dateBucketsFolded = enclosingDateBucketsFolded
       this.guardedBucketNames = enclosingGuardedBucketNames
       this.outerGuardedBucketNames = enclosingOuterGuardedBucketNames
+      this.orderByOutputs = enclosingOrderByOutputs
     }
   }
 
@@ -293,7 +297,7 @@ export class SQLQueryCompiler {
     const unionClause = this.compileUnions(plan.unions, bindings)
     const orderClause = plan.orderBy.length === 0
       ? ''
-      : ` ORDER BY ${this.withDateBucketAliases(plan.unions.length === 0 ? 'expression' : 'output', () => plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', '))}`
+      : ` ORDER BY ${this.withOrderByOutputs(plan, () => this.withDateBucketAliases(plan.unions.length === 0 ? 'expression' : 'output', () => plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', ')))}`
     const lockOf = plan.joins.some(join => join.subquery !== undefined && isOneOfManyAggregatePlan(join.subquery))
       ? this.quoteIdentifier(plan.source.alias ?? splitTablePath(plan.source.tableName).table)
       : undefined
@@ -1062,6 +1066,22 @@ export class SQLQueryCompiler {
     }
   }
 
+  private withOrderByOutputs<TResult>(plan: SelectQueryPlan, compile: () => TResult): TResult {
+    const enclosing = this.orderByOutputs
+    this.orderByOutputs = this.guardedBucketNames.size === 0
+      ? NO_GUARDED_BUCKET_NAMES
+      : new Set(plan.selections.flatMap((selection) => {
+        if (selection.kind === 'raw' || selection.kind === 'date-bucket') return []
+        if (selection.kind !== 'column') return [selection.alias.toLowerCase()]
+        return selection.alias ? [selection.alias.toLowerCase()] : []
+      }))
+    try {
+      return compile()
+    } finally {
+      this.orderByOutputs = enclosing
+    }
+  }
+
   private withVisibleJoins<TResult>(count: number, compile: () => TResult): TResult {
     const enclosing = this.dateBucketPlan
     if (!enclosing) return compile()
@@ -1099,7 +1119,7 @@ export class SQLQueryCompiler {
       throw new CompilerError(`Refer to the date bucket "${dateBucket.bucket.alias}" by its exact name, not "${reference}".`)
     }
     if (dateBucket && this.dateBucketAliasMode === 'expression') return this.compileDateBucketExpression(dateBucket)
-    if ((this.dateBucketAliasMode === 'column' || !dateBucket) && this.dateBucketPlan && !reference.includes('.') && this.guardedBucketNames.has(reference.toLowerCase())) {
+    if ((this.dateBucketAliasMode === 'column' || !dateBucket) && this.dateBucketPlan && !reference.includes('.') && this.guardedBucketNames.has(reference.toLowerCase()) && !this.orderByOutputs.has(reference.toLowerCase())) {
       return `${this.compileTableReference(bareColumnOwner(this.dateBucketPlan, reference, this.connectionName, this.foldsColumnNames()))}.${this.quoteIdentifier(reference)}`
     }
     const { schema: table, table: column } = splitTablePath(reference)
