@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { CapabilityError, CompilerError, ConfigurationError, DB, DatabaseError, SQLiteQueryCompiler, createDeleteQueryPlan, SecurityError, clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB } from '../src'
+import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
-import { integrationDrivers, mysqlIntegration, openDatabase, postgresIntegration, postgresTestConnection } from './support/database'
+import { integrationDrivers, mysqlIntegration, mysqlTestConnection, openDatabase, postgresIntegration, postgresTestConnection } from './support/database'
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)
 
@@ -1534,6 +1535,46 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
 
     expect(probes).toBe(1)
   })
+
+  it('runs a transaction probe of its own while an outside probe waits for the only pooled connection', async () => {
+    useAppTimezone('Europe/Paris')
+    const db = createDatabase({
+      connectionName: 'default',
+      adapter: createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 1 } }),
+      dialect: createDialect('mysql'),
+    })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    const name = `bucket_pooled_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const pooled = defineGeneratedTable(name, { id: column.id(), at: column.datetime() })
+    try {
+      await createSchemaService(db).createTable(name, (table) => {
+        table.id()
+        table.datetime('at')
+      })
+      await DB.table(pooled).count()
+      const query = DB.table(pooled).selectDate('day', 'at', { as: 'day', timeZone: 'Asia/Tokyo' })
+      const days = () => query.get()
+      let began!: () => void
+      let release!: () => void
+      const started = new Promise<void>((resolve) => { began = resolve })
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      const inside = db.transaction(async () => {
+        await DB.table(pooled).count()
+        began()
+        await gate
+        return days()
+      })
+      await started
+      const outside = days()
+      await new Promise(resolve => setTimeout(resolve, 50))
+      release()
+
+      await expect(Promise.all([inside, outside])).resolves.toEqual([[], []])
+    } finally {
+      await createSchemaService(db).dropTable(name)
+      await db.disconnect()
+    }
+  }, 10_000)
 
   it('skips conversion for another spelling of the app time zone', async () => {
     useAppTimezone('America/New_York')

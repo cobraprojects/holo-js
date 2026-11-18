@@ -6,6 +6,7 @@ import { knownJoinedColumns } from './modelRowProjection'
 import { dateBucketSelections, readAllColumnsSelectionTable } from './ast'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { getRootDatabaseContext } from '../core/contextOwnership'
+import { currentRootTransaction } from '../core/openTransactions'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryDateBucketSelection, QueryDateBucketUnit, QueryPredicateNode, SelectQueryPlan } from './ast'
 
@@ -278,7 +279,7 @@ export function sameMySQLTimeZone(left: string, right: string): boolean {
 }
 
 const convertibleMySQLTimeZones = new WeakMap<DatabaseContext, Set<string>>()
-const inFlightMySQLTimeZoneChecks = new WeakMap<DatabaseContext, Map<string, Promise<void>>>()
+const inFlightMySQLTimeZoneChecks = new WeakMap<object, Map<string, Promise<void>>>()
 
 type PlannedDateBucket = { readonly plan: SelectQueryPlan, readonly bucket: QueryDateBucketSelection }
 
@@ -321,8 +322,9 @@ export async function assertDateBucketTimeZonesConvertible(connection: DatabaseC
   const root = getRootDatabaseContext(connection)
   const convertible = convertibleMySQLTimeZones.get(root) ?? new Set<string>()
   convertibleMySQLTimeZones.set(root, convertible)
-  const inFlight = inFlightMySQLTimeZoneChecks.get(connection) ?? new Map<string, Promise<void>>()
-  inFlightMySQLTimeZoneChecks.set(connection, inFlight)
+  const scope: object = currentRootTransaction(connection) ?? connection
+  const inFlight = inFlightMySQLTimeZoneChecks.get(scope) ?? new Map<string, Promise<void>>()
+  inFlightMySQLTimeZoneChecks.set(scope, inFlight)
   const zones = convertedMySQLTimeZones(plan, connection.getConnectionName()).filter(zone => !convertible.has(zone))
   const unchecked = zones.filter(zone => !inFlight.has(zone))
   if (unchecked.length > 0) {
