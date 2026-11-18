@@ -365,10 +365,10 @@ export class TableQueryBuilder<
     })
   }
 
-  private async prepareMutation(): Promise<void> {
+  private async prepareMutation(executesPredicates = false): Promise<void> {
     await this.bindGeneratedTable()
     const executed = Object.freeze({ ...createSelectQueryPlan(this.plan.source), predicates: this.plan.predicates })
-    if (planHasDateBuckets(executed)) {
+    if (executesPredicates && planHasDateBuckets(executed)) {
       this.getCompiler().compile(executed)
       await assertDateBucketTimeZonesConvertible(this.connection, executed)
     }
@@ -2369,7 +2369,7 @@ export class TableQueryBuilder<
     const unionColumns = orderedQuery.plan.unions.length === 0
       ? undefined
       : unionCursorColumns(orderedQuery.plan, cursorOrders.map(order => order.column), this.connection.getConnectionName())
-    if (unionColumns) assertUnionCursorDistinguishesGroups(orderedQuery.plan, unionColumns)
+    if (unionColumns) assertUnionCursorDistinguishesGroups(orderedQuery.plan)
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     if (decodedCursor) {
       const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
@@ -2897,7 +2897,7 @@ export class TableQueryBuilder<
 
   async update(values: Readonly<Record<string, unknown>>): Promise<DriverExecutionResult> {
     assertQueryTablePath(this.source.tableName)
-    await this.prepareMutation()
+    await this.prepareMutation(true)
     const normalizedValues = this.normalizeUpdateValues(values)
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     const writesDecimal = this.writesDecimalColumn(Object.keys(normalizedValues))
@@ -2944,7 +2944,7 @@ export class TableQueryBuilder<
   }
 
   async delete(): Promise<DriverExecutionResult> {
-    await this.prepareMutation()
+    await this.prepareMutation(true)
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createDeleteQueryPlan(this.source, this.plan.predicates),
     ))
@@ -3310,7 +3310,7 @@ export class TableQueryBuilder<
     requestedAmounts: Readonly<Record<string, number>>,
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
-    await this.prepareMutation()
+    await this.prepareMutation(true)
     const amounts = this.resolveSourceColumnKeys(requestedAmounts, 'increment/decrement')
     const columns = Object.keys(amounts)
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
@@ -3694,11 +3694,10 @@ export function whereRelationKeys<TQuery extends TableQueryBuilder<TableReferenc
   return query.withPredicates([...query.getPlan().predicates, { kind: 'relation-keys', column, values: predicate.value, valueType }]) as TQuery
 }
 
-function assertUnionCursorDistinguishesGroups(plan: SelectQueryPlan, unionColumns: (branch: SelectQueryPlan) => readonly UnionCursorColumn[]): void {
+function assertUnionCursorDistinguishesGroups(plan: SelectQueryPlan): void {
   const branches = unionBranchPlans(plan)
-  if (!branches.some(branch => branch.groupBy.length > 0)) return
-  if (branches.some(branch => unionColumns(branch).some(column => column.selectionAlias))) {
-    throw new SecurityError('Cursor pagination cannot page a union of grouped queries by a date bucket, because the same bucket can appear in more than one of them.')
+  if (branches.some(branch => branch.groupBy.length > 0) && branches.some(branch => dateBucketSelections(branch).size > 0)) {
+    throw new SecurityError('Cursor pagination cannot page a union with date buckets that has a grouped query, because its order cannot always tell the groups apart.')
   }
 }
 

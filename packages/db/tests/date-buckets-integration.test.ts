@@ -886,6 +886,28 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .get()).rejects.toThrow(SecurityError)
   })
 
+  it('rejects union cursor pagination with date buckets when a query in the union is grouped', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events.tableName)
+      .select('id', 'tenant_id')
+      .addSelectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .unionAll(DB.table(events.tableName).select('tenant_id as id', 'tenant_id').addSelectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' }).groupBy('tenant_id', 'bucket'))
+      .orderBy('id')
+      .cursorPaginate(1)).rejects.toThrow(SecurityError)
+  })
+
+  it('inserts without validating date buckets in predicates the insert discards', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const unused = DB.table(events).selectDate('day', 'occurred_at', { as: `b${'u'.repeat(63)}` })
+
+    await DB.table(events).whereExists(unused).insert({ tenant_id: 10, occurred_at: null, billed_on: null })
+
+    await expect(DB.table(events).where('tenant_id', 10).count()).resolves.toBe(1)
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)
@@ -1245,6 +1267,29 @@ describe.runIf(postgresIntegration)('date buckets on postgres qualifiers that di
       .join(`${name} as ${shadow}`, `${shadow}.id`, '=', `${events.tableName}.id`)
       .selectDate('day', `${shadow}.billed_on`, { as: 'day', timeZone: 'Asia/Tokyo' })
       .get()).rejects.toThrow(ConfigurationError)
+  })
+})
+
+describe.runIf(postgresIntegration)('date buckets next to postgres wildcards of case-distinct aliases', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('checks only the wildcard of the exactly named alias', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('postgres')
+    const plain = await createKeyedTable('bucket_plain', 'amount', [{ id: 1, value: 1 }])
+    const tagged = await createKeyedTable('bucket_tagged', 'bucket', [{ id: 1, value: 1 }])
+    registerGeneratedTables({ events, plain, tagged })
+
+    const rows = await DB.table(events.tableName)
+      .join(`${plain.tableName} as tags`, 'tags.id', '=', `${events.tableName}.id`)
+      .join(`${tagged.tableName} as Tags`, 'Tags.id', '=', `${events.tableName}.id`)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
+      .addSelect('tags.*')
+      .get()
+
+    expect(rows).toEqual([{ bucket: '2026-11-03', id: 1, amount: 1 }])
   })
 })
 

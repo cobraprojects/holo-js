@@ -102,13 +102,17 @@ function visibleTables(plan: SelectQueryPlan, connectionName: string | undefined
   ]
 }
 
+function boundTables(visible: readonly VisibleTable[], qualifier: string | undefined): readonly VisibleTable[] {
+  if (qualifier === undefined) return visible
+  const exactlyBound = visible.filter(table => isVisibleAs(qualifier, table, sameIdentifierExactly))
+  return exactlyBound.length > 0 ? exactlyBound : visible.filter(table => isVisibleAs(qualifier, table))
+}
+
 function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectionName: string | undefined): AnyColumnDefinition | undefined {
   const separator = column.lastIndexOf('.')
   const name = column.slice(separator + 1)
   const qualifier = separator === -1 ? undefined : column.slice(0, separator)
-  const visible = visibleTables(plan, connectionName)
-  const exactlyBound = qualifier === undefined ? visible : visible.filter(table => isVisibleAs(qualifier, table, sameIdentifierExactly))
-  const tables = exactlyBound.length > 0 ? exactlyBound : visible.filter(table => qualifier !== undefined && isVisibleAs(qualifier, table))
+  const tables = boundTables(visibleTables(plan, connectionName), qualifier)
   const find = (matches: IdentifierMatch) => tables
     .map(table => matchingColumnDefinition(table.definition, name, matches))
     .find(definition => definition !== undefined)
@@ -126,8 +130,7 @@ export function selectionMayOutputName(
   if (selection.kind !== 'column' || selection.alias) return false
   const wildcardTable = selection.column === '*' ? undefined : readAllColumnsSelectionTable(selection.column)
   if (selection.column !== '*' && wildcardTable === undefined) return false
-  return visibleTables(plan, connectionName)
-    .filter(table => wildcardTable === undefined || isVisibleAs(wildcardTable, table))
+  return boundTables(visibleTables(plan, connectionName), wildcardTable)
     .some((table) => {
       const columns = table.columns()
       return columns === undefined ? unknown.wildcard : columns.some(column => effectiveOutputName(column) === effectiveOutputName(name))
