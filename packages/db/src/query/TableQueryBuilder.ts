@@ -41,7 +41,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { readConvertedResultColumns, readInsertedKey, readIntegerColumns, resolveConvertedResultColumns, withResolvedDefinitions } from './resultColumns'
+import { readConvertedResultColumns, readInsertedKey, readIntegerColumns, readsAsColumnValue, resolveConvertedResultColumns, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -463,37 +463,37 @@ export class TableQueryBuilder<
     )
   }
 
-  selectMin<TAlias extends string>(
+  selectMin<TAlias extends string, TColumn extends DeclaredColumnName<TTableOrName, TAvailableColumns>>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
-  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
+    column: TColumn,
+  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, TAvailableColumns[TColumn] | null>, TAvailableColumns> {
     return this.clone(
       withAggregateSelection(this.plan, this.createAggregateSelection('min', alias, column)),
     )
   }
 
-  addSelectMin<TAlias extends string>(
+  addSelectMin<TAlias extends string, TColumn extends DeclaredColumnName<TTableOrName, TAvailableColumns>>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
+    column: TColumn,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, TAvailableColumns[TColumn] | null>, TAvailableColumns> {
     return this.clone(
       appendAggregateSelection(this.plan, this.createAggregateSelection('min', alias, column)),
     )
   }
 
-  selectMax<TAlias extends string>(
+  selectMax<TAlias extends string, TColumn extends DeclaredColumnName<TTableOrName, TAvailableColumns>>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
-  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
+    column: TColumn,
+  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, TAvailableColumns[TColumn] | null>, TAvailableColumns> {
     return this.clone(
       withAggregateSelection(this.plan, this.createAggregateSelection('max', alias, column)),
     )
   }
 
-  addSelectMax<TAlias extends string>(
+  addSelectMax<TAlias extends string, TColumn extends DeclaredColumnName<TTableOrName, TAvailableColumns>>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
+    column: TColumn,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, TAvailableColumns[TColumn] | null>, TAvailableColumns> {
     return this.clone(
       appendAggregateSelection(this.plan, this.createAggregateSelection('max', alias, column)),
     )
@@ -2180,7 +2180,7 @@ export class TableQueryBuilder<
 
   private async queryRows<TRow extends Record<string, unknown>>(statement: CompiledStatement): Promise<TRow[]> {
     const { rows } = await this.connection.queryCompiled<TRow>(statement)
-    const aggregates = this.plan.selections.filter(selection => selection.kind === 'aggregate')
+    const aggregates = this.plan.selections.filter((selection): selection is QueryAggregateSelection => selection.kind === 'aggregate' && !readsAsColumnValue(selection))
     if (aggregates.length === 0) return rows
     return rows.map(row => {
       const values: Record<string, unknown> = { ...row }

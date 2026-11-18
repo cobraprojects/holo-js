@@ -674,6 +674,14 @@ describe('type system contracts', () => {
         .addSelectSum('totalScore', 'id')
         .groupBy('name')
       const groupedRows = grouped.get()
+      const extrema = builder
+        .select('name')
+        .addSelectMax('lastCreatedAt', 'created_at')
+        .addSelectMin('firstName', 'name')
+        .addSelectMax('highestId', 'id')
+        .addSelectMin('anyActive', 'active')
+        .groupBy('name')
+      const latest = builder.selectMax('lastCreatedAt', 'created_at')
 
       expectTypeOf(narrowed.get()).toEqualTypeOf<Promise<Array<{ id: number, name: string }>>>()
       expectTypeOf(narrowed.first()).toEqualTypeOf<Promise<{ id: number, name: string } | undefined>>()
@@ -683,11 +691,15 @@ describe('type system contracts', () => {
       expectTypeOf(activeOnly.value('active')).toEqualTypeOf<Promise<boolean | undefined>>()
       expectTypeOf(aliased.get()).toEqualTypeOf<Promise<Array<{ displayName: string }>>>()
       expectTypeOf(groupedRows).toMatchTypeOf<Promise<Array<{ name: string, total: number, totalScore: number | null }>>>()
+      expectTypeOf(extrema.get()).toEqualTypeOf<Promise<Array<{ name: string } & Record<'lastCreatedAt', Date | null> & Record<'firstName', string | null> & Record<'highestId', number | null> & Record<'anyActive', boolean | null>>>>()
+      expectTypeOf(latest.first()).toEqualTypeOf<Promise<Record<'lastCreatedAt', Date | null> | undefined>>()
       void cached
       void widened
       void aliased
       void grouped
       void groupedRows
+      void extrema
+      void latest
 
       // @ts-expect-error invalid typed table column should be rejected
       builder.where('missing', '=', 1)

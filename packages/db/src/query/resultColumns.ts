@@ -3,7 +3,7 @@ import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { splitTablePath } from '../schema/identifiers'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
-import type { QueryColumnSelection, SelectQueryPlan } from './ast'
+import type { QueryAggregateSelection, QueryColumnSelection, QuerySelection, SelectQueryPlan } from './ast'
 
 const INTEGER_TEXT = /^-?\d+$/
 
@@ -74,13 +74,23 @@ function selectedColumns(selection: QueryColumnSelection, tables: ReadonlyMap<st
   return [[selection.alias ?? name, table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined]]
 }
 
+export function readsAsColumnValue(selection: QueryAggregateSelection): boolean {
+  return selection.aggregate === 'min' || selection.aggregate === 'max'
+}
+
+function selectionResultColumns(selection: QuerySelection, tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
+  if (selection.kind === 'column') return selectedColumns(selection, tables)
+  if (selection.kind === 'aggregate' && readsAsColumnValue(selection)) {
+    return selectedColumns({ kind: 'column', column: selection.column, alias: selection.alias }, tables)
+  }
+  return 'alias' in selection ? [[selection.alias, undefined]] : [[UNKNOWN_COLUMNS, undefined]]
+}
+
 function selectedResultColumns(plan: SelectQueryPlan): readonly SelectedColumn[] {
   const tables = queryTables(plan)
   return plan.selections.length === 0
     ? projectedColumns(tables)
-    : plan.selections.flatMap((selection): SelectedColumn[] => selection.kind === 'column'
-      ? selectedColumns(selection, tables)
-      : 'alias' in selection ? [[selection.alias, undefined]] : [[UNKNOWN_COLUMNS, undefined]])
+    : plan.selections.flatMap(selection => selectionResultColumns(selection, tables))
 }
 
 function resultColumnDefinitions(plan: SelectQueryPlan): ReadonlyMap<string, AnyColumnDefinition> {
