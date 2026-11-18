@@ -42,8 +42,8 @@ You don't need to catch `ValidationException` yourself. Holo handles it in each 
 | Next.js | Server action passed to `<form action>` | The page renders again with the errors for [`useValidationErrors()`](/basics/forms/frameworks#next-js-native-forms) |
 | Nuxt | `server/api/**` or a request that doesn't accept HTML | 422 JSON response |
 | Nuxt | `server/routes/**` from a native HTML form post | 303 redirect back to the form, with errors flashed for [`useValidationErrors()`](/basics/forms/frameworks#native-forms-in-nuxt) |
-| SvelteKit | `+server.ts` | 422 JSON response |
-| SvelteKit | Form action in `+page.server.ts` | Errors flashed for `useForm()` and `useValidationErrors()` on the page, passed as `pageData` from the root layout load |
+| SvelteKit | A route whose path inside the app starts with `api/` (whatever `kit.paths.base` is), including form actions there, or a request with a method only `+server.ts` handles (anything but `GET`, `HEAD` and `POST`). Client-side navigation data requests are excluded | 422 JSON response |
+| SvelteKit | Any other request outside `api/`, such as a form action in `+page.server.ts` or a `GET`/`POST` to `+server.ts`. Put endpoints that should answer with JSON under `api/` | Errors flashed for `useForm()` and `useValidationErrors()` on the page, passed as `pageData` from the root layout load |
 
 ## Default messages
 
