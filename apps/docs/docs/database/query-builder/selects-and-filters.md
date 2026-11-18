@@ -71,6 +71,17 @@ const totals = await DB.table('orders')
 | `selectMin(alias, column)` | `addSelectMin(...)` | alias, column |
 | `selectMax(alias, column)` | `addSelectMax(...)` | alias, column |
 
+`COUNT`, `SUM`, and `AVG` return numbers. `MIN` and `MAX` work on any comparable column and return the value the same way selecting that column does. A timestamp column gives its date, a string column a string, a decimal column its decimal string, and an integer column a number. Every aggregate except `COUNT` returns `null` when no rows match.
+
+```ts
+const rows = await DB.table(tables.redemptions)
+  .select('actor_user_id')
+  .addSelectMax('last_redeemed_at', 'redeemed_at')
+  .groupBy('actor_user_id')
+  .get()
+// [{ actor_user_id: 1, last_redeemed_at: Date }]
+```
+
 ### selectCount()
 
 Select `COUNT` of rows as a named column. The alias defaults to `count`, and the column defaults to `*`.
