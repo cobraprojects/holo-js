@@ -8,6 +8,33 @@ export type AvailableTableColumns<TTable extends string | TableDefinition> = TTa
   ? InferSelect<TTable> & QualifiedTableColumns<TTable>
   : Record<string, unknown>
 
+export type DateBucketUnit = 'year' | 'month' | 'day' | 'hour'
+
+declare const dateBucketUnit: unique symbol
+
+export type DateBucket<TUnit extends DateBucketUnit = DateBucketUnit> = string & { readonly [dateBucketUnit]: TUnit }
+
+export type DateColumnName<TColumns extends Record<string, unknown>> = string extends keyof TColumns
+  ? string
+  : { [TColumn in keyof TColumns & string]: NonNullable<TColumns[TColumn]> extends Date ? TColumn : never }[keyof TColumns & string]
+
+export type DateBucketAlias<TRow extends Record<string, unknown>> = {
+  [TColumn in keyof TRow & string]: NonNullable<TRow[TColumn]> extends DateBucket ? TColumn : never
+}[keyof TRow & string]
+
+export type DateBucketAliasName<TAlias extends string, TColumns extends Record<string, unknown>> = string extends keyof TColumns
+  ? TAlias
+  : TAlias extends keyof TColumns ? never : TAlias
+
+export interface DateBucketOptions<TAlias extends string> {
+  readonly as: TAlias
+  readonly timeZone?: string
+}
+
+export type DateBucketSelectionResult<TAlias extends string, TUnit extends DateBucketUnit, TValue> = {
+  [TName in TAlias]: DateBucket<TUnit> | (null extends TValue ? null : never)
+}
+
 export type NullableColumns<TColumns extends Record<string, unknown>> = {
   [TColumn in keyof TColumns]: TColumns[TColumn] | null
 }

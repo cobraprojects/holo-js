@@ -1,13 +1,15 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { SecurityError } from '../core/errors'
-import { isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
+import { dateBucketSelections, isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
 import { storesJson } from '../schema/normalization'
+import { assertDateBucketTimeZone, assertDateBucketUnit } from './dateBuckets'
 import { tablePathSegments } from '../schema/identifiers'
 import type { TableColumnsShape } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type {
   QueryAggregateSelection,
   QueryColumnSelection,
+  QueryDateBucketSelection,
   QueryJoinClause,
   QueryColumnPredicate,
   QueryDatePredicate,
@@ -18,6 +20,7 @@ import type {
   QueryPlan,
   QueryPredicateNode,
   QueryUpdateValue,
+  SelectQueryPlan,
 } from './ast'
 
 const IDENTIFIER_PATTERN = /^[A-Z_]\w*$/i
@@ -203,6 +206,26 @@ function assertColumnReference(
   assertKnownColumn(column, tableName, allowedColumns)
 }
 
+function assertDateBucketSelection(
+  selection: QueryDateBucketSelection,
+  tableName: string,
+  allowedColumns?: Set<string>,
+): void {
+  assertDateBucketUnit(selection.unit)
+  assertColumnReference(selection.column, tableName, allowedColumns)
+  assertIdentifier(selection.alias, 'Selection alias')
+  if (allowedColumns?.has(selection.alias)) {
+    throw new SecurityError(`Date bucket alias "${selection.alias}" must not reuse a column name of table "${tableName}".`)
+  }
+  if (selection.timeZone !== undefined) assertDateBucketTimeZone(selection.timeZone)
+}
+
+function withDateBucketAliases(plan: SelectQueryPlan, allowedColumns?: Set<string>): Set<string> | undefined {
+  if (!allowedColumns) return undefined
+  const aliases = [...dateBucketSelections(plan).keys()]
+  return aliases.length === 0 ? allowedColumns : new Set([...allowedColumns, ...aliases])
+}
+
 function assertColumnSelection(
   selection: QueryColumnSelection,
   tableName: string,
@@ -276,6 +299,7 @@ function assertPredicate(
   tableName: string,
   allowedColumns?: Set<string>,
   sourceColumns?: TableColumnsShape,
+  selectionAliasColumns: Set<string> | undefined = allowedColumns,
 ): void {
   if (predicate.kind === 'group') {
     if (predicate.predicates.length === 0) {
@@ -283,7 +307,7 @@ function assertPredicate(
     }
 
     for (const nested of predicate.predicates) {
-      assertPredicate(nested, tableName, allowedColumns, sourceColumns)
+      assertPredicate(nested, tableName, allowedColumns, sourceColumns, selectionAliasColumns)
     }
 
     return
@@ -472,7 +496,8 @@ function assertPredicate(
     return
   }
 
-  assertColumnReference(predicate.column, tableName, allowedColumns)
+  const referencesSelectionAlias = (predicate.kind === 'comparison' || predicate.kind === 'null') && predicate.selectionAlias === true
+  assertColumnReference(predicate.column, tableName, referencesSelectionAlias ? selectionAliasColumns : allowedColumns)
 
   if (predicate.kind === 'null') {
     return
@@ -626,8 +651,14 @@ export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName):
           continue
         }
 
+        if (selection.kind === 'date-bucket') {
+          assertDateBucketSelection(selection, plan.source.tableName, allowedColumns)
+          continue
+        }
+
         assertColumnSelection(selection, plan.source.tableName, allowedColumns)
       }
+      const referenceableColumns = withDateBucketAliases(plan, allowedColumns)
 
       for (const join of plan.joins) {
         assertJoinClause(join)
@@ -638,11 +669,11 @@ export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName):
       }
 
       for (const predicate of plan.predicates) {
-        assertPredicate(predicate, plan.source.tableName, allowedColumns, plan.source.table?.columns)
+        assertPredicate(predicate, plan.source.tableName, allowedColumns, plan.source.table?.columns, referenceableColumns)
       }
 
       for (const column of plan.groupBy) {
-        assertColumnReference(column, plan.source.tableName, allowedColumns)
+        assertColumnReference(column, plan.source.tableName, referenceableColumns)
       }
 
       for (const clause of plan.having) {

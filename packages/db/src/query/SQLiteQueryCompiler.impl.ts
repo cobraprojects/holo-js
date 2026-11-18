@@ -7,7 +7,14 @@ import { CompilerError } from '../core/errors'
 import { splitTablePath } from '../schema/identifiers'
 import { sameIdentifier } from '../schema/introspection/sqliteTokens'
 import { SQLITE_DECIMAL_TEXT_FUNCTION } from '../schema/normalization'
-import type { InsertStatementOptions, QueryColumnPredicate, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate, SelectQueryPlan } from './ast'
+import type { InsertStatementOptions, QueryColumnPredicate, QueryDateBucketSelection, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate, SelectQueryPlan } from './ast'
+
+const SQLITE_DATE_BUCKET_FORMATS: Readonly<Record<QueryDateBucketSelection['unit'], string>> = {
+  year: '%Y',
+  month: '%Y-%m',
+  day: '%Y-%m-%d',
+  hour: '%Y-%m-%d %H:00',
+}
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
   return `json_extract(${column}, ${pathLiteral})`
@@ -245,8 +252,13 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     return expression
   }
 
-  private compileAppWallClock(column: string): string {
-    const timeZone = getApplicationTimezone()
+  protected override compileDateBucket(bucket: QueryDateBucketSelection): string {
+    const column = this.compileColumnReference(bucket.column)
+    const wallClock = bucket.calendarDate ? column : this.compileAppWallClock(column, bucket.timeZone)
+    return `strftime('${SQLITE_DATE_BUCKET_FORMATS[bucket.unit]}', ${wallClock})`
+  }
+
+  private compileAppWallClock(column: string, timeZone = getApplicationTimezone()): string {
     if (timeZone === 'UTC') return column
 
     const wallClock = compileSQLiteWallClock(column, this.createSqlStringLiteral(timeZone))

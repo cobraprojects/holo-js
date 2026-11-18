@@ -57,6 +57,7 @@ export function decodeOffsetCursor(
 export type CursorOrderDefinition = {
   readonly column: string
   readonly direction: 'asc' | 'desc'
+  readonly selectionAlias?: true
 }
 
 export type ValueCursor = {

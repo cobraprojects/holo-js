@@ -58,11 +58,27 @@ export interface QuerySubquerySelection {
   readonly alias: string
 }
 
+export type QueryDateBucketUnit = 'year' | 'month' | 'day' | 'hour'
+
+export interface QueryDateBucketSelection {
+  readonly kind: 'date-bucket'
+  readonly unit: QueryDateBucketUnit
+  readonly column: string
+  readonly alias: string
+  readonly calendarDate: boolean
+  readonly timeZone?: string
+}
+
 export type QuerySelection
   = | QueryColumnSelection
     | QueryAggregateSelection
     | QueryRawSelection
     | QuerySubquerySelection
+    | QueryDateBucketSelection
+
+export function dateBucketSelections(plan: SelectQueryPlan): ReadonlyMap<string, QueryDateBucketSelection> {
+  return new Map(plan.selections.flatMap(selection => selection.kind === 'date-bucket' ? [[selection.alias, selection] as const] : []))
+}
 
 export type QueryKeyCast = 'text' | 'integer' | 'decimal' | 'decimalText' | { readonly kind: 'decimalText', readonly places: number }
 
@@ -138,6 +154,7 @@ export interface QueryPredicate {
   readonly operator: QueryOperator
   readonly value: unknown
   readonly valueType?: 'json' | 'date'
+  readonly selectionAlias?: true
 }
 
 export interface QueryColumnPredicate {
@@ -155,6 +172,7 @@ export interface QueryNullPredicate {
   readonly boolean?: 'and' | 'or'
   readonly column: string
   readonly negated: boolean
+  readonly selectionAlias?: true
 }
 
 export interface QueryLikePredicate {
@@ -526,6 +544,29 @@ export function withAggregateSelection(
 export function appendAggregateSelection(
   plan: SelectQueryPlan,
   selection: QueryAggregateSelection,
+): SelectQueryPlan {
+  return Object.freeze({
+    ...plan,
+    selections: Object.freeze([
+      ...plan.selections,
+      Object.freeze(selection),
+    ]),
+  })
+}
+
+export function withDateBucketSelection(
+  plan: SelectQueryPlan,
+  selection: QueryDateBucketSelection,
+): SelectQueryPlan {
+  return Object.freeze({
+    ...plan,
+    selections: Object.freeze([Object.freeze(selection)]),
+  })
+}
+
+export function appendDateBucketSelection(
+  plan: SelectQueryPlan,
+  selection: QueryDateBucketSelection,
 ): SelectQueryPlan {
   return Object.freeze({
     ...plan,

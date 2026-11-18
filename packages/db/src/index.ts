@@ -388,6 +388,8 @@ export type {
 export type {
   CursorPaginatedResult,
   CursorPaginationOptions,
+  DateBucket,
+  DateBucketUnit,
   DeleteQueryPlan,
   InsertQueryPlan,
   PaginationMeta,

@@ -1,7 +1,7 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError, SecurityError } from '../core/errors'
-import { isInlineIntegerValue, keyCastFor, readAllColumnsSelectionTable } from './ast'
+import { dateBucketSelections, isInlineIntegerValue, keyCastFor, readAllColumnsSelectionTable } from './ast'
 import { validateQueryPlan } from './validator'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import { isTrustedRawPredicate } from './trustedRawPredicate'
@@ -11,6 +11,7 @@ import type { CompiledStatement, CompiledStatementMetadata } from '../core/types
 import type { TableNameFolding } from '../schema/tableIdentityRegistry'
 import type {
   DeleteQueryPlan,
+  QueryDateBucketSelection,
   QueryDatePredicate,
   QueryLikePredicate,
   QueryRelationKeysPredicate,
@@ -52,6 +53,8 @@ const UNKNOWN_KIND_KEYS_ALIAS = '__holo_keys'
 
 export class SQLQueryCompiler {
   protected readonly dialect: SchemaDialectName | undefined = undefined
+  private dateBuckets: ReadonlyMap<string, QueryDateBucketSelection> = new Map()
+  private resolvesDateBucketAliases = false
 
   constructor(
     protected readonly quoteIdentifier: IdentifierQuoter,
@@ -195,6 +198,20 @@ export class SQLQueryCompiler {
     bindings: unknown[],
     projection?: string,
   ): string {
+    const enclosingDateBuckets = this.dateBuckets
+    this.dateBuckets = dateBucketSelections(plan)
+    try {
+      return this.compileSelectSqlWithinDateBuckets(plan, bindings, projection)
+    } finally {
+      this.dateBuckets = enclosingDateBuckets
+    }
+  }
+
+  private compileSelectSqlWithinDateBuckets(
+    plan: SelectQueryPlan,
+    bindings: unknown[],
+    projection?: string,
+  ): string {
     const extremum = readScalarExtremum(plan)
     if (extremum) {
       const source = this.compileSelectSql(withScalarExtremum(plan, undefined), bindings)
@@ -219,6 +236,10 @@ export class SQLQueryCompiler {
             return this.compileRawSql(selection.sql, selection.bindings, bindings)
           }
 
+          if (selection.kind === 'date-bucket') {
+            return `${this.compileDateBucketExpression(selection)} AS ${this.quoteIdentifier(selection.alias)}`
+          }
+
           const allColumnsOf = readAllColumnsSelectionTable(selection.column)
           if (allColumnsOf !== undefined && !selection.alias) {
             return this.compileAllColumnsOf(allColumnsOf, plan)
@@ -234,11 +255,11 @@ export class SQLQueryCompiler {
     const unionClause = this.compileUnions(plan.unions, bindings)
     const groupByClause = plan.groupBy.length === 0
       ? ''
-      : ` GROUP BY ${plan.groupBy.map(column => this.compileColumnReference(column)).join(', ')}`
-    const havingClause = this.compileHaving(plan.having, bindings)
+      : ` GROUP BY ${this.withDateBucketAliases(true, () => plan.groupBy.map(column => this.compileColumnReference(column)).join(', '))}`
+    const havingClause = this.withDateBucketAliases(true, () => this.compileHaving(plan.having, bindings))
     const orderClause = plan.orderBy.length === 0
       ? ''
-      : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', ')}`
+      : ` ORDER BY ${this.withDateBucketAliases(true, () => plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', '))}`
     const lockOf = plan.joins.some(join => join.subquery !== undefined && isOneOfManyAggregatePlan(join.subquery))
       ? this.quoteIdentifier(plan.source.alias ?? splitTablePath(plan.source.tableName).table)
       : undefined
@@ -643,6 +664,14 @@ export class SQLQueryCompiler {
     predicate: QueryPredicateNode,
     bindings: unknown[],
   ): string {
+    const referencesSelectionAlias = (predicate.kind === 'comparison' || predicate.kind === 'null') && predicate.selectionAlias === true
+    return this.withDateBucketAliases(referencesSelectionAlias, () => this.compilePredicateNode(predicate, bindings))
+  }
+
+  private compilePredicateNode(
+    predicate: QueryPredicateNode,
+    bindings: unknown[],
+  ): string {
     if (predicate.kind === 'group') {
       const nested = this.compilePredicateSequence(predicate.predicates, bindings)
       return predicate.negated ? `NOT (${nested})` : `(${nested})`
@@ -980,7 +1009,27 @@ export class SQLQueryCompiler {
     return this.compileColumnReference(expression)
   }
 
+  private withDateBucketAliases<TResult>(resolves: boolean, compile: () => TResult): TResult {
+    const enclosing = this.resolvesDateBucketAliases
+    this.resolvesDateBucketAliases = resolves
+    try {
+      return compile()
+    } finally {
+      this.resolvesDateBucketAliases = enclosing
+    }
+  }
+
+  private compileDateBucketExpression(bucket: QueryDateBucketSelection): string {
+    return this.withDateBucketAliases(false, () => this.compileDateBucket(bucket))
+  }
+
+  protected compileDateBucket(bucket: QueryDateBucketSelection): string {
+    throw new CompilerError(`This database engine does not support the "${bucket.unit}" date bucket.`)
+  }
+
   protected compileColumnReference(reference: string): string {
+    const dateBucket = this.resolvesDateBucketAliases ? this.dateBuckets.get(reference) : undefined
+    if (dateBucket) return this.compileDateBucketExpression(dateBucket)
     const { schema: table, table: column } = splitTablePath(reference)
     return table === undefined
       ? this.quoteIdentifier(column)

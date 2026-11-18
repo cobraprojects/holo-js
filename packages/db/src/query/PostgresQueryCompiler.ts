@@ -1,7 +1,9 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { CompiledStatement } from '../core/types'
+import { getApplicationTimezone } from '../applicationTimezone'
 import type {
   InsertStatementOptions,
+  QueryDateBucketSelection,
   QueryDatePredicate,
   QueryFullTextPredicate,
   QueryJsonPredicate,
@@ -13,6 +15,13 @@ import type {
 } from './ast'
 
 const POSTGRES_NUMERIC_INTEGER_DIGITS = 131072
+
+const POSTGRES_DATE_BUCKET_FORMATS: Readonly<Record<QueryDateBucketSelection['unit'], string>> = {
+  year: 'YYYY',
+  month: 'YYYY-MM',
+  day: 'YYYY-MM-DD',
+  hour: 'YYYY-MM-DD HH24:00',
+}
 
 const POSTGRES_NUMERIC_FRACTION_DIGITS = 16383
 
@@ -180,6 +189,13 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
   ): string {
     bindings.push(`[${vector.join(',')}]`)
     return `${this.compileColumnReference(column)} <=> CAST(${this.createPlaceholder(bindings.length)} AS vector)`
+  }
+
+  protected override compileDateBucket(bucket: QueryDateBucketSelection): string {
+    const column = this.compileColumnReference(bucket.column)
+    const timeZone = this.createSqlStringLiteral(bucket.timeZone ?? getApplicationTimezone())
+    const wallClock = bucket.calendarDate ? column : `(CAST(${column} AS TIMESTAMPTZ) AT TIME ZONE ${timeZone})`
+    return `to_char(${wallClock}, '${POSTGRES_DATE_BUCKET_FORMATS[bucket.unit]}')`
   }
 
   protected override compileDatePredicate(

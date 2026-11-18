@@ -182,6 +182,65 @@ const rows = await DB.table('products')
   .get()
 ```
 
+### Selecting date buckets
+
+Select the calendar year, month, day, or hour of a date column as a named string column. Once selected, the alias works in `groupBy()`, `orderBy()`, `orderByDesc()`, and [cursor pagination](/database/pagination#cursor-pagination), on every database.
+
+```ts
+const perDay = await DB.table(events)
+  .where('tenant_id', tenantId)
+  .whereBetween('occurred_at', [from, to])
+  .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+  .addSelectCount('total')
+  .groupBy('day')
+  .orderByDesc('day')
+  .get()
+// [{ day: '2026-11-05', total: 12 }, { day: '2026-11-04', total: 9 }, ...]
+```
+
+| Unit | Value |
+| --- | --- |
+| `'year'` | `'2026'` |
+| `'month'` | `'2026-11'` |
+| `'day'` | `'2026-11-05'` |
+| `'hour'` | `'2026-11-05 14:00'` |
+
+Values are zero-padded strings, so they sort in date order. A `null` date gives a `null` bucket.
+
+`timeZone` is an IANA time zone name such as `'UTC'` or `'Europe/Paris'`, and defaults to `app.timezone`. Holo converts each timestamp to that zone before it takes the calendar part, so an event at `2026-11-04 23:30 UTC` falls on `2026-11-05` in `'Asia/Tokyo'`. `date()` columns hold a calendar day, not an instant, so they keep their stored day in every zone.
+
+::: warning MySQL time zones
+MySQL converts named time zones with its time zone tables. If they're empty, a bucket in a zone other than `app.timezone` throws a `CapabilityError`. Load them with [`mysql_tzinfo_to_sql`](https://dev.mysql.com/doc/refman/8.0/en/mysql-tzinfo-to-sql.html).
+:::
+
+With a table definition, only `date()`, `datetime()`, and `timestamp()` columns are accepted, the alias can't reuse a column name, and the result is typed as `DateBucket<'day'>`, a `string` that remembers its unit.
+
+### selectDate()
+
+Replace the selection with a date bucket.
+
+```ts
+const months = await DB.table(orders)
+  .selectDate('month', 'created_at', { as: 'month' })
+  .addSelectSum('revenue', 'total')
+  .groupBy('month')
+  .orderBy('month')
+  .get()
+```
+
+### addSelectDate()
+
+Add a date bucket to the existing selection.
+
+```ts
+const rows = await DB.table(events)
+  .select('channel')
+  .addSelectDate('hour', 'occurred_at', { as: 'hour', timeZone: 'Europe/Paris' })
+  .addSelectCount('total')
+  .groupBy('channel', 'hour')
+  .get()
+```
+
 For subquery columns and raw expressions, see [Joins and Subqueries](/database/query-builder/joins-and-subqueries).
 
 ## Basic where clauses
@@ -1191,7 +1250,7 @@ const nearest = await DB.table('documents')
 
 ### groupBy()
 
-Group rows by one or more columns. Pass several columns to group by each combination.
+Group rows by one or more columns. Pass several columns to group by each combination. A [date bucket](#selecting-date-buckets) alias works here too.
 
 ```ts
 const postsPerUser = await DB.table('posts')

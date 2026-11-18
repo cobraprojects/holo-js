@@ -6,9 +6,17 @@ import type { CompiledStatement } from '../core/types'
 import type { TableNameFolding } from '../schema/tableIdentityRegistry'
 import { formatWallClockSeconds } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
-import type { DeleteQueryPlan, InsertStatementOptions, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
+import { mysqlTimeZoneName } from './dateBuckets'
+import type { DeleteQueryPlan, InsertStatementOptions, QueryDateBucketSelection, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
 const MYSQL_DECIMAL_DIGITS = 65
+
+const MYSQL_DATE_BUCKET_FORMATS: Readonly<Record<QueryDateBucketSelection['unit'], string>> = {
+  year: '%Y',
+  month: '%Y-%m',
+  day: '%Y-%m-%d',
+  hour: '%Y-%m-%d %H:00',
+}
 
 const MYSQL_DECIMAL_KEY_INTEGER_DIGITS = 35
 
@@ -132,6 +140,16 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
       .map(column => `${this.quoteIdentifier(column)} = VALUES(${this.quoteIdentifier(column)})`)
       .join(', ')
     return ` ON DUPLICATE KEY UPDATE ${updates}`
+  }
+
+  protected override compileDateBucket(bucket: QueryDateBucketSelection): string {
+    const column = this.compileColumnReference(bucket.column)
+    const applicationTimeZone = getApplicationTimezone()
+    const timeZone = bucket.timeZone ?? applicationTimeZone
+    const wallClock = bucket.calendarDate || timeZone === applicationTimeZone
+      ? column
+      : `CONVERT_TZ(${column}, ${this.createSqlStringLiteral(mysqlTimeZoneName(applicationTimeZone))}, ${this.createSqlStringLiteral(mysqlTimeZoneName(timeZone))})`
+    return `DATE_FORMAT(${wallClock}, '${MYSQL_DATE_BUCKET_FORMATS[bucket.unit]}')`
   }
 
   protected override createDateLiteral(value: Date): string {

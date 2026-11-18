@@ -185,6 +185,18 @@ Cursor pagination needs a stable sort order:
 - If you don't call `orderBy()`, Holo orders by the primary key.
 - Holo adds the primary key as a tie-breaker, so sorting by a non-unique column such as `created_at` is safe.
 - Use the same ordering for every page. A cursor created by a different ordering is rejected.
+- A grouped query must order by every `groupBy()` column, since each group is one row. Holo doesn't add the primary key to a grouped query.
+
+Cursor pagination works over [date buckets](/database/query-builder/selects-and-filters#selecting-date-buckets), so you can page through per-day totals newest first:
+
+```ts
+const page = await DB.table(events)
+  .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+  .addSelectCount('total')
+  .groupBy('day')
+  .orderByDesc('day')
+  .cursorPaginate(30, cursor)
+```
 
 A malformed or tampered cursor also throws, so you don't need to validate it yourself.
 

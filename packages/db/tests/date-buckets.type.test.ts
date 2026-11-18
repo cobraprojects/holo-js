@@ -1,0 +1,75 @@
+import { expectTypeOf, it } from 'vitest'
+import { DB, column, defineGeneratedTable, type CursorPaginatedResult, type DateBucket, type InferSelect, type TableDefinition } from '../src'
+
+const campaigns = defineGeneratedTable('bucket_campaigns', { id: column.id(), visibility: column.string() })
+const events = defineGeneratedTable('bucket_events', {
+  id: column.id(),
+  campaign_id: column.integer(),
+  channel: column.string(),
+  occurred_at: column.datetime(),
+  billed_on: column.date().nullable(),
+})
+
+function channelBreakdown<TTable extends TableDefinition, TKey extends keyof InferSelect<TTable> & string>(table: TTable, key: TKey) {
+  return DB.table(table)
+    .join(campaigns, 'bucket_campaigns.id', '=', 'bucket_campaigns.id')
+    .select(`${key} as key`, 'bucket_campaigns.visibility')
+    .addSelectCount('total')
+    .groupBy(key, 'bucket_campaigns.visibility')
+    .get()
+}
+
+async function dailyTotals<TTable extends TableDefinition, TColumn extends keyof InferSelect<TTable> & string>(table: TTable, at: TColumn) {
+  const rows = await DB.table(table).selectDate('day', at, { as: 'day', timeZone: 'UTC' }).addSelectCount('total').groupBy('day').get()
+  return rows.map(row => ({ day: row.day, total: row.total }))
+}
+
+it('types date buckets as unit-branded strings that keep the column nullability', async () => {
+  if (false) {
+    const rows = await DB.table(events)
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .addSelectDate('month', 'billed_on', { as: 'month' })
+      .addSelectCount('total')
+      .groupBy('day', 'month')
+      .orderByDesc('day')
+      .orderBy('month')
+      .get()
+    expectTypeOf(rows[0]!.day).toEqualTypeOf<DateBucket<'day'>>()
+    expectTypeOf(rows[0]!.month).toEqualTypeOf<DateBucket<'month'> | null>()
+    expectTypeOf(rows[0]!.total).toEqualTypeOf<number>()
+    expectTypeOf<keyof typeof rows[0]>().toEqualTypeOf<'day' | 'month' | 'total'>()
+    const label: string = rows[0]!.day
+    void label
+
+    const page = await DB.table(events).selectDate('hour', 'occurred_at', { as: 'hour' }).addSelectCount('total').groupBy('hour').orderByDesc('hour').cursorPaginate(30)
+    expectTypeOf(page).toEqualTypeOf<CursorPaginatedResult<{ hour: DateBucket<'hour'> } & { total: number }>>()
+  }
+})
+
+it('rejects date buckets on non-date columns, unknown units and aliases that shadow a column', () => {
+  if (false) {
+    // @ts-expect-error only date, datetime and timestamp columns can be bucketed
+    DB.table(events).selectDate('day', 'channel', { as: 'day' })
+    // @ts-expect-error unknown units are rejected
+    DB.table(events).selectDate('week', 'occurred_at', { as: 'week' })
+    // @ts-expect-error the alias must not reuse a column name
+    DB.table(events).selectDate('day', 'occurred_at', { as: 'channel' })
+    // @ts-expect-error groupBy only accepts declared columns and selected date buckets
+    DB.table(events).selectDate('day', 'occurred_at', { as: 'day' }).groupBy('week')
+    // @ts-expect-error orderBy only accepts declared columns and selected date buckets
+    DB.table(events).selectDate('day', 'occurred_at', { as: 'day' }).orderByDesc('week')
+  }
+})
+
+it('resolves aliased selections of generic query helpers at the call site', async () => {
+  if (false) {
+    const rows = await channelBreakdown(events, 'channel')
+    expectTypeOf<keyof typeof rows[0]>().toEqualTypeOf<'key' | 'visibility' | 'total'>()
+    expectTypeOf(rows[0]!.key).toEqualTypeOf<string>()
+    expectTypeOf(rows[0]!.visibility).toEqualTypeOf<string>()
+    expectTypeOf(rows[0]!.total).toEqualTypeOf<number>()
+
+    const days = await dailyTotals(events, 'occurred_at')
+    expectTypeOf(days[0]!).toEqualTypeOf<{ day: DateBucket<'day'>, total: number }>()
+  }
+})
