@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { CapabilityError, CompilerError, ConfigurationError, DB, DatabaseError, SQLiteQueryCompiler, createDeleteQueryPlan, SecurityError, clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB } from '../src'
+import { encodeValueCursor } from '../src/query/pagination'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { integrationDrivers, mysqlIntegration, mysqlTestConnection, openDatabase, postgresIntegration, postgresTestConnection } from './support/database'
@@ -615,15 +616,11 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .groupBy('bucket')
     const combined = () => daysOf(1).unionAll(daysOf(2)).orderByDesc('bucket')
 
-    const rows = [...await combined().get()].sort((left, right) => (right.bucket ?? '').localeCompare(left.bucket ?? '') || left.total - right.total)
+    const rows = await combined().get()
 
-    expect(rows).toEqual([
-      { bucket: '2026-12-31', total: 1 },
-      { bucket: '2026-11-05', total: 1 },
-      { bucket: '2026-11-04', total: 1 },
-      { bucket: '2026-11-04', total: 2 },
-      { bucket: '2026-11-03', total: 2 },
-    ])
+    expect(rows.map(row => row.bucket)).toEqual(['2026-12-31', '2026-11-05', '2026-11-04', '2026-11-04', '2026-11-03'])
+    expect(rows.filter(row => row.bucket === '2026-11-04').map(row => row.total).sort()).toEqual([1, 2])
+    expect(rows.filter(row => row.bucket !== '2026-11-04').map(row => row.total)).toEqual([1, 1, 2])
     await expect(combined().cursorPaginate(2)).rejects.toThrow(SecurityError)
   })
 
@@ -650,6 +647,29 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       { id: 2, bucket: '2026-11-03' },
     ])
     expect(second.nextCursor).toBeNull()
+  })
+
+  it('returns an empty union page after a null date bucket with no successor', async () => {
+    useAppTimezone('UTC')
+    const { schema } = await openDatabase(driver)
+    const name = `bucket_keyless_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(name)
+    })
+    await schema.createTable(name, (table) => {
+      table.integer('tenant_id')
+      table.datetime('at').nullable()
+    })
+    const keyless = defineGeneratedTable(name, { tenant_id: column.integer(), at: column.datetime().nullable() })
+    registerGeneratedTables({ keyless })
+    onTestFinished(() => clearGeneratedTables())
+    await DB.table(keyless).insert([{ tenant_id: 1, at: null }, { tenant_id: 2, at: new Date('2026-11-03T10:00:00Z') }])
+    const bucketsOf = (tenantId: number) => DB.table(keyless).where('tenant_id', tenantId).selectDate('day', 'at', { as: 'bucket', timeZone: 'UTC' })
+    const nullsSortLast = driver === 'postgres' ? 'asc' : 'desc'
+
+    const page = await bucketsOf(1).unionAll(bucketsOf(2)).orderBy('bucket', nullsSortLast).cursorPaginate(1, encodeValueCursor([null]))
+
+    expect(page.data).toEqual([])
   })
 
   it('rejects cursor pagination by a date bucket that a raw selection could overwrite', async () => {
@@ -1095,7 +1115,7 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     registerGeneratedTables({ events, tenants })
     const page = (cursor: string | null) => DB.table(events.tableName)
       .join(tenants.tableName, `${tenants.tableName}.code`, '=', `${events.tableName}.tenant_id`)
-      .whereIn(`${events.tableName}.id`, [1, 2])
+      .whereIn(`${events.tableName}.id`, [1, 3])
       .select(`${events.tableName}.*`, `${tenants.tableName}.id`)
       .addSelectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
       .groupBy(`${events.tableName}.id`, `${tenants.tableName}.id`, 'day')
@@ -1107,7 +1127,7 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     const first = await page(null)
     const second = await page(first.nextCursor)
 
-    expect([...first.data, ...second.data].map(row => row.occurred_at)).toHaveLength(2)
+    expect([...first.data, ...second.data].map(row => row.day)).toEqual(['2026-11-03', '2026-11-04'])
     expect(Object.keys(first.data[0]!).some(key => key.startsWith('__holo_cursor'))).toBe(false)
   })
 
@@ -1937,7 +1957,7 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
         await gate
         return days()
       })
-      await started
+      await Promise.race([started, inside])
       const outside = days()
       await new Promise(resolve => setTimeout(resolve, 50))
       release()
@@ -1977,7 +1997,7 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
         await gate
         return query.get()
       })
-      await started
+      await Promise.race([started, inside])
       const outside = query.get()
       await new Promise(resolve => setTimeout(resolve, 50))
       release()
@@ -2307,8 +2327,9 @@ describe.runIf(postgresIntegration)('date buckets next to postgres domains and v
     onTestFinished(async () => {
       await createSchemaService(connection).dropTable(name)
     })
+    await connection.executeCompiled({ sql: 'CREATE EXTENSION IF NOT EXISTS vector', source: 'test' })
     await connection.executeCompiled({ sql: `CREATE TABLE "${name}" (id integer PRIMARY KEY, embedding vector(2))`, source: 'test' })
-    await connection.executeCompiled({ sql: `INSERT INTO "${name}" (id, embedding) VALUES (1, '[1,2]'), (2, '[9,9]')`, source: 'test' })
+    await connection.executeCompiled({ sql: `INSERT INTO "${name}" (id, embedding) VALUES (3, '[1,2]'), (1, '[9,9]')`, source: 'test' })
     registerGeneratedTables({ events, vectors: defineGeneratedTable(name, { id: column.id(), embedding: column.vector({ dimensions: 2 }) }) })
 
     const rows = await DB.table(events.tableName)
@@ -2317,7 +2338,7 @@ describe.runIf(postgresIntegration)('date buckets next to postgres domains and v
       .orderByVectorSimilarity('embedding', [1, 2])
       .get()
 
-    expect(rows).toEqual([{ embedding: '2026-11-03' }, { embedding: '2026-11-03' }])
+    expect(rows).toEqual([{ embedding: '2026-11-04' }, { embedding: '2026-11-03' }])
   })
 })
 

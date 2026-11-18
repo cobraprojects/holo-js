@@ -1,9 +1,16 @@
 import type { QueryPredicateNode } from './ast'
-import { createTrustedRawPredicate } from './trustedRawPredicate'
+import { SecurityError } from '../core/errors'
 import type { CursorOrderDefinition, ValueCursor } from './pagination'
 
 function selectionAliasOf(order: CursorOrderDefinition): { readonly selectionAlias?: true } {
   return order.selectionAlias ? { selectionAlias: true } : {}
+}
+
+function noRowsAfter(orders: readonly CursorOrderDefinition[]): QueryPredicateNode {
+  const [first] = orders
+  if (!first) throw new SecurityError('Cursor pagination needs an order.')
+  const isNull: QueryPredicateNode = { kind: 'null', column: first.column, negated: false, ...selectionAliasOf(first) }
+  return { kind: 'group', predicates: [isNull, { ...isNull, negated: true }] }
 }
 
 export function cursorPredicate(cursor: ValueCursor, orders: readonly CursorOrderDefinition[], nullsLow: boolean): QueryPredicateNode {
@@ -25,5 +32,5 @@ export function cursorPredicate(cursor: ValueCursor, orders: readonly CursorOrde
       : { kind: 'comparison', column: prefixOrder.column, operator: '=', value: cursor.values[prefixIndex], ...selectionAliasOf(prefixOrder) })
     return [{ kind: 'group', boolean: 'or', predicates: [...prefix, comparison] }]
   })
-  return branches.length === 0 ? createTrustedRawPredicate({ kind: 'raw', sql: '1 = 0', bindings: [] }) : { kind: 'group', predicates: branches }
+  return branches.length === 0 ? noRowsAfter(orders) : { kind: 'group', predicates: branches }
 }
