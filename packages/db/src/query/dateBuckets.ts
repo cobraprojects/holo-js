@@ -1,9 +1,9 @@
-import { CapabilityError, ConfigurationError, SecurityError } from '../core/errors'
+import { CapabilityError, CompilerError, ConfigurationError, SecurityError } from '../core/errors'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { splitTablePath } from '../schema/identifiers'
 import { knownJoinedColumns, knownTableColumns } from './modelRowProjection'
-import { readAllColumnsSelectionTable } from './ast'
+import { dateBucketSelections, readAllColumnsSelectionTable } from './ast'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryDateBucketSelection, QueryDateBucketUnit, QueryPredicateNode, SelectQueryPlan } from './ast'
@@ -86,8 +86,14 @@ function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectio
     .find(definition => definition !== undefined)
 }
 
-export function selectionMayOutputName(plan: SelectQueryPlan, selection: SelectQueryPlan['selections'][number], name: string, connectionName: string): boolean {
-  if (selection.kind === 'raw') return true
+export function selectionMayOutputName(
+  plan: SelectQueryPlan,
+  selection: SelectQueryPlan['selections'][number],
+  name: string,
+  connectionName: string | undefined,
+  whenUnknown: boolean,
+): boolean {
+  if (selection.kind === 'raw') return whenUnknown
   if (selection.kind !== 'column' || selection.alias) return false
   const wildcardTable = selection.column === '*' ? undefined : readAllColumnsSelectionTable(selection.column)
   if (selection.column !== '*' && wildcardTable === undefined) return false
@@ -95,8 +101,27 @@ export function selectionMayOutputName(plan: SelectQueryPlan, selection: SelectQ
     .filter(table => wildcardTable === undefined || isVisibleAs(wildcardTable, table))
     .some((table) => {
       const columns = table.columns()
-      return columns === undefined || columns.includes(name)
+      return columns === undefined ? whenUnknown : columns.includes(name)
     })
+}
+
+export function bareColumnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined): string {
+  const folded = name.toLowerCase()
+  const tables = visibleTables(plan, connectionName)
+  const owners = tables.filter(table => table.columns()?.some(column => column.toLowerCase() === folded))
+  if (owners.length > 1) {
+    throw new CompilerError(`Column "${name}" is ambiguous next to the date bucket of the same name. Qualify it with its table.`)
+  }
+  const owner = owners[0] ?? tables[0]!
+  return owner.alias ?? owner.tableName ?? plan.source.tableName
+}
+
+export function assertDateBucketOutputsUnshadowed(plan: SelectQueryPlan, connectionName: string | undefined): void {
+  for (const alias of dateBucketSelections(plan).keys()) {
+    if (plan.selections.some(selection => selectionMayOutputName(plan, selection, alias, connectionName, false))) {
+      throw new SecurityError(`Date bucket alias "${alias}" must not be reused by a column of a selected wildcard.`)
+    }
+  }
 }
 
 export function dateBucketStorage(plan: SelectQueryPlan, bucket: QueryDateBucketSelection, connectionName: string | undefined): DateBucketStorage {

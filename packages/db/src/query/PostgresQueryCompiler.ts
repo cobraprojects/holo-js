@@ -202,7 +202,8 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
       return `CASE WHEN ${column} BETWEEN DATE '0001-01-01' AND DATE '9999-12-31' THEN to_char(CAST(${column} AS TIMESTAMP), '${format}') END`
     }
     const wallClock = `((${instant}) AT TIME ZONE ${timeZone})`
-    return `CASE WHEN ${wallClock} BETWEEN TIMESTAMP '0001-01-01 00:00:00' AND TIMESTAMP '9999-12-31 23:59:59.999999' THEN to_char(${wallClock}, '${format}') END`
+    const formatted = `CASE WHEN ${wallClock} BETWEEN TIMESTAMP '0001-01-01 00:00:00' AND TIMESTAMP '9999-12-31 23:59:59.999999' THEN to_char(${wallClock}, '${format}') END`
+    return `CASE WHEN ${column} BETWEEN '0001-12-30 BC' AND '10000-01-02' THEN ${formatted} END`
   }
 
   protected override compileDatePredicate(

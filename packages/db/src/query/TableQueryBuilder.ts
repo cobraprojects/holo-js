@@ -3426,8 +3426,10 @@ export class TableQueryBuilder<
       throw new SecurityError('Cursor pagination cannot use random ordering.')
     }
 
-    if (this.plan.unions.length > 0 && unionBranchPlans(this.plan).some(branch => branch.groupBy.length > 0)) {
-      throw new SecurityError('Cursor pagination cannot page a union of grouped queries, because a group can appear in more than one of them.')
+    const branches = unionBranchPlans(this.plan)
+    const ordersByDateBucket = this.plan.orderBy.some(orderBy => orderBy.kind === 'column' && branches.some(branch => dateBucketSelections(branch).has(orderBy.column)))
+    if (this.plan.unions.length > 0 && ordersByDateBucket && branches.some(branch => branch.groupBy.length > 0)) {
+      throw new SecurityError('Cursor pagination cannot page a union of grouped queries by a date bucket, because the same bucket can appear in more than one of them.')
     }
 
     if (this.plan.groupBy.length > 0) {
@@ -3474,7 +3476,7 @@ export class TableQueryBuilder<
   private assertDateBucketCursorKey(branch: SelectQueryPlan, alias: string): void {
     if (!dateBucketSelections(branch).has(alias)) return
     const connectionName = this.connection.getConnectionName()
-    if (branch.selections.some(selection => selectionMayOutputName(branch, selection, alias, connectionName))) {
+    if (branch.selections.some(selection => selectionMayOutputName(branch, selection, alias, connectionName, true))) {
       throw new SecurityError(`Cursor pagination by the date bucket "${alias}" needs every other selected column to have a different name, so select it under a name no raw or wildcard selection can produce.`)
     }
   }

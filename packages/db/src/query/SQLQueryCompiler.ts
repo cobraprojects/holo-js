@@ -1,7 +1,7 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError, SecurityError } from '../core/errors'
-import { dateBucketStorage, type DateBucketStorage } from './dateBuckets'
+import { assertDateBucketOutputsUnshadowed, bareColumnOwner, dateBucketStorage, type DateBucketStorage } from './dateBuckets'
 import { dateBucketSelections, isInlineIntegerValue, keyCastFor, readAllColumnsSelectionTable } from './ast'
 import { validateQueryPlan } from './validator'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -59,7 +59,8 @@ type ResolvedDateBucket = { readonly bucket: QueryDateBucketSelection, readonly 
 export class SQLQueryCompiler {
   protected readonly dialect: SchemaDialectName | undefined = undefined
   private dateBuckets: ReadonlyMap<string, ResolvedDateBucket> = new Map()
-  private dateBucketSource = ''
+  private dateBucketPlan: SelectQueryPlan | undefined = undefined
+  private dateBucketFoldedAliases: ReadonlySet<string> = new Set()
   private dateBucketAliasMode: DateBucketAliasMode = 'column'
 
   constructor(
@@ -206,14 +207,18 @@ export class SQLQueryCompiler {
     projection?: string,
   ): string {
     const enclosingDateBuckets = this.dateBuckets
-    const enclosingDateBucketSource = this.dateBucketSource
+    const enclosingDateBucketPlan = this.dateBucketPlan
+    const enclosingDateBucketFoldedAliases = this.dateBucketFoldedAliases
     this.dateBuckets = new Map([...dateBucketSelections(plan)].map(([alias, bucket]) => [alias, { bucket, storage: dateBucketStorage(plan, bucket, this.connectionName) }]))
-    this.dateBucketSource = plan.source.alias ?? plan.source.tableName
+    this.dateBucketPlan = plan
+    this.dateBucketFoldedAliases = new Set([...this.dateBuckets.keys()].map(alias => alias.toLowerCase()))
+    assertDateBucketOutputsUnshadowed(plan, this.connectionName)
     try {
       return this.compileSelectSqlWithinDateBuckets(plan, bindings, projection)
     } finally {
       this.dateBuckets = enclosingDateBuckets
-      this.dateBucketSource = enclosingDateBucketSource
+      this.dateBucketPlan = enclosingDateBucketPlan
+      this.dateBucketFoldedAliases = enclosingDateBucketFoldedAliases
     }
   }
 
@@ -265,7 +270,7 @@ export class SQLQueryCompiler {
     const groupByClause = plan.groupBy.length === 0
       ? ''
       : ` GROUP BY ${this.withDateBucketAliases('expression', () => plan.groupBy.map(column => this.compileColumnReference(column)).join(', '))}`
-    const havingClause = this.withDateBucketAliases(this.dateBucketHavingMode(), () => this.compileHaving(plan.having, bindings))
+    const havingClause = this.withDateBucketAliases(this.dateBucketHavingMode(plan), () => this.compileHaving(plan.having, bindings))
     const unionClause = this.compileUnions(plan.unions, bindings)
     const orderClause = plan.orderBy.length === 0
       ? ''
@@ -1033,7 +1038,7 @@ export class SQLQueryCompiler {
     return this.withDateBucketAliases('column', () => this.compileDateBucket(bucket, storage))
   }
 
-  protected dateBucketHavingMode(): DateBucketAliasMode {
+  protected dateBucketHavingMode(_plan: SelectQueryPlan): DateBucketAliasMode {
     return 'expression'
   }
 
@@ -1044,7 +1049,9 @@ export class SQLQueryCompiler {
   protected compileColumnReference(reference: string): string {
     const dateBucket = this.dateBuckets.get(reference)
     if (dateBucket && this.dateBucketAliasMode === 'expression') return this.compileDateBucketExpression(dateBucket)
-    if (dateBucket && this.dateBucketAliasMode === 'column') return `${this.compileTableReference(this.dateBucketSource)}.${this.quoteIdentifier(reference)}`
+    if (this.dateBucketAliasMode === 'column' && this.dateBucketPlan && !reference.includes('.') && this.dateBucketFoldedAliases.has(reference.toLowerCase())) {
+      return `${this.compileTableReference(bareColumnOwner(this.dateBucketPlan, reference, this.connectionName))}.${this.quoteIdentifier(reference)}`
+    }
     const { schema: table, table: column } = splitTablePath(reference)
     return table === undefined
       ? this.quoteIdentifier(column)

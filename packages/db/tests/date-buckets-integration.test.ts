@@ -47,6 +47,22 @@ async function createEventsTable(driver: typeof drivers[number]) {
   return events
 }
 
+async function createFactsTable(driver: typeof drivers[number]) {
+  const events = await createEventsTable(driver)
+  const schema = createSchemaService(DB.connection())
+  const facts = `bucket_facts_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+  onTestFinished(async () => {
+    await schema.dropTable(facts)
+  })
+  await schema.createTable(facts, (table) => {
+    table.id()
+    table.string('bucket')
+  })
+  registerGeneratedTables({ events, factsTable: defineGeneratedTable(facts, { id: column.id(), bucket: column.string() }) })
+  await DB.table(facts).insert([{ id: 1, bucket: 'first' }, { id: 2, bucket: 'second' }])
+  return { events, facts }
+}
+
 describe.each(drivers)('date buckets on %s', (driver) => {
   afterEach(() => {
     resetDB()
@@ -357,6 +373,69 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .cursorPaginate(2)).rejects.toThrow(SecurityError)
   })
 
+  it('rejects union cursor pagination when a wildcard hides where a query selects the date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events)
+      .where('tenant_id', 1)
+      .select('id', 'tenant_id', 'occurred_at', 'billed_on')
+      .addSelectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .unionAll(DB.table(events).where('tenant_id', 2).addSelectDate('day', 'occurred_at', { as: 'other', timeZone: 'UTC' }))
+      .orderByDesc('bucket')
+      .cursorPaginate(2)).rejects.toThrow(CompilerError)
+  })
+
+  it('still cursor-paginates a union of grouped keys ordered by the key', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const tenants = (tenantId: number) => DB.table(events).where('tenant_id', tenantId).select('tenant_id').groupBy('tenant_id')
+    const combined = () => tenants(1).union(tenants(2)).orderBy('tenant_id')
+
+    const first = await combined().cursorPaginate(1)
+    const second = await combined().cursorPaginate(1, first.nextCursor)
+
+    expect([...first.data, ...second.data]).toEqual([{ tenant_id: 1 }, { tenant_id: 2 }])
+  })
+
+  it('converts date-only text in a datetime column as midnight UTC', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    await DB.table(events).insert([
+      { tenant_id: 8, occurred_at: '2026-11-03', billed_on: null },
+      { tenant_id: 8, occurred_at: '2026-11-03 00:00:00', billed_on: null },
+    ])
+
+    const days = await DB.table(events).where('tenant_id', 8).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'America/New_York' }).pluck('day')
+
+    expect(days).toEqual(['2026-11-02', '2026-11-02'])
+  })
+
+  it('rejects a joined wildcard whose column shares the date bucket alias', async () => {
+    useAppTimezone('UTC')
+    const { events, facts } = await createFactsTable(driver)
+
+    await expect(DB.table(events.tableName)
+      .join(facts, `${facts}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .addSelect(`${facts}.*`)
+      .get()).rejects.toThrow(SecurityError)
+  })
+
+  it('resolves a bare where column that shares the date bucket alias to the table that has it', async () => {
+    useAppTimezone('UTC')
+    const { events, facts } = await createFactsTable(driver)
+
+    const rows = await DB.table(events.tableName)
+      .join(facts, `${facts}.id`, '=', `${events.tableName}.id`)
+      .where('bucket', 'first')
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .get()
+
+    expect(rows).toEqual([{ bucket: '2026-11-03' }])
+    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'bucket' }).where('BUCKET', '2026-11-03').get()).rejects.toThrow(DatabaseError)
+  })
+
   it('rejects a selection that reuses a date bucket alias', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
@@ -524,6 +603,25 @@ describe.each(integrationDrivers(['sqlite', 'mysql'] as const))('date buckets be
   })
 })
 
+describe.runIf(mysqlIntegration)('date buckets in mysql having clauses', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('rejects HAVING on a date bucket that a grouped column of the same name would shadow', async () => {
+    useAppTimezone('UTC')
+    const { events, facts } = await createFactsTable('mysql')
+
+    await expect(DB.table(events.tableName)
+      .join(facts, `${facts}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .addSelectCount('total')
+      .groupBy('bucket', `${facts}.bucket`)
+      .having('bucket', '2026-11-03')
+      .get()).rejects.toThrow(CompilerError)
+  })
+})
+
 describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () => {
   afterEach(() => {
     resetDB()
@@ -558,9 +656,12 @@ describe.runIf(postgresIntegration)('date buckets on postgres before the common 
     useAppTimezone('UTC')
     const events = await createEventsTable('postgres')
     await DB.connection().executeCompiled({ sql: `INSERT INTO "${events.tableName}" (tenant_id, billed_on) VALUES (7, '0001-01-01 BC'), (7, '0001-01-01'), (7, '10000-01-01'), (7, '300000-01-01')`, source: 'test' })
+    await DB.connection().executeCompiled({ sql: `INSERT INTO "${events.tableName}" (tenant_id, occurred_at) VALUES (9, '294276-12-31 23:59:59')`, source: 'test' })
 
     const days = await DB.table(events).where('tenant_id', 7).selectDate('day', 'billed_on', { as: 'day' }).orderBy('billed_on').pluck('day')
+    const lastInstant = await DB.table(events).where('tenant_id', 9).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'Asia/Tokyo' }).value('day')
 
     expect(days).toEqual([null, '0001-01-01', null, null])
+    expect(lastInstant).toBeNull()
   })
 })

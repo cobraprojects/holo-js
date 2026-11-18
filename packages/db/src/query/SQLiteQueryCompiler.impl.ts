@@ -255,8 +255,12 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
 
   protected override compileDateBucket(bucket: QueryDateBucketSelection, storage: DateBucketStorage): string {
     const column = this.compileColumnReference(bucket.column)
-    const wallClock = storage === 'calendar' ? `date(${this.compileAppWallClock(column)})` : this.compileAppWallClock(column, bucket.timeZone)
+    const wallClock = storage === 'calendar' ? `date(${this.compileAppWallClock(column)})` : this.compileInstantWallClock(column, bucket.timeZone ?? getApplicationTimezone())
     return `CASE WHEN ${wallClock} >= '0001-01-01' AND ${wallClock} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*' THEN strftime('${SQLITE_DATE_BUCKET_FORMATS[bucket.unit]}', ${wallClock}) END`
+  }
+
+  private compileInstantWallClock(column: string, timeZone: string): string {
+    return timeZone === 'UTC' ? `datetime(${column})` : compileSQLiteWallClock(column, this.createSqlStringLiteral(timeZone))
   }
 
   private compileAppWallClock(column: string, timeZone = getApplicationTimezone()): string {

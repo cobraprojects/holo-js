@@ -1,6 +1,7 @@
 import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
+import { CompilerError } from '../core/errors'
 import { SQLQueryCompiler, type DateBucketAliasMode } from './SQLQueryCompiler'
-import { serializeRelationKeys, type QueryRelationKeysPredicate } from './ast'
+import { dateBucketSelections, serializeRelationKeys, type QueryRelationKeysPredicate, type SelectQueryPlan } from './ast'
 import { splitTablePath } from '../schema/identifiers'
 import type { CompiledStatement } from '../core/types'
 import type { TableNameFolding } from '../schema/tableIdentityRegistry'
@@ -144,7 +145,15 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
     return ` ON DUPLICATE KEY UPDATE ${updates}`
   }
 
-  protected override dateBucketHavingMode(): DateBucketAliasMode {
+  protected override dateBucketHavingMode(plan: SelectQueryPlan): DateBucketAliasMode {
+    for (const alias of dateBucketSelections(plan).keys()) {
+      const folded = alias.toLowerCase()
+      const filtersBucket = plan.having.some(clause => clause.expression.toLowerCase() === folded)
+      const groupsColumnOfSameName = plan.groupBy.some(column => column !== alias && column.slice(column.lastIndexOf('.') + 1).toLowerCase() === folded)
+      if (filtersBucket && groupsColumnOfSameName) {
+        throw new CompilerError(`MySQL can't tell the date bucket "${alias}" in HAVING from the grouped column of the same name. Give the date bucket another alias.`)
+      }
+    }
     return 'output'
   }
 

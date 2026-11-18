@@ -185,7 +185,7 @@ Cursor pagination needs a stable sort order:
 - If you don't call `orderBy()`, Holo orders by the primary key.
 - Holo adds the primary key as a tie-breaker, so sorting by a non-unique column such as `created_at` is safe.
 - Use the same ordering for every page. A cursor created by a different ordering is rejected.
-- A grouped query must order by every `groupBy()` column, since each group is one row. Holo doesn't add the primary key to a grouped query. A union of grouped queries can't be cursor-paginated, because the same group can come from more than one query.
+- A grouped query must order by every `groupBy()` column, since each group is one row. Holo doesn't add the primary key to a grouped query. A union of grouped queries can't be cursor-paginated by a date bucket, because the same bucket can come from more than one query.
 
 Cursor pagination works over [date buckets](/database/query-builder/selects-and-filters#selecting-date-buckets), so you can page through per-day totals newest first:
 

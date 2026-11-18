@@ -79,8 +79,8 @@ export function unionCursorColumns(plan: SelectQueryPlan, columns: readonly stri
   const branchColumns = (branch: SelectQueryPlan) => columns.map((column, index) => {
     const position = positions[index]
     if (typeof position === 'undefined') assertKnownPosition(branchOutputs(branch, connectionName), column)
-    if (typeof position === 'undefined' && rootDateBuckets.has(column) && !dateBucketSelections(branch).has(column)) {
-      throw new CompilerError(`Cannot cursor paginate a union by "${column}": a query in the union doesn't select its date bucket under that name. Use the same alias in each query.`)
+    if (rootDateBuckets.has(column) && (typeof position === 'undefined' || !branchOutputs(branch, connectionName).slice(0, position + 1).every(output => output.positioned))) {
+      throw new CompilerError(`Cannot cursor paginate a union by the date bucket "${column}": its column position cannot be determined in every query. Select the date bucket before any wildcard in each query.`)
     }
     return typeof position === 'undefined' ? namedBranchColumn(branch, column) : positionedBranchColumn(branch, column, position, connectionName)
   })
