@@ -3447,8 +3447,9 @@ export class TableQueryBuilder<
       const groupsSourceRowsOnly = this.plan.unions.length === 0 && (this.plan.joins.length === 0 || this.plan.groupBy.every(belongsToSource))
       if (groupsByPrimaryKey && groupsSourceRowsOnly) return ordered
       const orderedColumns = new Set(ordered.plan.orderBy.flatMap(orderBy => orderBy.kind === 'column' ? [identity(orderBy.column)] : []))
-      if (!ordered.plan.groupBy.every(column => orderedColumns.has(identity(column)))) {
-        throw new SecurityError('Cursor pagination over grouped rows must order by every groupBy column.')
+      const groupedColumns = new Set(ordered.plan.groupBy.map(identity))
+      if (!ordered.plan.groupBy.every(column => orderedColumns.has(identity(column))) || ![...orderedColumns].every(column => groupedColumns.has(column))) {
+        throw new SecurityError('Cursor pagination over grouped rows must order by exactly the groupBy columns.')
       }
       return ordered
     }

@@ -908,6 +908,20 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     await expect(DB.table(events).where('tenant_id', 10).count()).resolves.toBe(1)
   })
 
+  it('rejects a grouped cursor order on a column the groups do not share', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events)
+      .select('id')
+      .addSelectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .addSelectCount('total')
+      .groupBy('bucket')
+      .orderBy('bucket')
+      .orderBy('id')
+      .cursorPaginate(1)).rejects.toThrow(SecurityError)
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)
@@ -1290,6 +1304,35 @@ describe.runIf(postgresIntegration)('date buckets next to postgres wildcards of 
       .get()
 
     expect(rows).toEqual([{ bucket: '2026-11-03', id: 1, amount: 1 }])
+  })
+})
+
+describe.runIf(postgresIntegration)('date buckets with postgres qualifiers that bind no joined name exactly', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('rejects a schema-qualified wildcard next to a date bucket', async () => {
+    useAppTimezone('UTC')
+    const { events, facts } = await createFactsTable('postgres')
+
+    await expect(DB.table(events.tableName)
+      .join(facts, `${facts}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
+      .addSelect(`public.${facts}.*`)
+      .get()).rejects.toThrow(SecurityError)
+  })
+
+  it('needs the exact alias to bucket a joined column', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('postgres')
+    const labels = await createLabelsTable()
+    registerGeneratedTables({ events, labels })
+
+    await expect(DB.table(events.tableName)
+      .join(`${labels.tableName} as Tags`, 'Tags.id', '=', `${events.tableName}.id`)
+      .selectDate('day', 'tags.at', { as: 'bucket', timeZone: 'UTC' })
+      .get()).rejects.toThrow(ConfigurationError)
   })
 })
 

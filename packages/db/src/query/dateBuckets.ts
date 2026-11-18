@@ -74,9 +74,9 @@ type IdentifierMatch = (left: string, right: string) => boolean
 
 const sameIdentifierExactly: IdentifierMatch = (left, right) => left === right
 
-function isVisibleAs(qualifier: string, { tableName, alias }: VisibleTable, matches: IdentifierMatch = sameIdentifierFolded): boolean {
-  if (alias !== undefined) return matches(qualifier, alias)
-  return tableName !== undefined && (matches(qualifier, tableName) || matches(qualifier, splitTablePath(tableName).table))
+function isVisibleAs(qualifier: string, { tableName, alias }: VisibleTable): boolean {
+  if (alias !== undefined) return qualifier === alias
+  return tableName !== undefined && (qualifier === tableName || qualifier === splitTablePath(tableName).table)
 }
 
 function matchingColumnDefinition(table: TableDefinition | undefined, name: string, matches: IdentifierMatch): AnyColumnDefinition | undefined {
@@ -103,9 +103,7 @@ function visibleTables(plan: SelectQueryPlan, connectionName: string | undefined
 }
 
 function boundTables(visible: readonly VisibleTable[], qualifier: string | undefined): readonly VisibleTable[] {
-  if (qualifier === undefined) return visible
-  const exactlyBound = visible.filter(table => isVisibleAs(qualifier, table, sameIdentifierExactly))
-  return exactlyBound.length > 0 ? exactlyBound : visible.filter(table => isVisibleAs(qualifier, table))
+  return qualifier === undefined ? visible : visible.filter(table => isVisibleAs(qualifier, table))
 }
 
 function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectionName: string | undefined): AnyColumnDefinition | undefined {
@@ -130,7 +128,9 @@ export function selectionMayOutputName(
   if (selection.kind !== 'column' || selection.alias) return false
   const wildcardTable = selection.column === '*' ? undefined : readAllColumnsSelectionTable(selection.column)
   if (selection.column !== '*' && wildcardTable === undefined) return false
-  return boundTables(visibleTables(plan, connectionName), wildcardTable)
+  const tables = boundTables(visibleTables(plan, connectionName), wildcardTable)
+  if (tables.length === 0) return unknown.wildcard
+  return tables
     .some((table) => {
       const columns = table.columns()
       return columns === undefined ? unknown.wildcard : columns.some(column => effectiveOutputName(column) === effectiveOutputName(name))
