@@ -1,3 +1,5 @@
+import { HOLO_FIELD_ERRORS, type HoloFieldErrors, type HoloFieldErrorsCarrier } from '@holo-js/kernel/field-errors'
+
 export class DatabaseError extends Error {
   override readonly name: string
   readonly code: string
@@ -66,6 +68,23 @@ export class ModelNotFoundException extends DatabaseError {
   constructor(model: string, message?: string, cause?: unknown) {
     super(message ?? `${model} not found.`, 'MODEL_NOT_FOUND', cause)
     this.model = model
+  }
+}
+
+export class InvalidCursorException extends DatabaseError implements HoloFieldErrorsCarrier {
+  declare readonly code: 'INVALID_CURSOR'
+  readonly statusCode = 422
+  readonly cursorName: string
+  readonly errors: HoloFieldErrors
+
+  constructor(cursorName: string, message = 'The cursor is invalid.', cause?: unknown) {
+    super(message, 'INVALID_CURSOR', cause)
+    this.cursorName = cursorName
+    this.errors = Object.freeze({ [cursorName]: Object.freeze([message]) })
+  }
+
+  get [HOLO_FIELD_ERRORS](): HoloFieldErrors {
+    return this.errors
   }
 }
 

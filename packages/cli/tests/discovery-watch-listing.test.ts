@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import type * as FsPromises from 'node:fs/promises'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -43,7 +44,7 @@ it('lists only the folders the discovery policy can watch when holo dev starts',
     deferred: true,
     createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
       listeners.push(listener)
-      return { close() {} }
+      return Object.assign(new EventEmitter(), { close() {} })
     }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
   })
   onTestFinished(() => watcher.close())

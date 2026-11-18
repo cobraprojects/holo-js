@@ -1,9 +1,9 @@
-import { coerceBoolean, parseInteger, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
+import { coerceBoolean, parseInteger, parseStoredDate, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDate, readsAsSQLiteDecimal } from '../schema/normalization'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { splitTablePath } from '../schema/identifiers'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
-import type { QueryColumnSelection, SelectQueryPlan } from './ast'
+import type { QueryAggregateSelection, QueryColumnSelection, QuerySelection, SelectQueryPlan } from './ast'
 
 const INTEGER_TEXT = /^-?\d+$/
 
@@ -25,8 +25,16 @@ function readIntegerResult(value: unknown): unknown {
   return holdsInteger(value) ? parseInteger(value) : value
 }
 
-function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | undefined): ColumnReader | undefined {
+function readSQLiteDate(value: unknown): unknown {
+  return parseStoredDate('sqlite', value)
+}
+
+export type ResultReads = 'values' | 'dates' | 'valuesAndDates'
+
+function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | undefined, reads: ResultReads): ColumnReader | undefined {
   if (!column) return undefined
+  if (readsAsSQLiteDate(dialect, column)) return reads === 'values' ? undefined : readSQLiteDate
+  if (reads === 'dates') return undefined
   if (readsAsInteger(column)) return readIntegerResult
   if (readsAsCoercedBoolean(dialect, column)) return coerceBoolean
   return readsAsSQLiteDecimal(dialect, column) ? value => readSQLiteDecimal(value, column.decimalPlaces) : undefined
@@ -74,13 +82,25 @@ function selectedColumns(selection: QueryColumnSelection, tables: ReadonlyMap<st
   return [[selection.alias ?? name, table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined]]
 }
 
+function readsAsColumnValue(selection: QueryAggregateSelection): boolean {
+  return selection.aggregate === 'min' || selection.aggregate === 'max'
+}
+
+function aggregatedColumns(selection: QueryAggregateSelection, tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
+  return selectedColumns({ kind: 'column', column: selection.column, alias: selection.alias }, tables)
+}
+
+function selectionResultColumns(selection: QuerySelection, tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
+  if (selection.kind === 'column') return selectedColumns(selection, tables)
+  if (selection.kind === 'aggregate' && readsAsColumnValue(selection)) return aggregatedColumns(selection, tables)
+  return 'alias' in selection ? [[selection.alias, undefined]] : [[UNKNOWN_COLUMNS, undefined]]
+}
+
 function selectedResultColumns(plan: SelectQueryPlan): readonly SelectedColumn[] {
   const tables = queryTables(plan)
   return plan.selections.length === 0
     ? projectedColumns(tables)
-    : plan.selections.flatMap((selection): SelectedColumn[] => selection.kind === 'column'
-      ? selectedColumns(selection, tables)
-      : 'alias' in selection ? [[selection.alias, undefined]] : [[UNKNOWN_COLUMNS, undefined]])
+    : plan.selections.flatMap(selection => selectionResultColumns(selection, tables))
 }
 
 function resultColumnDefinitions(plan: SelectQueryPlan): ReadonlyMap<string, AnyColumnDefinition> {
@@ -107,6 +127,14 @@ export function withResolvedDefinitions(plan: SelectQueryPlan, connectionName: s
 
 export function resultColumnDefinition(plan: SelectQueryPlan, key: string): AnyColumnDefinition | undefined {
   return resultColumnDefinitions(plan).get(key)
+}
+
+function readsAsNumber(column: AnyColumnDefinition | undefined): boolean {
+  return column !== undefined && (readsAsInteger(column) || column.kind === 'real')
+}
+
+export function readsAsNumericAggregate(plan: SelectQueryPlan, selection: QueryAggregateSelection): boolean {
+  return !readsAsColumnValue(selection) || aggregatedColumns(selection, queryTables(plan)).every(([, definition]) => readsAsNumber(definition))
 }
 
 export type ConvertedResultColumns = ReadonlyMap<string, ColumnReader>
@@ -141,6 +169,7 @@ function hasAlignedWildcards(plan: SelectQueryPlan, branches: readonly SelectQue
 function createUnionReaderCheck(
   dialect: SchemaDialectName,
   plan: SelectQueryPlan,
+  reads: ResultReads,
 ): (key: string, reader: ColumnReader) => boolean {
   if (plan.unions.length === 0) return () => true
   const branchPlans = unionBranches(plan)
@@ -158,16 +187,16 @@ function createUnionReaderCheck(
       if (definition && column && readsAsSQLiteDecimal(dialect, definition) && readsAsSQLiteDecimal(dialect, column)) {
         return (definition.decimalPlaces ?? 2) === (column.decimalPlaces ?? 2)
       }
-      return columnReader(dialect, column) === reader
+      return columnReader(dialect, column, reads) === reader
     })
   }
 }
 
-export function resolveConvertedResultColumns(dialect: SchemaDialectName, plan: SelectQueryPlan): ConvertedResultColumns {
+export function resolveConvertedResultColumns(dialect: SchemaDialectName, plan: SelectQueryPlan, reads: ResultReads): ConvertedResultColumns {
   const columns = new Map<string, ColumnReader>()
-  const unionReads = createUnionReaderCheck(dialect, plan)
+  const unionReads = createUnionReaderCheck(dialect, plan, reads)
   for (const [key, definition] of resultColumnDefinitions(plan)) {
-    const reader = columnReader(dialect, definition)
+    const reader = columnReader(dialect, definition, reads)
     if (reader && unionReads(key, reader)) columns.set(key, reader)
   }
   return columns

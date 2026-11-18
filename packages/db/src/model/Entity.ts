@@ -1,7 +1,8 @@
 import { HydrationError } from '../core/errors'
 import { assertAttributeNameAllowed, exposeUntypedEntityAttributes, initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
-import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelInsertPayload, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, ModelWritableAttributeKey, PivotAttributesOfRelation, PivotRelatedIdsOfRelation, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
+import type { RelationAggregateAttributes } from './relationAggregateTypes'
+import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelAttributeSnapshot, ModelInsertPayload, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, ModelWithAggregateAttributes, ModelWritableAttributeKey, PivotAttributesOfRelation, PivotRelatedIdsOfRelation, RelatedColumnNameOfRelation, RelationAggregateKind, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
 
 function isEntity(value: unknown): value is Entity<TableDefinition, RelationMap> {
   return value instanceof EntityBase
@@ -313,8 +314,8 @@ class EntityBase<
     return this
   }
 
-  toAttributes(): ModelRecord<TTable> {
-    return { ...this.#attributes } as ModelRecord<TTable>
+  toAttributes(): ModelAttributeSnapshot<TTable, this> {
+    return { ...this.#attributes } as ModelAttributeSnapshot<TTable, this>
   }
 
   setRelation(name: string, value: unknown): this {
@@ -581,14 +582,18 @@ class EntityBase<
     this.#persisted = false
   }
 
-  private async loadAggregateDefinitions(aggregates: readonly ModelAggregateLoad[]): Promise<this> {
+  private async loadAggregates<
+    TKind extends RelationAggregateKind,
+    const TNames extends readonly ModelRelationName<TRelations>[],
+    TColumn extends string = '*',
+  >(kind: TKind, relations: TNames, column?: TColumn): Promise<ModelWithAggregateAttributes<this, RelationAggregateAttributes<TRelations, TKind, TNames, TColumn>>> {
     const repo = this.getRepositoryRuntime()
     if (typeof repo.loadRelationAggregates !== 'function') {
       throw new HydrationError('The bound repository cannot load relation aggregates.')
     }
 
-    await repo.loadRelationAggregates([this], aggregates)
-    return this
+    await repo.loadRelationAggregates([this], relations.map(relation => ({ relation, kind, column })))
+    return this as ModelWithAggregateAttributes<this, RelationAggregateAttributes<TRelations, TKind, TNames, TColumn>>
   }
 
   async save(): Promise<this> {
@@ -760,28 +765,28 @@ class EntityBase<
     return this
   }
 
-  async loadCount(...relations: readonly ModelRelationName<TRelations>[]): Promise<this> {
-    return this.loadAggregateDefinitions(relations.map(relation => ({ relation, kind: 'count' })))
+  loadCount<const TNames extends readonly ModelRelationName<TRelations>[]>(...relations: TNames) {
+    return this.loadAggregates('count', relations)
   }
 
-  async loadExists(...relations: readonly ModelRelationName<TRelations>[]): Promise<this> {
-    return this.loadAggregateDefinitions(relations.map(relation => ({ relation, kind: 'exists' })))
+  loadExists<const TNames extends readonly ModelRelationName<TRelations>[]>(...relations: TNames) {
+    return this.loadAggregates('exists', relations)
   }
 
-  async loadSum<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<this> {
-    return this.loadAggregateDefinitions([{ relation, kind: 'sum', column }])
+  loadSum<TRelation extends ModelRelationName<TRelations>, TColumn extends RelatedColumnNameOfRelation<TRelations[TRelation]> = RelatedColumnNameOfRelation<TRelations[TRelation]>>(relation: TRelation, column: TColumn) {
+    return this.loadAggregates('sum', [relation], column)
   }
 
-  async loadAvg<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<this> {
-    return this.loadAggregateDefinitions([{ relation, kind: 'avg', column }])
+  loadAvg<TRelation extends ModelRelationName<TRelations>, TColumn extends RelatedColumnNameOfRelation<TRelations[TRelation]> = RelatedColumnNameOfRelation<TRelations[TRelation]>>(relation: TRelation, column: TColumn) {
+    return this.loadAggregates('avg', [relation], column)
   }
 
-  async loadMin<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<this> {
-    return this.loadAggregateDefinitions([{ relation, kind: 'min', column }])
+  loadMin<TRelation extends ModelRelationName<TRelations>, TColumn extends RelatedColumnNameOfRelation<TRelations[TRelation]> = RelatedColumnNameOfRelation<TRelations[TRelation]>>(relation: TRelation, column: TColumn) {
+    return this.loadAggregates('min', [relation], column)
   }
 
-  async loadMax<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<this> {
-    return this.loadAggregateDefinitions([{ relation, kind: 'max', column }])
+  loadMax<TRelation extends ModelRelationName<TRelations>, TColumn extends RelatedColumnNameOfRelation<TRelations[TRelation]> = RelatedColumnNameOfRelation<TRelations[TRelation]>>(relation: TRelation, column: TColumn) {
+    return this.loadAggregates('max', [relation], column)
   }
 
   associate<TRelated extends TableDefinition>(relation: string, related: Entity<TRelated> | null): this {

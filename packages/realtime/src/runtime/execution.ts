@@ -1,5 +1,5 @@
 import { getExecutionDatabase, type RealtimeContextRunner } from './execution-context'
-import { DB, TableQueryBuilder, type DatabaseContext, type TableDefinition } from '@holo-js/db'
+import { DB, type DatabaseContext, type TableDefinition } from '@holo-js/db'
 import { validate } from '@holo-js/validation'
 import {
   RealtimeAuthUnavailableError,
@@ -24,7 +24,7 @@ export function createRealtimeDatabaseContext(connection: DatabaseContext): Real
   const context = {
     connection,
     table<TTableOrName extends string | TableDefinition>(table: TTableOrName) {
-      return new TableQueryBuilder(table, connection)
+      return connection.table(table)
     },
     model(...parameters: Parameters<DatabaseContext['model']>) {
       return connection.model(...parameters)

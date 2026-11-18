@@ -1,16 +1,19 @@
 import type { RequestEvent } from '@sveltejs/kit'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ValidationException, field, schema, validate } from '@holo-js/validation'
+import { InvalidCursorException } from '../../db/src/core/errors'
 import { adapterSvelteKitInternals, createSvelteKitHoloHooks } from '../src'
 
-function createEvent(value: string, accept = 'application/json', path = '/login') {
+function createEvent(value: string, accept = 'application/json', path = '/login', options: { readonly method?: string, readonly routeId?: string, readonly params?: Record<string, string> } = {}) {
   const flashed = new Map<string, string>()
+  const method = options.method ?? 'POST'
   const event: Partial<RequestEvent> = {
     url: new URL(`https://app.test${path}`),
+    ...(options.routeId === undefined ? {} : { route: { id: options.routeId } as RequestEvent['route'], params: options.params ?? {} }),
     request: new Request(`https://app.test${path}`, {
-      method: 'POST',
+      method,
       headers: { accept },
-      body: new URLSearchParams({ email: value, password: 'private-password' }),
+      ...(method === 'POST' ? { body: new URLSearchParams({ email: value, password: 'private-password' }) } : {}),
     }),
     cookies: {
       get: (name: string) => flashed.get(name),
@@ -86,6 +89,89 @@ describe('SvelteKit validation hooks', () => {
     const body = await response.text()
     expect(JSON.parse(body)).toMatchObject({ valid: false, status: 422, values: { email: 'invalid-email' } })
     expect(body).not.toContain('private-password')
+  })
+
+  it('answers an invalid pagination cursor reported through native errors with a 422 on the cursor key', async () => {
+    (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
+    const { event, flashed } = createEvent('ignored', 'application/json', '/api/posts')
+    const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
+    const response = await hooks.handle({ event, resolve: async (event) => {
+      await hooks.handleError({ event, kind: 'unknown', error: new InvalidCursorException('after', 'Reload the feed.') })
+      return new Response('native failure', { status: 500 })
+    } })
+    expect(response.status).toBe(422)
+    expect(await response.json()).toMatchObject({ status: 422, message: 'Reload the feed.', errors: { after: ['Reload the feed.'] } })
+    expect(flashed.size).toBe(0)
+  })
+
+  it.each([
+    ['an API route under the base path', '/dashboard/api/login', '/api/login'],
+    ['an API route inside a route group', '/dashboard/api/login', '/(app)/api/login'],
+  ])('answers validation failures on %s with 422 JSON and no flash cookie', async (_label, path, routeId) => {
+    (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
+    const { event, flashed } = createEvent('invalid-email', 'application/json', path, { routeId })
+    const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
+    const response = await hooks.handle({ event, resolve: async (event) => {
+      await validate(await event.request.formData(), loginSchema)
+      return new Response('success')
+    } })
+    expect(response.status).toBe(422)
+    expect(await response.json()).toMatchObject({ valid: false, status: 422, values: { email: 'invalid-email' } })
+    expect(flashed.size).toBe(0)
+  })
+
+  it.each([
+    ['an API route under the base path', 'GET', 'application/json', '/dashboard/api/posts?after=abc', '/api/posts', {}],
+    ['a non-form method endpoint', 'DELETE', 'text/html', '/dashboard/posts/1?after=abc', '/posts/[id]', { id: '1' }],
+    ['an API route behind an omitted optional parameter', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[[lang]]/api/posts', {}],
+    ['an API route behind an omitted optional parameter named like an Object property', 'POST', 'text/html', '/dashboard/api/posts', '/[[constructor]]/api/posts', {}],
+    ['a catch-all route serving api/ under the base path', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[...path]', { path: 'api/posts' }],
+    ['a hyphenated parameter that resolves to api/', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[api-section]/posts', { 'api-section': 'api' }],
+    ['a multi-codepoint route escape spelling api/', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[u+0061-0070-0069]/posts', {}],
+    ['an API route whose numeric matcher value precedes api/', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[[version=integer]]/api/posts', {}],
+  ])('answers an invalid cursor on %s with 422 JSON and no flash cookie', async (_label, method, accept, path, routeId, params) => {
+    (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
+    const { event, flashed } = createEvent('ignored', accept, path, { method, routeId, params })
+    const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
+    const response = await hooks.handle({ event, resolve: async (event) => {
+      await hooks.handleError({ event, kind: 'unknown', error: new InvalidCursorException('after', 'Reload the feed.') })
+      return new Response('native failure', { status: 500 })
+    } })
+    expect(response.status).toBe(422)
+    expect(await response.json()).toMatchObject({ status: 422, errors: { after: ['Reload the feed.'] } })
+    expect(flashed.size).toBe(0)
+  })
+
+  it.each([
+    ['route escapes', '/dashboard/api/login', '/a[x+70]i/login', {}],
+    ['a rest parameter inside a mixed segment', '/api/login.json', '/[...path].json', { path: 'api/login' }],
+  ])('answers a POST validation failure on an API route spelled with %s with 422 JSON', async (_label, path, routeId, params) => {
+    const { event } = createEvent('invalid-email', 'text/html', path, { routeId, params })
+    const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
+    const response = await hooks.handle({ event, resolve: async (event) => {
+      await validate(await event.request.formData(), loginSchema)
+      return new Response('success')
+    } })
+    expect(response.status).toBe(422)
+  })
+
+  it.each([
+    ['a parameter whose value contains an encoded slash', 'POST', 'text/html', '/dashboard/api%2Fadmin/posts', '/[section]/posts', { section: 'api/admin' }],
+    ['a JSON GET outside api/', 'GET', 'application/json', '/posts.json?after=abc', '/posts.json', {}],
+    ['a client data request for a page under api/', 'GET', 'application/json', '/dashboard/api/search/__data.json', '/api/search', {}],
+    ['an omitted optional parameter named like an Object property', 'POST', 'text/html', '/dashboard/posts', '/[[constructor]]/posts', {}],
+    ['an escaped literal bracket segment before api/', 'POST', 'text/html', '/dashboard/[section]/api/posts', '/[x+5b]section[x+5d]/api/posts', {}],
+    ['a route whose numeric matcher value comes first', 'POST', 'text/html', '/dashboard/7/api/posts', '/[id=integer]/api/posts', { id: '7' }],
+  ])('keeps the flash redirect for %s', async (_label, method, accept, path, routeId, params) => {
+    (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
+    const created = createEvent('ignored', accept, path, { method, routeId, params })
+    const event = path.endsWith('/__data.json') ? { ...created.event, isDataRequest: true } : created.event
+    const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
+    const response = await hooks.handle({ event, resolve: async (event) => {
+      await hooks.handleError({ event, kind: 'unknown', error: new InvalidCursorException('after', 'Reload the feed.') })
+      return new Response('native failure', { status: 500 })
+    } })
+    expect(response.status).toBe(303)
   })
 
   it('cleans failures after handler errors and ignores late validation reports', async () => {

@@ -58,6 +58,7 @@ export {
   TransactionError,
   HydrationError,
   ModelNotFoundException,
+  InvalidCursorException,
   SerializationError,
 } from './core/errors'
 export { createSecurityPolicy, DEFAULT_SECURITY_POLICY, redactBindings, redactSql } from './security/policy'
@@ -256,6 +257,8 @@ export type {
   AggregateRelatedColumnNameOfKeys,
   AggregateRelationConstraintMap,
 } from './model'
+export type { RelationAggregateMethods, RelationAggregateQueryResult } from './model/relationAggregateTypes'
+export type { WithAggregateAttributes } from './model/types'
 export type {
   AnyModelDefinition,
   BelongsToManyRelationDefinition,

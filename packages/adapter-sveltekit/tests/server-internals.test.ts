@@ -138,6 +138,18 @@ describe('SvelteKit server adapter internals', () => {
     expect((await adapterSvelteKitInternals.mapValidationActionResponse(json as never, original)).status).toBe(200)
 
     expect(await adapterSvelteKitInternals.mapValidationActionResponse(createEvent('/posts', 'GET') as never, original)).toBe(original)
+
+    const endpointMethod = createEvent('/posts/1', 'DELETE', 'text/html')
+    adapterSvelteKitInternals.rememberValidationActionFailure(endpointMethod as never, payload as never)
+    expect((await adapterSvelteKitInternals.mapValidationActionResponse(endpointMethod as never, original)).status).toBe(422)
+
+    const pageVisit = createEvent('/posts', 'GET', 'text/html,application/xhtml+xml,*/*;q=0.8')
+    adapterSvelteKitInternals.rememberValidationActionFailure(pageVisit as never, payload as never)
+    expect((await adapterSvelteKitInternals.mapValidationActionResponse(pageVisit as never, original)).status).toBe(303)
+
+    const dataRequest = { ...createEvent('/api/posts/__data.json', 'GET', 'application/json'), isDataRequest: true }
+    adapterSvelteKitInternals.rememberValidationActionFailure(dataRequest as never, payload as never)
+    expect((await adapterSvelteKitInternals.mapValidationActionResponse(dataRequest as never, original)).status).toBe(303)
     expect(await adapterSvelteKitInternals.mapValidationActionResponse(createEvent('/posts', 'POST', 'application/json') as never, new Response(null))).toBeInstanceOf(Response)
     expect(await adapterSvelteKitInternals.mapValidationActionResponse(createEvent('/posts', 'POST', 'application/json') as never, new Response('plain'))).toBeInstanceOf(Response)
     expect(await adapterSvelteKitInternals.mapValidationActionResponse(createEvent('/posts', 'POST', 'application/json') as never, new Response('{', { headers: { 'content-type': 'application/json' } }))).toBeInstanceOf(Response)

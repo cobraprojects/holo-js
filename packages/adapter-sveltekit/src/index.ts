@@ -1,4 +1,4 @@
-import { getCurrentSvelteKitRequestEvent, runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitRequestEvent } from '@holo-js/adapter-shared/sveltekit/request-context'
+import { getCurrentSvelteKitRequestEvent, runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitParamValue, type SvelteKitRequestEvent } from '@holo-js/adapter-shared/sveltekit/request-context'
 import { serializeRateLimitError } from '@holo-js/adapter-shared/server-errors'
 import { error as svelteKitError } from '@sveltejs/kit'
 import type { Handle, HandleServerError } from '@sveltejs/kit/hooks'
@@ -74,8 +74,49 @@ function toSvelteKitErrorStatus(status: number): SvelteKitErrorStatus {
   return status >= 400 && status <= 599 ? status as SvelteKitErrorStatus : 500
 }
 
+const ROUTE_GROUP_SEGMENT = /^\([^)]+\)$/
+const ROUTE_SEGMENT_PART = /\[([ux])\+([^\]]+)\]|\[(\[)?(\.\.\.)?([\w-]+?)(?:=([\w-]+))?\]\]?/g
+const LITERAL_SLASH = '\u0000'
+
+function literalPathText(text: string): string {
+  return text.replaceAll('/', LITERAL_SLASH)
+}
+
+function routeSegmentPath(segment: string, params: Readonly<Record<string, SvelteKitParamValue | undefined>>): string {
+  return segment.replace(ROUTE_SEGMENT_PART, (_part, escapeType: string | undefined, escapeCode: string | undefined, _optional, rest: string | undefined, name: string | undefined) => {
+    if (escapeType) return literalPathText(String.fromCodePoint(...(escapeCode ?? '').split('-').map(codepoint => Number.parseInt(codepoint, 16))))
+    const value = name !== undefined && Object.hasOwn(params, name) ? String(params[name] ?? '') : ''
+    return rest ? value : literalPathText(value)
+  })
+}
+
+function firstAppPathSegment(routeId: string, params: Readonly<Record<string, SvelteKitParamValue | undefined>>): string | undefined {
+  const path = routeId.slice(1).split('/')
+    .filter(segment => segment !== '' && !ROUTE_GROUP_SEGMENT.test(segment))
+    .map(segment => routeSegmentPath(segment, params))
+    .join('/')
+  return path.split('/').find(segment => segment !== '')?.replaceAll(LITERAL_SLASH, '/')
+}
+
+function isApiRoute(event: SvelteKitRequestEvent): boolean {
+  const routeId = event.route?.id
+  const first = typeof routeId === 'string'
+    ? firstAppPathSegment(routeId, event.params ?? {})
+    : event.url?.pathname.split('/').find(segment => segment !== '')
+  return first === 'api'
+}
+
+function acceptsJson(event: SvelteKitRequestEvent): boolean {
+  return event.request.headers.get('accept')?.toLowerCase().includes('application/json') === true
+}
+
+function isEndpointOnlyMethod(event: SvelteKitRequestEvent): boolean {
+  const method = event.request.method?.toUpperCase() ?? 'GET'
+  return method !== 'GET' && method !== 'HEAD' && method !== 'POST'
+}
+
 function isApiEvent(event: SvelteKitRequestEvent): boolean {
-  return event.url?.pathname.startsWith('/api/') === true
+  return event.isDataRequest !== true && (isApiRoute(event) || isEndpointOnlyMethod(event))
 }
 
 function isDebugEnabled(): boolean {
@@ -111,8 +152,7 @@ function toSvelteKitValidationBody(payload: SerializedValidationException): Svel
 }
 
 function isSvelteKitActionJsonRequest(event: SvelteKitRequestEvent): boolean {
-  return event.request.method?.toUpperCase() === 'POST'
-    && event.request.headers.get('accept')?.toLowerCase().includes('application/json') === true
+  return event.request.method?.toUpperCase() === 'POST' && acceptsJson(event)
 }
 
 async function mapValidationActionResponse(
@@ -475,7 +515,7 @@ function takeValidationActionFailure(event: SvelteKitRequestEvent): SerializedVa
 function rememberValidationActionFailure(event: SvelteKitRequestEvent, payload: SerializedValidationException): void {
   const state = validationRequests.get(event.request)
   if (state && !state.active) return
-  flashValidationPayload(event, payload)
+  if (!isApiEvent(event)) flashValidationPayload(event, payload)
   if (state) state.payload = payload
   else validationRequests.set(event.request, { active: true, payload })
 }

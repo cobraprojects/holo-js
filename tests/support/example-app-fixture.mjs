@@ -19,7 +19,7 @@ export async function createExampleAppFixture(root, framework) {
     await mkdir(join(directory, 'apps'))
     await cp(sourceRoot, projectRoot, {
       recursive: true,
-      filter: source => !generatedDirectories.has(relative(sourceRoot, source).split(sep)[0]),
+      filter: source => !source.endsWith('.tsbuildinfo') && !generatedDirectories.has(relative(sourceRoot, source).split(sep)[0]),
     })
     await mkdir(join(projectRoot, 'storage'))
     const manifestPath = join(projectRoot, 'package.json')

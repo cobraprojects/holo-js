@@ -182,10 +182,11 @@ const feed = await Post.where('status', 'published').latest().cursorPaginate(20,
 Cursor pagination needs a stable sort order:
 
 - Order by real columns. `inRandomOrder()` and `unsafeOrderBy()` aren't allowed.
-- If you don't call `orderBy()`, Holo orders by the primary key.
-- Holo adds the primary key as a tie-breaker, so sorting by a non-unique column such as `created_at` is safe.
-- Use the same ordering for every page. A cursor created by a different ordering is rejected.
+- If you don't call `orderBy()`, Holo orders by the primary key it knows from the model or table definition. When Holo has no primary-key metadata for the table, call `orderBy()` yourself.
+- When Holo knows the table's primary key, it adds it as a tie-breaker, so sorting by a non-unique column such as `created_at` is safe. Without that metadata, add a unique column yourself: `.orderBy('created_at').orderBy('id')`.
 - A grouped query with a date bucket must order by exactly its `groupBy()` columns, since each group is one row. Holo adds the primary key to it only when it groups by the primary key, and only a single-table query grouped by its primary key may order by other columns. A date bucket query with an aggregate needs `groupBy()` to be cursor-paginated. A union with a date bucket can't be cursor-paginated when any of its queries is grouped, aggregated or has a raw selection, because the order can't always tell the groups apart. An ordered position that holds a date bucket in one query of a union must hold a date bucket in every query.
+
+Holo throws a `SecurityError` for random, raw, or missing ordering, and a `CompilerError` when it can't tell which column of a union to order by. Both end in a 500 response, and Holo checks the ordering before it reads the cursor. Holo can't tell whether your own columns are unique, though: without primary-key metadata, an ordering that isn't unique can skip rows that share a value at a page boundary.
 
 Cursor pagination works over [date buckets](/database/query-builder/selects-and-filters#selecting-date-buckets), so you can page through per-day totals newest first:
 
@@ -198,7 +199,54 @@ const page = await DB.table(events)
   .cursorPaginate(30, cursor)
 ```
 
-A malformed or tampered cursor also throws, so you don't need to validate it yourself.
+### Invalid cursors
+
+The cursor comes from the client, so it can be garbled, truncated, or left over from a page that ordered by different columns. Holo checks it before it runs the query and throws an `InvalidCursorException` when:
+
+- it isn't canonical base64url-encoded UTF-8 JSON,
+- its `values` aren't a list of strings, finite numbers, booleans and `null`,
+- its `previous` flag is present but isn't a boolean, or
+- it holds a different number of values than the query orders by.
+
+Keep the same ordering for every page. Holo only checks that a cursor has one value per ordered column, so a cursor issued by `orderBy('id')` is still accepted by `orderBy('id', 'desc')` and returns the wrong page.
+
+Cursors aren't signed. Holo binds each cursor value as a query parameter, and turns a `null` value into `IS NULL` / `IS NOT NULL` checks, so an edited value can't inject SQL. It isn't checked against the column type either. A value the database can't compare with the column, such as text for an integer column on PostgreSQL, fails like any other query.
+
+The Next, Nuxt and SvelteKit adapters handle an `InvalidCursorException` exactly like a failed `validate()`, with the error under the cursor parameter name. Where a failed `validate()` returns a 422 JSON response, so does an invalid cursor:
+
+```json
+{
+  "ok": false,
+  "status": 422,
+  "valid": false,
+  "message": "The cursor is invalid.",
+  "bag": "default",
+  "values": {},
+  "errors": { "cursor": ["The cursor is invalid."] }
+}
+```
+
+Set your own message with the `invalidCursorMessage` option. It must contain a non-whitespace character, even on pages without a cursor, and defaults to `'The cursor is invalid.'`. The error key follows `cursorName`, so `cursorName` can't contain `__proto__`, `constructor` or `prototype` as a dot-separated segment:
+
+```ts
+const feed = await Post.latest().cursorPaginate(20, url.searchParams.get('after'), {
+  cursorName: 'after',
+  invalidCursorMessage: 'This page is no longer available. Reload the feed.',
+})
+```
+
+To handle it yourself, catch the exception. It has `statusCode` (`422`), `code` (`'INVALID_CURSOR'`), `cursorName`, and `errors`:
+
+```ts
+import { InvalidCursorException } from '@holo-js/db'
+
+try {
+  return await Post.latest().cursorPaginate(20, cursor)
+} catch (error) {
+  if (error instanceof InvalidCursorException) return await Post.latest().cursorPaginate(20)
+  throw error
+}
+```
 
 ## Paginating models
 
@@ -261,7 +309,7 @@ const page = await DB.table('posts').orderBy('id').simplePaginate(15, 2)
 
 ### cursorPaginate()
 
-Returns a page from a cursor. Arguments: `perPage` (default `15`), `cursor` (default `null`), and `options` with `cursorName` (default `'cursor'`).
+Returns a page from a cursor. Arguments: `perPage` (default `15`), `cursor` (default `null`), and `options` with `cursorName` (default `'cursor'`) and `invalidCursorMessage`, which must contain a non-whitespace character (default `'The cursor is invalid.'`). An invalid cursor throws an [`InvalidCursorException`](#invalid-cursors).
 
 ```ts
 const page = await DB.table('posts').orderBy('id').cursorPaginate(15, null, { cursorName: 'after' })

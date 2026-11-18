@@ -301,7 +301,7 @@ export class DatabaseContext {
   }
 
   table<TTable extends string | TableDefinition>(table: TTable): TableQueryBuilder<TTable> {
-    return new TableQueryBuilder(table, this)
+    return new TableQueryBuilder(table, this, undefined, undefined, undefined, true)
   }
 
   async invalidateTables(tables: readonly string[]): Promise<void> {

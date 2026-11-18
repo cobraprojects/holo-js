@@ -43,8 +43,9 @@ export interface ColumnDefinition<
   TGenerated extends boolean = false,
   TPrimaryKey extends boolean = false,
   TComputed extends boolean = false,
+  TKind extends LogicalColumnKind = LogicalColumnKind,
 > {
-  readonly kind: LogicalColumnKind
+  readonly kind: TKind
   readonly name: string
   readonly nullable: TNullable
   readonly hasDefault: THasDefault

@@ -32,6 +32,19 @@ const posts = await Post.published()
   .paginate(20)
 ```
 
+## Cursor pagination
+
+Pass the request's cursor straight to `cursorPaginate(perPage, cursor, options)` or `cursorPaginateJson()`. Don't validate or decode it yourself. A malformed cursor, or one with a different number of values than the query orders by, throws `InvalidCursorException` from `@holo-js/db`, and the adapters handle it like a failed `validate()`, keyed by `cursorName`. Cursors aren't signed, and their values aren't checked against column types. Set the message with `invalidCursorMessage`. It must contain a non-whitespace character and defaults to `'The cursor is invalid.'`. Ordering mistakes in your code, such as `inRandomOrder()`, still throw `SecurityError`. See [pagination](https://docs.holo-js.com/database/pagination#invalid-cursors).
+
+```ts
+const feed = await Post.published()
+  .latest()
+  .cursorPaginateJson(20, url.searchParams.get('after'), {
+    cursorName: 'after',
+    invalidCursorMessage: 'Reload the feed.',
+  })
+```
+
 ## Observers
 
 Use observers for reusable model lifecycle concerns such as normalization, derived fields, audit records, and cleanup. Keep the observer registered at application boot, make ordering explicit, and avoid hidden network work in pre-write hooks.

@@ -26,6 +26,7 @@ import {
   toPosixSlashes,
   isRecursiveWatchUnsupported,
   isIgnorableWatchError,
+  isVanishedEntryUnderWatchRoot,
   normalizeWatchedFilePath,
 } from './watch-paths'
 import { runProjectPrepare } from './project-prepare'
@@ -620,6 +621,11 @@ export async function runQueueListen(
         })
     }
 
+    const keepWatchingPast = (watchRoot: string) => (error: Error): void => {
+      if (session.signal.aborted || isVanishedEntryUnderWatchRoot(error, watchRoot)) return
+      throw error
+    }
+
     closeWatchers = (() => {
       try {
         const watcher = createWatcher(projectRoot, { recursive: true }, (_eventType, fileName) => {
@@ -629,6 +635,7 @@ export async function runQueueListen(
 
           rerunPrepare()
         })
+        watcher.on('error', keepWatchingPast(projectRoot))
 
         return () => watcher.close()
       } catch (error) {
@@ -649,7 +656,7 @@ export async function runQueueListen(
           if (session.signal.aborted) return
           for (const watchRoot of watchRoots) {
             try {
-              watchers.push(createWatcher(watchRoot, { recursive: false }, (_eventType, fileName) => {
+              const watcher = createWatcher(watchRoot, { recursive: false }, (_eventType, fileName) => {
                 if (session.signal.aborted || typeof fileName !== 'string') {
                   return
                 }
@@ -660,7 +667,9 @@ export async function runQueueListen(
                 }
 
                 rerunPrepare()
-              }))
+              })
+              watcher.on('error', keepWatchingPast(watchRoot))
+              watchers.push(watcher)
             } catch (watchError) {
               if (!isIgnorableWatchError(watchError)) {
                 throw watchError

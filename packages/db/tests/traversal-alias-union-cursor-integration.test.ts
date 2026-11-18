@@ -48,9 +48,11 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     const second = wildcardBranch === 'second'
       ? joined().select(`${name}.*`, `${table.tableName}.id as other_key`).where(`${table.tableName}.id`, 2)
       : joined().select(`${name}.note_id`, `${table.tableName}.id as other_key`).where(`${table.tableName}.id`, 2)
-    await expect(first.unionAll(second).orderBy('sort_key').cursorPaginate(1)).rejects.toThrow(
-      new CompilerError('Cannot cursor paginate a union by "sort_key": its column position cannot be determined. Select the order column explicitly in each query without preceding wildcards.'),
-    )
+    for (const cursor of [null, 'abc']) {
+      await expect(first.unionAll(second).orderBy('sort_key').cursorPaginate(1, cursor)).rejects.toThrow(
+        new CompilerError('Cannot cursor paginate a union by "sort_key": its column position cannot be determined. Select the order column explicitly in each query without preceding wildcards.'),
+      )
+    }
     const explicit = joined().select(`${name}.note_id`, `${table.tableName}.id as sort_key`).where(`${table.tableName}.id`, 1)
       .unionAll(joined().select(`${name}.note_id`, `${table.tableName}.id as other_key`).where(`${table.tableName}.id`, 2)).orderBy('sort_key')
     const page = await explicit.cursorPaginate(1)

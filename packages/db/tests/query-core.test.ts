@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
+  InvalidCursorException,
   CompilerError,
   DB,
   clearGeneratedTables,
@@ -1459,14 +1460,14 @@ describe('query core slice', () => {
     await expect(DB.table('users').simplePaginate(1, 1, { pageName: '' })).rejects.toThrow('Page parameter name must be a non-empty string.')
     await expect(DB.table('users').cursorPaginate(0)).rejects.toThrow('Per-page value must be a positive integer.')
     await expect(DB.table('users').chunkByIdDesc(0, () => {})).rejects.toThrow('Chunk size must be a positive integer.')
-    await expect(DB.table('users').cursorPaginate(2, 'broken')).rejects.toThrow('Cursor is malformed.')
+    await expect(DB.table('users').orderBy('id').cursorPaginate(2, 'broken')).rejects.toThrow(InvalidCursorException)
     await expect(DB.table('users').paginate(1, 1, { pageName: '' })).rejects.toThrow('Page parameter name must be a non-empty string.')
     await expect(DB.table('users').cursorPaginate(1, null, { cursorName: '' })).rejects.toThrow('Cursor parameter name must be a non-empty string.')
     await expect(DB.table('users').cursorPaginate(1)).rejects.toThrow('Cursor pagination requires an explicit stable orderBy clause.')
     await expect(DB.table('users').inRandomOrder().cursorPaginate(1)).rejects.toThrow('Cursor pagination cannot use random ordering.')
     await expect(DB.table('users').unsafeOrderBy('id', []).cursorPaginate(1)).rejects.toThrow('requires column orderBy clauses')
     const malformedCursor = Buffer.from(JSON.stringify({ offset: 'bad' }), 'utf8').toString('base64url')
-    await expect(DB.table('users').cursorPaginate(2, malformedCursor)).rejects.toThrow('Cursor is malformed.')
+    await expect(DB.table('users').orderBy('id').cursorPaginate(2, malformedCursor)).rejects.toThrow(InvalidCursorException)
     await expect(DB.table('users').chunk(0, () => undefined)).rejects.toThrow('Chunk size must be a positive integer.')
     await expect(DB.table('users').chunkById(0, () => undefined)).rejects.toThrow('Chunk size must be a positive integer.')
   })

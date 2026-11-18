@@ -5,7 +5,7 @@ import { assertQueryTablePath } from '../query/validator'
 import { TableQueryBuilder, aliasTableSource, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
 import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { selectionOutputName } from '../query/modelRowProjection'
-import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadTableDefinition } from '../schema/columnListing'
+import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadColumnSqlTypes, loadTableDefinition } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition, isUnresolvedGeneratedPrimaryKey } from '../schema/generated'
 import { typedTableOrName } from '../schema/untypedTable'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
@@ -3530,11 +3530,14 @@ export class ModelRepository<
     const connection = this.getConnection()
     const table = this.resolvePivotTable(relation.pivotTable, connection)
     const relatedKey = typeof table === 'string' ? undefined : ownEntry(table.columns, relatedColumn)
+    const tableName = typeof table === 'string' ? table : table.tableName
     return new PivotMutation({
       table,
       scope,
       relatedColumn,
       relatedKey,
+      ...(typeof table === 'string' ? { loadTable: () => loadTableDefinition(connection, tableName) } : {}),
+      loadColumnSqlTypes: () => loadColumnSqlTypes(connection, tableName),
       dialect: connection.getDriver() as SchemaDialectName,
       allowedColumns: relation.pivotColumns,
       timestamps: relation.pivotTimestamps === true,

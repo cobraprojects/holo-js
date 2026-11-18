@@ -37,7 +37,7 @@ function createFakeWatcher(calls: string[]) {
       calls.push('live')
       emit('rename', DISCOVERY_WATCH_PROBE_PATH)
     })
-    return { close() {} } as unknown as WatchHandle
+    return Object.assign(new EventEmitter(), { close() {} }) as unknown as WatchHandle
   }) as unknown as WatchFactory
   return { createWatcher, emit }
 }
@@ -216,7 +216,7 @@ function createNonRecursiveWatcher() {
     if (options.recursive) {
       throw Object.assign(new Error('recursive watch unavailable'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' })
     }
-    return { close() {} } as unknown as WatchHandle
+    return Object.assign(new EventEmitter(), { close() {} }) as unknown as WatchHandle
   }) as unknown as WatchFactory
   return { createWatcher, emit() {} }
 }

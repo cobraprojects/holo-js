@@ -4,7 +4,8 @@ import { whereIntegerKeysIn } from './ModelQueryBuilder'
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
-import type { EmptyScopeMap, ModelAggregateLoad, ModelMorphLoadMap, ModelRelationName, ModelRelationPath, ModelRecord, ModelScopesDefinition, RelatedColumnNameOfRelation, RelationMap, ResolveEagerLoads, SerializeLoaded } from './types'
+import type { RelationAggregateAttributes } from './relationAggregateTypes'
+import type { EmptyScopeMap, ModelAggregateLoad, ModelMorphLoadMap, ModelRelationName, ModelRelationPath, ModelRecord, ModelScopesDefinition, ModelWithAggregateAttributes, RelatedColumnNameOfRelation, RelationAggregateKind, RelationMap, ResolveEagerLoads, SerializeLoaded } from './types'
 
 type CollectionRepository<
   TTable extends TableDefinition,
@@ -44,12 +45,19 @@ type CollectionSerializedItem<TItem, TTable extends TableDefinition>
     ? TSerialized
     : ModelRecord<TTable>
 
+type CollectionWithAggregates<TTable extends TableDefinition, TRelations extends RelationMap, TItem, TScopes extends ModelScopesDefinition, TKind extends RelationAggregateKind, TNames extends readonly string[], TColumn extends string = '*'>
+  = ModelCollection<TTable, TRelations, ModelWithAggregateAttributes<TItem, RelationAggregateAttributes<TRelations, TKind, TNames, TColumn>>, TScopes>
+
+type CollectionAggregateMethods<TTable extends TableDefinition, TRelations extends RelationMap, TItem, TScopes extends ModelScopesDefinition>
+  = { [K in 'count' | 'exists' as `load${Capitalize<K>}`]: <const TNames extends readonly ModelRelationName<TRelations>[]>(...relations: TNames) => Promise<CollectionWithAggregates<TTable, TRelations, TItem, TScopes, K, TNames>> }
+  & { [K in 'sum' | 'avg' | 'min' | 'max' as `load${Capitalize<K>}`]: <TRelation extends ModelRelationName<TRelations>, TColumn extends RelatedColumnNameOfRelation<TRelations[TRelation]> = RelatedColumnNameOfRelation<TRelations[TRelation]>>(relation: TRelation, column: TColumn) => Promise<CollectionWithAggregates<TTable, TRelations, TItem, TScopes, K, readonly [TRelation], TColumn>> }
+
 export interface ModelCollectionMethods<
   TTable extends TableDefinition = TableDefinition,
   TRelations extends RelationMap = RelationMap,
   TItem = Entity<TTable, TRelations>,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
-> {
+> extends CollectionAggregateMethods<TTable, TRelations, TItem, TScopes> {
   modelKeys(): unknown[]
   toQuery(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
   toJSON(): Array<CollectionSerializedItem<TItem, TTable>>
@@ -63,12 +71,6 @@ export interface ModelCollectionMethods<
     relation: ModelRelationName<TRelations>,
     mapping: ModelMorphLoadMap,
   ): Promise<ModelCollection<TTable, TRelations, TItem, TScopes>>
-  loadCount(...relations: readonly ModelRelationName<TRelations>[]): Promise<ModelCollection<TTable, TRelations, TItem, TScopes>>
-  loadExists(...relations: readonly ModelRelationName<TRelations>[]): Promise<ModelCollection<TTable, TRelations, TItem, TScopes>>
-  loadSum<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<ModelCollection<TTable, TRelations, TItem, TScopes>>
-  loadAvg<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<ModelCollection<TTable, TRelations, TItem, TScopes>>
-  loadMin<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<ModelCollection<TTable, TRelations, TItem, TScopes>>
-  loadMax<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<ModelCollection<TTable, TRelations, TItem, TScopes>>
   fresh(): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   append(...keys: readonly string[]): ModelCollection<TTable, TRelations, TItem, TScopes>
   withoutAppends(): ModelCollection<TTable, TRelations, TItem, TScopes>

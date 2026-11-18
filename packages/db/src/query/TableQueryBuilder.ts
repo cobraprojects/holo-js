@@ -1,12 +1,13 @@
-import { CompilerError, ConfigurationError, SecurityError, TransactionError } from '../core/errors'
+import { CompilerError, ConfigurationError, SecurityError, TransactionError, type InvalidCursorException } from '../core/errors'
 import { NumericAdjustment } from './NumericAdjustment'
 import { redactBindings } from '../security/policy'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
-import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
+import { createDateExtremaSelection, createFractionalCountSelection, createMatchingValuesSelection, createStoredTextSelection } from './trustedRawSelection'
 import type { QueryDateBucketSelection, QueryRawSelection, QueryRelationKeysPredicate } from './ast'
-import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, assertGroupedOrderKeysUnshadowed, effectiveOutputName, groupedCursorKey, planHasDateBuckets, selectionMayOutputName, type GroupedKeyContext } from './dateBuckets'
+import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketUnit, assertGroupedOrderKeysUnshadowed, effectiveOutputName, groupedCursorKey, planHasDateBuckets, selectionMayOutputName, type GroupedKeyContext } from './dateBuckets'
+import { assertDateBucketTimeZonesConvertible } from './mysqlDateBucketTimeZones'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -42,7 +43,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { readConvertedResultColumns, readInsertedKey, readIntegerColumns, resolveConvertedResultColumns, withResolvedDefinitions } from './resultColumns'
+import { type ResultReads, readConvertedResultColumns, readInsertedKey, readIntegerColumns, readsAsNumericAggregate, resolveConvertedResultColumns, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -53,7 +54,9 @@ import {
   decodeValueCursor,
   encodeValueCursor,
   normalizePaginationParameterName,
+  resolveCursorPaginationOptions,
   type CursorOrderDefinition,
+  type ValueCursor,
 } from './pagination'
 import { cursorPredicate } from './cursorPredicate'
 import {
@@ -294,6 +297,7 @@ export class TableQueryBuilder<
     plan?: SelectQueryPlan,
     private readonly queryCacheConfig?: NormalizedQueryCacheConfig,
     handoff?: symbol,
+    private readonly readsSQLiteDates = false,
   ) {
     const source = plan?.source ?? createTableSource(table)
     this.ownSource = source
@@ -405,6 +409,7 @@ export class TableQueryBuilder<
       withSource(this.plan, this.sourceHasRowKey(source.tableName) ? Object.freeze({ ...source, primaryKey: this.source.primaryKey }) : source),
       this.queryCacheConfig,
       internalPlanHandoff,
+      this.readsSQLiteDates,
     )
   }
 
@@ -474,37 +479,37 @@ export class TableQueryBuilder<
     )
   }
 
-  selectMin<TAlias extends string>(
+  selectMin<TAlias extends string, TColumn extends DeclaredColumnName<TTableOrName, TAvailableColumns>>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
-  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
+    column: TColumn,
+  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, TAvailableColumns[TColumn] | null>, TAvailableColumns> {
     return this.clone(
       withAggregateSelection(this.plan, this.createAggregateSelection('min', alias, column)),
     )
   }
 
-  addSelectMin<TAlias extends string>(
+  addSelectMin<TAlias extends string, TColumn extends DeclaredColumnName<TTableOrName, TAvailableColumns>>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
+    column: TColumn,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, TAvailableColumns[TColumn] | null>, TAvailableColumns> {
     return this.clone(
       appendAggregateSelection(this.plan, this.createAggregateSelection('min', alias, column)),
     )
   }
 
-  selectMax<TAlias extends string>(
+  selectMax<TAlias extends string, TColumn extends DeclaredColumnName<TTableOrName, TAvailableColumns>>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
-  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
+    column: TColumn,
+  ): TableQueryBuilder<TTableOrName, AggregateSelectionResult<TAlias, TAvailableColumns[TColumn] | null>, TAvailableColumns> {
     return this.clone(
       withAggregateSelection(this.plan, this.createAggregateSelection('max', alias, column)),
     )
   }
 
-  addSelectMax<TAlias extends string>(
+  addSelectMax<TAlias extends string, TColumn extends DeclaredColumnName<TTableOrName, TAvailableColumns>>(
     alias: TAlias,
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
-  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, number | null>, TAvailableColumns> {
+    column: TColumn,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow & AggregateSelectionResult<TAlias, TAvailableColumns[TColumn] | null>, TAvailableColumns> {
     return this.clone(
       appendAggregateSelection(this.plan, this.createAggregateSelection('max', alias, column)),
     )
@@ -2112,6 +2117,7 @@ export class TableQueryBuilder<
       this.plan,
       normalizeQueryCacheConfig(config),
       internalPlanHandoff,
+      this.readsSQLiteDates,
     )
   }
 
@@ -2123,7 +2129,7 @@ export class TableQueryBuilder<
     compileStatement: () => CompiledStatement,
     collectObservation = true,
     scopeCacheKey = false,
-    convertColumns = true,
+    reads: ResultReads | false = this.readsSQLiteDates ? 'valuesAndDates' : 'values',
   ): Promise<TRow[]> {
     await this.bindGeneratedTable()
     const statement = compileStatement()
@@ -2152,7 +2158,7 @@ export class TableQueryBuilder<
     recordDatabaseQueryDependencies(observationDependencies)
     const expired = cacheConfig?.ttl instanceof Date && cacheConfig.ttl.getTime() <= Date.now()
     if (!cacheConfig || this.plan.lockMode || expired || !canUseQueryCache(this.connection) || currentRootTransaction(this.connection)?.schemaChanged) {
-      const rows = this.convertRows(convertColumns, await this.queryRows<TRow>(statement))
+      const rows = this.convertRows(reads, await this.queryRows<TRow>(statement))
       this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
         observationDependencies,
@@ -2172,7 +2178,7 @@ export class TableQueryBuilder<
 
     const flexible = cacheConfig.flexible
     if (flexible) {
-      const rows = this.convertRows(convertColumns, await runQueryCacheOperation(runSource => bridge.flexible(
+      const rows = this.convertRows(reads, await runQueryCacheOperation(runSource => bridge.flexible(
         cacheKey,
         flexible,
         () => runSource(() => this.queryRows<TRow>(statement)),
@@ -2194,7 +2200,7 @@ export class TableQueryBuilder<
     }
 
     const ttl = normalizeAtomicQueryCacheTtl(cacheConfig.ttl)
-    const rows = this.convertRows(convertColumns, await runQueryCacheOperation(runSource => bridge.flexible(
+    const rows = this.convertRows(reads, await runQueryCacheOperation(runSource => bridge.flexible(
       cacheKey,
       ttl,
       () => runSource(() => this.queryRows<TRow>(statement)),
@@ -2211,17 +2217,18 @@ export class TableQueryBuilder<
     return rows
   }
 
-  private convertRows<TRow extends Record<string, unknown>>(convertColumns: boolean, rows: TRow[]): TRow[] {
-    if (!convertColumns) return rows
+  private convertRows<TRow extends Record<string, unknown>>(reads: ResultReads | false, rows: TRow[]): TRow[] {
+    if (!reads) return rows
     const plan = withResolvedDefinitions(this.plan, this.connection.getConnectionName())
-    const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan)
+    const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan, reads)
     if (convertedColumns.size === 0) return rows
     return rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
   }
 
   private async queryRows<TRow extends Record<string, unknown>>(statement: CompiledStatement): Promise<TRow[]> {
     const { rows } = await this.connection.queryCompiled<TRow>(statement)
-    const aggregates = this.plan.selections.filter(selection => selection.kind === 'aggregate')
+    const plan = withResolvedDefinitions(this.plan, this.connection.getConnectionName())
+    const aggregates = plan.selections.filter((selection): selection is QueryAggregateSelection => selection.kind === 'aggregate' && readsAsNumericAggregate(plan, selection))
     if (aggregates.length === 0) return rows
     return rows.map(row => {
       const values: Record<string, unknown> = { ...row }
@@ -2357,13 +2364,10 @@ export class TableQueryBuilder<
     options: CursorPaginationOptions = {},
   ): Promise<CursorPaginatedResult<TRow>> {
     assertPositiveInteger(perPage, 'Per-page value', message => new SecurityError(message))
-    const cursorName = normalizePaginationParameterName(options.cursorName, 'cursor', message => new SecurityError(message))
-    const decodedCursor = decodeValueCursor(cursor, message => new SecurityError(message))
+    const { cursorName, invalidCursor } = resolveCursorPaginationOptions(options, message => new SecurityError(message))
     await this.bindGeneratedTable()
     const orderedQuery = this.prepareCursorPaginationQuery()
     const cursorOrders = orderedQuery.resolveCursorOrders()
-    if (decodedCursor && decodedCursor.values.length !== cursorOrders.length) throw new SecurityError('Cursor does not match the query ordering.')
-    const previous = decodedCursor?.previous === true
     const hiddenCursorColumns = orderedQuery.hiddenGroupedCursorColumns(cursorOrders)
     const cursorValue = (row: Record<string, unknown>, column: string, index: number): unknown => {
       const hidden = hiddenCursorColumns[index]
@@ -2379,6 +2383,8 @@ export class TableQueryBuilder<
       return hidden === undefined ? [] : [`${order.column} as ${hidden}`]
     })
     let plan = withOffset(withLimit(hiddenSelections.length === 0 ? orderedQuery.plan : appendSelections(orderedQuery.plan, hiddenSelections), perPage + 1), undefined)
+    const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
+    const previous = decodedCursor?.previous === true
     if (decodedCursor) {
       const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
       const nullsLow = !this.connection.getDialect().name.includes('postgres')
@@ -2403,16 +2409,15 @@ export class TableQueryBuilder<
     }
     if (previous) plan = replaceOrderBy(plan, cursorOrders.map(order => ({ kind: 'column', column: order.column, direction: order.direction === 'asc' ? 'desc' : 'asc' })))
     const pageQuery = orderedQuery.clone(plan)
-    const rows = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true)
-    const pageRows = rows
-    const hasMorePages = pageRows.length > perPage
-    const pageData = pageRows.slice(0, perPage)
-    if (previous) pageData.reverse()
-    const firstRow = pageData.at(0)
-    const lastRow = pageData.at(-1)
+    const storedRows = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true, 'values')
+    const hasMorePages = storedRows.length > perPage
+    const pageRows = storedRows.slice(0, perPage)
+    if (previous) pageRows.reverse()
+    const firstRow = pageRows.at(0)
+    const lastRow = pageRows.at(-1)
     const hiddenNames = hiddenCursorColumns.filter((name): name is string => name !== undefined)
-    const data = hiddenNames.length === 0 ? pageData : pageData.map(row => withoutKeys(row, hiddenNames))
-    const result = createCursorPaginator(data, {
+    const visibleRows = hiddenNames.length === 0 ? pageRows : pageRows.map(row => withoutKeys(row, hiddenNames))
+    const result = createCursorPaginator(this.readsSQLiteDates ? pageQuery.convertRows('dates', visibleRows) : visibleRows, {
       perPage,
       cursorName,
       nextCursor: (previous ? cursor !== null : hasMorePages) && lastRow
@@ -2992,7 +2997,7 @@ export class TableQueryBuilder<
     plan: SelectQueryPlan,
   ): TableQueryBuilder<TTableOrName, TRow, TNextColumns> {
     const table = (this.source.table ?? this.source.tableName) as TTableOrName
-    return new TableQueryBuilder<TTableOrName, TRow, TNextColumns>(table, this.connection, plan, this.queryCacheConfig, internalPlanHandoff)
+    return new TableQueryBuilder<TTableOrName, TRow, TNextColumns>(table, this.connection, plan, this.queryCacheConfig, internalPlanHandoff, this.readsSQLiteDates)
   }
 
   private async readDecimalUpdateKeys(values: Readonly<Record<string, unknown>>): Promise<readonly Readonly<Record<string, unknown>>[] | undefined> {
@@ -3540,6 +3545,17 @@ export class TableQueryBuilder<
     return { connectionName: this.connection.getConnectionName(), foldsColumnNames: !dialect.startsWith('postgres'), foldsTableNames: dialect.startsWith('sqlite') }
   }
 
+  private decodePageCursor(cursor: string | null, orderCount: number, plan: SelectQueryPlan, invalidCursor: () => InvalidCursorException): ValueCursor | null {
+    try {
+      const decoded = decodeValueCursor(cursor, invalidCursor)
+      if (decoded && decoded.values.length !== orderCount) throw invalidCursor()
+      return decoded
+    } catch (error) {
+      this.getCompiler().compile(plan)
+      throw error
+    }
+  }
+
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
     if (dateBucketSelections(this.plan).has(column)) return row[column]
     const sourceColumn = this.resolveSourceColumnName(column)
@@ -3594,6 +3610,7 @@ export class TableQueryBuilder<
       projected.getPlan(),
       { ...cacheConfig, key },
       internalPlanHandoff,
+      this.readsSQLiteDates,
     )
   }
 
@@ -3784,6 +3801,96 @@ export function addSelectFractionalCount(
     throw new SecurityError('addSelectFractionalCount() only supports SQLite.')
   }
   return append(createFractionalCountSelection(column, alias))
+}
+
+export function whereStoredValuesIn<
+  TTableOrName extends TableReference,
+  TSelectedRow extends Record<string, unknown>,
+  TAvailableColumns extends Record<string, unknown>,
+>(
+  query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
+  column: string,
+  values: readonly unknown[],
+): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  const appendTrusted = trustedRawWhereAppenders.get(query)
+  const connection = query.getConnection()
+  if (!appendTrusted || !isGenuineDatabaseContext(connection)) {
+    throw new SecurityError('whereStoredValuesIn() needs a query builder and connection that Holo created.')
+  }
+  if (!/^[A-Za-z_]\w*$/.test(column)) {
+    throw new SecurityError(`Stored-value predicates need a plain column name, received "${column}".`)
+  }
+  if (values.length === 0) return appendTrusted('1 = 0', []) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+  const placeholders = values.map(() => '?').join(', ')
+  return appendTrusted(`${connection.getDialect().quoteIdentifier(column)} IN (${placeholders})`, values) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+}
+
+export function selectStoredText<TTableOrName extends TableReference>(
+  query: TableQueryBuilder<TTableOrName, Record<string, unknown>>,
+  column: string,
+  alias: string,
+): TableQueryBuilder<TTableOrName, Record<string, unknown>> {
+  const { connection, append } = internalSelectionContext(query as unknown as TableQueryBuilder<string, Record<string, unknown>>)
+  const dialect = connection.getDialect().name
+  if (dialect !== 'postgres' && dialect !== 'mysql') {
+    throw new SecurityError('selectStoredText() only supports PostgreSQL and MySQL.')
+  }
+  return append(createStoredTextSelection(dialect, column, alias)) as unknown as TableQueryBuilder<TTableOrName, Record<string, unknown>>
+}
+
+export function selectMatchingValues<TTableOrName extends TableReference>(
+  query: TableQueryBuilder<TTableOrName, Record<string, unknown>>,
+  column: string,
+  values: readonly unknown[],
+  alias: string,
+): TableQueryBuilder<TTableOrName, Record<string, unknown>> {
+  const { connection, append } = internalSelectionContext(query as unknown as TableQueryBuilder<string, Record<string, unknown>>)
+  const dialect = connection.getDialect().name
+  if (dialect !== 'postgres' && dialect !== 'mysql') {
+    throw new SecurityError('selectMatchingValues() only supports PostgreSQL and MySQL.')
+  }
+  return append(createMatchingValuesSelection(dialect, column, values, alias)) as unknown as TableQueryBuilder<TTableOrName, Record<string, unknown>>
+}
+
+const MYSQL_DATE_TYPE = /^(date|datetime|timestamp)(\([0-6]\))?$/i
+const POSTGRES_DATE_TYPE = /^(?:date|(?:timestamp|time)(?:\([0-6]\))?(?: with(?:out)? time zone)?)$/
+
+export function whereStoredValuesDiffer<
+  TTableOrName extends TableReference,
+  TSelectedRow extends Record<string, unknown>,
+  TAvailableColumns extends Record<string, unknown>,
+>(
+  query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
+  values: Readonly<Record<string, unknown>>,
+  calendarDateColumns: readonly string[] = [],
+  sqlTypes: ReadonlyMap<string, string> = new Map(),
+): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  const appendTrusted = trustedRawWhereAppenders.get(query)
+  const connection = query.getConnection()
+  if (!appendTrusted || !isGenuineDatabaseContext(connection)) {
+    throw new SecurityError('whereStoredValuesDiffer() needs a query builder and connection that Holo created.')
+  }
+  const columns = Object.keys(values)
+  const invalid = columns.find(column => !/^[A-Za-z_]\w*$/.test(column))
+  if (invalid !== undefined) {
+    throw new SecurityError(`Stored-value predicates need a plain column name, received "${invalid}".`)
+  }
+  if (columns.length === 0) return appendTrusted('1 = 0', []) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+  const dialect = connection.getDialect()
+  const differs = (column: string) => {
+    const quoted = dialect.quoteIdentifier(column)
+    if (dialect.name === 'postgres') {
+      const type = sqlTypes.get(column)
+      return type && POSTGRES_DATE_TYPE.test(type) ? `${quoted} IS DISTINCT FROM CAST(? AS ${type})` : `${quoted} IS DISTINCT FROM ?`
+    }
+    if (dialect.name === 'mysql') {
+      const type = MYSQL_DATE_TYPE.exec(sqlTypes.get(column) ?? '')
+      if (type) return `NOT (${quoted} <=> CAST(? AS ${type[1]!.toLowerCase() === 'date' ? 'DATE' : `DATETIME${type[2] ?? ''}`}))`
+      return calendarDateColumns.includes(column) ? `NOT (${quoted} <=> DATE(?))` : `NOT (${quoted} <=> ?)`
+    }
+    return `${quoted} IS NOT ?`
+  }
+  return appendTrusted(`(${columns.map(differs).join(' OR ')})`, columns.map(column => values[column])) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
 }
 
 export function whereColumnNotExpiredByDatabaseClock<

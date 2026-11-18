@@ -28,6 +28,12 @@
       "import": "./dist/http-errors.mjs",
       "default": "./dist/http-errors.mjs"
     },
+    "./field-errors": {
+      "@holo-js/source": "./src/fieldErrors.ts",
+      "types": "./dist/field-errors.d.ts",
+      "import": "./dist/field-errors.mjs",
+      "default": "./dist/field-errors.mjs"
+    },
     "./managed-resources": {
       "@holo-js/source": "./src/managedResources.ts",
       "types": "./dist/managed-resources.d.ts",

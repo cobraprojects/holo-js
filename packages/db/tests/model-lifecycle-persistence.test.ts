@@ -177,6 +177,19 @@ describe('model lifecycle persistence', () => {
     account.set('name', 'Ada Lovelace')
     await expect(account.save()).resolves.toBe(account)
     expect(await db.table('accounts').where('id', 1).get()).toMatchObject([{ name: 'Ada Lovelace' }])
+
+    await account.refresh()
+    expect(account.toAttributes().posts_count).toBeUndefined()
+
+    const relations: 'posts'[] = []
+    const uncounted = await Account.withCount(...relations).firstOrFail()
+    expect(uncounted.toAttributes().posts_count).toBeUndefined()
+
+    const counted = await Account.withAggregate('posts as metric', '*', 'count')
+      .withAggregate('posts as metric', '*', 'exists')
+      .withAggregate('posts as metric as ignored', '*', 'count')
+      .firstOrFail()
+    expect(counted.toAttributes().metric).toBe(2)
   })
 
   it('detects in-place changes to JSON and date attributes as dirty and saves them', async () => {

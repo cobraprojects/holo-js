@@ -3,9 +3,7 @@ import { createSimplePaginator } from '../src/query/paginator'
 import {
   assertPositiveInteger,
   decodeOffsetCursor,
-  decodeValueCursor,
   encodeOffsetCursor,
-  encodeValueCursor,
   normalizePaginationParameterName,
 } from '../src/query/pagination'
 
@@ -48,18 +46,6 @@ describe('@holo-js/db query pagination helpers', () => {
     )).toThrow('Cursor is malformed.')
     expect(() => decodeOffsetCursor(
       Buffer.from(JSON.stringify({ offset: 1.5 }), 'utf8').toString('base64url'),
-      createError,
-    )).toThrow('Cursor is malformed.')
-  })
-
-  it('encodes and decodes value cursors and rejects malformed payloads', () => {
-    const values = ['Ava', 1, null]
-
-    expect(decodeValueCursor(null, createError)).toBeNull()
-    expect(decodeValueCursor(encodeValueCursor(values), createError)).toEqual({ values })
-    expect(() => decodeValueCursor('not-json', createError)).toThrow('Cursor is malformed.')
-    expect(() => decodeValueCursor(
-      Buffer.from(JSON.stringify({ values: 'Ava' }), 'utf8').toString('base64url'),
       createError,
     )).toThrow('Cursor is malformed.')
   })

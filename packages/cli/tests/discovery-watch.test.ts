@@ -158,7 +158,7 @@ it('defers observed edits until it is resumed and judges them by the policy in e
     deferred: true,
     createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
       listeners.push(listener)
-      return { close() {} }
+      return Object.assign(new EventEmitter(), { close() {} })
     }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
   })
   onTestFinished(() => watcher.close())
@@ -191,7 +191,7 @@ it('ignores events for a dependency manifest that still holds the content the CL
     observe: captured.observe,
     createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
       listeners.push(listener)
-      return { close() {} }
+      return Object.assign(new EventEmitter(), { close() {} })
     }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
   })
   onTestFinished(() => watcher.close())
@@ -221,7 +221,7 @@ it('observes a user restoring a dependency manifest to content the CLI wrote ear
     observe: captured.observe,
     createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
       listeners.push(listener)
-      return { close() {} }
+      return Object.assign(new EventEmitter(), { close() {} })
     }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
   })
   onTestFinished(() => watcher.close())
@@ -254,7 +254,7 @@ it('waits for a running dependency install to record its writes before judging m
     observe: captured.observe,
     createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
       listeners.push(listener)
-      return { close() {} }
+      return Object.assign(new EventEmitter(), { close() {} })
     }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
   })
   onTestFinished(() => watcher.close())
@@ -284,7 +284,7 @@ it('ignores the staging files of atomic writes in watched roots', async () => {
     deferred: true,
     createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
       listeners.push(listener)
-      return { close() {} }
+      return Object.assign(new EventEmitter(), { close() {} })
     }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
   })
   onTestFinished(() => watcher.close())
@@ -312,7 +312,7 @@ it('judges a manifest event that arrives while the CLI is writing it against the
     observe: captured.observe,
     createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
       listeners.push(listener)
-      return { close() {} }
+      return Object.assign(new EventEmitter(), { close() {} })
     }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
   })
   onTestFinished(() => watcher.close())
@@ -341,7 +341,7 @@ it('ignores events for source files the CLI wrote or removed while they still ma
     deferred: true,
     createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
       listeners.push(listener)
-      return { close() {} }
+      return Object.assign(new EventEmitter(), { close() {} })
     }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
   })
   onTestFinished(() => watcher.close())
@@ -398,7 +398,7 @@ it('ignores events for files and new directories the CLI writes through its atom
     deferred: true,
     createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
       listeners.push(listener)
-      return { close() {} }
+      return Object.assign(new EventEmitter(), { close() {} })
     }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
   })
   onTestFinished(() => watcher.close())
@@ -520,7 +520,7 @@ async function startDeferredWatch(root: string, recursive: boolean, config = def
         throw Object.assign(new Error('directory vanished'), { code: 'ENOENT' })
       }
       listeners.set(path, [...listeners.get(path) ?? [], listener])
-      return { close() {} }
+      return Object.assign(new EventEmitter(), { close() {} })
     }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
   })
   onTestFinished(() => watcher.close())
@@ -846,4 +846,33 @@ it('replays a startup-excluded watch root deleted during startup as deleted', as
   watcher.resume()
   await settled()
   expect(changes).toEqual([{ path: 'resources/demo', kind: 'deleted' }])
+})
+
+it('keeps watching past a folder that vanished under the watched root and fails on other watcher errors', async () => {
+  const root = await createProject()
+  const handles: (EventEmitter & { listener: (eventType: string, fileName: string) => void })[] = []
+  const captured = captureChanges()
+  const watcher = await startDiscoveryWatch({
+    projectRoot: root,
+    signal: new AbortController().signal,
+    writeWarning: message => { throw new Error(message) },
+    project: { config: defaultProjectConfig() },
+    observe: captured.observe,
+    createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
+      const handle = Object.assign(new EventEmitter(), { listener, close() {} })
+      handles.push(handle)
+      return handle
+    }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
+  })
+  onTestFinished(() => watcher.close())
+  handles.forEach(handle => handle.listener('change', DISCOVERY_WATCH_PROBE_PATH))
+  await watcher.ready
+  const fail = (code: string, path?: string) => Object.assign(new Error(`${code}: scandir '${path}'`), { code, ...(path ? { path, syscall: 'scandir' } : {}) })
+  const [handle] = handles
+
+  expect(() => handle!.emit('error', fail('ENOENT', join(root, '.holo-js/runtime/cli/bundle-1')))).not.toThrow()
+  expect(() => handle!.emit('error', fail('ENOENT', root))).toThrow('ENOENT')
+  expect(() => handle!.emit('error', fail('EPERM'))).toThrow('EPERM')
+  handle!.listener('change', 'config/app.ts')
+  await vi.waitFor(() => expect(captured.changes).toEqual([{ path: 'config/app.ts', kind: 'changed' }]))
 })

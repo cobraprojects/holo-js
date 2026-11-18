@@ -43,6 +43,7 @@ import {
   markDefinitionSensitive,
   parseByteSize,
 } from './contracts-support'
+import { readHoloFieldErrors } from '@holo-js/kernel/field-errors'
 import { DEFAULT_VALIDATION_BAG } from './error-bag'
 import { createFieldStandardValidate, createSchemaStandardValidate, flatToStandardIssues, summarizeErrors, validateInternal } from './contracts-runtime'
 
@@ -615,29 +616,55 @@ export function isValidationException(value: unknown): value is ValidationExcept
   return value instanceof ValidationException
 }
 
+function readCarrierMessage(candidate: Record<string, unknown>): unknown {
+  try {
+    return candidate.message
+  } catch {
+    return undefined
+  }
+}
+
+function serializeFieldErrorCarrier(candidate: Record<string, unknown>): SerializedValidationException | undefined {
+  const errors = readHoloFieldErrors(candidate)
+  const message = errors && readCarrierMessage(candidate)
+  if (!errors || typeof message !== 'string') return undefined
+  return {
+    ok: false,
+    status: 422,
+    valid: false,
+    message,
+    bag: DEFAULT_VALIDATION_BAG,
+    values: {},
+    errors,
+  }
+}
+
 function serializeValidationException(value: unknown): SerializedValidationException | undefined {
   const pending = [value]
   const seen = new Set<unknown>()
   let digest: ValidationExceptionDigestPayload | undefined
 
   for (const candidate of pending) {
-    if (!isPlainObject(candidate) || seen.has(candidate)) continue
-    seen.add(candidate)
+    try {
+      if (!isPlainObject(candidate) || seen.has(candidate)) continue
+      seen.add(candidate)
 
-    if (isSerializedValidationExceptionPayload(candidate)) return candidate
+      if (isSerializedValidationExceptionPayload(candidate)) return candidate
 
-    if (candidate.name === 'ValidationException' && typeof candidate.toJSON === 'function') {
-      try {
+      const fieldFailure = serializeFieldErrorCarrier(candidate)
+      if (fieldFailure) return fieldFailure
+
+      if (candidate.name === 'ValidationException' && typeof candidate.toJSON === 'function') {
         const payload: unknown = candidate.toJSON()
         if (isSerializedValidationExceptionPayload(payload)) return payload
-      } catch {
-        continue
       }
+
+      digest ??= parseValidationExceptionDigest(candidate)
+
+      pending.push(candidate.body, candidate.data, candidate.error, candidate.cause)
+    } catch {
+      continue
     }
-
-    digest ??= parseValidationExceptionDigest(candidate)
-
-    pending.push(candidate.body, candidate.data, candidate.error, candidate.cause)
   }
 
   return digest ? { ...digest, values: digest.values ?? {} } : undefined

@@ -236,7 +236,7 @@ const users = await User
 ```
 
 ::: info Aggregate attributes and types
-Aggregate attributes are added at runtime and are not part of the model's inferred type. They are included when the model is serialized with `toJSON()` or the `*Json()` query methods.
+Read inferred aggregate attributes through `toAttributes()` on the model returned by the query or by a `load*` method. These attributes are optional because methods such as `refresh()` can clear them. Loaded aggregate values are also included when the model is serialized with `toJSON()` or the `*Json()` query methods.
 :::
 
 ### Aggregates on loaded models

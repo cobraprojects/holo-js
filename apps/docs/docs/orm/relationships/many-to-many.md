@@ -251,6 +251,8 @@ const { attached, detached } = await post.tags().toggle([1, 2])
 await post.tags().updateExistingPivot(1, { is_primary: false })
 ```
 
+The database compares `date`, `datetime` and `timestamp` pivot columns, so a `Date` or text for the instant the row already holds counts as unchanged, in `sync()` and `syncWithoutDetaching()` too. A difference finer than a JavaScript `Date` can hold, such as PostgreSQL microseconds, still counts as a change.
+
 ## Creating and saving through the relation
 
 `create()` inserts a new related row and attaches it. `save()` does the same for a model you built:
