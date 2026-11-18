@@ -1,4 +1,5 @@
 import { readBoundedBufferedBody, readBoundedNodeRequestBody, requestBodyLimitFor, type BufferedRequestBody } from '@holo-js/kernel'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import {
   createError,
   defineEventHandler,
@@ -120,6 +121,7 @@ export function csrfProtection(): ReturnType<typeof defineEventHandler> {
 
     try {
       const request = await createRequest(event)
+      requestAppBaseInternals.set(request, requestAppBaseInternals.base(event))
       const preflight = cors.preflight(request)
       if (preflight) return preflight
       cors.headers(request).forEach((value, name) => setResponseHeader(event, name, value))

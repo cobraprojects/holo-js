@@ -96,7 +96,7 @@ The self-hosted driver. Your app server signs each event and posts it to the wor
 | `options.port` | Worker port, from 1 to 65535. The worker listens on this port too, unless `worker.port` is set. |
 | `options.scheme` | `http` or `https`. |
 | `options.useTLS` | Defaults to `true` when the scheme is `https`. |
-| `clientOptions.authEndpoint` | URL Flux uses to authorize private and presence channels. Only the path is sent to the browser. |
+| `clientOptions.authEndpoint` | URL Flux uses to authorize private and presence channels. Only the path is sent to the browser. If your app is served under a base path, include it, for example `https://example.com/dashboard/broadcasting/auth`. |
 
 The browser reads the default connection's settings from `/broadcasting/config`. That endpoint needs the **default** connection to use the `holo` driver.
 

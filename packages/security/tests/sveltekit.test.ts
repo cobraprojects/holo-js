@@ -7,6 +7,7 @@ import {
   resetSecurityRuntime,
 } from '../src'
 import { SECURITY_CLIENT_CONFIG_COOKIE } from '../src/client-config'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import { csrfProtection } from '../src/sveltekit/server'
 import { memoryCsrfSessions, type MemoryCsrfSessions } from './support/csrf-session'
 
@@ -267,6 +268,18 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
 
     expect(response.status).toBe(200)
     expect(resolve).toHaveBeenCalledOnce()
+  })
+
+  it('skips csrf exceptions by the path inside the app base the SvelteKit hooks record', async () => {
+    configureSecurity(['/webhooks/*'])
+    const status = async (path: string) => {
+      const { event } = createEvent(new Request(`https://app.test/dashboard${path}`, { method: 'POST' }))
+      requestAppBaseInternals.set(event.request, '/dashboard')
+      return (await csrfProtection()({ event, resolve: () => new Response('ok') })).status
+    }
+    expect(await status('/broadcasting/auth')).toBe(200)
+    expect(await status('/webhooks/stripe')).toBe(200)
+    expect(await status('/api/login')).toBe(419)
   })
 
   it('does nothing when csrf is disabled', async () => {

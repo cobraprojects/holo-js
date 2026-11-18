@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { createApp, defineEventHandler, getResponseHeader, readRawBody, toNodeListener, toWebHandler, toWebRequest } from 'h3'
 import { NextRequest } from 'next/server.js'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import { afterEach, describe, expect, it } from 'vitest'
 import { configureSecurityRuntime, csrf, defineSecurityConfig, resetSecurityRuntime } from '../src'
 import { csrfProtection as nextCsrfProtection } from '../src/next/server'
@@ -19,6 +20,16 @@ function configureSecurity(
     csrfSession: sessions,
   })
   return sessions
+}
+
+function nuxtStatusUnder(base: string, headers: Record<string, string>): (path: string) => Promise<number> {
+  const app = createApp()
+  app.use(defineEventHandler((event) => {
+    requestAppBaseInternals.set(event, base)
+  }))
+  app.use(nuxtCsrfProtection())
+  app.use(defineEventHandler(() => 'handled'))
+  return async path => (await toWebHandler(app)(new Request(`https://app.test${path}`, { method: 'POST', headers }))).status
 }
 
 function isSessionCookie(setCookie: string): boolean {
@@ -88,6 +99,43 @@ describe('native csrf middleware', () => {
       method: 'POST', headers: { cookie },
     }))
     expect(broadcastAuth).toBeUndefined()
+  })
+
+  it('matches CSRF exceptions on the path inside the app base path', async () => {
+    configureSecurity(true, [], memoryCsrfSessions({ 'browser-a': 'session-token' }))
+    const headers = { cookie: 'browser=browser-a' }
+    const nextConfig = { basePath: '/dashboard' }
+    const nextStatus = async (path: string) => (await nextCsrfProtection()(new NextRequest(`https://app.test${path}`, { method: 'POST', headers, nextConfig })))?.status
+    expect(await nextStatus('/dashboard/broadcasting/auth')).toBeUndefined()
+    expect(await nextStatus('/dashboard/webhooks/provider')).toBeUndefined()
+    expect(await nextStatus('/dashboard/api/login')).toBe(419)
+    const nuxtStatus = nuxtStatusUnder('/dashboard/', headers)
+    expect(await nuxtStatus('/dashboard/broadcasting/auth')).toBe(200)
+    expect(await nuxtStatus('/dashboard/webhooks/provider')).toBe(200)
+    expect(await nuxtStatus('/dashboard/api/login')).toBe(419)
+  })
+
+  it('keeps CSRF on Nuxt paths a request shapes to look like the configured base', async () => {
+    const sessions = memoryCsrfSessions({ 'browser-a': 'session-token' })
+    const headers = { cookie: 'browser=browser-a' }
+    const status = nuxtStatusUnder('/dashboard/', headers)
+    configureSecurity(true, [], sessions)
+    expect(await status('/dashboard/api/%75sers')).toBe(419)
+    expect(await status('/dashboard/webhooks/%70rovider')).toBe(200)
+    configureSecurityRuntime({
+      config: defineSecurityConfig({ csrf: { enabled: true, except: ['/'] } }),
+      csrfSigningKey: 'native-middleware-test-key',
+      csrfSession: sessions,
+    })
+    expect(await status('/dashboard/api/%75sers')).toBe(419)
+    expect(await status('/dashboard//api/')).toBe(419)
+  })
+
+  it('exempts broadcast auth under a Nuxt base with characters a URL encodes', async () => {
+    configureSecurity(true, [], memoryCsrfSessions({ 'browser-a': 'session-token' }))
+    const status = nuxtStatusUnder('/café/', { cookie: 'browser=browser-a' })
+    expect(await status('/caf%C3%A9/broadcasting/auth')).toBe(200)
+    expect(await status('/caf%C3%A9/api/login')).toBe(419)
   })
 
   it('leaves CSRF checks off when the csrf block sets enabled to false', async () => {

@@ -386,6 +386,7 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
     '}',
     '',
     'const holoHooks = createSvelteKitHoloHooks({',
+    '  base,',
     '  handle: typeof serverHooks.handle === \'function\'',
     '    ? sequence(holoHandle, serverHooks.handle)',
     '    : holoHandle,',

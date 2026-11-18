@@ -84,6 +84,8 @@ interface NextConfig {
   readonly experimental?: Record<string, unknown>
   readonly pageExtensions?: readonly string[]
   readonly turbopack?: TurbopackConfig
+  readonly basePath?: string
+  readonly compiler?: { readonly define?: Record<string, string | number | boolean>, readonly [key: string]: unknown }
   readonly rewrites?: () => Promise<unknown>
   readonly webpack?: (config: WebpackConfig, context: WebpackConfigContext) => WebpackConfig
   readonly [key: string]: unknown
@@ -361,6 +363,10 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
     transpilePackages: mergedTranspilePackages,
     outputFileTracingExcludes: mergedExcludes,
     turbopack: mergedTurbopack,
+    compiler: {
+      ...nextConfig.compiler,
+      define: { ...nextConfig.compiler?.define, __HOLO_APP_BASE__: nextConfig.basePath ?? '' },
+    },
     webpack(config, context) {
       const nextWebpackConfig = userWebpack?.(config, context) ?? config
       if (hasRealtime) {

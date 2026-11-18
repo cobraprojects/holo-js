@@ -66,6 +66,12 @@
         "@holo-js/source": "./src/imageDecoding.ts",
         "default": "./dist/image-decoding.mjs"
       }
+    },
+    "./internal/app-base": {
+      "@holo-js/source": "./src/appBase.ts",
+      "types": "./dist/app-base.d.ts",
+      "import": "./dist/app-base.mjs",
+      "default": "./dist/app-base.mjs"
     }
   },
   "main": "./dist/index.mjs",

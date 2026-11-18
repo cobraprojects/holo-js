@@ -9,7 +9,7 @@ type ConfiguredPlugin = { readonly name: string, readonly api?: unknown }
 type VitePlugin = {
   readonly name: string
   readonly enforce: 'pre'
-  configResolved(config: { readonly plugins: readonly ConfiguredPlugin[] }): void
+  config(config: { readonly plugins?: readonly unknown[] }): Promise<{ readonly define: Record<string, string> }>
   buildStart(): void
   configureServer(server: { readonly watcher: { on(event: 'all', listener: (event: string, path: string) => void): unknown } }): void
   resolveId(id: string): null | string
@@ -41,6 +41,16 @@ function property(value: unknown, key: string): unknown {
   return typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
 }
 
+function isConfiguredPlugin(value: unknown): value is ConfiguredPlugin {
+  return typeof property(value, 'name') === 'string'
+}
+
+async function configuredPlugins(plugins: readonly unknown[]): Promise<ConfiguredPlugin[]> {
+  const resolved = await Promise.all(plugins)
+  const nested = await Promise.all(resolved.map(async plugin => Array.isArray(plugin) ? await configuredPlugins(plugin) : [plugin].filter(isConfiguredPlugin)))
+  return nested.flat()
+}
+
 function svelteKitBase(plugins: readonly ConfiguredPlugin[]): string {
   const setup = plugins.find(plugin => plugin.name === 'vite-plugin-sveltekit-setup')
   const base = ['options', 'paths', 'base'].reduce(property, setup?.api)
@@ -55,8 +65,9 @@ export function holoSvelteKit(rootDir = process.cwd()): VitePlugin {
   return {
     name: 'holo-sveltekit',
     enforce: 'pre',
-    configResolved(config) {
-      base = svelteKitBase(config.plugins)
+    async config(config) {
+      base = svelteKitBase(await configuredPlugins(config.plugins ?? []))
+      return { define: { __HOLO_APP_BASE__: JSON.stringify(base) } }
     },
     buildStart() {
       assertRealtimeDefinitionTree(rootDir)

@@ -778,6 +778,7 @@ const holoNuxtModule: NuxtModule<ModuleOptions> = defineNuxtModule<ModuleOptions
     const modelRegistryTypesPath = resolve(rootDir, '.holo-js/generated/model-registry.d.ts')
     const pluginTypesPaths = await pluginGeneratedTypePaths(rootDir)
     addViteOptimizeDeps(opts, resolveClientOptimizeDeps(rootDir))
+    addPlugin({ src: resolver.resolve('./runtime/plugins/app-base.client'), mode: 'client' })
     const storageModule = await importOptionalStorageModule()
     const loaded = await loadConfigDirectory(rootDir, {
       processEnv: process.env,

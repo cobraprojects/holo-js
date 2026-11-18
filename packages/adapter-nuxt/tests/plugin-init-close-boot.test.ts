@@ -7,7 +7,7 @@ import { peekHolo, resolveGeneratedProjectRegistryPath } from '@holo-js/core'
 vi.mock('#imports', () => ({
   defineNitroPlugin: <TPlugin>(plugin: TPlugin): TPlugin => plugin,
   useEvent: () => undefined,
-  useRuntimeConfig: () => ({ holo: { projectRoot: projectRoot.current } }),
+  useRuntimeConfig: () => ({ app: { baseURL: '/' }, holo: { projectRoot: projectRoot.current } }),
 }))
 
 const projectRoot = vi.hoisted(() => ({ current: '' }))

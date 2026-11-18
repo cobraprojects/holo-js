@@ -418,7 +418,7 @@ async function resolveHoloWebSocketConnectorOptions(
   globals: HoloWebSocketGlobals,
 ): Promise<HoloWebSocketConnectorOptions> {
   try {
-    const config = await broadcastBrowserInternals.discoverConfig(globals.fetch!, options.configEndpoint ?? '/broadcasting/config')
+    const config = await broadcastBrowserInternals.discoverConfig(globals.fetch!, options.configEndpoint ?? broadcastBrowserInternals.appPath('/broadcasting/config'))
     return mergeHoloWebSocketConnectorOptions(normalizeHoloWebSocketConnectorConfig(config), options)
   } catch {
     return options

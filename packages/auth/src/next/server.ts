@@ -1,3 +1,4 @@
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { connection } from 'next/server.js'
 import type { HoloAuthUser } from '../contracts'
@@ -36,7 +37,7 @@ export type AuthOnlyOptions = RouteProtectionOptions
 
 type NextRouteProtectionRequest = NextAuthRequestLike & {
   readonly method?: string
-  readonly nextUrl?: URL
+  readonly nextUrl?: URL & { readonly basePath?: string }
   readonly url: string
 }
 
@@ -69,7 +70,7 @@ function matchesRoute(route: RouteMatcher, pathname: string): boolean {
     return route.test(normalizedPathname)
   }
 
-  const normalizedRoute = normalizePathname(route)
+  const normalizedRoute = normalizePathname(requestAppBaseInternals.decodePath(route))
   if (normalizedRoute.endsWith('/*')) {
     const prefix = normalizePathname(normalizedRoute.slice(0, -2))
     return normalizedPathname === prefix || normalizedPathname.startsWith(`${prefix}/`)
@@ -80,6 +81,10 @@ function matchesRoute(route: RouteMatcher, pathname: string): boolean {
 
 function matchesRoutes(routes: readonly RouteMatcher[] | undefined, pathname: string): boolean {
   return (routes ?? ['/*']).some(route => matchesRoute(route, pathname))
+}
+
+function withAppBase(redirectTo: string, base: string): string {
+  return redirectTo.startsWith('/') && !redirectTo.startsWith('//') ? `${base}${redirectTo}` : redirectTo
 }
 
 function isSameUrl(left: URL, right: URL): boolean {
@@ -137,7 +142,7 @@ function createRouteProtectionProxy(
 ): NextRouteProtectionProxy {
   return async function proxy(request) {
     const requestUrl = request.nextUrl ?? new URL(request.url)
-    if (!matchesRoutes(options.routes, requestUrl.pathname)) {
+    if (!matchesRoutes(options.routes, requestAppBaseInternals.decodePath(requestUrl.pathname))) {
       return undefined
     }
 
@@ -147,8 +152,8 @@ function createRouteProtectionProxy(
         return undefined
       }
 
-      const redirectUrl = new URL(options.redirectTo, request.url)
-      if (isSameUrl(requestUrl, redirectUrl)) {
+      const redirectUrl = new URL(withAppBase(options.redirectTo, request.nextUrl?.basePath ?? ''), request.url)
+      if (isSameUrl(new URL(request.url), redirectUrl)) {
         return undefined
       }
 

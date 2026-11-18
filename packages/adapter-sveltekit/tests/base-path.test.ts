@@ -1,5 +1,8 @@
+import type { RequestEvent } from '@sveltejs/kit'
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import { createServer, type Plugin } from 'vite'
 import { describe, expect, it } from 'vitest'
+import { createSvelteKitHoloHooks } from '../src'
 import { appPathname, withBase } from '../src/paths'
 import { holoSvelteKit } from '../src/vite'
 
@@ -38,6 +41,23 @@ describe('SvelteKit base path', () => {
 
   it('serves the base path from the app\'s SvelteKit config to the generated hooks', async () => {
     expect(await loadBase([svelteKitSetup('/dashboard'), holoSvelteKit()])).toBe('/dashboard')
+  })
+
+  it('defines the same base for Holo browser clients when sveltekit() resolves its plugins asynchronously', async () => {
+    const server = await createServer({ configFile: false, logLevel: 'silent', plugins: [Promise.resolve([svelteKitSetup('/dashboard')]), holoSvelteKit()], server: { middlewareMode: true, ws: false } })
+    try {
+      expect(server.config.define?.__HOLO_APP_BASE__).toBe('"/dashboard"')
+      expect((await server.ssrLoadModule('virtual:holo-sveltekit/paths')).base).toBe('/dashboard')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('records the base on each request so Holo security and auth read the path inside the app', async () => {
+    const hooks = createSvelteKitHoloHooks({ base: '/dashboard', handle: ({ event }) => new Response(requestAppBaseInternals.pathname(event.request)) })
+    const request = new Request('https://app.test/dashboard/broadcasting/auth')
+    const response = await hooks.handle({ event: { url: new URL(request.url), request } as RequestEvent, resolve: async () => new Response('') })
+    expect(await response.text()).toBe('/broadcasting/auth')
   })
 
   it('is the only Holo Vite plugin an app registers', async () => {

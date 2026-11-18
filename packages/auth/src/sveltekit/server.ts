@@ -1,3 +1,4 @@
+import { requestAppBaseInternals } from '@holo-js/kernel/internal/app-base'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitRequestEvent } from '@holo-js/adapter-shared/sveltekit/request-context'
 import holoAuth, { authRuntimeInternals, provider as currentProvider, user as currentUser } from '../index'
@@ -102,7 +103,7 @@ function matchesRoute(route: RouteMatcher, pathname: string): boolean {
     return route.test(normalizedPathname)
   }
 
-  const normalizedRoute = normalizePathname(route)
+  const normalizedRoute = normalizePathname(requestAppBaseInternals.decodePath(route))
   if (normalizedRoute.endsWith('/*')) {
     const prefix = normalizePathname(normalizedRoute.slice(0, -2))
     return normalizedPathname === prefix || normalizedPathname.startsWith(`${prefix}/`)
@@ -159,7 +160,8 @@ function createRouteProtectionHandle(
 ): SvelteKitHandle {
   return async ({ event, resolve }) => {
     return runWithSvelteKitRequestEvent(event, async () => {
-      if (!matchesRoutes(options.routes, event.url.pathname)) {
+      const request = 'request' in event && event.request instanceof Request ? event.request : undefined
+      if (!matchesRoutes(options.routes, requestAppBaseInternals.routePathname(event.url.pathname, request ? requestAppBaseInternals.base(request) : ''))) {
         return resolve(event)
       }
 
@@ -168,7 +170,10 @@ function createRouteProtectionHandle(
         return resolve(event)
       }
 
-      const redirectUrl = new URL(options.redirectTo, event.url)
+      const redirectTo = request && options.redirectTo.startsWith('/') && !options.redirectTo.startsWith('//')
+        ? requestAppBaseInternals.withBase(request, options.redirectTo)
+        : options.redirectTo
+      const redirectUrl = new URL(redirectTo, event.url)
       if (isSameUrl(event.url, redirectUrl)) {
         return resolve(event)
       }
