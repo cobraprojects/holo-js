@@ -54,6 +54,7 @@ const UNKNOWN_KIND_KEYS_ALIAS = '__holo_keys'
 
 export class SQLQueryCompiler {
   protected readonly dialect: SchemaDialectName | undefined = undefined
+  protected readonly caseSensitiveIdentifiers: boolean = false
 
   constructor(
     protected readonly quoteIdentifier: IdentifierQuoter,
@@ -252,7 +253,7 @@ export class SQLQueryCompiler {
     const havingClause = this.compileHaving(plan.having, bindings)
     const orderClause = plan.orderBy.length === 0
       ? ''
-      : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(plan.unions.length > 0 ? unionOutputOrder(plan, orderBy) : orderBy, bindings)).join(', ')}`
+      : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(plan.unions.length > 0 ? unionOutputOrder(plan, orderBy, this.caseSensitiveIdentifiers) : orderBy, bindings)).join(', ')}`
     const lockOf = plan.joins.some(join => join.subquery !== undefined && isOneOfManyAggregatePlan(join.subquery))
       ? this.quoteIdentifier(plan.source.alias ?? splitTablePath(plan.source.tableName).table)
       : undefined

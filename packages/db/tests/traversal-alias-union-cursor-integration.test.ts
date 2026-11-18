@@ -83,6 +83,11 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     const shadowed = DB.table(users.tableName).select('id as other', 'n as id').unionAll(DB.table(users.tableName).select('id', 'n').where('id', 0)).orderBy('id')
     expect((await shadowed.get()).map(row => row.id)).toEqual([25, 50, 100])
     expect((await pageThrough(shadowed)).map(row => row.id)).toEqual([25, 50, 100])
+    if (driver !== 'postgres') {
+      const differentCase = DB.table(users.tableName).select('id as other', 'n as ID').unionAll(DB.table(users.tableName).select('id', 'n').where('id', 0)).orderBy('id')
+      expect((await differentCase.get()).map(row => Number(row.ID))).toEqual([25, 50, 100])
+      expect((await pageThrough(differentCase)).map(row => Number(row.ID))).toEqual([25, 50, 100])
+    }
   })
 
   it('rejects union outputs a derived page cannot address before any page runs', async () => {

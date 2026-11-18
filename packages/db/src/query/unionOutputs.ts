@@ -8,19 +8,23 @@ function sameColumnReference(plan: SelectQueryPlan, left: string, right: string)
   return source !== undefined && source === resolveSourceColumnName(plan.source, right)
 }
 
-function selectedOutput(plan: SelectQueryPlan, column: string): QuerySelection | undefined {
-  return plan.selections.find(selection => selectionOutputName(selection) === column)
+function sameOutputName(left: string | undefined, right: string, caseSensitive: boolean): boolean {
+  return left !== undefined && (caseSensitive ? left === right : left.toLowerCase() === right.toLowerCase())
+}
+
+function selectedOutput(plan: SelectQueryPlan, column: string, caseSensitive: boolean): QuerySelection | undefined {
+  return plan.selections.find(selection => sameOutputName(selectionOutputName(selection), column, caseSensitive))
     ?? plan.selections.find(selection => selection.kind === 'column' && sameColumnReference(plan, selection.column, column))
 }
 
-export function unionOutputName(plan: SelectQueryPlan, column: string): string {
-  const selected = selectedOutput(plan, column)
+export function unionOutputName(plan: SelectQueryPlan, column: string, caseSensitive: boolean): string {
+  const selected = selectedOutput(plan, column, caseSensitive)
   return (selected && selectionOutputName(selected)) ?? column.slice(column.lastIndexOf('.') + 1)
 }
 
-export function unionOutputOrder(plan: SelectQueryPlan, orderBy: QueryOrderBy): QueryOrderBy {
+export function unionOutputOrder(plan: SelectQueryPlan, orderBy: QueryOrderBy, caseSensitive: boolean): QueryOrderBy {
   if (orderBy.kind !== 'column' || orderBy.column.includes('->')) return orderBy
-  return { ...orderBy, column: unionOutputName(plan, orderBy.column) }
+  return { ...orderBy, column: unionOutputName(plan, orderBy.column, caseSensitive) }
 }
 
 function sourceColumns(plan: SelectQueryPlan, connectionName: string): readonly string[] | undefined {
@@ -40,8 +44,8 @@ function selectionNames(plan: SelectQueryPlan, selection: QuerySelection, connec
   return join && knownJoinedColumns(join, connectionName)
 }
 
-export function unionOutputValueColumn(plan: SelectQueryPlan, column: string, connectionName: string): string | undefined {
-  const selected = selectedOutput(plan, column)
+export function unionOutputValueColumn(plan: SelectQueryPlan, column: string, connectionName: string, caseSensitive: boolean): string | undefined {
+  const selected = selectedOutput(plan, column, caseSensitive)
   if (selected?.kind === 'column') return selected.column
   if (selected?.kind === 'aggregate') return selected.aggregate === 'min' || selected.aggregate === 'max' ? selected.column : undefined
   if (selected) return undefined

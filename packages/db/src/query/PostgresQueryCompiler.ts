@@ -17,6 +17,8 @@ const POSTGRES_NUMERIC_INTEGER_DIGITS = 131072
 const POSTGRES_NUMERIC_FRACTION_DIGITS = 16383
 
 export class PostgresQueryCompiler extends SQLQueryCompiler {
+  protected override readonly caseSensitiveIdentifiers = true
+
   protected override compileIntegerKey(expression: string): string {
     return `CASE WHEN ${expression} ~ '^-?(0|[1-9][0-9]{0,18})([.]0+)?$' THEN CAST(split_part(${expression}, '.', 1) AS NUMERIC) END`
   }

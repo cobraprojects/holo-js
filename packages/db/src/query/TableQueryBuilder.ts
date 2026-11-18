@@ -2328,14 +2328,15 @@ export class TableQueryBuilder<
     await this.bindGeneratedTable()
     const orderedQuery = this.prepareCursorPaginationQuery()
     const cursorOrders = orderedQuery.resolveCursorOrders()
+    const caseSensitiveNames = this.connection.getDialect().name.includes('postgres')
     const unionOutputNames = orderedQuery.plan.unions.length === 0
       ? undefined
-      : pageableUnionOutputNames(orderedQuery.plan, cursorOrders.map(order => unionOutputName(orderedQuery.plan, order.column)), this.connection.getConnectionName(), this.connection.getDialect().name.includes('postgres'))
+      : pageableUnionOutputNames(orderedQuery.plan, cursorOrders.map(order => unionOutputName(orderedQuery.plan, order.column, caseSensitiveNames)), this.connection.getConnectionName(), caseSensitiveNames)
     const unionOrders = unionOutputNames && cursorOrders.map((order, index) => ({ ...order, column: unionOutputNames[index]! }))
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
     const previous = decodedCursor?.previous === true
-    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => unionOrders ? this.normalizeUnionCursorValue(unionOutputValueColumn(orderedQuery.plan, unionOrders[index]!.column, this.connection.getConnectionName()), value) : this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) } : undefined
+    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => unionOrders ? this.normalizeUnionCursorValue(unionOutputValueColumn(orderedQuery.plan, unionOrders[index]!.column, this.connection.getConnectionName(), caseSensitiveNames), value) : this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) } : undefined
     const nullsLow = !this.connection.getDialect().name.includes('postgres')
     const pageOrders = (orders: readonly CursorOrderDefinition[]) => orders.map((order): QueryOrderBy => ({ kind: 'column', column: order.column, direction: previous === (order.direction === 'asc') ? 'desc' : 'asc' }))
     let storedRows: TRow[]
