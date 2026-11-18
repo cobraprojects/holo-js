@@ -1,6 +1,7 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError, SecurityError } from '../core/errors'
+import { dateBucketStorage, type DateBucketStorage } from './dateBuckets'
 import { dateBucketSelections, isInlineIntegerValue, keyCastFor, readAllColumnsSelectionTable } from './ast'
 import { validateQueryPlan } from './validator'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -51,14 +52,17 @@ const UNKNOWN_KIND_KEY_ALIAS = '__holo_key'
 
 const UNKNOWN_KIND_KEYS_ALIAS = '__holo_keys'
 
+type ResolvedDateBucket = { readonly bucket: QueryDateBucketSelection, readonly storage: DateBucketStorage }
+
 export class SQLQueryCompiler {
   protected readonly dialect: SchemaDialectName | undefined = undefined
-  private dateBuckets: ReadonlyMap<string, QueryDateBucketSelection> = new Map()
+  private dateBuckets: ReadonlyMap<string, ResolvedDateBucket> = new Map()
   private resolvesDateBucketAliases = false
 
   constructor(
     protected readonly quoteIdentifier: IdentifierQuoter,
     protected readonly createPlaceholder: PlaceholderFactory,
+    private readonly connectionName?: string,
   ) {}
 
   compile(plan: QueryPlan): CompiledStatement {
@@ -199,7 +203,7 @@ export class SQLQueryCompiler {
     projection?: string,
   ): string {
     const enclosingDateBuckets = this.dateBuckets
-    this.dateBuckets = dateBucketSelections(plan)
+    this.dateBuckets = new Map([...dateBucketSelections(plan)].map(([alias, bucket]) => [alias, { bucket, storage: dateBucketStorage(plan, bucket, this.connectionName) }]))
     try {
       return this.compileSelectSqlWithinDateBuckets(plan, bindings, projection)
     } finally {
@@ -237,7 +241,7 @@ export class SQLQueryCompiler {
           }
 
           if (selection.kind === 'date-bucket') {
-            return `${this.compileDateBucketExpression(selection)} AS ${this.quoteIdentifier(selection.alias)}`
+            return `${this.compileDateBucketExpression(this.dateBuckets.get(selection.alias)!)} AS ${this.quoteIdentifier(selection.alias)}`
           }
 
           const allColumnsOf = readAllColumnsSelectionTable(selection.column)
@@ -259,7 +263,7 @@ export class SQLQueryCompiler {
     const havingClause = this.withDateBucketAliases(true, () => this.compileHaving(plan.having, bindings))
     const orderClause = plan.orderBy.length === 0
       ? ''
-      : ` ORDER BY ${this.withDateBucketAliases(true, () => plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', '))}`
+      : ` ORDER BY ${this.withDateBucketAliases(plan.unions.length === 0, () => plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', '))}`
     const lockOf = plan.joins.some(join => join.subquery !== undefined && isOneOfManyAggregatePlan(join.subquery))
       ? this.quoteIdentifier(plan.source.alias ?? splitTablePath(plan.source.tableName).table)
       : undefined
@@ -1019,11 +1023,11 @@ export class SQLQueryCompiler {
     }
   }
 
-  private compileDateBucketExpression(bucket: QueryDateBucketSelection): string {
-    return this.withDateBucketAliases(false, () => this.compileDateBucket(bucket))
+  private compileDateBucketExpression({ bucket, storage }: ResolvedDateBucket): string {
+    return this.withDateBucketAliases(false, () => this.compileDateBucket(bucket, storage))
   }
 
-  protected compileDateBucket(bucket: QueryDateBucketSelection): string {
+  protected compileDateBucket(bucket: QueryDateBucketSelection, _storage: DateBucketStorage): string {
     throw new CompilerError(`This database engine does not support the "${bucket.unit}" date bucket.`)
   }
 

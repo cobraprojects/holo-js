@@ -6,7 +6,7 @@ import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
 import type { QueryDateBucketSelection, QueryRawSelection, QueryRelationKeysPredicate } from './ast'
-import { assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit } from './dateBuckets'
+import { assertDateBucketTimeZonesConvertible, assertDateBucketUnit, normalizeDateBucketTimeZone } from './dateBuckets'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -366,6 +366,7 @@ export class TableQueryBuilder<
 
   private async prepareMutation(): Promise<void> {
     await this.bindGeneratedTable()
+    await assertDateBucketTimeZonesConvertible(this.connection, this.plan)
     if (!currentRootTransaction(this.connection)?.schemaChanged && (getDatabaseQueryCacheBridge() || hasDatabaseDependencyInvalidationListeners() || hasDatabaseDependencyInvalidationPublisher())) {
       await resolveTableIdentity(this.connection, this.ownSource.tableName)
     }
@@ -796,14 +797,12 @@ export class TableQueryBuilder<
 
   private createDateBucketSelection(unit: DateBucketUnit, column: string, options: DateBucketOptions<string>): QueryDateBucketSelection {
     assertDateBucketUnit(unit)
-    if (options.timeZone !== undefined) assertDateBucketTimeZone(options.timeZone)
     return Object.freeze({
       kind: 'date-bucket',
       unit,
       column,
       alias: options.as,
-      calendarDate: this.isDateColumn(column),
-      ...(options.timeZone === undefined ? {} : { timeZone: options.timeZone }),
+      ...(options.timeZone === undefined ? {} : { timeZone: normalizeDateBucketTimeZone(options.timeZone) }),
     })
   }
 
@@ -2371,7 +2370,12 @@ export class TableQueryBuilder<
         const grouped = branch.predicates.some(predicate => predicate.boolean === 'or')
           ? withPredicate(withoutPredicates(branch, () => true), { kind: 'group', predicates: branch.predicates })
           : branch
-        return withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map((order, index) => ({ ...order, column: columns[index]! })), nullsLow))
+        const dateBuckets = dateBucketSelections(branch)
+        return withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map((order, index) => ({
+          ...order,
+          column: columns[index]!,
+          ...(dateBuckets.has(columns[index]!) ? { selectionAlias: true as const } : {}),
+        })), nullsLow))
       }
       const filterUnion = (branch: SelectQueryPlan, branchColumns: (branch: SelectQueryPlan) => readonly string[]): SelectQueryPlan => Object.freeze({
         ...filter(branch, branchColumns(branch)),
@@ -2856,6 +2860,7 @@ export class TableQueryBuilder<
 
     await this.prepareMutation()
     await query.bindGeneratedTable()
+    await assertDateBucketTimeZonesConvertible(this.connection, query.getPlan())
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertUsingQueryPlan(this.source, columns, query.getPlan(), { ignoreConflicts }),
     ))
@@ -3447,7 +3452,6 @@ export class TableQueryBuilder<
   }
 
   private resolveCursorOrders(): readonly CursorOrderDefinition[] {
-    const dateBuckets = dateBucketSelections(this.plan)
     return this.plan.orderBy.map((orderBy) => {
       if (orderBy.kind !== 'column') {
         throw new SecurityError('Cursor pagination requires column orderBy clauses.')
@@ -3456,7 +3460,6 @@ export class TableQueryBuilder<
       return {
         column: orderBy.column,
         direction: orderBy.direction,
-        ...(dateBuckets.has(orderBy.column) ? { selectionAlias: true as const } : {}),
       }
     })
   }

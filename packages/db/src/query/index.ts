@@ -34,7 +34,7 @@ export type {
   SelectQueryPlan,
   UpdateQueryPlan,
 } from './ast'
-export type { DateBucket, DateBucketUnit } from './selectionTypes'
+export type { DateBucket, DateBucketUnit, DateColumnName } from './selectionTypes'
 export type {
   CursorPaginatedResult,
   CursorPaginationOptions,

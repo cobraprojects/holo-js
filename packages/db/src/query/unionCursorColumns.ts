@@ -20,6 +20,7 @@ function sourceColumns(branch: SelectQueryPlan, connectionName: string): readonl
 
 function selectionOutput(branch: SelectQueryPlan, selection: QuerySelection, connectionName: string): UnionOutput {
   if (selection.kind === 'raw') return unpositioned(undefined)
+  if (selection.kind === 'date-bucket') return { names: [selection.alias], column: selection.alias, positioned: true }
   const name = selectionOutputName(selection)
   if (selection.kind !== 'column') return { names: typeof name === 'string' ? [name] : undefined, positioned: true }
   if (selection.column === '*') {

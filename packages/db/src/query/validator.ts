@@ -220,6 +220,20 @@ function assertDateBucketSelection(
   if (selection.timeZone !== undefined) assertDateBucketTimeZone(selection.timeZone)
 }
 
+function selectedOutputName(selection: SelectQueryPlan['selections'][number]): string | undefined {
+  if (selection.kind === 'raw') return undefined
+  if (selection.kind !== 'column') return selection.alias
+  return selection.alias ?? selection.column.slice(selection.column.lastIndexOf('.') + 1)
+}
+
+function assertUniqueDateBucketOutputs(plan: SelectQueryPlan): void {
+  for (const alias of dateBucketSelections(plan).keys()) {
+    if (plan.selections.filter(selection => selectedOutputName(selection) === alias).length > 1) {
+      throw new SecurityError(`Date bucket alias "${alias}" must not be reused by another selected column.`)
+    }
+  }
+}
+
 function withDateBucketAliases(plan: SelectQueryPlan, allowedColumns?: Set<string>): Set<string> | undefined {
   if (!allowedColumns) return undefined
   const aliases = [...dateBucketSelections(plan).keys()]
@@ -658,6 +672,7 @@ export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName):
 
         assertColumnSelection(selection, plan.source.tableName, allowedColumns)
       }
+      assertUniqueDateBucketOutputs(plan)
       const referenceableColumns = withDateBucketAliases(plan, allowedColumns)
 
       for (const join of plan.joins) {

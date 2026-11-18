@@ -1,4 +1,5 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
+import type { DateBucketStorage } from './dateBuckets'
 import type { CompiledStatement } from '../core/types'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type {
@@ -191,10 +192,12 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
     return `${this.compileColumnReference(column)} <=> CAST(${this.createPlaceholder(bindings.length)} AS vector)`
   }
 
-  protected override compileDateBucket(bucket: QueryDateBucketSelection): string {
+  protected override compileDateBucket(bucket: QueryDateBucketSelection, storage: DateBucketStorage): string {
     const column = this.compileColumnReference(bucket.column)
-    const timeZone = this.createSqlStringLiteral(bucket.timeZone ?? getApplicationTimezone())
-    const wallClock = bucket.calendarDate ? column : `(CAST(${column} AS TIMESTAMPTZ) AT TIME ZONE ${timeZone})`
+    const applicationTimeZone = getApplicationTimezone()
+    const timeZone = this.createSqlStringLiteral(bucket.timeZone ?? applicationTimeZone)
+    const instant = `CASE WHEN pg_typeof(${column}) = 'timestamp with time zone'::regtype THEN CAST(${column} AS TIMESTAMPTZ) ELSE CAST(${column} AS TIMESTAMP) AT TIME ZONE ${this.createSqlStringLiteral(applicationTimeZone)} END`
+    const wallClock = storage === 'calendar' ? `CAST(${column} AS TIMESTAMP)` : `((${instant}) AT TIME ZONE ${timeZone})`
     return `to_char(${wallClock}, '${POSTGRES_DATE_BUCKET_FORMATS[bucket.unit]}')`
   }
 

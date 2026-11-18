@@ -1,4 +1,5 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
+import type { DateBucketStorage } from './dateBuckets'
 import { compileSQLiteWallClock, formatSQLiteDateTime } from '../sqliteDateTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type { CompiledStatement } from '../core/types'
@@ -252,9 +253,9 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     return expression
   }
 
-  protected override compileDateBucket(bucket: QueryDateBucketSelection): string {
+  protected override compileDateBucket(bucket: QueryDateBucketSelection, storage: DateBucketStorage): string {
     const column = this.compileColumnReference(bucket.column)
-    const wallClock = bucket.calendarDate ? column : this.compileAppWallClock(column, bucket.timeZone)
+    const wallClock = storage === 'calendar' ? `date(${this.compileAppWallClock(column)})` : this.compileAppWallClock(column, bucket.timeZone)
     return `strftime('${SQLITE_DATE_BUCKET_FORMATS[bucket.unit]}', ${wallClock})`
   }
 

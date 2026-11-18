@@ -6,10 +6,12 @@ import type { CompiledStatement } from '../core/types'
 import type { TableNameFolding } from '../schema/tableIdentityRegistry'
 import { formatWallClockSeconds } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
-import { mysqlTimeZoneName } from './dateBuckets'
+import { mysqlTimeZoneName, type DateBucketStorage } from './dateBuckets'
 import type { DeleteQueryPlan, InsertStatementOptions, QueryDateBucketSelection, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
 const MYSQL_DECIMAL_DIGITS = 65
+
+const MYSQL_CONVERTIBLE_UTC_RANGE = { earliest: '1970-01-01 00:00:01', latest: '3001-01-18 23:59:59.999999' } as const
 
 const MYSQL_DATE_BUCKET_FORMATS: Readonly<Record<QueryDateBucketSelection['unit'], string>> = {
   year: '%Y',
@@ -142,14 +144,21 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
     return ` ON DUPLICATE KEY UPDATE ${updates}`
   }
 
-  protected override compileDateBucket(bucket: QueryDateBucketSelection): string {
+  protected override compileDateBucket(bucket: QueryDateBucketSelection, storage: DateBucketStorage): string {
     const column = this.compileColumnReference(bucket.column)
     const applicationTimeZone = getApplicationTimezone()
     const timeZone = bucket.timeZone ?? applicationTimeZone
-    const wallClock = bucket.calendarDate || timeZone === applicationTimeZone
+    const wallClock = storage === 'calendar' || timeZone === applicationTimeZone
       ? column
-      : `CONVERT_TZ(${column}, ${this.createSqlStringLiteral(mysqlTimeZoneName(applicationTimeZone))}, ${this.createSqlStringLiteral(mysqlTimeZoneName(timeZone))})`
+      : this.compileConvertedWallClock(column, mysqlTimeZoneName(applicationTimeZone), mysqlTimeZoneName(timeZone))
     return `DATE_FORMAT(${wallClock}, '${MYSQL_DATE_BUCKET_FORMATS[bucket.unit]}')`
+  }
+
+  private compileConvertedWallClock(column: string, from: string, to: string): string {
+    const fromZone = this.createSqlStringLiteral(from)
+    const earliest = `CONVERT_TZ('${MYSQL_CONVERTIBLE_UTC_RANGE.earliest}', '+00:00', ${fromZone})`
+    const latest = `CONVERT_TZ('${MYSQL_CONVERTIBLE_UTC_RANGE.latest}', '+00:00', ${fromZone})`
+    return `CASE WHEN ${column} BETWEEN ${earliest} AND ${latest} THEN CONVERT_TZ(${column}, ${fromZone}, ${this.createSqlStringLiteral(to)}) END`
   }
 
   protected override createDateLiteral(value: Date): string {

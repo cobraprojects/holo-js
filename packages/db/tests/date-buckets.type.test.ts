@@ -1,5 +1,5 @@
 import { expectTypeOf, it } from 'vitest'
-import { DB, column, defineGeneratedTable, type CursorPaginatedResult, type DateBucket, type InferSelect, type TableDefinition } from '../src'
+import { DB, column, defineGeneratedTable, type CursorPaginatedResult, type DateBucket, type DateColumnName, type InferSelect, type TableDefinition } from '../src'
 
 const campaigns = defineGeneratedTable('bucket_campaigns', { id: column.id(), visibility: column.string() })
 const events = defineGeneratedTable('bucket_events', {
@@ -19,7 +19,7 @@ function channelBreakdown<TTable extends TableDefinition, TKey extends keyof Inf
     .get()
 }
 
-async function dailyTotals<TTable extends TableDefinition, TColumn extends keyof InferSelect<TTable> & string>(table: TTable, at: TColumn) {
+async function dailyTotals<TTable extends TableDefinition, TColumn extends DateColumnName<InferSelect<TTable>>>(table: TTable, at: TColumn) {
   const rows = await DB.table(table).selectDate('day', at, { as: 'day', timeZone: 'UTC' }).addSelectCount('total').groupBy('day').get()
   return rows.map(row => ({ day: row.day, total: row.total }))
 }
@@ -71,5 +71,7 @@ it('resolves aliased selections of generic query helpers at the call site', asyn
 
     const days = await dailyTotals(events, 'occurred_at')
     expectTypeOf(days[0]!).toEqualTypeOf<{ day: DateBucket<'day'>, total: number }>()
+    // @ts-expect-error a generic helper constrained with DateColumnName rejects non-date columns
+    await dailyTotals(events, 'channel')
   }
 })

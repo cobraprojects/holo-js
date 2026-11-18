@@ -390,6 +390,7 @@ export type {
   CursorPaginationOptions,
   DateBucket,
   DateBucketUnit,
+  DateColumnName,
   DeleteQueryPlan,
   InsertQueryPlan,
   PaginationMeta,

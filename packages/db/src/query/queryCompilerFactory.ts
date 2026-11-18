@@ -11,10 +11,12 @@ export function createQueryCompiler(connection: DatabaseContext): SQLQueryCompil
     Compiler: new (
       quoteIdentifier: (value: string) => string,
       createPlaceholder: (index: number) => string,
+      connectionName?: string,
     ) => TCompiler,
   ): TCompiler => new Compiler(
     identifier => dialect.quoteIdentifier(identifier),
     index => dialect.createPlaceholder(index),
+    connection.getConnectionName(),
   )
 
   if (dialect.name.startsWith('sqlite')) return createCompiler(SQLiteQueryCompiler)

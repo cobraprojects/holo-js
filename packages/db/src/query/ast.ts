@@ -65,7 +65,6 @@ export interface QueryDateBucketSelection {
   readonly unit: QueryDateBucketUnit
   readonly column: string
   readonly alias: string
-  readonly calendarDate: boolean
   readonly timeZone?: string
 }
 
