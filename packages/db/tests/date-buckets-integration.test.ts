@@ -922,6 +922,35 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .cursorPaginate(1)).rejects.toThrow(SecurityError)
   })
 
+  it('rejects a grouped cursor over a join ordered by a joined column', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const notes = await createKeyedTable('bucket_notes', 'rank', [{ id: 1, value: 1 }, { id: 2, value: 26 }])
+    registerGeneratedTables({ events, notes })
+
+    await expect(DB.table(events)
+      .join(notes.tableName, `${notes.tableName}.id`, '=', `${events.tableName}.id`)
+      .select(`${events.tableName}.id`)
+      .addSelectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .groupBy(`${events.tableName}.id`)
+      .orderBy(`${notes.tableName}.rank`)
+      .cursorPaginate(1)).rejects.toThrow(SecurityError)
+  })
+
+  it('rejects the wildcard of a joined subquery whose own wildcard cannot be verified', async () => {
+    useAppTimezone('UTC')
+    const { events, facts } = await createFactsTable(driver)
+    const shadowing = DB.table(`${events.tableName} as base`)
+      .join(`${facts} as ${events.tableName}`, `${events.tableName}.id`, '=', 'base.id')
+      .select(`${events.tableName}.*`)
+
+    await expect(DB.table(events.tableName)
+      .joinSub(shadowing, 'j', 'j.id', '=', `${events.tableName}.id`)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
+      .addSelect('j.*')
+      .get()).rejects.toThrow(SecurityError)
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)

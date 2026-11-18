@@ -6,7 +6,7 @@ import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
 import type { QueryDateBucketSelection, QueryRawSelection, QueryRelationKeysPredicate } from './ast'
-import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, columnOwner, planHasDateBuckets, selectionMayOutputName } from './dateBuckets'
+import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, planHasDateBuckets, selectionMayOutputName } from './dateBuckets'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -3439,13 +3439,7 @@ export class TableQueryBuilder<
       const identity = (column: string): string => this.resolveSourceColumnName(column) ?? column
       const groupsByPrimaryKey = primaryKeys.length > 0 && primaryKeys.every(key => this.plan.groupBy.some(column => identity(column) === key))
       const ordered = groupsByPrimaryKey ? this.withPrimaryKeyTieBreakers(primaryKeys) : this
-      const sourceTable = this.source.alias ?? this.source.tableName
-      const connectionName = this.connection.getConnectionName()
-      const belongsToSource = (column: string): boolean => column.includes('.')
-        ? qualifiesTable(column.slice(0, column.lastIndexOf('.')), sourceTable, undefined)
-        : !dateBucketSelections(this.plan).has(column) && columnOwner(this.plan, column, connectionName) === sourceTable
-      const groupsSourceRowsOnly = this.plan.unions.length === 0 && (this.plan.joins.length === 0 || this.plan.groupBy.every(belongsToSource))
-      if (groupsByPrimaryKey && groupsSourceRowsOnly) return ordered
+      if (groupsByPrimaryKey && this.plan.joins.length === 0 && this.plan.unions.length === 0) return ordered
       const orderedColumns = new Set(ordered.plan.orderBy.flatMap(orderBy => orderBy.kind === 'column' ? [identity(orderBy.column)] : []))
       const groupedColumns = new Set(ordered.plan.groupBy.map(identity))
       if (!ordered.plan.groupBy.every(column => orderedColumns.has(identity(column))) || ![...orderedColumns].every(column => groupedColumns.has(column))) {

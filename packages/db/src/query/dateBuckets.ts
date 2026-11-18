@@ -97,9 +97,21 @@ function visibleTables(plan: SelectQueryPlan, connectionName: string | undefined
       tableName: join.table,
       alias: join.alias,
       definition: join.definition ?? generatedDefinition(join.table, connectionName),
-      columns: () => connectionName === undefined ? undefined : knownJoinedColumns(join, connectionName),
+      columns: () => join.subquery ? explicitOutputNames(join.subquery) : connectionName === undefined ? undefined : knownJoinedColumns(join, connectionName),
     })),
   ]
+}
+
+function explicitOutputNames(plan: SelectQueryPlan): readonly string[] | undefined {
+  const names = plan.selections.map((selection) => {
+    if (selection.kind === 'raw') return undefined
+    if (selection.kind !== 'column') return selection.alias
+    if (selection.alias) return selection.alias
+    if (selection.column === '*' || readAllColumnsSelectionTable(selection.column) !== undefined) return undefined
+    return selection.column.slice(selection.column.lastIndexOf('.') + 1)
+  })
+  if (plan.selections.length === 0 || names.some(name => name === undefined)) return undefined
+  return names.filter((name): name is string => name !== undefined)
 }
 
 function boundTables(visible: readonly VisibleTable[], qualifier: string | undefined): readonly VisibleTable[] {
