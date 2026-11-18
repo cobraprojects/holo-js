@@ -1203,6 +1203,15 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .cursorPaginate(1)).rejects.toThrow(SecurityError)
   })
 
+  it('rejects union cursor pagination with date buckets when a query has a raw selection', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver, { security: { allowUnsafeRawSql: true } })
+    const plain = DB.table(events.tableName).where('tenant_id', 1).select('id').addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+    const raw = DB.table(events.tableName).where('tenant_id', 2).select('id').addUnsafeSelect('COUNT(id) AS day', [])
+
+    await expect(plain.unionAll(raw).orderBy('id').cursorPaginate(1)).rejects.toThrow('raw-selected')
+  })
+
   it('rejects cursor pagination of aggregated date bucket queries without groupBy()', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)

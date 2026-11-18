@@ -3747,14 +3747,14 @@ function withoutKeys<TRow extends Record<string, unknown>>(row: TRow, keys: read
 }
 
 function groupsRows(plan: SelectQueryPlan): boolean {
-  return plan.groupBy.length > 0 || plan.having.length > 0 || plan.selections.some(selection => selection.kind === 'aggregate')
+  return plan.groupBy.length > 0 || plan.having.length > 0 || plan.selections.some(selection => selection.kind === 'aggregate' || selection.kind === 'raw')
 }
 
 function assertDateBucketUnionCursor(plan: SelectQueryPlan, unionColumns: (branch: SelectQueryPlan) => readonly UnionCursorColumn[]): void {
   const branches = unionBranchPlans(plan)
   if (!branches.some(branch => dateBucketSelections(branch).size > 0)) return
   if (branches.some(groupsRows)) {
-    throw new SecurityError('Cursor pagination cannot page a union with date buckets that has a grouped or aggregated query, because its order cannot always tell the groups apart.')
+    throw new SecurityError('Cursor pagination cannot page a union with date buckets that has a grouped, aggregated or raw-selected query, because its order cannot always tell the groups apart.')
   }
   const columns = branches.map(unionColumns)
   const mixesBuckets = (columns[0] ?? []).some((_column, index) => new Set(columns.map(branch => branch[index]?.selectionAlias)).size > 1)
