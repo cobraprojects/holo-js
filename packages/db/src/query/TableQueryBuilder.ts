@@ -58,7 +58,7 @@ import {
   type CursorOrderDefinition,
   type ValueCursor,
 } from './pagination'
-import { cursorPredicate } from './cursorPredicate'
+import { cursorIsExhausted, cursorPredicate } from './cursorPredicate'
 import {
   assertUnreservedTableAlias,
   createDeleteQueryPlan,
@@ -2387,7 +2387,7 @@ export class TableQueryBuilder<
     const previous = decodedCursor?.previous === true
     const nullsLow = !this.connection.getDialect().name.includes('postgres')
     const normalizedCursor = decodedCursor && { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
-    const exhausted = normalizedCursor !== null && cursorPredicate(normalizedCursor, cursorOrders, nullsLow) === undefined
+    const exhausted = normalizedCursor !== null && cursorIsExhausted(normalizedCursor, cursorOrders, nullsLow)
     if (exhausted) plan = withLimit(plan, 0)
     if (normalizedCursor && !exhausted) {
       const filter = (branch: SelectQueryPlan, columns: readonly UnionCursorColumn[]): SelectQueryPlan => {
