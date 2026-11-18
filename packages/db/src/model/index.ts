@@ -82,6 +82,8 @@ export type {
   DynamicRelationResolver,
   EmptyScopeMap,
   EnumCastDefinition,
+  NamedModelReference,
+  RegisteredModelDefinitions,
   RegisteredModelName,
   RegisteredModelReference,
   RegisteredModels,

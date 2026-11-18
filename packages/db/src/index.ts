@@ -354,6 +354,8 @@ export type {
   BuiltInCastName,
   BuiltInCastString,
   CastableDefinition,
+  NamedModelReference,
+  RegisteredModelDefinitions,
   RegisteredModelName,
   RegisteredModelReference,
   RegisteredModels,

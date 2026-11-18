@@ -17,7 +17,7 @@ import type {
   PivotTableColumnName,
   PivotRelationMethods,
   RegisteredModelName,
-  RegisteredModelReference,
+  NamedModelReference,
   RelationConstraintDefinition,
   ScopedRelationConstraint,
   RelationDefinition,
@@ -146,7 +146,7 @@ export function belongsTo<const TName extends RegisteredModelName>(
   related: TName,
   foreignKeyOrOptions: string | { foreignKey: string, ownerKey?: string },
   ownerKey?: string,
-): BelongsToRelationDefinition<RegisteredModelReference<TName>>
+): BelongsToRelationDefinition<NamedModelReference<TName>>
 export function belongsTo<TRelated extends ModelDefinitionLike<TableDefinition>>(
   related: () => TRelated,
   foreignKeyOrOptions: string | { foreignKey: string, ownerKey?: string },
@@ -176,7 +176,7 @@ export function hasMany<const TName extends RegisteredModelName>(
   related: TName,
   foreignKeyOrOptions: string | { foreignKey: string, localKey?: string },
   localKey?: string,
-): HasManyRelationDefinition<RegisteredModelReference<TName>>
+): HasManyRelationDefinition<NamedModelReference<TName>>
 export function hasMany<TRelated extends ModelDefinitionLike<TableDefinition>>(
   related: () => TRelated,
   foreignKeyOrOptions: string | { foreignKey: string, localKey?: string },
@@ -206,7 +206,7 @@ export function hasOne<const TName extends RegisteredModelName>(
   related: TName,
   foreignKeyOrOptions: string | { foreignKey: string, localKey?: string },
   localKey?: string,
-): HasOneRelationDefinition<RegisteredModelReference<TName>>
+): HasOneRelationDefinition<NamedModelReference<TName>>
 export function hasOne<TRelated extends ModelDefinitionLike<TableDefinition>>(
   related: () => TRelated,
   foreignKeyOrOptions: string | { foreignKey: string, localKey?: string },
@@ -375,7 +375,7 @@ export function belongsToMany<
   relatedPivotKey?: TRelatedPivotKey,
   parentKey?: string,
   relatedKey?: string,
-): InitialPivotRelation<BelongsToManyRelationDefinition<RegisteredModelReference<TName>, TPivotTable>, TPivotTable, BelongsToManyPivotKeys<TForeignPivotKey, TRelatedPivotKey>>
+): InitialPivotRelation<BelongsToManyRelationDefinition<NamedModelReference<TName>, TPivotTable>, TPivotTable, BelongsToManyPivotKeys<TForeignPivotKey, TRelatedPivotKey>>
 export function belongsToMany<
   TRelated extends ModelDefinitionLike<TableDefinition>,
   const TPivotTable extends string | TableDefinition,
