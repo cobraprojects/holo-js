@@ -733,7 +733,7 @@ describe('type system contracts', () => {
         missing: 'value' } })
   })
 
-  it('types static model helpers, relation aggregates, and pivot APIs with exact keys', () => {
+  it('types static model helpers, relation aggregates, and pivot APIs with exact keys', async () => {
     const users = defineTable('users', {
       id: column.id(),
       name: column.string(),
@@ -796,10 +796,10 @@ describe('type system contracts', () => {
       expectTypeOf(User.max('id')).toEqualTypeOf<Promise<number | null>>()
       expectTypeOf(User.chunkById(10, () => undefined, 'id')).toEqualTypeOf<Promise<void>>()
       expectTypeOf(User.chunkByIdDesc(10, () => undefined, 'id')).toEqualTypeOf<Promise<void>>()
-      expectTypeOf(User.withSum('posts', 'score')).toEqualTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
-      expectTypeOf(User.withAvg('posts', 'score')).toEqualTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
-      expectTypeOf(User.withMin('roles', 'weight')).toEqualTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
-      expectTypeOf(User.withMax('roles', 'weight')).toEqualTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
+      expectTypeOf((await User.withSum('posts', 'score').firstOrFail()).toAttributes().posts_sum_score).toEqualTypeOf<number | undefined>()
+      expectTypeOf((await User.withAvg('posts', 'score').firstOrFail()).toAttributes().posts_avg_score).toEqualTypeOf<number | null | undefined>()
+      expectTypeOf((await User.withMin('roles', 'weight').firstOrFail()).toAttributes().roles_min_weight).toEqualTypeOf<number | null | undefined>()
+      expectTypeOf((await User.withMax('roles', 'weight').firstOrFail()).toAttributes().roles_max_weight).toEqualTypeOf<number | null | undefined>()
       expectTypeOf(User.whereRelation('posts', 'title', 'Hello')).toEqualTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
       expectTypeOf(User.orWhereRelation('roles', 'name', 'admin')).toEqualTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
       expectTypeOf(User.find(1)).toEqualTypeOf<Promise<Entity<typeof users, UserRelations> | undefined>>()
@@ -810,14 +810,14 @@ describe('type system contracts', () => {
       expectTypeOf(User.destroy([1, 2])).toEqualTypeOf<Promise<number>>()
       expectTypeOf(User.restore(1)).toEqualTypeOf<Promise<Entity<typeof users, UserRelations>>>()
       expectTypeOf(User.forceDelete(1)).toEqualTypeOf<Promise<void>>()
-      expectTypeOf(entity.loadSum('posts', 'score')).toEqualTypeOf<Promise<Entity<typeof users, UserRelations>>>()
-      expectTypeOf(entity.loadAvg('posts', 'score')).toEqualTypeOf<Promise<Entity<typeof users, UserRelations>>>()
-      expectTypeOf(entity.loadMin('roles', 'weight')).toEqualTypeOf<Promise<Entity<typeof users, UserRelations>>>()
-      expectTypeOf(entity.loadMax('roles', 'weight')).toEqualTypeOf<Promise<Entity<typeof users, UserRelations>>>()
-      expectTypeOf(collection.loadSum('posts', 'score')).toEqualTypeOf<Promise<ModelCollection<typeof users, UserRelations>>>()
-      expectTypeOf(collection.loadAvg('posts', 'score')).toEqualTypeOf<Promise<ModelCollection<typeof users, UserRelations>>>()
-      expectTypeOf(collection.loadMin('roles', 'weight')).toEqualTypeOf<Promise<ModelCollection<typeof users, UserRelations>>>()
-      expectTypeOf(collection.loadMax('roles', 'weight')).toEqualTypeOf<Promise<ModelCollection<typeof users, UserRelations>>>()
+      expectTypeOf((await entity.loadSum('posts', 'score')).toAttributes().posts_sum_score).toEqualTypeOf<number | undefined>()
+      expectTypeOf((await entity.loadAvg('posts', 'score')).toAttributes().posts_avg_score).toEqualTypeOf<number | null | undefined>()
+      expectTypeOf((await entity.loadMin('roles', 'weight')).toAttributes().roles_min_weight).toEqualTypeOf<number | null | undefined>()
+      expectTypeOf((await entity.loadMax('roles', 'weight')).toAttributes().roles_max_weight).toEqualTypeOf<number | null | undefined>()
+      expectTypeOf((await collection.loadSum('posts', 'score'))[0]?.toAttributes()?.posts_sum_score).toEqualTypeOf<number | undefined>()
+      expectTypeOf((await collection.loadAvg('posts', 'score'))[0]?.toAttributes()?.posts_avg_score).toEqualTypeOf<number | null | undefined>()
+      expectTypeOf((await collection.loadMin('roles', 'weight'))[0]?.toAttributes()?.roles_min_weight).toEqualTypeOf<number | null | undefined>()
+      expectTypeOf((await collection.loadMax('roles', 'weight'))[0]?.toAttributes()?.roles_max_weight).toEqualTypeOf<number | null | undefined>()
       void User.increment('id')
       void User.decrement('id')
       void rolesRelation.withPivot('approved', 'granted_at')
