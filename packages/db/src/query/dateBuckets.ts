@@ -12,12 +12,16 @@ export type DateBucketStorage = 'calendar' | 'datetime' | 'timestamp'
 
 const MAX_ALIAS_BYTES = 63
 
-export function effectiveOutputName(name: string): string {
+export function truncatedIdentifier(name: string): string {
   const bytes = new TextEncoder().encode(name)
-  if (bytes.length <= MAX_ALIAS_BYTES) return name.toLowerCase()
+  if (bytes.length <= MAX_ALIAS_BYTES) return name
   let end = MAX_ALIAS_BYTES
-  while (end > 0 && (bytes[end]! & 0xC0) === 0x80) end -= 1
-  return new TextDecoder().decode(bytes.slice(0, end)).toLowerCase()
+  while (end > 0 && ((bytes[end] ?? 0) & 0xC0) === 0x80) end -= 1
+  return new TextDecoder().decode(bytes.slice(0, end))
+}
+
+export function effectiveOutputName(name: string): string {
+  return truncatedIdentifier(name).toLowerCase()
 }
 
 export function planHasDateBuckets(plan: SelectQueryPlan): boolean {
@@ -185,7 +189,9 @@ export function assertGroupedOrderKeysUnshadowed(plan: SelectQueryPlan, context:
   for (const orderBy of plan.orderBy) {
     if (orderBy.kind !== 'column' || orderBy.column.includes('.') || dateBucketSelections(plan).has(orderBy.column)) continue
     const key = orderBy.column
-    const names: IdentifierMatch = context.foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly
+    const names: IdentifierMatch = context.foldsColumnNames
+      ? sameIdentifierFolded
+      : (left, right) => truncatedIdentifier(left) === truncatedIdentifier(right)
     const shadowed = plan.selections.some((selection) => {
       if (selection.kind === 'raw' || selection.kind === 'date-bucket') return false
       if (selection.kind !== 'column') return names(selection.alias, key)

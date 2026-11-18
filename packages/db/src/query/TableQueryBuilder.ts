@@ -3504,17 +3504,27 @@ export class TableQueryBuilder<
   private hiddenGroupedCursorColumns(orders: readonly CursorOrderDefinition[]): readonly (string | undefined)[] {
     const dateBuckets = dateBucketSelections(this.plan)
     if (this.plan.unions.length > 0 || this.plan.groupBy.length === 0 || dateBuckets.size === 0) return orders.map(() => undefined)
-    const taken = new Set(this.plan.selections.flatMap((selection) => {
-      const output = selectionOutputName(selection)
-      return output === undefined ? [] : [effectiveOutputName(output)]
-    }))
-    return orders.map((order, index) => {
+    const connectionName = this.connection.getConnectionName()
+    const taken = new Set([
+      ...this.plan.selections.flatMap((selection) => {
+        const output = selectionOutputName(selection)
+        return output === undefined ? [] : [effectiveOutputName(output)]
+      }),
+      ...orders.map(order => effectiveOutputName(order.column)),
+    ])
+    const isTaken = (alias: string) => taken.has(effectiveOutputName(alias))
+      || this.plan.selections.some(selection => selectionMayOutputName(this.plan, selection, alias, connectionName, { raw: false, wildcard: false }))
+    const hidden = orders.map((order, index) => {
       if (dateBuckets.has(order.column)) return undefined
       let alias = `__holo_cursor_${index}`
-      while (taken.has(effectiveOutputName(alias))) alias = `${alias}_`
+      while (isTaken(alias)) alias = `${alias}_`
       taken.add(effectiveOutputName(alias))
       return alias
     })
+    if (this.plan.distinct && hidden.some(alias => alias !== undefined)) {
+      throw new SecurityError('Cursor pagination cannot page distinct grouped date buckets by a column that is not a date bucket.')
+    }
+    return hidden
   }
 
   private groupedKeyContext(): GroupedKeyContext {

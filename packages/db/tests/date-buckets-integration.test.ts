@@ -1118,6 +1118,42 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect(page.data.map(row => row.day)).toEqual(['2026-11-03', '2026-11-04', '2026-11-05', '2026-12-31'])
   })
 
+  it('keeps a table column named like a hidden cursor column', async () => {
+    useAppTimezone('UTC')
+    await openDatabase(driver)
+    const schema = createSchemaService(DB.connection())
+    const name = `bucket_hidden_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(name)
+    })
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.integer('__holo_cursor_0')
+      table.datetime('at')
+    })
+    const hidden = defineGeneratedTable(name, { id: column.id(), __holo_cursor_0: column.integer(), at: column.datetime() })
+    registerGeneratedTables({ hidden })
+    onTestFinished(() => clearGeneratedTables())
+    await DB.table(hidden).insert({ id: 1, __holo_cursor_0: 42, at: new Date('2026-11-03T10:00:00Z') })
+
+    const page = await DB.table(hidden).addSelectDate('day', 'at', { as: 'day', timeZone: 'UTC' }).groupBy('id', 'day').orderBy('id').cursorPaginate(5)
+
+    expect(page.data).toEqual([{ id: 1, __holo_cursor_0: 42, at: expect.anything(), day: '2026-11-03' }])
+  })
+
+  it('rejects distinct grouped date bucket cursors ordered by another column', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events)
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .groupBy('tenant_id', 'day')
+      .orderBy('tenant_id')
+      .orderBy('day')
+      .distinct()
+      .cursorPaginate(5)).rejects.toThrow(SecurityError)
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)
@@ -1636,6 +1672,26 @@ describe.runIf(postgresIntegration)('grouped date bucket cursors on postgres out
     const second = await page(first.nextCursor)
 
     expect([...first.data, ...second.data].map(row => row.day)).toEqual(['2026-11-03', '2026-11-03', '2026-11-04', '2026-11-04', '2026-11-05', '2026-12-31'])
+  })
+
+  it('rejects a grouped order key that an alias shadows after PostgreSQL truncates it', async () => {
+    useAppTimezone('UTC')
+    const { db } = await openDatabase('postgres')
+    const key = `k${'e'.repeat(62)}`
+    const name = `bucket_long_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await createSchemaService(db).dropTable(name)
+    })
+    await db.executeCompiled({ sql: `CREATE TABLE "${name}" (id integer PRIMARY KEY, "${key}" integer, at timestamp)`, source: 'test' })
+    const long = defineGeneratedTable(name, { id: column.id(), [key]: column.integer(), at: column.datetime() })
+
+    await expect(DB.table(long)
+      .select(`id as ${key}x`)
+      .addSelectDate('day', 'at', { as: 'day', timeZone: 'UTC' })
+      .groupBy(key, 'day', 'id')
+      .orderBy(key)
+      .orderBy('day')
+      .cursorPaginate(1)).rejects.toThrow(SecurityError)
   })
 
   it('orders by a key that differs from an output alias only in case', async () => {
