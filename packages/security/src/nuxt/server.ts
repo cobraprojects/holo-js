@@ -63,11 +63,18 @@ async function readBoundedEventBody(event: H3Event): Promise<BufferedRequestBody
   return { bytes, contentType: buffered?.contentType }
 }
 
+function decodedPath(path: string): string {
+  try {
+    return decodeURI(path)
+  } catch {
+    return path
+  }
+}
+
 function mountedBase(request: Request, event: H3Event): string {
-  const pathname = new URL(request.url).pathname
-  const inner = new URL(event.path, 'http://holo.local').pathname
-  const base = pathname.endsWith(inner) ? pathname.slice(0, pathname.length - inner.length) : pathname
-  return base.replace(/\/+$/, '')
+  const pathname = decodedPath(new URL(request.url).pathname)
+  const inner = decodedPath(new URL(event.path, 'http://holo.local').pathname)
+  return pathname.endsWith(inner) ? pathname.slice(0, pathname.length - inner.length).replace(/\/+$/, '') : ''
 }
 
 async function createRequest(event: H3Event): Promise<Request> {

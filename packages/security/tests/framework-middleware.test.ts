@@ -107,6 +107,24 @@ describe('native csrf middleware', () => {
     expect(await nuxtStatus('/dashboard/api/login')).toBe(419)
   })
 
+  it('keeps CSRF on encoded Nuxt paths inside the app base path', async () => {
+    const sessions = memoryCsrfSessions({ 'browser-a': 'session-token' })
+    const headers = { cookie: 'browser=browser-a' }
+    const app = createApp()
+    app.use('/dashboard', nuxtCsrfProtection())
+    app.use(defineEventHandler(() => 'handled'))
+    const status = async (path: string) => (await toWebHandler(app)(new Request(`https://app.test${path}`, { method: 'POST', headers }))).status
+    configureSecurity(true, [], sessions)
+    expect(await status('/dashboard/api/%75sers')).toBe(419)
+    expect(await status('/dashboard/webhooks/%70rovider')).toBe(200)
+    configureSecurityRuntime({
+      config: defineSecurityConfig({ csrf: { enabled: true, except: ['/'] } }),
+      csrfSigningKey: 'native-middleware-test-key',
+      csrfSession: sessions,
+    })
+    expect(await status('/dashboard/api/%75sers')).toBe(419)
+  })
+
   it('leaves CSRF checks off when the csrf block sets enabled to false', async () => {
     configureSecurityRuntime({
       config: { csrf: { enabled: false } },
