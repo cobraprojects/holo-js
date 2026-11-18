@@ -2,6 +2,8 @@ import type { AsyncLocalStorage } from 'node:async_hooks'
 
 export type SvelteKitRequestEvent = {
   readonly url?: URL
+  readonly route?: { readonly id: string | null }
+  readonly isDataRequest?: boolean
   readonly cookies: {
     get(name: string): string | undefined
     set(name: string, value: string, options: SvelteKitCookieOptions): void
