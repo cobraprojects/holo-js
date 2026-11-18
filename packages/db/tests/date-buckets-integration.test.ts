@@ -240,6 +240,13 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect(DB.table(events).selectDate('day', 'occurred_at', { as: 'day' }).toSQL().metadata?.selectedShape.columns).toEqual(['day'])
   })
 
+  it('reports date bucket aliases in projection order', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    expect(DB.table(events).selectDate('day', 'occurred_at', { as: 'day' }).addSelect('id').toSQL().metadata?.selectedShape.columns).toEqual(['day', 'id'])
+  })
+
   it('rejects time zones that are not IANA names', async () => {
     const events = await createEventsTable(driver)
 
@@ -905,7 +912,7 @@ describe.each(drivers)('date buckets on %s', (driver) => {
   it('inserts without validating date buckets in predicates the insert discards', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
-    const unused = DB.table(events).selectDate('day', 'occurred_at', { as: `b${'u'.repeat(63)}` })
+    const unused = DB.table(events).selectDate('day', 'occurred_at', { as: 'buuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu' })
 
     await DB.table(events).whereExists(unused).insert({ tenant_id: 10, occurred_at: null, billed_on: null })
 
@@ -1213,7 +1220,7 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
 
-    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: `bucket_${'x'.repeat(57)}` }).get()).rejects.toThrow(SecurityError)
+    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'bucket_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' }).get()).rejects.toThrow(SecurityError)
   })
 
   it('reports a misspelled date bucket before checking its column', async () => {
@@ -1444,7 +1451,7 @@ describe.runIf(mysqlIntegration)('date buckets in mysql mutation subqueries', ()
         },
       }),
     })
-    const subquery = DB.table(events).selectDate('day', 'occurred_at', { as: `b${'u'.repeat(63)}`, timeZone: 'Asia/Tokyo' })
+    const subquery = DB.table(events).selectDate('day', 'occurred_at', { as: 'buuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu', timeZone: 'Asia/Tokyo' })
 
     await expect(DB.table(events).whereInSub('billed_on', subquery).update({ tenant_id: 9 })).rejects.toThrow(SecurityError)
   })
@@ -1605,6 +1612,46 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
       await expect(Promise.all([inside, outside])).resolves.toEqual([[], []])
     } finally {
       await createSchemaService(db).dropTable(name)
+      await db.disconnect()
+    }
+  }, 10_000)
+
+  it('runs a probe of its own on a connection pinned by withoutForeignKeyConstraints()', async () => {
+    useAppTimezone('Europe/Paris')
+    const db = createDatabase({
+      connectionName: 'default',
+      adapter: createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 1 } }),
+      dialect: createDialect('mysql'),
+    })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    const schema = createSchemaService(db)
+    const name = `bucket_pinned_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const pinned = defineGeneratedTable(name, { id: column.id(), at: column.datetime() })
+    try {
+      await schema.createTable(name, (table) => {
+        table.id()
+        table.datetime('at')
+      })
+      await DB.table(pinned).count()
+      const query = DB.table(pinned).selectDate('day', 'at', { as: 'day', timeZone: 'Asia/Tokyo' })
+      let began!: () => void
+      let release!: () => void
+      const started = new Promise<void>((resolve) => { began = resolve })
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      const inside = schema.withoutForeignKeyConstraints(async () => {
+        await DB.table(pinned).count()
+        began()
+        await gate
+        return query.get()
+      })
+      await started
+      const outside = query.get()
+      await new Promise(resolve => setTimeout(resolve, 50))
+      release()
+
+      await expect(Promise.all([inside, outside])).resolves.toEqual([[], []])
+    } finally {
+      await schema.dropTable(name)
       await db.disconnect()
     }
   }, 10_000)

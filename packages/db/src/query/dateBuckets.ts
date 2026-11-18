@@ -7,6 +7,7 @@ import { dateBucketSelections, readAllColumnsSelectionTable } from './ast'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import { currentRootTransaction } from '../core/openTransactions'
+import { currentPinnedConnection } from '../concurrency/pinnedConnection'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryDateBucketSelection, QueryDateBucketUnit, QueryPredicateNode, SelectQueryPlan } from './ast'
 
@@ -322,7 +323,7 @@ export async function assertDateBucketTimeZonesConvertible(connection: DatabaseC
   const root = getRootDatabaseContext(connection)
   const convertible = convertibleMySQLTimeZones.get(root) ?? new Set<string>()
   convertibleMySQLTimeZones.set(root, convertible)
-  const scope: object = currentRootTransaction(connection) ?? connection
+  const scope: object = currentRootTransaction(connection) ?? currentPinnedConnection(connection.getAdapter()) ?? connection
   const inFlight = inFlightMySQLTimeZoneChecks.get(scope) ?? new Map<string, Promise<void>>()
   inFlightMySQLTimeZoneChecks.set(scope, inFlight)
   const zones = convertedMySQLTimeZones(plan, connection.getConnectionName()).filter(zone => !convertible.has(zone))

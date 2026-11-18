@@ -452,7 +452,6 @@ export class SQLQueryCompiler {
   }
 
   protected createSelectMetadata(plan: SelectQueryPlan): CompiledStatementMetadata {
-    const columnSelections = plan.selections.filter(selection => selection.kind === 'column')
     const aggregateSelections = plan.selections.filter(selection => selection.kind === 'aggregate')
     const complexity = this.calculatePlanComplexity(plan)
 
@@ -461,10 +460,10 @@ export class SQLQueryCompiler {
       resultMode: 'rows',
       selectedShape: {
         mode: plan.selections.length === 0 ? 'all' : 'projection',
-        columns: [
-          ...columnSelections.map(selection => selection.alias ?? selection.column),
-          ...plan.selections.flatMap(selection => selection.kind === 'date-bucket' ? [selection.alias] : []),
-        ],
+        columns: plan.selections.flatMap((selection) => {
+          if (selection.kind === 'column') return [selection.alias ?? selection.column]
+          return selection.kind === 'date-bucket' ? [selection.alias] : []
+        }),
         aggregates: aggregateSelections.map(selection => selection.alias),
         hasRawSelections: plan.selections.some(selection => selection.kind === 'raw'),
         hasSubqueries: plan.selections.some(selection => selection.kind === 'subquery'),

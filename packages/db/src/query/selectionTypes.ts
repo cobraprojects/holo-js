@@ -32,7 +32,11 @@ export type UnreplacedDateBuckets<TRow extends Record<string, unknown>, TSelecte
 
 type UnionToIntersection<TUnion> = (TUnion extends unknown ? (value: TUnion) => void : never) extends (value: infer TIntersection) => void ? TIntersection : never
 
-type SingleLiteral<TValue extends string> = string extends TValue ? never : [TValue] extends [UnionToIntersection<TValue>] ? TValue : never
+type SingleLiteral<TValue extends string> = string extends TValue
+  ? never
+  : [TValue] extends [UnionToIntersection<TValue>]
+    ? Record<never, never> extends Record<TValue, true> ? never : TValue
+    : never
 
 export type DateBucketAliasName<TAlias extends string, TColumns extends Record<string, unknown>> = [SingleLiteral<TAlias>] extends [never]
   ? never

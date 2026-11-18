@@ -96,6 +96,9 @@ it('rejects date buckets on non-date columns, unknown units and aliases that sha
     const runtime: string = 'day'
     // @ts-expect-error the alias must be one string literal so the row type knows its key
     DB.table(events).selectDate('day', 'occurred_at', { as: runtime })
+    const suffix: string = 'actual'
+    // @ts-expect-error an alias interpolating a runtime string is not one known key
+    DB.table(events).selectDate('day', 'occurred_at', { as: `bucket_${suffix}` as const })
     // @ts-expect-error a selected null-only JSON column is not a date bucket alias
     DB.table(events).select('payload as missing').groupBy('missing')
     // @ts-expect-error unknown units are rejected
