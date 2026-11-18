@@ -11556,6 +11556,64 @@ export default defineConfig({
     )
   }, 30000)
 
+  it('fails prepare when the sveltekit() plugin element is a chained expression', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    linkNativeFramework(projectRoot, 'sveltekit')
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'vite.config.ts', [
+      'import { sveltekit } from \'@sveltejs/kit/vite\'',
+      'import { defineConfig } from \'vite\'',
+      '',
+      'export default defineConfig({ plugins: [sveltekit().flat()] })',
+      '',
+    ].join('\n'))
+
+    await expect(runProjectPrepare(projectRoot, undefined, { syncFramework: false })).rejects.toThrow(
+      'Could not add holoSvelteKit() to vite.config.ts. Put sveltekit() directly in the plugins array so holo prepare can add the Holo plugin next to it.',
+    )
+  }, 30000)
+
+  it('recognizes a holoSvelteKit import with a comment inside its braces', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    linkNativeFramework(projectRoot, 'sveltekit')
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'vite.config.ts', [
+      'import { /* plugin */ holoSvelteKit } from \'@holo-js/adapter-sveltekit/vite\'',
+      'import { sveltekit } from \'@sveltejs/kit/vite\'',
+      'import { defineConfig } from \'vite\'',
+      '',
+      'export default defineConfig({ plugins: [sveltekit()] })',
+      '',
+    ].join('\n'))
+
+    await runProjectPrepare(projectRoot, undefined, { syncFramework: false })
+    const viteConfig = await readFile(join(projectRoot, 'vite.config.ts'), 'utf8')
+    expect(viteConfig).toContain('import { /* plugin */ holoSvelteKit } from \'@holo-js/adapter-sveltekit/vite\'')
+    expect(viteConfig.match(/holoSvelteKit\b/g)?.length).toBe(2)
+    expect(viteConfig).toContain('plugins: [sveltekit(withHoloSvelteKit()), holoSvelteKit()]')
+  }, 30000)
+
+  it('fails prepare when the legacy realtime plugin is registered conditionally', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    linkNativeFramework(projectRoot, 'sveltekit')
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'vite.config.ts', [
+      'import { holoSvelteKitRealtime } from \'@holo-js/adapter-sveltekit/vite\'',
+      'import { sveltekit } from \'@sveltejs/kit/vite\'',
+      'import { defineConfig } from \'vite\'',
+      '',
+      'export default defineConfig(({ command }) => ({ plugins: [sveltekit(), command === \'serve\' && holoSvelteKitRealtime()] }))',
+      '',
+    ].join('\n'))
+
+    await expect(runProjectPrepare(projectRoot, undefined, { syncFramework: false })).rejects.toThrow(
+      'Could not add holoSvelteKit() to vite.config.ts. Register holoSvelteKit() unconditionally in the plugins array next to sveltekit(), because the generated hooks need it in every build.',
+    )
+  }, 30000)
+
   it('fails prepare when sveltekit() is not an element of the plugins array', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
