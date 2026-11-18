@@ -80,7 +80,7 @@ export class PivotMutation {
     if (!update) return 0
     const values = this.timestampAttributes(attributes, false)
     this.assertColumnsWritable(Object.keys(values))
-    return await this.updateRows(this.connection, this.storedKeys(existing), values, update) ? 1 : 0
+    return await this.updateRows(this.connection, this.targetKeys(existing, key), values, update) ? 1 : 0
   }
 
   private async mutate(kind: 'attach' | 'sync' | 'toggle', ids: unknown, attributes: Attributes = {}, detachMissing = false): Promise<Result> {
@@ -97,14 +97,14 @@ export class PivotMutation {
       for (const entry of entries) {
         const existing = current.get(this.incomingKeyIdentity(entry.id))
         if (kind === 'toggle' && existing) {
-          actions.push({ kind: 'delete', keys: this.storedKeys(existing) })
+          actions.push({ kind: 'delete', keys: this.targetKeys(existing, entry.id) })
           result.detached.push(entry.id)
         } else if (!existing) {
           actions.push({ ...entry, kind: 'insert' })
           result.attached.push(entry.id)
         } else if (kind !== 'toggle') {
           const update = this.updateFor(existing, entry.attributes)
-          if (update) actions.push({ ...entry, kind: 'update', keys: this.storedKeys(existing), update, onUpdated: () => result.updated.push(entry.id) })
+          if (update) actions.push({ ...entry, kind: 'update', keys: this.targetKeys(existing, entry.id), update, onUpdated: () => result.updated.push(entry.id) })
         }
       }
       if (detachMissing) {
@@ -199,6 +199,10 @@ export class PivotMutation {
       groups.set(identity, [...groups.get(identity) ?? [], row])
     }
     return groups
+  }
+
+  private targetKeys(existing: readonly Attributes[], incoming: unknown): unknown[] {
+    return this.storesSQLiteDateKeys() ? this.storedKeys(existing) : [incoming]
   }
 
   private storedKeys(rows: readonly Attributes[]): unknown[] {

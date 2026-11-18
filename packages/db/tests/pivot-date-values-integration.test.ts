@@ -107,6 +107,19 @@ describe.each(integrationDrivers(['sqlite']))('pivot rows that store one instant
   })
 })
 
+describe.each(integrationDrivers(['postgres']))('pivot keys a microsecond apart on %s', (driver) => {
+  it('updates and toggles only the requested row', async () => {
+    const { db, names, owner, ownerSlots } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`INSERT INTO ${quote(driver, names.ownerSlots)} (${quote(driver, 'owner_id')}, ${quote(driver, 'starts_at')}, ${quote(driver, 'note')}) VALUES (1, '2026-01-01 10:00:00', 'whole'), (1, '2026-01-01 10:00:00.000002', 'micro')`))
+    const notes = async () => (await DB.table(ownerSlots).orderBy('note').pluck('note'))
+
+    expect(await owner.updateExistingPivot('slots', '2026-01-01 10:00:00.000002' as never, { note: 'micro changed' })).toBe(1)
+    expect(await notes()).toEqual(['micro changed', 'whole'])
+    await owner.toggle('slots', ['2026-01-01 10:00:00.000002' as never])
+    expect(await notes()).toEqual(['whole'])
+  })
+})
+
 describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as SQLite text on %s', (driver) => {
   it('writes a new time into a date column even on the same calendar day', async () => {
     const { owner, ownerTags } = await openPivots(driver)
