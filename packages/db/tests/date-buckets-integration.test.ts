@@ -1965,6 +1965,42 @@ describe.runIf(postgresIntegration)('date buckets next to postgres domains and v
   })
 })
 
+describe.runIf(postgresIntegration)('date buckets next to postgres columns named alike in another case', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('resolves a bare where column to the table with its exact spelling', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('postgres')
+    const connection = DB.connection()
+    const tags = `bucket_tags_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const labels = `bucket_labels_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await createSchemaService(connection).dropTable(tags)
+      await createSchemaService(connection).dropTable(labels)
+    })
+    await connection.executeCompiled({ sql: `CREATE TABLE "${tags}" (id integer PRIMARY KEY, bucket text)`, source: 'test' })
+    await connection.executeCompiled({ sql: `CREATE TABLE "${labels}" (id integer PRIMARY KEY, "Bucket" text)`, source: 'test' })
+    await connection.executeCompiled({ sql: `INSERT INTO "${tags}" (id, bucket) VALUES (1, 'tag'), (2, 'other')`, source: 'test' })
+    await connection.executeCompiled({ sql: `INSERT INTO "${labels}" (id, "Bucket") VALUES (1, 'label'), (2, 'label')`, source: 'test' })
+    registerGeneratedTables({
+      events,
+      tagsTable: defineGeneratedTable(tags, { id: column.id(), bucket: column.string() }),
+      labelsTable: defineGeneratedTable(labels, { id: column.id(), Bucket: column.string() }),
+    })
+
+    const rows = await DB.table(events.tableName)
+      .join(tags, `${tags}.id`, '=', `${events.tableName}.id`)
+      .join(labels, `${labels}.id`, '=', `${events.tableName}.id`)
+      .where('bucket', 'tag')
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
+      .get()
+
+    expect(rows).toEqual([{ bucket: '2026-11-03' }])
+  })
+})
+
 describe.runIf(postgresIntegration)('date buckets on postgres before the common era', () => {
   afterEach(() => {
     resetDB()

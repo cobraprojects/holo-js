@@ -1061,6 +1061,10 @@ export class SQLQueryCompiler {
     return this.withDateBucketAliases('column', () => this.compileDateBucket(bucket, storage))
   }
 
+  protected foldsColumnNames(): boolean {
+    return true
+  }
+
   protected dateBucketHavingMode(_plan: SelectQueryPlan): DateBucketAliasMode {
     return 'expression'
   }
@@ -1076,7 +1080,7 @@ export class SQLQueryCompiler {
     }
     if (dateBucket && this.dateBucketAliasMode === 'expression') return this.compileDateBucketExpression(dateBucket)
     if (this.dateBucketAliasMode === 'column' && this.dateBucketPlan && dateBucket) {
-      return `${this.compileTableReference(bareColumnOwner(this.dateBucketPlan, reference, this.connectionName))}.${this.quoteIdentifier(reference)}`
+      return `${this.compileTableReference(bareColumnOwner(this.dateBucketPlan, reference, this.connectionName, this.foldsColumnNames()))}.${this.quoteIdentifier(reference)}`
     }
     const { schema: table, table: column } = splitTablePath(reference)
     return table === undefined

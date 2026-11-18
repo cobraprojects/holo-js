@@ -213,8 +213,8 @@ export function assertGroupedOrderKeysUnshadowed(plan: SelectQueryPlan, context:
   }
 }
 
-export function bareColumnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined): string {
-  const owner = columnOwner(plan, name, connectionName)
+export function bareColumnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined, foldsColumnNames: boolean): string {
+  const owner = columnOwner(plan, name, connectionName, foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly)
   if (owner === undefined) {
     throw new CompilerError(`Column "${name}" shares its name with a date bucket and Holo can't tell which table owns it. Qualify it with its table.`)
   }

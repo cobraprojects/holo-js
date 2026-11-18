@@ -192,6 +192,10 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
     return `${this.compileColumnReference(column)} <=> CAST(${this.createPlaceholder(bindings.length)} AS vector)`
   }
 
+  protected override foldsColumnNames(): boolean {
+    return false
+  }
+
   protected override compileDateBucket(bucket: QueryDateBucketSelection, storage: DateBucketStorage): string {
     const column = this.compileColumnReference(bucket.column)
     const applicationTimeZone = getApplicationTimezone()
