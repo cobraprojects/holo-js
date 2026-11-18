@@ -1,6 +1,6 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
-import { TableQueryBuilder, whereStoredValuesDiffer, whereStoredValuesIn } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, whereMillisecondInstantsIn, whereStoredValuesDiffer, whereStoredValuesIn } from '../query/TableQueryBuilder'
 import { normalizeQueryWriteValue } from '../query/queryValueNormalizer'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { assertQueryTablePath } from '../query/validator'
@@ -14,7 +14,7 @@ type Entry = { id: unknown, attributes: Attributes }
 type PivotUpdate = { readonly when: 'always' } | { readonly when: 'datesDiffer', readonly columns: readonly string[] }
 type InsertAction = Entry & { readonly kind: 'insert' }
 type UpdateAction = Entry & { readonly kind: 'update', readonly keys: readonly unknown[], readonly update: PivotUpdate, readonly onUpdated: () => void }
-type DeleteAction = { readonly kind: 'delete', readonly keys: readonly unknown[] }
+type DeleteAction = { readonly kind: 'delete', readonly keys: readonly unknown[], readonly readBack?: boolean }
 type Action = InsertAction | UpdateAction | DeleteAction
 type Result = { attached: unknown[], detached: unknown[], updated: unknown[] }
 type Context = {
@@ -112,7 +112,7 @@ export class PivotMutation {
         for (const [identity, rows] of current) {
           const keys = this.storedKeys(rows)
           if (desired.has(identity) || keys.length === 0) continue
-          actions.push({ kind: 'delete', keys })
+          actions.push({ kind: 'delete', keys, readBack: true })
           result.detached.push(...keys.map(key => this.readKey(key)))
         }
       }
@@ -138,11 +138,12 @@ export class PivotMutation {
       }
       if (action.kind === 'delete') {
         const keys = [...action.keys]
-        while (offset < timestamped.length && timestamped[offset]!.kind === 'delete' && keys.length < this.idBatchSize()) {
+        const sameDelete = (next: Action | undefined): next is DeleteAction => next?.kind === 'delete' && next.readBack === action.readBack
+        while (offset < timestamped.length && sameDelete(timestamped[offset]) && keys.length < this.idBatchSize()) {
           keys.push(...(timestamped[offset] as DeleteAction).keys)
           offset++
         }
-        await this.delete(connection, keys)
+        await this.delete(connection, keys, action.readBack)
         continue
       }
       const columns = Object.keys(action.attributes)
@@ -295,6 +296,14 @@ export class PivotMutation {
     return this.storesSQLiteDateKeys() ? whereStoredValuesIn(query, this.context.relatedColumn, keys) : query.where(this.context.relatedColumn, 'in', keys)
   }
 
+  private whereReadBackKeys(query: PivotQuery, keys: readonly unknown[]): PivotQuery {
+    const column = this.dateKeyColumn()
+    const instants = keys.filter((key): key is Date => key instanceof Date)
+    return this.context.dialect === 'postgres' && column && column.kind !== 'date' && instants.length === keys.length
+      ? whereMillisecondInstantsIn(query, this.context.relatedColumn, instants)
+      : this.whereKeys(query, keys)
+  }
+
   private query(connection: DatabaseContext): PivotQuery {
     let query = new TableQueryBuilder(this.context.table, connection)
     for (const [column, value] of Object.entries(this.context.scope)) query = query.where(column, value)
@@ -315,11 +324,12 @@ export class PivotMutation {
     return rows
   }
 
-  private async delete(connection: DatabaseContext, keys?: readonly unknown[]): Promise<number> {
+  private async delete(connection: DatabaseContext, keys?: readonly unknown[], readBack = false): Promise<number> {
     if (!keys) return (await this.query(connection).delete()).affectedRows ?? 0
     let count = 0
     for (let offset = 0; offset < keys.length; offset += this.idBatchSize()) {
-      const result = await this.whereKeys(this.query(connection), keys.slice(offset, offset + this.idBatchSize())).delete()
+      const batch = keys.slice(offset, offset + this.idBatchSize())
+      const result = await (readBack ? this.whereReadBackKeys(this.query(connection), batch) : this.whereKeys(this.query(connection), batch)).delete()
       count += result.affectedRows ?? 0
     }
     return count

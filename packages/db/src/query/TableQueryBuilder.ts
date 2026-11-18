@@ -3676,6 +3676,30 @@ export function whereStoredValuesIn<
   return appendTrusted(`${connection.getDialect().quoteIdentifier(column)} IN (${placeholders})`, values) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
 }
 
+export function whereMillisecondInstantsIn<
+  TTableOrName extends TableReference,
+  TSelectedRow extends Record<string, unknown>,
+  TAvailableColumns extends Record<string, unknown>,
+>(
+  query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
+  column: string,
+  instants: readonly Date[],
+): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  const appendTrusted = trustedRawWhereAppenders.get(query)
+  const connection = query.getConnection()
+  if (!appendTrusted || !isGenuineDatabaseContext(connection)) {
+    throw new SecurityError('whereMillisecondInstantsIn() needs a query builder and connection that Holo created.')
+  }
+  if (!/^[A-Za-z_]\w*$/.test(column)) {
+    throw new SecurityError(`Stored-value predicates need a plain column name, received "${column}".`)
+  }
+  const dialect = connection.getDialect()
+  if (dialect.name !== 'postgres') throw new SecurityError('whereMillisecondInstantsIn() only supports PostgreSQL.')
+  if (instants.length === 0) return appendTrusted('1 = 0', []) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+  const placeholders = instants.map(() => '?').join(', ')
+  return appendTrusted(`date_trunc('milliseconds', ${dialect.quoteIdentifier(column)}) IN (${placeholders})`, instants) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+}
+
 export function whereStoredValuesDiffer<
   TTableOrName extends TableReference,
   TSelectedRow extends Record<string, unknown>,

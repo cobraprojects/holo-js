@@ -118,6 +118,16 @@ describe.each(integrationDrivers(['postgres']))('pivot keys a microsecond apart 
     await owner.toggle('slots', ['2026-01-01 10:00:00.000002' as never])
     expect(await notes()).toEqual(['whole'])
   })
+
+  it('detaches a row whose key holds more precision than a Date', async () => {
+    const { db, names, owner, ownerSlots } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`INSERT INTO ${quote(driver, names.ownerSlots)} (${quote(driver, 'owner_id')}, ${quote(driver, 'starts_at')}, ${quote(driver, 'note')}) VALUES (1, '2026-01-01 10:00:00.000002', 'micro'), (1, '2026-01-02 10:00:00', 'kept')`))
+
+    expect(await owner.sync('slots', [new Date('2026-01-02T10:00:00Z')])).toEqual({ attached: [], detached: [new Date('2026-01-01T10:00:00Z')], updated: [] })
+    expect(await DB.table(ownerSlots).pluck('note')).toEqual(['kept'])
+    expect(await owner.sync('slots', [])).toEqual({ attached: [], detached: [new Date('2026-01-02T10:00:00Z')], updated: [] })
+    expect(await DB.table(ownerSlots).count()).toBe(0)
+  })
 })
 
 describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as SQLite text on %s', (driver) => {
