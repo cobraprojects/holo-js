@@ -181,11 +181,23 @@ const feed = await Post.where('status', 'published').latest().cursorPaginate(20,
 
 Cursor pagination needs a stable sort order:
 
-- Order by real columns. `inRandomOrder()` and `unsafeOrderBy()` aren't allowed.
+- Order by real columns or [date bucket](/database/query-builder/selects-and-filters#selecting-date-buckets) aliases. `inRandomOrder()` and `unsafeOrderBy()` aren't allowed.
 - If you don't call `orderBy()`, Holo orders by the primary key it knows from the model or table definition. When Holo has no primary-key metadata for the table, call `orderBy()` yourself.
 - When Holo knows the table's primary key, it adds it as a tie-breaker, so sorting by a non-unique column such as `created_at` is safe. Without that metadata, add a unique column yourself: `.orderBy('created_at').orderBy('id')`.
+- A grouped or aggregated query, or a union with one, returns groups rather than table rows, so Holo adds no primary key to it and uses your `orderBy()` as given, as Laravel does. Call `orderBy()` with columns that are unique across the groups, such as every `groupBy()` column.
 
 Holo throws a `SecurityError` for random, raw, or missing ordering, and a `CompilerError` when it can't tell which column of a union to order by. Both end in a 500 response, and Holo checks the ordering before it reads the cursor. Holo can't tell whether your own columns are unique, though: without primary-key metadata, an ordering that isn't unique can skip rows that share a value at a page boundary.
+
+Cursor pagination works over date buckets, so you can page through per-day totals newest first:
+
+```ts
+const page = await DB.table(events)
+  .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+  .addSelectCount('total')
+  .groupBy('day')
+  .orderByDesc('day')
+  .cursorPaginate(30, cursor)
+```
 
 ### Invalid cursors
 

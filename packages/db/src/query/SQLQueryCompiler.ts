@@ -1,7 +1,8 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError, SecurityError } from '../core/errors'
-import { isInlineIntegerValue, keyCastFor, readAllColumnsSelectionTable } from './ast'
+import { dateBucketSelections, isInlineIntegerValue, keyCastFor, readAllColumnsSelectionTable } from './ast'
+import { dateBucketStorage, queryColumnNames, type DateBucketStorage } from './dateBuckets'
 import { validateQueryPlan } from './validator'
 import { unionOutputOrder } from './unionOutputs'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -27,6 +28,7 @@ import type {
   InsertUsingQueryPlan,
   TruncateQueryPlan,
   UpsertQueryPlan,
+  QueryDateBucketSelection,
   QueryOrderBy,
   QueryPlan,
   QueryPredicateNode,
@@ -61,6 +63,7 @@ export class SQLQueryCompiler {
   constructor(
     protected readonly quoteIdentifier: IdentifierQuoter,
     protected readonly createPlaceholder: PlaceholderFactory,
+    private readonly connectionName = 'default',
   ) {}
 
   compile(plan: QueryPlan): CompiledStatement {
@@ -240,10 +243,15 @@ export class SQLQueryCompiler {
       const source = this.compileSelectSql(withScalarExtremum(plan, undefined), bindings)
       return `SELECT ${extremum.kind.toUpperCase()}(${this.quoteIdentifier(extremum.column)}) FROM (${source}) AS ${this.quoteIdentifier('__holo_extremum')}`
     }
+    const buckets = this.compileDateBuckets(plan)
     const selectKeyword = plan.distinct ? 'SELECT DISTINCT' : 'SELECT'
     const selectList = projection ?? (plan.selections.length === 0
       ? '*'
       : plan.selections.map((selection) => {
+          if (selection.kind === 'date-bucket') {
+            return `${buckets.get(selection.alias)} AS ${this.quoteIdentifier(selection.alias)}`
+          }
+
           if (selection.kind === 'subquery') {
             return `(${this.compileSelectSql(selection.query, bindings)}) AS ${this.quoteIdentifier(selection.alias)}`
           }
@@ -270,15 +278,15 @@ export class SQLQueryCompiler {
             : column
         }).join(', '))
     const joinClause = this.compileJoins(plan.joins, bindings)
-    const whereClause = this.compilePredicates(plan.predicates, bindings)
+    const whereClause = this.compilePredicates(plan.predicates.map(predicate => this.dateBucketPredicate(predicate, buckets)), bindings)
     const unionClause = this.compileUnions(plan.unions, bindings)
     const groupByClause = plan.groupBy.length === 0
       ? ''
-      : ` GROUP BY ${plan.groupBy.map(column => this.compileColumnReference(column)).join(', ')}`
-    const havingClause = this.compileHaving(plan.having, bindings)
+      : ` GROUP BY ${plan.groupBy.map(column => buckets.get(column) ?? this.compileColumnReference(column)).join(', ')}`
+    const havingClause = this.compileHaving(plan.having, bindings, buckets)
     const orderClause = plan.orderBy.length === 0
       ? ''
-      : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(plan.unions.length > 0 ? unionOutputOrder(plan, orderBy, this.caseSensitiveIdentifiers) : orderBy, bindings)).join(', ')}`
+      : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileSelectOrderBy(plan, orderBy, buckets, bindings)).join(', ')}`
     const lockOf = plan.joins.some(join => join.subquery !== undefined && isOneOfManyAggregatePlan(join.subquery))
       ? this.quoteIdentifier(plan.source.alias ?? splitTablePath(plan.source.tableName).table)
       : undefined
@@ -652,19 +660,21 @@ export class SQLQueryCompiler {
   protected compileHaving(
     clauses: readonly QueryHavingClause[],
     bindings: unknown[],
+    buckets: ReadonlyMap<string, string> = new Map(),
   ): string {
     if (clauses.length === 0) return ''
 
     const compiled = clauses.map((clause, index) => {
-      const condition = this.compileHavingCondition(clause, bindings)
+      const condition = this.compileHavingCondition(clause, bindings, buckets)
       return index === 0 ? condition : `${(clause.boolean ?? 'and').toUpperCase()} ${condition}`
     }).join(' ')
 
     return ` HAVING ${compiled}`
   }
 
-  private compileHavingCondition(clause: QueryHavingClause, bindings: unknown[]): string {
-    const expression = this.compileHavingExpression(clause.expression)
+  private compileHavingCondition(clause: QueryHavingClause, bindings: unknown[], buckets: ReadonlyMap<string, string>): string {
+    const bucket = buckets.get(clause.expression)
+    const expression = bucket === undefined ? this.compileHavingExpression(clause.expression) : this.compileDateBucketHaving(clause.expression, bucket)
     if (clause.kind === 'null') {
       return `${expression} IS ${clause.negated ? 'NOT ' : ''}NULL`
     }
@@ -975,6 +985,41 @@ export class SQLQueryCompiler {
     }
 
     return `${this.compileColumnReference(orderBy.column)} ${orderBy.direction.toUpperCase()}`
+  }
+
+  private compileSelectOrderBy(plan: SelectQueryPlan, orderBy: QueryOrderBy, buckets: ReadonlyMap<string, string>, bindings: unknown[]): string {
+    if (plan.unions.length > 0) return this.compileOrderBy(unionOutputOrder(plan, orderBy, this.caseSensitiveIdentifiers), bindings)
+    const bucket = orderBy.kind === 'column' ? buckets.get(orderBy.column) : undefined
+    return bucket !== undefined && orderBy.kind === 'column' ? `${bucket} ${orderBy.direction.toUpperCase()}` : this.compileOrderBy(orderBy, bindings)
+  }
+
+  private compileDateBuckets(plan: SelectQueryPlan): ReadonlyMap<string, string> {
+    const buckets = dateBucketSelections(plan)
+    if (buckets.size === 0) return new Map()
+    const columns = queryColumnNames(plan, this.connectionName)
+    return new Map([...buckets].map(([alias, bucket]) => {
+      if (columns.has(alias)) throw new SecurityError(`Date bucket alias "${alias}" is the name of a column of the query, so the database could read the column instead. Choose another alias.`)
+      return [alias, this.compileDateBucket(bucket, dateBucketStorage(plan, bucket, this.connectionName))]
+    }))
+  }
+
+  protected compileDateBucketHaving(_alias: string, expression: string): string {
+    return expression
+  }
+
+  protected compileDateBucket(_bucket: QueryDateBucketSelection, _storage: DateBucketStorage): string {
+    throw new CompilerError('The active query compiler does not support date buckets.')
+  }
+
+  private dateBucketPredicate(predicate: QueryPredicateNode, buckets: ReadonlyMap<string, string>): QueryPredicateNode {
+    if (predicate.kind === 'group') return { ...predicate, predicates: predicate.predicates.map(nested => this.dateBucketPredicate(nested, buckets)) }
+    if ((predicate.kind !== 'comparison' && predicate.kind !== 'null') || predicate.dateBucket !== true) return predicate
+    const bucket = buckets.get(predicate.column)
+    if (bucket === undefined) throw new CompilerError(`"${predicate.column}" is not a date bucket of this query.`)
+    const boolean = predicate.boolean === undefined ? {} : { boolean: predicate.boolean }
+    if (predicate.kind === 'null') return { kind: 'raw', ...boolean, sql: `${bucket} IS ${predicate.negated ? 'NOT ' : ''}NULL`, bindings: [] }
+    if (!UNION_CURSOR_OPERATORS.has(predicate.operator)) throw new CompilerError(`A date bucket can't be compared with "${predicate.operator}".`)
+    return { kind: 'raw', ...boolean, sql: `${bucket} ${predicate.operator} ?`, bindings: [predicate.value] }
   }
 
   protected compileRandomOrder(): string {

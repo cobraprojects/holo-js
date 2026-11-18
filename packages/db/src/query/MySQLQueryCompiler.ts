@@ -6,13 +6,47 @@ import type { CompiledStatement } from '../core/types'
 import type { TableNameFolding } from '../schema/tableIdentityRegistry'
 import { formatWallClockSeconds } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
-import type { DeleteQueryPlan, InsertStatementOptions, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
+import { mysqlTimeZoneName, sameMySQLTimeZone, type DateBucketStorage } from './dateBuckets'
+import type { DeleteQueryPlan, InsertStatementOptions, QueryDateBucketSelection, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
 const MYSQL_DECIMAL_DIGITS = 65
 
 const MYSQL_DECIMAL_KEY_INTEGER_DIGITS = 35
 
+const MYSQL_DATE_BUCKET_FORMATS: Readonly<Record<QueryDateBucketSelection['unit'], string>> = {
+  year: '%Y',
+  month: '%Y-%m',
+  day: '%Y-%m-%d',
+  hour: '%Y-%m-%d %H:00',
+}
+
 export class MySQLQueryCompiler extends SQLQueryCompiler {
+  protected override compileDateBucket(bucket: QueryDateBucketSelection, storage: DateBucketStorage): string {
+    const column = this.compileColumnReference(bucket.column)
+    const applicationTimeZone = getApplicationTimezone()
+    const timeZone = bucket.timeZone ?? applicationTimeZone
+    const wallClock = storage === 'timestamp'
+      ? `CONVERT_TZ(${this.compileUtcWallClock(column)}, '+00:00', ${this.createSqlStringLiteral(mysqlTimeZoneName(timeZone))})`
+      : storage === 'calendar' || sameMySQLTimeZone(timeZone, applicationTimeZone)
+        ? column
+        : this.compileConvertedWallClock(column, mysqlTimeZoneName(applicationTimeZone), mysqlTimeZoneName(timeZone))
+    return `CASE WHEN ${wallClock} >= '0001-01-01' THEN DATE_FORMAT(${wallClock}, '${MYSQL_DATE_BUCKET_FORMATS[bucket.unit]}') END`
+  }
+
+  protected override compileDateBucketHaving(alias: string): string {
+    return this.quoteIdentifier(alias)
+  }
+
+  private compileUtcWallClock(timestampColumn: string): string {
+    return `DATE_ADD('1970-01-01 00:00:00', INTERVAL ROUND(NULLIF(UNIX_TIMESTAMP(${timestampColumn}), 0) * 1000000) MICROSECOND)`
+  }
+
+  private compileConvertedWallClock(column: string, from: string, to: string): string {
+    const fromZone = this.createSqlStringLiteral(from)
+    const converts = `CONVERT_TZ(${column}, ${fromZone}, '+00:00') <> CONVERT_TZ(${column}, ${fromZone}, '+01:00')`
+    return `CASE WHEN ${converts} THEN CONVERT_TZ(${column}, ${fromZone}, ${this.createSqlStringLiteral(to)}) END`
+  }
+
   protected override compileRelationKeys(predicate: QueryRelationKeysPredicate, bindings: unknown[]): string {
     const column = this.compileColumnReference(predicate.column)
     const serialized = serializeRelationKeys(predicate.values)

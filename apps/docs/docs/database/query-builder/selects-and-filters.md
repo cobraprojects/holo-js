@@ -193,6 +193,77 @@ const rows = await DB.table('products')
   .get()
 ```
 
+### Selecting date buckets
+
+Select the calendar year, month, day, or hour of a date column as a named string column. Once selected, the alias works in `groupBy()`, `orderBy()`, `orderByDesc()`, `having()`, and [cursor pagination](/database/pagination#cursor-pagination), on every database. Spell it exactly as you declared it.
+
+```ts
+const perDay = await DB.table(events)
+  .where('tenant_id', tenantId)
+  .whereBetween('occurred_at', [from, to])
+  .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+  .addSelectCount('total')
+  .groupBy('day')
+  .orderByDesc('day')
+  .get()
+// [{ day: '2026-11-05', total: 12 }, { day: '2026-11-04', total: 9 }, ...]
+```
+
+| Unit | Value |
+| --- | --- |
+| `'year'` | `'2026'` |
+| `'month'` | `'2026-11'` |
+| `'day'` | `'2026-11-05'` |
+| `'hour'` | `'2026-11-05 14:00'` |
+
+Values are zero-padded strings, so they sort in date order. A `null` date gives a `null` bucket, as does a date outside the years 1 to 9999.
+
+`timeZone` is `'UTC'` or an IANA Area/Location name such as `'Europe/Paris'` or `'US/Eastern'`, and defaults to `app.timezone`. Abbreviations such as `'CET'` or `'PST8PDT'` are rejected, because some databases read them as fixed offsets. Holo converts each timestamp to that zone before it takes the calendar part, so an event at `2026-11-04 23:30 UTC` falls on `2026-11-05` in `'Asia/Tokyo'`. `date()` columns hold a calendar day, not an instant, so they keep their day in every zone.
+
+The column must be a `date()`, `datetime()`, or `timestamp()` column of a table Holo knows: a table definition, or a table name listed in the generated schema. Qualify a joined column with the table's name or alias. An unqualified column must belong to exactly one table of the query. Otherwise the query throws, because a day and an instant need different conversions. The alias is a single string literal of at most 63 bytes, the longest name PostgreSQL keeps, and it can't be the name of a column of the query or of another selected column.
+
+Holo resolves the alias itself in `groupBy()`, `orderBy()`, `having()` and cursor pagination, so it works the same way on every database. `where()` doesn't read date buckets: as in Laravel, `where('day', ...)` names a column. Filter the date column itself instead, for example with `whereBetween('occurred_at', [from, to])`.
+
+::: warning MySQL time zones
+MySQL converts named time zones with its time zone tables. A `timestamp()` bucket converts to its zone, even when that zone is `app.timezone`, and needs the tables unless the zone is UTC, spelled `'UTC'` or an alias such as `'Etc/UTC'`. A `datetime()` bucket converts from `app.timezone` to its zone only when they are different zones, so aliases of one zone such as `'US/Eastern'` and `'America/New_York'` don't convert. When it converts, it needs the tables if either zone isn't UTC, so a `'UTC'` bucket still needs them when `app.timezone` is `'Europe/Paris'`. `date()` buckets never convert. If the tables are empty, a bucket that needs them throws a `CapabilityError`. Load them with [`mysql_tzinfo_to_sql`](https://dev.mysql.com/doc/refman/8.0/en/mysql-tzinfo-to-sql.html). A `datetime()` value outside the range MySQL can convert, from `1970-01-01 00:00:01` UTC up to `2038-01-19` or `3001-01-18` depending on the server, gets a `null` bucket in a zone other than `app.timezone`. That's why buckets are typed as possibly `null` even for a `NOT NULL` column.
+:::
+
+With a table definition, only date columns are accepted, the alias can't reuse a column name, and the result is typed as `DateBucket<'day'> | null`, where `DateBucket` is a `string` that remembers its unit. In a helper that's generic over the table, constrain the column with `DateColumnName` so callers can only pass date columns:
+
+```ts
+import { DB, type DateColumnName, type InferSelect, type TableDefinition } from '@holo-js/db'
+
+function dailyTotals<TTable extends TableDefinition, TColumn extends DateColumnName<InferSelect<TTable>>>(table: TTable, at: TColumn) {
+  return DB.table(table).selectDate('day', at, { as: 'day' }).addSelectCount('total').groupBy('day').get()
+}
+```
+
+### selectDate()
+
+Replace the selection with a date bucket.
+
+```ts
+const months = await DB.table(orders)
+  .selectDate('month', 'created_at', { as: 'month' })
+  .addSelectSum('revenue', 'total')
+  .groupBy('month')
+  .orderBy('month')
+  .get()
+```
+
+### addSelectDate()
+
+Add a date bucket to the existing selection. With no selection yet, the table's columns stay selected, as with `table.*`.
+
+```ts
+const rows = await DB.table(events)
+  .select('channel')
+  .addSelectDate('hour', 'occurred_at', { as: 'hour', timeZone: 'Europe/Paris' })
+  .addSelectCount('total')
+  .groupBy('channel', 'hour')
+  .get()
+```
+
 For subquery columns and raw expressions, see [Joins and Subqueries](/database/query-builder/joins-and-subqueries).
 
 ## Basic where clauses
@@ -1202,7 +1273,7 @@ const nearest = await DB.table('documents')
 
 ### groupBy()
 
-Group rows by one or more columns. Pass several columns to group by each combination.
+Group rows by one or more columns. Pass several columns to group by each combination. A [date bucket](#selecting-date-buckets) alias works here too.
 
 ```ts
 const postsPerUser = await DB.table('posts')

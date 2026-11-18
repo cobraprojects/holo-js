@@ -112,6 +112,8 @@ function requalifyPlanBody(plan: SelectQueryPlan, target: Target, enclosing: rea
         return Object.freeze({ ...item, column: column(item.column) })
       case 'aggregate':
         return item.column === '*' ? item : Object.freeze({ ...item, column: column(item.column) })
+      case 'date-bucket':
+        return Object.freeze({ ...item, column: column(item.column) })
       case 'subquery':
         return Object.freeze({ ...item, query: requalifyPlan(item.query, target, scope) })
       case 'raw':

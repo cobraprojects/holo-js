@@ -8,6 +8,51 @@ export type AvailableTableColumns<TTable extends string | TableDefinition> = TTa
   ? InferSelect<TTable> & QualifiedTableColumns<TTable>
   : Record<string, unknown>
 
+export type DateBucketUnit = 'year' | 'month' | 'day' | 'hour'
+
+declare const dateBucketUnit: unique symbol
+
+export type DateBucket<TUnit extends DateBucketUnit = DateBucketUnit> = string & { readonly [dateBucketUnit]: TUnit }
+
+export type DateColumnName<TColumns extends Record<string, unknown>> = string extends keyof TColumns
+  ? string
+  : { [TColumn in keyof TColumns & string]: [NonNullable<TColumns[TColumn]>] extends [never] ? never : NonNullable<TColumns[TColumn]> extends Date ? TColumn : never }[keyof TColumns & string]
+
+export type DateBucketAlias<TRow extends Record<string, unknown>> = keyof {
+  [TColumn in keyof TRow as TColumn extends string ? string extends TColumn ? never : [NonNullable<TRow[TColumn]>] extends [never] ? never : NonNullable<TRow[TColumn]> extends DateBucket ? TColumn : never : never]: true
+} & string
+
+export type SelectedDateBuckets<TRow extends Record<string, unknown>> = { [TColumn in DateBucketAlias<TRow>]: TRow[TColumn] }
+
+type LiteralKeys<TKey extends PropertyKey> = TKey extends string ? string extends TKey ? never : TKey : TKey
+
+export type UnreplacedDateBuckets<TRow extends Record<string, unknown>, TSelected extends PropertyKey> = {
+  [TColumn in Exclude<DateBucketAlias<TRow>, LiteralKeys<TSelected>>]: TRow[TColumn]
+}
+
+type UnionToIntersection<TUnion> = (TUnion extends unknown ? (value: TUnion) => void : never) extends (value: infer TIntersection) => void ? TIntersection : never
+
+type SingleLiteral<TValue extends string> = string extends TValue
+  ? never
+  : [TValue] extends [UnionToIntersection<TValue>]
+    ? Record<never, never> extends Record<TValue, true> ? never : TValue
+    : never
+
+export type DateBucketAliasName<TAlias extends string, TColumns extends Record<string, unknown>> = [SingleLiteral<TAlias>] extends [never]
+  ? never
+  : string extends keyof TColumns
+    ? TAlias
+    : [TAlias] extends [keyof TColumns] ? never : TAlias
+
+export interface DateBucketOptions<TAlias extends string> {
+  readonly as: TAlias
+  readonly timeZone?: string
+}
+
+export type DateBucketSelectionResult<TAlias extends string, TUnit extends DateBucketUnit> = {
+  [TName in TAlias]: DateBucket<TUnit> | null
+}
+
 export type NullableColumns<TColumns extends Record<string, unknown>> = {
   [TColumn in keyof TColumns]: TColumns[TColumn] | null
 }
