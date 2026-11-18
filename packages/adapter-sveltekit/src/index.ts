@@ -74,23 +74,22 @@ function toSvelteKitErrorStatus(status: number): SvelteKitErrorStatus {
   return status >= 400 && status <= 599 ? status as SvelteKitErrorStatus : 500
 }
 
-const ROUTE_GROUP_SEGMENT = /^\(.+\)$/
-const REST_ROUTE_SEGMENT = /^\[\.\.\.(\w+)(?:=\w+)?\]$/
-const ESCAPED_ROUTE_CHARACTER = /\[([xu])\+([0-9a-f]+)\]/gi
-const ROUTE_PARAMETER = /\[{1,2}(\w+)(?:=\w+)?\]{1,2}/g
+const ROUTE_GROUP_SEGMENT = /^\([^)]+\)$/
+const REST_ROUTE_SEGMENT = /^\[\.\.\.[\w-]+?(?:=[\w-]+)?\]$/
+const ROUTE_SEGMENT_PART = /\[([ux])\+([^\]]+)\]|\[(\[)?(\.\.\.)?([\w-]+?)(?:=([\w-]+))?\]\]?/g
 
 function routeSegmentPath(segment: string, params: Readonly<Record<string, string | undefined>>): string {
-  return segment
-    .replace(ESCAPED_ROUTE_CHARACTER, (_escape, _kind: string, code: string) => String.fromCodePoint(Number.parseInt(code, 16)))
-    .replace(ROUTE_PARAMETER, (_parameter, name: string) => params[name] ?? '')
+  return segment.replace(ROUTE_SEGMENT_PART, (_part, escapeType: string | undefined, escapeCode: string | undefined, _optional, _rest, name: string | undefined) => escapeType
+    ? String.fromCodePoint(...(escapeCode ?? '').split('-').map(codepoint => Number.parseInt(codepoint, 16)))
+    : params[name ?? ''] ?? '')
 }
 
 function firstAppPathSegment(routeId: string, params: Readonly<Record<string, string | undefined>>): string | undefined {
-  for (const segment of routeId.split('/')) {
+  for (const segment of routeId.slice(1).split('/')) {
     if (segment === '' || ROUTE_GROUP_SEGMENT.test(segment)) continue
-    const rest = REST_ROUTE_SEGMENT.exec(segment)
-    const path = rest ? (params[rest[1]!] ?? '').split('/').find(part => part !== '') : routeSegmentPath(segment, params)
-    if (path) return path
+    const path = routeSegmentPath(segment, params)
+    const first = REST_ROUTE_SEGMENT.test(segment) ? path.split('/').find(part => part !== '') : path
+    if (first) return first
   }
   return undefined
 }
@@ -112,7 +111,7 @@ type AcceptedMediaRange = { readonly type: string, readonly subtype: string, rea
 function acceptedMediaRanges(accept: string): readonly AcceptedMediaRange[] {
   return accept.split(',').flatMap((range, index) => {
     const match = /^[ \t]*([^/ \t]+)\/([^; \t]+)[ \t]*(?:;[ \t]*q=([0-9.]+))?/.exec(range)
-    return match ? [{ type: match[1]!.toLowerCase(), subtype: match[2]!.toLowerCase(), quality: Number(match[3] ?? '1'), index }] : []
+    return match ? [{ type: match[1]!, subtype: match[2]!, quality: Number(match[3] ?? '1'), index }] : []
   }).sort((left, right) => right.quality - left.quality
     || Number(left.subtype === '*') - Number(right.subtype === '*')
     || Number(left.type === '*') - Number(right.type === '*')
@@ -122,7 +121,7 @@ function acceptedMediaRanges(accept: string): readonly AcceptedMediaRange[] {
 function svelteKitSelectsEndpoint(event: SvelteKitRequestEvent): boolean {
   const htmlRange = acceptedMediaRanges(event.request.headers.get('accept') ?? '*/*')
     .find(range => (range.type === 'text' || range.type === '*') && (range.subtype === 'html' || range.subtype === '*'))
-  return htmlRange?.type !== 'text'
+  return htmlRange === undefined || (htmlRange.type === '*' && htmlRange.subtype === '*')
 }
 
 function isEndpointRequest(event: SvelteKitRequestEvent): boolean {
