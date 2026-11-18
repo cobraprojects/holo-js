@@ -12,6 +12,18 @@ export type DateBucketStorage = 'calendar' | 'datetime' | 'timestamp'
 
 const MAX_ALIAS_BYTES = 63
 
+export function effectiveOutputName(name: string): string {
+  const bytes = new TextEncoder().encode(name)
+  if (bytes.length <= MAX_ALIAS_BYTES) return name.toLowerCase()
+  let end = MAX_ALIAS_BYTES
+  while (end > 0 && (bytes[end]! & 0xC0) === 0x80) end -= 1
+  return new TextDecoder().decode(bytes.slice(0, end)).toLowerCase()
+}
+
+export function planHasDateBuckets(plan: SelectQueryPlan): boolean {
+  return planDateBuckets(plan).length > 0
+}
+
 export function assertDateBucketAliasLength(alias: string): void {
   if (new TextEncoder().encode(alias).length > MAX_ALIAS_BYTES) {
     throw new SecurityError(`Date bucket alias "${alias}" must be at most ${MAX_ALIAS_BYTES} bytes, the longest name PostgreSQL keeps.`)
@@ -58,14 +70,18 @@ function sameIdentifierFolded(left: string, right: string): boolean {
   return left.toLowerCase() === right.toLowerCase()
 }
 
-function isVisibleAs(qualifier: string, { tableName, alias }: VisibleTable): boolean {
-  if (alias !== undefined) return sameIdentifierFolded(qualifier, alias)
-  return tableName !== undefined && (sameIdentifierFolded(qualifier, tableName) || sameIdentifierFolded(qualifier, splitTablePath(tableName).table))
+type IdentifierMatch = (left: string, right: string) => boolean
+
+const sameIdentifierExactly: IdentifierMatch = (left, right) => left === right
+
+function isVisibleAs(qualifier: string, { tableName, alias }: VisibleTable, matches: IdentifierMatch = sameIdentifierFolded): boolean {
+  if (alias !== undefined) return matches(qualifier, alias)
+  return tableName !== undefined && (matches(qualifier, tableName) || matches(qualifier, splitTablePath(tableName).table))
 }
 
-function columnDefinitionFolded(table: TableDefinition | undefined, name: string): AnyColumnDefinition | undefined {
+function matchingColumnDefinition(table: TableDefinition | undefined, name: string, matches: IdentifierMatch): AnyColumnDefinition | undefined {
   if (!table) return undefined
-  const key = Object.keys(table.columns).find(column => sameIdentifierFolded(column, name))
+  const key = Object.keys(table.columns).find(column => matches(column, name))
   return key === undefined ? undefined : table.columns[key]
 }
 
@@ -90,10 +106,12 @@ function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectio
   const separator = column.lastIndexOf('.')
   const name = column.slice(separator + 1)
   const qualifier = separator === -1 ? undefined : column.slice(0, separator)
-  return visibleTables(plan, connectionName)
-    .filter(table => qualifier === undefined || isVisibleAs(qualifier, table))
-    .map(table => columnDefinitionFolded(table.definition, name))
+  const tables = visibleTables(plan, connectionName)
+  const find = (matches: IdentifierMatch) => tables
+    .filter(table => qualifier === undefined || isVisibleAs(qualifier, table, matches))
+    .map(table => matchingColumnDefinition(table.definition, name, matches))
     .find(definition => definition !== undefined)
+  return find(sameIdentifierExactly) ?? find(sameIdentifierFolded)
 }
 
 export function selectionMayOutputName(

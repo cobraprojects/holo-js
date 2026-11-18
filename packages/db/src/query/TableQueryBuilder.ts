@@ -6,7 +6,7 @@ import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
 import type { QueryDateBucketSelection, QueryRawSelection, QueryRelationKeysPredicate } from './ast'
-import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, columnOwner, selectionMayOutputName } from './dateBuckets'
+import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, columnOwner, planHasDateBuckets, selectionMayOutputName } from './dateBuckets'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -367,7 +367,10 @@ export class TableQueryBuilder<
 
   private async prepareMutation(): Promise<void> {
     await this.bindGeneratedTable()
-    await assertDateBucketTimeZonesConvertible(this.connection, this.plan)
+    if (planHasDateBuckets(this.plan)) {
+      this.getCompiler().compile(this.plan)
+      await assertDateBucketTimeZonesConvertible(this.connection, this.plan)
+    }
     if (!currentRootTransaction(this.connection)?.schemaChanged && (getDatabaseQueryCacheBridge() || hasDatabaseDependencyInvalidationListeners() || hasDatabaseDependencyInvalidationPublisher())) {
       await resolveTableIdentity(this.connection, this.ownSource.tableName)
     }

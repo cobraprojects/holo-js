@@ -209,11 +209,11 @@ export class SQLQueryCompiler {
     const enclosingDateBuckets = this.dateBuckets
     const enclosingDateBucketPlan = this.dateBucketPlan
     const enclosingDateBucketsFolded = this.dateBucketsFolded
-    this.dateBuckets = new Map([...dateBucketSelections(plan)].map(([alias, bucket]) => [alias, { bucket, storage: dateBucketStorage(plan, bucket, this.connectionName) }]))
-    this.dateBucketPlan = plan
-    this.dateBucketsFolded = new Map([...this.dateBuckets].map(([alias, resolved]) => [alias.toLowerCase(), resolved]))
-    assertDateBucketOutputsUnshadowed(plan, this.connectionName)
     try {
+      this.dateBuckets = new Map([...dateBucketSelections(plan)].map(([alias, bucket]) => [alias, { bucket, storage: dateBucketStorage(plan, bucket, this.connectionName) }]))
+      this.dateBucketPlan = plan
+      this.dateBucketsFolded = new Map([...this.dateBuckets].map(([alias, resolved]) => [alias.toLowerCase(), resolved]))
+      assertDateBucketOutputsUnshadowed(plan, this.connectionName)
       return this.compileSelectSqlWithinDateBuckets(plan, bindings, projection)
     } finally {
       this.dateBuckets = enclosingDateBuckets

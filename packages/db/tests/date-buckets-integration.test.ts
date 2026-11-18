@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { CapabilityError, CompilerError, ConfigurationError, DB, DatabaseError, SecurityError, clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB } from '../src'
+import { CapabilityError, CompilerError, ConfigurationError, DB, DatabaseError, SQLiteQueryCompiler, createDeleteQueryPlan, SecurityError, clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB } from '../src'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { integrationDrivers, mysqlIntegration, openDatabase, postgresIntegration, postgresTestConnection } from './support/database'
 
@@ -14,8 +14,8 @@ function useAppTimezone(timezone: string): void {
   })
 }
 
-async function createEventsTable(driver: typeof drivers[number]) {
-  const { schema } = await openDatabase(driver)
+async function createEventsTable(driver: typeof drivers[number], options: Parameters<typeof openDatabase>[1] = {}) {
+  const { schema } = await openDatabase(driver, options)
   const name = `bucket_events_${randomUUID().replaceAll('-', '').slice(0, 12)}`
   onTestFinished(async () => {
     await schema.dropTable(name)
@@ -845,6 +845,27 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect(() => DB.table(events).selectDate('hour', 'occurred_at', { as: 'hour', timeZone: 'PST8PDT' })).toThrow(SecurityError)
   })
 
+  it('rejects another output whose name PostgreSQL would cut to the date bucket alias', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const alias = `b${'u'.repeat(62)}`
+
+    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: alias }).addSelect(`tenant_id as ${alias}x`).get()).rejects.toThrow(SecurityError)
+  })
+
+  it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
+    useAppTimezone('UTC')
+    const { events, facts } = await createFactsTable(driver)
+    const compiler = new SQLiteQueryCompiler(identifier => `"${identifier}"`, () => '?', 'default')
+    const rejected = DB.table(events.tableName)
+      .join(facts, `${facts}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .addSelect(`${facts}.*`)
+
+    expect(() => compiler.compile(rejected.getPlan())).toThrow(SecurityError)
+    expect(compiler.compile(createDeleteQueryPlan(DB.table('orders').where('bucket', 1).getPlan().source, DB.table('orders').where('bucket', 1).getPlan().predicates)).sql).toBe('DELETE FROM "orders" WHERE "bucket" = ?')
+  })
+
   it('rejects a date bucket alias longer than PostgreSQL keeps', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
@@ -1006,6 +1027,29 @@ describe.each(integrationDrivers(['sqlite', 'mysql'] as const))('date buckets be
   })
 })
 
+describe.runIf(mysqlIntegration)('date buckets in mysql mutation subqueries', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('validates a subquery date bucket before probing time zone tables', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('mysql', {
+      wrapAdapter: adapter => new Proxy(adapter, {
+        get(target, property) {
+          if (property !== 'query') return Reflect.get(target, property, target)
+          return (sql: string, bindings: readonly unknown[], options: unknown) => sql.startsWith('SELECT CONVERT_TZ')
+            ? Promise.resolve({ rows: [{ converted: null }], rowCount: 1 })
+            : target.query(sql, bindings, options as never)
+        },
+      }),
+    })
+    const subquery = DB.table(events).selectDate('day', 'occurred_at', { as: `b${'u'.repeat(63)}`, timeZone: 'Asia/Tokyo' })
+
+    await expect(DB.table(events).whereInSub('billed_on', subquery).update({ tenant_id: 9 })).rejects.toThrow(SecurityError)
+  })
+})
+
 describe.runIf(mysqlIntegration)('date buckets in mysql having clauses', () => {
   afterEach(() => {
     resetDB()
@@ -1104,6 +1148,28 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
     })
 
     expect(days).toEqual(['2026-11-04', '2026-11-04'])
+  })
+})
+
+describe.runIf(postgresIntegration)('date buckets on postgres columns that differ only in case', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('reads the column with the exact spelling', async () => {
+    useAppTimezone('UTC')
+    const { db } = await openDatabase('postgres')
+    const name = `bucket_cased_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await createSchemaService(db).dropTable(name)
+    })
+    await db.executeCompiled({ sql: `CREATE TABLE "${name}" (id integer PRIMARY KEY, at date, "At" timestamptz)`, source: 'test' })
+    await db.executeCompiled({ sql: `INSERT INTO "${name}" (id, at, "At") VALUES (1, '2026-11-03', '2026-11-03 23:30:00+00')`, source: 'test' })
+    const cased = defineGeneratedTable(name, { id: column.integer().primaryKey(), at: column.date(), At: column.timestamp() })
+
+    const day = await DB.table(cased).selectDate('day', 'At', { as: 'bucket', timeZone: 'Asia/Tokyo' }).value('bucket')
+
+    expect(day).toBe('2026-11-04')
   })
 })
 

@@ -2,7 +2,7 @@ import { rawSqlPlaceholders } from './rawSql'
 import { SecurityError } from '../core/errors'
 import { dateBucketSelections, isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
 import { storesJson } from '../schema/normalization'
-import { assertDateBucketAliasLength, assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketUnit } from './dateBuckets'
+import { assertDateBucketAliasLength, assertDateBucketSpelling, effectiveOutputName, assertDateBucketTimeZone, assertDateBucketUnit } from './dateBuckets'
 import { tablePathSegments } from '../schema/identifiers'
 import type { TableColumnsShape } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -229,7 +229,11 @@ function selectedOutputName(selection: SelectQueryPlan['selections'][number]): s
 
 function assertUniqueDateBucketOutputs(plan: SelectQueryPlan): void {
   for (const alias of dateBucketSelections(plan).keys()) {
-    if (plan.selections.filter(selection => selectedOutputName(selection)?.toLowerCase() === alias.toLowerCase()).length > 1) {
+    const name = effectiveOutputName(alias)
+    if (plan.selections.filter((selection) => {
+      const output = selectedOutputName(selection)
+      return output !== undefined && effectiveOutputName(output) === name
+    }).length > 1) {
       throw new SecurityError(`Date bucket alias "${alias}" must not be reused by another selected column.`)
     }
   }
