@@ -14,7 +14,7 @@ import {
 } from '../src'
 
 const users = defineGeneratedTable('relation_callback_users', { id: column.id(), name: column.string() })
-const posts = defineGeneratedTable('relation_callback_posts', { id: column.id(), user_id: column.integer(), title: column.string() })
+const posts = defineGeneratedTable('relation_callback_posts', { id: column.id(), user_id: column.integer(), title: column.string(), published_at: column.datetime(), price: column.decimal().nullable() })
 const comments = defineGeneratedTable('relation_callback_comments', { id: column.id(), post_id: column.integer(), body: column.string() })
 
 const Comment = defineModel(comments)
@@ -45,6 +45,115 @@ const Activity = defineModel(users, {
 type CommentQuery = ModelQueryBuilder<typeof comments, typeof Comment.definition.relations>
 type PostQuery = ModelQueryBuilder<typeof posts, typeof Post.definition.relations>
 type UserQuery = ModelQueryBuilder<typeof users, typeof User.definition.relations>
+
+it('infers aggregate attributes alongside eager-loaded relations', async () => {
+  if (false) {
+    const user = await User.with('posts').withCount('posts').orderBy('id').firstOrFail()
+    expectTypeOf(user.posts[0]?.title).toEqualTypeOf<string | undefined>()
+    expectTypeOf(user.toAttributes().posts_count).toEqualTypeOf<number | undefined>()
+    expectTypeOf<ReturnType<typeof user.toAttributes>['posts_count']>().toEqualTypeOf<number | undefined>()
+  }
+})
+
+it('infers counts for constrained and dynamically selected relations', async () => {
+  if (false) {
+    const user = await User.withCount({ posts: query => query.where('title', 'Hello') }).firstOrFail()
+    expectTypeOf(user.toAttributes().posts_count).toEqualTypeOf<number | undefined>()
+
+    async function countSelectedRelations(relations: ('posts' | 'comments')[]) {
+      const activity = await Activity.withCount(...relations).firstOrFail()
+      expectTypeOf(activity.toAttributes().posts_count).toEqualTypeOf<number | undefined>()
+    }
+    void countSelectedRelations
+  }
+})
+
+it('infers aggregate attributes from the operation, related column and alias', async () => {
+  if (false) {
+    const user = await User.withExists('posts')
+      .withSum('posts', 'id')
+      .withAvg('posts', 'id')
+      .withMin({ 'posts AS earliest': query => query.where('title', 'Hello') }, 'published_at')
+      .withMax('posts', 'title')
+      .withAggregate('posts', 'price', 'max')
+      .withAggregate({ 'posts as has_published_posts': query => query.where('title', 'Hello') }, '*', 'exists')
+      .firstOrFail()
+    const attributes = user.toAttributes()
+    expectTypeOf(attributes.posts_exists).toEqualTypeOf<boolean | undefined>()
+    expectTypeOf(attributes.posts_sum_id).toEqualTypeOf<number | undefined>()
+    expectTypeOf(attributes.posts_avg_id).toEqualTypeOf<number | null | undefined>()
+    expectTypeOf(attributes.earliest).toEqualTypeOf<Date | null | undefined>()
+    expectTypeOf(attributes.posts_max_title).toEqualTypeOf<string | null | undefined>()
+    expectTypeOf(attributes.posts_max_price).toEqualTypeOf<number | null | undefined>()
+    expectTypeOf(attributes.has_published_posts).toEqualTypeOf<boolean | undefined>()
+
+    // @ts-expect-error aggregate constraints require a top-level relation
+    User.withAggregate({ missing: () => {} }, '*', 'count')
+  }
+})
+
+it('infers aggregates loaded onto existing models and collections', async () => {
+  if (false) {
+    const user = await User.with('posts').firstOrFail()
+    const counted = await user.loadCount('posts')
+    const loaded = await counted.loadMin('posts', 'title')
+    expectTypeOf(loaded.posts[0]?.title).toEqualTypeOf<string | undefined>()
+    expectTypeOf(loaded.toAttributes().posts_count).toEqualTypeOf<number | undefined>()
+    expectTypeOf(loaded.toAttributes().posts_min_title).toEqualTypeOf<string | null | undefined>()
+
+    const users = await User.withSum('posts', 'id').get()
+    const withExists = await users.loadExists('posts')
+    expectTypeOf(withExists[0]?.toAttributes().posts_exists).toEqualTypeOf<boolean | undefined>()
+    expectTypeOf(withExists[0]?.toAttributes().posts_sum_id).toEqualTypeOf<number | undefined>()
+  }
+})
+
+it('tracks the final value written to an aggregate alias', async () => {
+  if (false) {
+    const user = await User.withCount('posts')
+      .withAggregate('posts as posts_count as ignored', '*', 'exists')
+      .firstOrFail()
+    expectTypeOf(user.toAttributes().posts_count).toEqualTypeOf<boolean | undefined>()
+    const recounted = await user.loadCount('posts')
+    expectTypeOf(recounted.toAttributes().posts_count).toEqualTypeOf<number | undefined>()
+    expectTypeOf(recounted.toAttributes().id).toEqualTypeOf<number>()
+
+    const aliased = await User.withAggregate('posts as name', '*', 'exists').firstOrFail()
+    expectTypeOf(aliased.toAttributes().name).toEqualTypeOf<string | boolean>()
+    expectTypeOf(aliased.toAttributes().id).toEqualTypeOf<number>()
+  }
+})
+
+it('accepts a variable holding either a relation or a constraint map', () => {
+  if (false) {
+    function aggregate(input: 'posts' | { posts: () => void }) {
+      User.withAggregate(input, '*', 'count')
+      User.withAggregate<'posts'>(input, 'id', 'sum')
+    }
+    void aggregate
+
+    function invalidAggregate(input: 'posts' | { posts: number }) {
+      // @ts-expect-error a relation constraint must be a callback
+      User.withAggregate(input, '*', 'count')
+      // @ts-expect-error a relation constraint must be a callback
+      User.withSum(input, 'id')
+    }
+    void invalidAggregate
+
+    Activity.withSum({ posts: query => query.where('title', 'Hello') }, 'id', 'comments')
+  }
+})
+
+it('infers both possible results when the selected aggregate column varies', async () => {
+  if (false) {
+    async function maxOf(column: 'title' | 'id') {
+      const user = await User.withMax({ posts: query => query.where('id', '>', 0) }, column).firstOrFail()
+      expectTypeOf(user.toAttributes().posts_max_title).toEqualTypeOf<string | null | undefined>()
+      expectTypeOf(user.toAttributes().posts_max_id).toEqualTypeOf<number | null | undefined>()
+    }
+    void maxOf
+  }
+})
 
 it('types with(path, callback) against the related model builder', () => {
   if (false) {

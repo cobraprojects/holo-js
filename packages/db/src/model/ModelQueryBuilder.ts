@@ -34,9 +34,8 @@ import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
 import type { EmptyScopeMap, ModelScopeMethods, ModelScopesDefinition } from './types'
 import type {
-  AggregateRelationConstraintMap,
-  AggregateRelatedColumnNameOfKeys,
   EntityWithLoaded,
+  ModelAggregateLoad,
   ModelAttributeKey,
   ModelCastDefinition,
   ModelArithmeticColumnName,
@@ -53,19 +52,19 @@ import type {
   ModelRelationPath,
   ModelSelectableColumn,
   RelatedColumnNameForRelationPath,
-  RelatedColumnNameOfRelation,
   RelationConstraintFor,
   RelationConstraintMapGuarded,
   RelationConstraintRecord,
   RelationNameConstraintRecord,
-  RelationNameConstraintMapGuarded,
   RelationDefinition,
   RelationMap,
   ResolveEagerLoads,
   SerializedEntityWithLoaded,
   ModelUpdatePayload,
+  WithAggregateAttributes,
 } from './types'
 import type { ModelRepository } from './ModelRepository'
+import type { RelationAggregateMethods, RelationAggregateQueryResult } from './relationAggregateTypes'
 
 type BuilderCallback<TBuilder> = (query: TBuilder) => unknown
 type ValueBuilderCallback<TBuilder, TValue> = (query: TBuilder, value: TValue) => unknown
@@ -104,13 +103,6 @@ type EagerLoad = {
 type RelationWithRelatedModel = Extract<RelationDefinition, { kind: 'belongsTo' | 'belongsToMany' | 'morphToMany' | 'morphedByMany' }>
 const BELONGS_TO_RELATION_KINDS: readonly RelationDefinition['kind'][] = ['belongsTo']
 const MANY_TO_MANY_RELATION_KINDS: readonly RelationDefinition['kind'][] = ['belongsToMany', 'morphToMany', 'morphedByMany']
-type AggregateLoad = {
-  relation: string
-  kind: 'count' | 'exists' | 'sum' | 'avg' | 'min' | 'max'
-  constraint?: RelationConstraint
-  column?: string
-  alias?: string
-}
 type TableQueryPredicates<TTable extends TableDefinition> =
   ReturnType<TableQueryBuilder<TTable, Record<string, unknown>>['getPlan']>['predicates']
 
@@ -150,7 +142,7 @@ class ModelQueryBuilderBase<
     private readonly tableQuery: TableQueryBuilder<TTable, Record<string, unknown>>,
     private readonly eagerLoads: readonly EagerLoad[] = [],
     private readonly relationFilters: readonly RelationFilter[] = [],
-    private readonly aggregateLoads: readonly AggregateLoad[] = [],
+    private readonly aggregateLoads: readonly ModelAggregateLoad[] = [],
     private readonly queryCasts: Readonly<Record<string, ModelCastDefinition>> = {},
     private readonly scopePredicates: TableQueryPredicates<TTable> = [],
     private readonly softDeleteMode: 'with' | 'without' | 'only' = 'with',
@@ -1329,31 +1321,23 @@ class ModelQueryBuilderBase<
       : this.whereHas(relation).with(relation)) as ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>, TScopes, TJoinedTables>
   }
 
-  withCount(...relations: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withCount<TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
   withCount(
-    first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>,
+    first?: string | RelationNameConstraintRecord<RelationMap>,
     ...rest: readonly ModelRelationName<TRelations>[]
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+  ): object {
     return this.withAggregateLoads(this.normalizeAggregateLoads('count', first, rest))
   }
 
-  withExists(...relations: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withExists<TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
   withExists(
-    first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>,
+    first?: string | RelationNameConstraintRecord<RelationMap>,
     ...rest: readonly ModelRelationName<TRelations>[]
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+  ): object {
     return this.withAggregateLoads(this.normalizeAggregateLoads('exists', first, rest))
   }
 
-  withAggregate<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: '*', aggregate: 'count' | 'exists'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withAggregate<TKey extends string>(relations: NoInfer<TKey> | AggregateRelationConstraintMap<TRelations, TKey>, column: '*', aggregate: 'count' | 'exists'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withAggregate<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, aggregate: 'sum' | 'avg' | 'min' | 'max'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withAggregate<TKey extends string>(relations: NoInfer<TKey> | AggregateRelationConstraintMap<TRelations, TKey>, column: AggregateRelatedColumnNameOfKeys<TRelations, TKey>, aggregate: 'sum' | 'avg' | 'min' | 'max'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withAggregate(first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>, column: string, aggregate: AggregateLoad['kind']): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+  withAggregate(first: string | RelationNameConstraintRecord<RelationMap>, column: string, aggregate: ModelAggregateLoad['kind']): object {
     if (aggregate !== 'count' && aggregate !== 'exists') {
-      return this.withAggregateLoads(this.normalizeColumnAggregateLoads(aggregate, first, column))
+      return this.withAggregateLoads(this.normalizeAggregateLoads(aggregate, first, [], column))
     }
 
     if (column !== '*') {
@@ -1363,32 +1347,20 @@ class ModelQueryBuilderBase<
     return this.withAggregateLoads(this.normalizeAggregateLoads(aggregate, first))
   }
 
-  withSum<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withSum<TKey extends string>(relations: NoInfer<TKey> | AggregateRelationConstraintMap<TRelations, TKey>, column: AggregateRelatedColumnNameOfKeys<TRelations, TKey>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withSum<TRelationName extends ModelRelationName<TRelations>>(relations: TRelationName | { readonly [K in TRelationName]?: RelationConstraintFor<TRelations, K> }, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withSum(first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>, column: string, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    return this.withAggregateLoads(this.normalizeColumnAggregateLoads('sum', first, column, rest))
+  withSum(first: string | RelationNameConstraintRecord<RelationMap>, column: string, ...rest: readonly ModelRelationName<TRelations>[]): object {
+    return this.withAggregateLoads(this.normalizeAggregateLoads('sum', first, rest, column))
   }
 
-  withAvg<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withAvg<TKey extends string>(relations: NoInfer<TKey> | AggregateRelationConstraintMap<TRelations, TKey>, column: AggregateRelatedColumnNameOfKeys<TRelations, TKey>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withAvg<TRelationName extends ModelRelationName<TRelations>>(relations: TRelationName | { readonly [K in TRelationName]?: RelationConstraintFor<TRelations, K> }, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withAvg(first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>, column: string, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    return this.withAggregateLoads(this.normalizeColumnAggregateLoads('avg', first, column, rest))
+  withAvg(first: string | RelationNameConstraintRecord<RelationMap>, column: string, ...rest: readonly ModelRelationName<TRelations>[]): object {
+    return this.withAggregateLoads(this.normalizeAggregateLoads('avg', first, rest, column))
   }
 
-  withMin<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withMin<TKey extends string>(relations: NoInfer<TKey> | AggregateRelationConstraintMap<TRelations, TKey>, column: AggregateRelatedColumnNameOfKeys<TRelations, TKey>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withMin<TRelationName extends ModelRelationName<TRelations>>(relations: TRelationName | { readonly [K in TRelationName]?: RelationConstraintFor<TRelations, K> }, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withMin(first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>, column: string, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    return this.withAggregateLoads(this.normalizeColumnAggregateLoads('min', first, column, rest))
+  withMin(first: string | RelationNameConstraintRecord<RelationMap>, column: string, ...rest: readonly ModelRelationName<TRelations>[]): object {
+    return this.withAggregateLoads(this.normalizeAggregateLoads('min', first, rest, column))
   }
 
-  withMax<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withMax<TKey extends string>(relations: NoInfer<TKey> | AggregateRelationConstraintMap<TRelations, TKey>, column: AggregateRelatedColumnNameOfKeys<TRelations, TKey>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withMax<TRelationName extends ModelRelationName<TRelations>>(relations: TRelationName | { readonly [K in TRelationName]?: RelationConstraintFor<TRelations, K> }, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
-  withMax(first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>, column: string, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    return this.withAggregateLoads(this.normalizeColumnAggregateLoads('max', first, column, rest))
+  withMax(first: string | RelationNameConstraintRecord<RelationMap>, column: string, ...rest: readonly ModelRelationName<TRelations>[]): object {
+    return this.withAggregateLoads(this.normalizeAggregateLoads('max', first, rest, column))
   }
 
   toSQL() {
@@ -2072,11 +2044,13 @@ class ModelQueryBuilderBase<
     ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
   }
 
-  private withAggregateLoads(specs: readonly AggregateLoad[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    const merged = new Map<string, AggregateLoad>()
+  private withAggregateLoads(specs: readonly ModelAggregateLoad[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+    const merged = new Map<string, ModelAggregateLoad>()
 
     for (const load of [...this.aggregateLoads, ...specs]) {
-      merged.set(`${load.kind}:${load.relation}:${load.column ?? ''}:${load.alias ?? ''}`, load)
+      const key = `${load.kind}:${load.relation}:${load.column ?? ''}:${load.alias ?? ''}`
+      merged.delete(key)
+      merged.set(key, load)
     }
 
     return new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables>(
@@ -2126,30 +2100,23 @@ class ModelQueryBuilderBase<
   }
 
   private normalizeAggregateLoads(
-    kind: AggregateLoad['kind'],
-    first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>,
+    kind: ModelAggregateLoad['kind'],
+    first: string | RelationNameConstraintRecord<RelationMap> | undefined,
     rest: readonly ModelRelationName<TRelations>[] = [],
-  ): readonly AggregateLoad[] {
-    if (typeof first === 'string') {
-      return [first, ...rest].map((relation) => {
-        const parsed = this.parseAggregateRelation(relation)
-        return {
-          relation: parsed.relation,
-          kind,
-          alias: parsed.alias,
-        }
-      })
+    column?: string,
+  ): readonly ModelAggregateLoad[] {
+    if (first === undefined) {
+      return []
     }
-
-    return Object.entries(first).map(([relation, constraint]) => {
-      const parsed = this.parseAggregateRelation(relation)
-      return {
-        relation: parsed.relation,
-        kind,
-        constraint,
-        alias: parsed.alias,
-      }
+    const normalize = (relation: string, constraint?: RelationConstraint): ModelAggregateLoad => ({
+      ...this.parseAggregateRelation(relation),
+      kind,
+      column,
+      constraint,
     })
+    return typeof first === 'string'
+      ? [first, ...rest].map(relation => normalize(relation))
+      : Object.entries(first).map(([relation, constraint]) => normalize(relation, constraint))
   }
 
   private normalizeMorphTypes(
@@ -2316,18 +2283,6 @@ class ModelQueryBuilderBase<
     }
   }
 
-  private normalizeColumnAggregateLoads(
-    kind: Extract<AggregateLoad['kind'], 'sum' | 'avg' | 'min' | 'max'>,
-    first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>,
-    column: string,
-    rest: readonly ModelRelationName<TRelations>[] = [],
-  ): readonly AggregateLoad[] {
-    return this.normalizeAggregateLoads(kind, first, rest).map(load => ({
-      ...load,
-      column,
-    }))
-  }
-
   private parseAggregateRelation(spec: string): { relation: string, alias?: string } {
     const [relationPart, aliasPart] = spec.split(/\s+as\s+/i)
     const relation = relationPart?.trim()
@@ -2486,13 +2441,47 @@ class ModelQueryBuilderBase<
 
 }
 
+interface AggregateBuilderResult<
+  TTable extends TableDefinition,
+  TRelations extends RelationMap,
+  TLoaded,
+  TScopes extends ModelScopesDefinition,
+  TJoinedTables extends string,
+> extends RelationAggregateQueryResult {
+  readonly query: ModelQueryBuilder<TTable, TRelations, WithAggregateAttributes<TLoaded, this['attributes']>, TScopes, TJoinedTables>
+}
+
+type BuilderAggregateMethods<
+  TTable extends TableDefinition,
+  TRelations extends RelationMap,
+  TLoaded,
+  TScopes extends ModelScopesDefinition,
+  TJoinedTables extends string,
+> = RelationAggregateMethods<TRelations, AggregateBuilderResult<TTable, TRelations, TLoaded, TScopes, TJoinedTables>>
+
+declare class ModelQueryBuilderWithAggregates<
+  TTable extends TableDefinition,
+  TRelations extends RelationMap,
+  TLoaded,
+  TScopes extends ModelScopesDefinition,
+  TJoinedTables extends string,
+> extends ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+  withCount: BuilderAggregateMethods<TTable, TRelations, TLoaded, TScopes, TJoinedTables>['withCount']
+  withExists: BuilderAggregateMethods<TTable, TRelations, TLoaded, TScopes, TJoinedTables>['withExists']
+  withSum: BuilderAggregateMethods<TTable, TRelations, TLoaded, TScopes, TJoinedTables>['withSum']
+  withAvg: BuilderAggregateMethods<TTable, TRelations, TLoaded, TScopes, TJoinedTables>['withAvg']
+  withMin: BuilderAggregateMethods<TTable, TRelations, TLoaded, TScopes, TJoinedTables>['withMin']
+  withMax: BuilderAggregateMethods<TTable, TRelations, TLoaded, TScopes, TJoinedTables>['withMax']
+  withAggregate: BuilderAggregateMethods<TTable, TRelations, TLoaded, TScopes, TJoinedTables>['withAggregate']
+}
+
 export type ModelQueryBuilder<
   TTable extends TableDefinition = TableDefinition,
   TRelations extends RelationMap = RelationMap,
   TLoaded = unknown,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TJoinedTables extends string = never,
-> = ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
+> = ModelQueryBuilderWithAggregates<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
   & ModelScopeMethods<TTable, TScopes, TRelations, TLoaded, TJoinedTables>
 
 export interface ModelQueryBuilderConstructor {
@@ -2506,7 +2495,7 @@ export interface ModelQueryBuilderConstructor {
     tableQuery: TableQueryBuilder<TTable, Record<string, unknown>>,
     eagerLoads?: readonly EagerLoad[],
     relationFilters?: readonly RelationFilter[],
-    aggregateLoads?: readonly AggregateLoad[],
+    aggregateLoads?: readonly ModelAggregateLoad[],
     queryCasts?: Readonly<Record<string, ModelCastDefinition>>,
     scopePredicates?: TableQueryPredicates<TTable>,
     softDeleteMode?: 'with' | 'without' | 'only',

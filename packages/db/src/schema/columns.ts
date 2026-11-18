@@ -26,8 +26,8 @@ function resolveExpressionDefault(statement: UnsafeStatement): string {
   return statement.sql
 }
 
-type ColumnMetadata = {
-  kind: LogicalColumnKind
+type ColumnMetadata<TKind extends LogicalColumnKind> = {
+  kind: TKind
   name?: string
   nullable: boolean
   hasDefault: boolean
@@ -67,10 +67,11 @@ export class ColumnBuilder<
   TGenerated extends boolean = false,
   TPrimaryKey extends boolean = false,
   TComputed extends boolean = false,
+  TKind extends LogicalColumnKind = LogicalColumnKind,
 > {
-  private readonly metadata: ColumnMetadata
+  private readonly metadata: ColumnMetadata<TKind>
 
-  constructor(kind: LogicalColumnKind, name?: string, metadata?: Partial<ColumnMetadata>) {
+  constructor(kind: TKind, name?: string, metadata?: Partial<ColumnMetadata<TKind>>) {
     this.metadata = {
       kind,
       name,
@@ -83,15 +84,15 @@ export class ColumnBuilder<
     }
   }
 
-  notNull(): ColumnBuilder<TType, false, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  notNull(): ColumnBuilder<TType, false, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.clone({ nullable: false, explicitNotNull: true })
   }
 
-  nullable(): ColumnBuilder<TType, true, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  nullable(): ColumnBuilder<TType, true, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.clone({ nullable: true, explicitNotNull: undefined })
   }
 
-  default(value: unknown): ColumnBuilder<TType, TNullable, true, TGenerated, TPrimaryKey, TComputed> {
+  default(value: unknown): ColumnBuilder<TType, TNullable, true, TGenerated, TPrimaryKey, TComputed, TKind> {
     if (isUnsafeSqlStatement(value)) {
       return this.clone({
         hasDefault: true,
@@ -107,7 +108,7 @@ export class ColumnBuilder<
     })
   }
 
-  defaultNow(): ColumnBuilder<TType, TNullable, true, TGenerated, TPrimaryKey, TComputed> {
+  defaultNow(): ColumnBuilder<TType, TNullable, true, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.clone({
       hasDefault: true,
       defaultKind: 'now',
@@ -115,15 +116,15 @@ export class ColumnBuilder<
     })
   }
 
-  primaryKey(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, true, TComputed> {
+  primaryKey(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, true, TComputed, TKind> {
     return this.clone({ primaryKey: true })
   }
 
-  unique(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  unique(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.clone({ unique: true })
   }
 
-  references(columnName: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  references(columnName: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     assertValidIdentifierSegment(columnName, 'Foreign key column')
 
     return this.clone({
@@ -131,7 +132,7 @@ export class ColumnBuilder<
     })
   }
 
-  on(table: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  on(table: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     assertValidTablePath(table, 'Foreign key table')
 
     return this.clone({
@@ -140,7 +141,7 @@ export class ColumnBuilder<
     })
   }
 
-  constraintName(name: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  constraintName(name: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     assertValidIdentifierSegment(name, 'Foreign key name')
 
     return this.clone({
@@ -151,7 +152,7 @@ export class ColumnBuilder<
   constrained(
     table?: string,
     columnName = 'id',
-  ): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  ): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     if (table) {
       assertValidTablePath(table, 'Foreign key table')
     }
@@ -164,59 +165,59 @@ export class ColumnBuilder<
     })
   }
 
-  onDelete(action: NonNullable<ForeignKeyReference['onDelete']>): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  onDelete(action: NonNullable<ForeignKeyReference['onDelete']>): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.clone({
       referenceOnDelete: action,
     })
   }
 
-  onUpdate(action: NonNullable<ForeignKeyReference['onUpdate']>): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  onUpdate(action: NonNullable<ForeignKeyReference['onUpdate']>): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.clone({
       referenceOnUpdate: action,
     })
   }
 
-  cascadeOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  cascadeOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.onDelete('cascade')
   }
 
-  restrictOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  restrictOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.onDelete('restrict')
   }
 
-  nullOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  nullOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.onDelete('set null')
   }
 
-  noActionOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  noActionOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.onDelete('no action')
   }
 
-  cascadeOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  cascadeOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.onUpdate('cascade')
   }
 
-  restrictOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  restrictOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.onUpdate('restrict')
   }
 
-  nullOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  nullOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.onUpdate('set null')
   }
 
-  noActionOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  noActionOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     return this.onUpdate('no action')
   }
 
-  storedAs(expression: string): ColumnBuilder<TType, TNullable, THasDefault, true, TPrimaryKey, true> {
+  storedAs(expression: string): ColumnBuilder<TType, TNullable, THasDefault, true, TPrimaryKey, true, TKind> {
     return this.clone({ generated: true, computed: { expression, stored: true } })
   }
 
-  virtualAs(expression: string): ColumnBuilder<TType, TNullable, THasDefault, true, TPrimaryKey, true> {
+  virtualAs(expression: string): ColumnBuilder<TType, TNullable, THasDefault, true, TPrimaryKey, true, TKind> {
     return this.clone({ generated: true, computed: { expression, stored: false } })
   }
 
-  toDefinition(options: ColumnBuildOptions): ColumnDefinition<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+  toDefinition(options: ColumnBuildOptions): ColumnDefinition<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TKind> {
     assertValidIdentifierSegment(options.name, 'Column name')
 
     const resolvedName = this.metadata.name ?? options.name
@@ -272,9 +273,9 @@ export class ColumnBuilder<
     TNextPrimaryKey extends boolean = TPrimaryKey,
     TNextComputed extends boolean = TComputed,
   >(
-    metadata: Partial<ColumnMetadata>,
-  ): ColumnBuilder<TType, TNextNullable, TNextHasDefault, TNextGenerated, TNextPrimaryKey, TNextComputed> {
-    return new ColumnBuilder<TType, TNextNullable, TNextHasDefault, TNextGenerated, TNextPrimaryKey, TNextComputed>(
+    metadata: Partial<ColumnMetadata<TKind>>,
+  ): ColumnBuilder<TType, TNextNullable, TNextHasDefault, TNextGenerated, TNextPrimaryKey, TNextComputed, TKind> {
+    return new ColumnBuilder<TType, TNextNullable, TNextHasDefault, TNextGenerated, TNextPrimaryKey, TNextComputed, TKind>(
       this.metadata.kind,
       metadata.name ?? this.metadata.name,
       {
@@ -287,99 +288,100 @@ export class ColumnBuilder<
 
 function scalar<
   TType,
+  TKind extends LogicalColumnKind,
   TNullable extends boolean = false,
   THasDefault extends boolean = false,
   TGenerated extends boolean = false,
   TPrimaryKey extends boolean = false,
 >(
-  kind: LogicalColumnKind,
+  kind: TKind,
   name?: string,
-  metadata?: Partial<ColumnMetadata>,
-): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
-  return new ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey>(kind, name, metadata)
+  metadata?: Partial<ColumnMetadata<TKind>>,
+): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, false, TKind> {
+  return new ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, false, TKind>(kind, name, metadata)
 }
 
 export const column = {
   id(name?: string) {
-    return scalar<number, false, false, true, true>('id', name, {
+    return scalar<number, 'id', false, false, true, true>('id', name, {
       idStrategy: 'autoIncrement',
       primaryKey: true,
       generated: true,
     })
   },
   autoIncrementId(name?: string) {
-    return scalar<number, false, false, true, true>('id', name, {
+    return scalar<number, 'id', false, false, true, true>('id', name, {
       idStrategy: 'autoIncrement',
       primaryKey: true,
       generated: true,
     })
   },
   integer(name?: string) {
-    return scalar<number>('integer', name)
+    return scalar<number, 'integer'>('integer', name)
   },
   bigInteger(name?: string) {
-    return scalar<number>('bigInteger', name)
+    return scalar<number, 'bigInteger'>('bigInteger', name)
   },
   string(name?: string) {
-    return scalar<string>('string', name)
+    return scalar<string, 'string'>('string', name)
   },
   text(name?: string) {
-    return scalar<string>('text', name)
+    return scalar<string, 'text'>('text', name)
   },
   boolean(name?: string) {
-    return scalar<boolean>('boolean', name)
+    return scalar<boolean, 'boolean'>('boolean', name)
   },
   real(name?: string) {
-    return scalar<number>('real', name)
+    return scalar<number, 'real'>('real', name)
   },
   decimal(name?: string, total?: number, places?: number) {
-    return new ColumnBuilder<string>('decimal', name, total === undefined && places === undefined
+    return scalar<string, 'decimal'>('decimal', name, total === undefined && places === undefined
       ? {}
       : { decimalTotal: total ?? 8, decimalPlaces: places ?? 2 })
   },
   date(name?: string) {
-    return scalar<Date>('date', name)
+    return scalar<Date, 'date'>('date', name)
   },
   datetime(name?: string) {
-    return scalar<Date>('datetime', name)
+    return scalar<Date, 'datetime'>('datetime', name)
   },
   timestamp(name?: string) {
-    return scalar<Date>('timestamp', name)
+    return scalar<Date, 'timestamp'>('timestamp', name)
   },
   json<TValue = unknown>(name?: string) {
-    return scalar<TValue>('json', name)
+    return scalar<TValue, 'json'>('json', name)
   },
   blob(name?: string) {
-    return scalar<Uint8Array>('blob', name)
+    return scalar<Uint8Array, 'blob'>('blob', name)
   },
   uuid(name?: string) {
-    return scalar<string>('uuid', name)
+    return scalar<string, 'uuid'>('uuid', name)
   },
   ulid(name?: string) {
-    return scalar<string>('ulid', name)
+    return scalar<string, 'ulid'>('ulid', name)
   },
   snowflake(name?: string) {
-    return scalar<string>('snowflake', name, { idStrategy: 'snowflake' })
+    return scalar<string, 'snowflake'>('snowflake', name, { idStrategy: 'snowflake' })
   },
   foreignId(name?: string) {
-    return scalar<number>('bigInteger', name)
+    return scalar<number, 'bigInteger'>('bigInteger', name)
   },
   foreignUuid(name?: string) {
-    return scalar<string>('uuid', name)
+    return scalar<string, 'uuid'>('uuid', name)
   },
   foreignUlid(name?: string) {
-    return scalar<string>('ulid', name)
+    return scalar<string, 'ulid'>('ulid', name)
   },
   foreignSnowflake(name?: string) {
-    return scalar<string>('snowflake', name, { idStrategy: 'snowflake' })
+    return scalar<string, 'snowflake'>('snowflake', name, { idStrategy: 'snowflake' })
   },
   vector(options: VectorOptions, name?: string) {
-    return scalar<VectorValue>('vector', name, {
+    return scalar<VectorValue, 'vector'>('vector', name, {
       vectorDimensions: options.dimensions,
     })
   },
   enum<const TValues extends readonly string[]>(values: TValues, name?: string) {
-    return scalar<TValues[number]>('enum', name, {
+    return scalar<TValues[number], 'enum'>('enum', name, {
       enumValues: values,
     })
   },

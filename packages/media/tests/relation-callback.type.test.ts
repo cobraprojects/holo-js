@@ -44,6 +44,22 @@ const Activity = defineMediaModel(defineModel(users, {
 type CommentQuery = ModelQueryBuilder<typeof comments, typeof Comment.definition.relations>
 type PostQuery = ModelQueryBuilder<typeof posts, typeof Post.definition.relations>
 
+it('keeps inferred relation aggregates and media methods on the same query result', async () => {
+  if (false) {
+    const user = await User.with('posts')
+      .withCount('posts')
+      .withMax({ 'posts as latest_title': query => query.where('id', '>', 0) }, 'title')
+      .withAggregate('posts', '*', 'exists')
+      .firstOrFail()
+    const attributes = user.toAttributes()
+    expectTypeOf(attributes.posts_count).toEqualTypeOf<number | undefined>()
+    expectTypeOf(attributes.latest_title).toEqualTypeOf<string | null | undefined>()
+    expectTypeOf(attributes.posts_exists).toEqualTypeOf<boolean | undefined>()
+    expectTypeOf(user.posts[0]?.title).toEqualTypeOf<string | undefined>()
+    expectTypeOf(user.hasMedia()).toEqualTypeOf<Promise<boolean>>()
+  }
+})
+
 it('types with(path, callback) against the related media model builder', () => {
   if (false) {
     User.with('posts', (query) => {

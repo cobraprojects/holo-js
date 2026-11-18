@@ -504,20 +504,78 @@ type FirstAggregateWord<TValue extends string, TWord extends string = ''>
       : FirstAggregateWord<TRest, `${TWord}${TChar}`>
     : [TWord, '']
 
-type AggregateKeyParts<TKey extends string>
-  = TrimAggregateStart<TrimAggregateEnd<TKey>> extends infer TTrimmed extends string
+type FirstAggregateAlias<TValue extends string, TAlias extends string = ''>
+  = TValue extends `${AggregateWhitespace}${'as' | 'AS' | 'As' | 'aS'}${AggregateWhitespace}${string}` ? TrimAggregateEnd<TAlias>
+    : TValue extends `${infer TChar}${infer TRest}` ? FirstAggregateAlias<TRest, `${TAlias}${TChar}`>
+      : `${TAlias}${TValue}`
+
+export type AggregateKeyParts<TKey extends string>
+  = TrimAggregateStart<TKey> extends infer TTrimmed extends string
     ? FirstAggregateWord<TTrimmed> extends [infer TRelation extends string, infer TRest extends string]
       ? FirstAggregateWord<TrimAggregateStart<TRest>> extends [infer TKeyword extends string, infer TTail extends string]
         ? Lowercase<TKeyword> extends 'as'
-          ? TrimAggregateStart<TTail> extends infer TAlias extends string
+          ? TrimAggregateEnd<FirstAggregateAlias<TrimAggregateStart<TTail>>> extends infer TAlias extends string
             ? TAlias extends ''
-              ? { readonly relation: TTrimmed }
+              ? { readonly relation: TrimAggregateEnd<TTrimmed> }
               : { readonly relation: TRelation, readonly alias: TAlias }
             : never
-          : { readonly relation: TTrimmed }
+          : { readonly relation: TrimAggregateEnd<TTrimmed> }
         : never
       : never
     : never
+
+declare const aggregateAttributes: unique symbol
+
+type AggregateState<TAttributes> = {
+  readonly [aggregateAttributes]: () => TAttributes
+}
+
+type AggregateAttributes<TLoaded>
+  = TLoaded extends AggregateState<infer TAttributes> ? TAttributes : unknown
+
+type MergeAggregateAttributes<TPrevious, TNext>
+  = TPrevious extends unknown
+    ? TNext extends object ? {
+        [K in keyof TPrevious | keyof TNext]: K extends keyof TNext
+          ? K extends keyof TPrevious
+            ? object extends Pick<TNext, K> ? TPrevious[K] | TNext[K] : TNext[K]
+            : TNext[K]
+          : K extends keyof TPrevious ? TPrevious[K] : never
+      } : TPrevious
+    : never
+
+type AggregateAttributeKeys<TAttributes> = TAttributes extends unknown ? keyof TAttributes : never
+
+type OptionalAggregateAttributes<TAttributes> = {
+  readonly [K in AggregateAttributeKeys<TAttributes>]?: TAttributes extends Record<K, infer TValue> ? TValue
+    : K extends keyof TAttributes ? TAttributes[K] : never
+}
+
+export type WithAggregateAttributes<TLoaded, TAttributes>
+  = LoadedRelations<TLoaded> & AggregateState<MergeAggregateAttributes<AggregateAttributes<TLoaded>, TAttributes>>
+
+type ModelAttributesWithAggregates<TRecord, TAttributes>
+  = {
+      [K in keyof TRecord]: K extends keyof TAttributes ? TRecord[K] | Exclude<TAttributes[K], undefined> : TRecord[K]
+    } & Omit<TAttributes, string extends keyof TRecord ? never : keyof TRecord>
+
+export type ModelAttributeSnapshot<TTable extends TableDefinition, TModel>
+  = TModel extends AggregateState<infer TAttributes>
+    ? ModelAttributesWithAggregates<ModelRecord<TTable>, OptionalAggregateAttributes<TAttributes>>
+    : ModelRecord<TTable>
+
+type AggregateStateIfPresent<TAttributes>
+  = [AggregateAttributeKeys<TAttributes>] extends [never]
+    ? unknown
+    : AggregateState<TAttributes>
+
+export type ModelWithAggregateAttributes<TModel, TAttributes>
+  = TModel extends { toAttributes(): object }
+    ? TModel & AggregateStateIfPresent<MergeAggregateAttributes<AggregateAttributes<TModel>, TAttributes>>
+    : TModel
+
+type LoadedRelations<TLoaded>
+  = typeof aggregateAttributes extends keyof TLoaded ? Omit<TLoaded, typeof aggregateAttributes> : TLoaded
 
 export type AggregateRelationName<TKey extends string>
   = TKey extends string
@@ -795,7 +853,7 @@ export type SerializeLoaded<TLoaded>
 export type SerializedEntityWithLoaded<
   TTable extends TableDefinition,
   TLoaded,
-> = ModelRecord<TTable> & SerializeLoaded<TLoaded>
+> = ModelRecord<TTable> & SerializeLoaded<LoadedRelations<TLoaded>>
 
 /**
  * The entity type returned by terminal query methods when eager loads
@@ -807,9 +865,9 @@ export type EntityWithLoaded<
   TLoaded,
 > = ModelBase<TTable, TRelations>
   & Omit<ModelRelationMethods<TRelations>, Extract<keyof TLoaded, string>>
-  & TLoaded & {
-  toJSON(): SerializedEntityWithLoaded<TTable, TLoaded>
-}
+  & LoadedRelations<TLoaded>
+  & { toJSON(): SerializedEntityWithLoaded<TTable, TLoaded> }
+  & AggregateStateIfPresent<AggregateAttributes<TLoaded>>
 
 export type PivotTableOfRelation<TRelation>
   = TRelation extends { readonly pivotTable: infer TPivotTable extends string | TableDefinition }
@@ -902,7 +960,7 @@ type CastValue<TCastName, TColumnValue>
 
 type CastedColumn<TColumn extends AnyColumnDefinition, TCast>
   = TColumn extends ColumnDefinition<infer TValue, infer TNullable, infer THasDefault, infer TGenerated, infer TPrimaryKey, infer TComputed>
-    ? ColumnDefinition<CastValue<BuiltInCastNameOf<TCast>, TValue>, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed>
+    ? ColumnDefinition<CastValue<BuiltInCastNameOf<TCast>, TValue>, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed, TColumn['kind']>
     : never
 
 type CastedColumns<TColumns extends TableColumnsShape, TCasts extends ModelCastMap> = {

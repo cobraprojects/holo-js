@@ -18,11 +18,13 @@ test('app source edits and generated files stay inside each journey fixture', as
   }
   await writeFile(join(source, 'job.ts'), 'original job')
   await writeFile(join(source, '.next/stale'), 'stale output')
+  await writeFile(join(source, 'tsconfig.tsbuildinfo'), 'stale build info')
   await writeFile(join(source, 'app/storage/route.ts'), 'storage route')
   const first = await createExampleAppFixture(root, 'next')
   context.after(() => rm(first.directory, { recursive: true, force: true }))
   await writeFile(join(first.projectRoot, 'job.ts'), 'changed job')
   await assert.rejects(readFile(join(first.projectRoot, '.next/stale')), { code: 'ENOENT' })
+  await assert.rejects(readFile(join(first.projectRoot, 'tsconfig.tsbuildinfo')), { code: 'ENOENT' })
   assert.equal(await readFile(join(first.projectRoot, 'app/storage/route.ts'), 'utf8'), 'storage route')
   const second = await createExampleAppFixture(root, 'next')
   context.after(() => rm(second.directory, { recursive: true, force: true }))
