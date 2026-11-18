@@ -1,7 +1,9 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder, selectStoredText, whereStoredValuesDiffer, whereStoredValuesIn } from '../query/TableQueryBuilder'
-import { normalizeDateColumnPredicateValue, normalizeQueryWriteValue } from '../query/queryValueNormalizer'
+import { normalizeQueryWriteValue } from '../query/queryValueNormalizer'
+import { formatCalendarDate } from '../applicationTime'
+import { getApplicationTimezone } from '../applicationTimezone'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { assertQueryTablePath } from '../query/validator'
 import { normalizeDialectWriteValue, parseStoredDate, storesDate } from '../schema/normalization'
@@ -32,6 +34,7 @@ type PivotQuery = TableQueryBuilder<string | TableDefinition>
 const bindingBudget = 900
 const storedKeyTextAlias = 'holo_stored_key_text'
 const FRACTION_DIGITS = /\d{2}:\d{2}:\d{2}\.(\d+)/
+const CALENDAR_DATE = /^\d{4,}-\d{2}-\d{2}$/
 
 function bindableId(id: unknown): unknown {
   return ArrayBuffer.isView(id) && !(id instanceof Uint8Array) ? new Uint8Array(id.buffer, id.byteOffset, id.byteLength) : id
@@ -229,13 +232,17 @@ export class PivotMutation {
   }
 
   private incomingKeyIdentity(value: unknown): unknown {
-    if (this.dateKeyColumn()?.kind === 'date') return this.calendarDayIdentity(value)
+    if (this.dateKeyColumn()?.kind === 'date') return this.calendarDayIdentity(this.writeKey(value))
     const written = this.writeKey(value)
     return this.readsStoredKeyText() ? this.instantIdentity(written, written) : this.keyIdentity(this.readKey(written))
   }
 
   private calendarDayIdentity(value: unknown): unknown {
-    return this.keyIdentity(normalizeDateColumnPredicateValue(this.tableDefinition(), this.context.dialect, this.context.relatedColumn, value, '=').value)
+    if (typeof value === 'string' && CALENDAR_DATE.test(value)) return `day:${value}`
+    const instant = parseStoredDate(this.context.dialect, value)
+    return instant instanceof Date && !Number.isNaN(instant.getTime())
+      ? `day:${formatCalendarDate(instant, getApplicationTimezone())}`
+      : this.keyIdentity(value)
   }
 
   private instantIdentity(value: unknown, text: unknown): unknown {

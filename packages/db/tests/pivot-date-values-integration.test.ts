@@ -194,6 +194,20 @@ describe.each(integrationDrivers(['sqlite']))('pivot rows keyed by a SQLite cale
   })
 })
 
+describe.each(drivers)('pivot rows keyed by a calendar date on %s', (driver) => {
+  it('matches a day key given as a Date or as text for that day', async () => {
+    const { owner, ownerDays } = await openPivots(driver)
+    await owner.attach('days', new Date('2026-01-01T00:00:00Z'), { note: 'attached' })
+
+    expect(await owner.updateExistingPivot('days', '2026-01-01 00:00:00' as never, { note: 'wall clock' })).toBe(1)
+    expect(await owner.updateExistingPivot('days', '2026-01-01T00:00:00Z' as never, { note: 'iso' })).toBe(1)
+    expect(await owner.sync('days', ['2026-01-01' as never])).toEqual({ attached: [], detached: [], updated: [] })
+    expect(await DB.table(ownerDays).pluck('note')).toEqual(['iso'])
+    expect(await owner.detach('days', '2026-01-01 00:00:00' as never)).toBe(1)
+    expect(await DB.table(ownerDays).count()).toBe(0)
+  })
+})
+
 describe.each(drivers)('pivot keys given with more precision than the database keeps on %s', (driver) => {
   it('attaches a key once and detaches it by the same value', async () => {
     const { owner, ownerSlots } = await openPivots(driver)
