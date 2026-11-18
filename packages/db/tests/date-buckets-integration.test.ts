@@ -1252,6 +1252,22 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     await expect(DB.table(events.tableName).selectDate('day', 'tenant_id', { as: 'day' }).orderBy('Day').get()).rejects.toThrow(CompilerError)
   })
 
+  it('buckets an unqualified column that only a joined table defines', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const labels = await createLabelsTable()
+    registerGeneratedTables({ events, labels })
+    await fillLabelsTable(labels)
+
+    const days = await DB.table(events)
+      .join(labels.tableName, `${labels.tableName}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', 'at', { as: 'bucket', timeZone: 'UTC' })
+      .orderBy('bucket')
+      .pluck('bucket')
+
+    expect(days).toEqual(['2026-11-01', '2026-11-03'])
+  })
+
   it('needs a date, datetime or timestamp column it can identify', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)

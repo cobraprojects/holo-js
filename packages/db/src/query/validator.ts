@@ -212,7 +212,7 @@ function assertDateBucketSelection(
   allowedColumns?: Set<string>,
 ): void {
   assertDateBucketUnit(selection.unit)
-  assertColumnReference(selection.column, tableName, allowedColumns)
+  assertColumnReference(selection.column, tableName)
   assertIdentifier(selection.alias, 'Selection alias')
   assertDateBucketAliasLength(selection.alias)
   if (allowedColumns?.has(selection.alias)) {
