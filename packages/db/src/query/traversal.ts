@@ -5,7 +5,7 @@ import type { TableDefinition } from '../schema/types'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from './chunkOrdering'
 import { selectionOutputName } from './modelRowProjection'
 import { resultColumnDefinition, withResolvedDefinitions } from './resultColumns'
-import type { QueryDirection } from './ast'
+import { dateBucketSelections, type QueryDirection } from './ast'
 import type { TableQueryBuilder } from './TableQueryBuilder'
 import type { CursorPaginatedResult } from './types'
 
@@ -99,7 +99,9 @@ export async function* queryBatches<
       ...Object.keys(table?.columns ?? {}),
       ...plan.selections.map(selection => selection.kind === 'column' ? selection.alias ?? selection.column.split('.').at(-1) : 'alias' in selection ? selection.alias : undefined),
     ])
+    const dateBuckets = dateBucketSelections(plan)
     for (const cursorColumn of cursorColumns) {
+      if (dateBuckets.has(cursorColumn)) continue
       let alias = `__holo_chunk_${suffix}_${hiddenColumns.length}`
       while (selectedNames.has(alias)) alias += '_'
       hiddenColumns.push(alias)

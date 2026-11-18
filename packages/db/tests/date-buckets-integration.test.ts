@@ -1,0 +1,335 @@
+import { randomUUID } from 'node:crypto'
+import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
+import { describe, expect, it, onTestFinished } from 'vitest'
+import { CapabilityError, ConfigurationError, DB, SecurityError, clearGeneratedTables, column, defineGeneratedTable, registerGeneratedTables } from '../src'
+import { integrationDrivers, mysqlIntegration, openDatabase, postgresIntegration } from './support/database'
+
+const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)
+
+function useAppTimezone(timezone: string): void {
+  configureConfigRuntime({ app: { timezone } } as never)
+  onTestFinished(() => {
+    resetConfigRuntime()
+  })
+}
+
+async function createEvents(driver: typeof drivers[number], options: Parameters<typeof openDatabase>[1] = {}) {
+  const { schema } = await openDatabase(driver, options)
+  const name = `bucket_events_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+  onTestFinished(async () => {
+    await schema.dropTable(name)
+  })
+  await schema.createTable(name, (table) => {
+    table.id()
+    table.integer('tenant_id')
+    table.datetime('occurred_at').nullable()
+    table.timestamp('seen_at').nullable()
+    table.date('billed_on').nullable()
+  })
+  const events = defineGeneratedTable(name, {
+    id: column.id(),
+    tenant_id: column.integer(),
+    occurred_at: column.datetime().nullable(),
+    seen_at: column.timestamp().nullable(),
+    billed_on: column.date().nullable(),
+  })
+  registerGeneratedTables({ events })
+  onTestFinished(() => clearGeneratedTables())
+  const at = (iso: string) => ({ occurred_at: new Date(iso), seen_at: new Date(iso) })
+  await DB.table(events).insert([
+    { tenant_id: 1, ...at('2026-11-03T10:00:00Z'), billed_on: '2026-11-03' },
+    { tenant_id: 1, ...at('2026-11-03T23:30:00Z'), billed_on: '2026-11-03' },
+    { tenant_id: 1, ...at('2026-11-04T01:00:00Z'), billed_on: '2026-11-04' },
+    { tenant_id: 2, ...at('2026-11-04T12:00:00Z'), billed_on: '2026-11-04' },
+    { tenant_id: 1, ...at('2026-12-31T23:59:00Z'), billed_on: '2026-12-31' },
+    { tenant_id: 1, occurred_at: null, seen_at: null, billed_on: null },
+  ])
+  return events
+}
+
+describe.each(drivers)('date buckets on %s', (driver) => {
+  it('selects each unit as a zero-padded string', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+
+    const row = await DB.table(events)
+      .where('id', 3)
+      .selectDate('year', 'occurred_at', { as: 'year', timeZone: 'UTC' })
+      .addSelectDate('month', 'occurred_at', { as: 'month', timeZone: 'UTC' })
+      .addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .addSelectDate('hour', 'occurred_at', { as: 'hour', timeZone: 'UTC' })
+      .first()
+
+    expect(row).toEqual({ year: '2026', month: '2026-11', day: '2026-11-04', hour: '2026-11-04 01:00' })
+  })
+
+  it.each(['occurred_at', 'seen_at'] as const)('converts %s to the requested time zone before taking the day', async (at) => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const day = (timeZone: string) => DB.table(events).where('id', 2).selectDate('day', at, { as: 'day', timeZone }).value('day')
+
+    expect(await day('UTC')).toBe('2026-11-03')
+    expect(await day('Asia/Tokyo')).toBe('2026-11-04')
+    expect(await day('America/New_York')).toBe('2026-11-03')
+  })
+
+  it('takes the day in app.timezone when no time zone is given', async () => {
+    useAppTimezone('Asia/Tokyo')
+    const events = await createEvents(driver)
+
+    expect(await DB.table(events).where('id', 2).selectDate('day', 'occurred_at', { as: 'day' }).value('day')).toBe('2026-11-04')
+  })
+
+  it('keeps the calendar day of a date column in every time zone', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+
+    expect(await DB.table(events).where('id', 2).selectDate('day', 'billed_on', { as: 'day', timeZone: 'Asia/Tokyo' }).value('day')).toBe('2026-11-03')
+  })
+
+  it('returns a null bucket for a null date', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+
+    expect(await DB.table(events).where('id', 6).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).value('day')).toBeNull()
+  })
+
+  it('groups, filters and orders per-day totals newest first', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+
+    const rows = await DB.table(events)
+      .whereNotNull('occurred_at')
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .addSelectCount('total')
+      .groupBy('day')
+      .having('day', '<', '2026-12-01')
+      .orderByDesc('day')
+      .get()
+
+    expect(rows).toEqual([{ day: '2026-11-04', total: 2 }, { day: '2026-11-03', total: 2 }])
+  })
+
+  it('counts and paginates groups of days', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const perDay = () => DB.table(events).whereNotNull('occurred_at').selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).addSelectCount('total').groupBy('day').orderBy('day')
+
+    const page = await perDay().paginate(2, 2)
+
+    expect(await perDay().count()).toBe(3)
+    expect(page.meta.total).toBe(3)
+    expect(page.data).toEqual([{ day: '2026-12-31', total: 1 }])
+  })
+
+  it('cursor-paginates per-day totals newest first, forward and back', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const perDay = (cursor: string | null) => DB.table(events).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).addSelectCount('total').groupBy('day').orderByDesc('day').cursorPaginate(2, cursor)
+
+    const first = await perDay(null)
+    const second = await perDay(first.nextCursor)
+    const back = await perDay(second.prevCursor)
+
+    expect([...first.data, ...second.data].map(row => row.day)).toEqual(driver === 'postgres'
+      ? [null, '2026-12-31', '2026-11-04', '2026-11-03']
+      : ['2026-12-31', '2026-11-04', '2026-11-03', null])
+    expect(second.nextCursor).toBeNull()
+    expect(back.data).toEqual(first.data)
+  })
+
+  it('cursor-paginates rows by a date bucket and the primary key', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const page = (cursor: string | null) => DB.table(events).whereNotNull('occurred_at').select('id').addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).orderBy('day').cursorPaginate(2, cursor)
+
+    const first = await page(null)
+    const second = await page(first.nextCursor)
+    const third = await page(second.nextCursor)
+
+    expect([...first.data, ...second.data, ...third.data].map(row => row.id)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('binds a having() filter on the first query of a union before the union', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const daysOf = (tenantId: number) => DB.table(events).where('tenant_id', tenantId).whereNotNull('occurred_at').selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).groupBy('day')
+
+    const rows = await daysOf(1).having('day', '<', '2026-12-01').unionAll(daysOf(2)).orderBy('day').get()
+
+    expect(rows.map(row => row.day)).toEqual(['2026-11-03', '2026-11-04', '2026-11-04'])
+  })
+
+  it('cursor-paginates a union by its date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const daysOf = (tenantId: number) => DB.table(events).where('tenant_id', tenantId).whereNotNull('occurred_at').select('tenant_id').addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).addSelectCount('total').groupBy('tenant_id', 'day')
+    const page = (cursor: string | null) => daysOf(1).unionAll(daysOf(2)).orderBy('day').orderBy('tenant_id').cursorPaginate(2, cursor)
+
+    const first = await page(null)
+    const second = await page(first.nextCursor)
+
+    expect([...first.data, ...second.data]).toEqual([
+      { tenant_id: 1, day: '2026-11-03', total: 2 },
+      { tenant_id: 1, day: '2026-11-04', total: 1 },
+      { tenant_id: 2, day: '2026-11-04', total: 1 },
+      { tenant_id: 1, day: '2026-12-31', total: 1 },
+    ])
+  })
+
+  it('rejects an alias that names a column of the query', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+
+    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'billed_on', timeZone: 'UTC' }).get()).rejects.toThrow(SecurityError)
+  })
+
+  it('rejects an alias that differs from a column of the query only in case where the database folds names', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const query = () => DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'BILLED_ON', timeZone: 'UTC' }).get()
+
+    if (driver === 'postgres') await expect(query()).resolves.toHaveLength(6)
+    else await expect(query()).rejects.toThrow(SecurityError)
+  })
+
+  it('reads the date column of the table a qualifier names when the same table is joined under an alias', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+
+    const day = await DB.table(events.tableName)
+      .join(`${events.tableName} as e`, 'e.id', '=', `${events.tableName}.id`)
+      .where(`${events.tableName}.id`, 2)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'Asia/Tokyo' })
+      .value('day')
+
+    expect(day).toBe('2026-11-04')
+  })
+
+  it('reads a bare date column next to a joined subquery that does not select it', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+
+    const day = await DB.table(events)
+      .joinSub(DB.table(events).select('id'), 'ids', 'ids.id', '=', `${events.tableName}.id`)
+      .where(`${events.tableName}.id`, 2)
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'Asia/Tokyo' })
+      .value('day')
+
+    expect(day).toBe('2026-11-04')
+  })
+
+  it('treats a where() name on a defined table as a column, never as a date bucket alias', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+
+    await expect(DB.table(events).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).where('day' as 'id', '2026-11-03').get()).rejects.toThrow(SecurityError)
+  })
+
+  it('rejects an alias that names another selected column the way the database compares names', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const query = () => DB.table(events.tableName).where('id', 2).select('tenant_id as day').addSelectDate('day', 'occurred_at', { as: 'Day', timeZone: 'UTC' }).get()
+
+    if (driver === 'postgres') await expect(query()).resolves.toEqual([{ day: 1, Day: '2026-11-03' }])
+    else await expect(query()).rejects.toThrow(SecurityError)
+  })
+
+  it('rejects an alias that names a grouped column of a table without a definition', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const { schema } = await openDatabase(driver)
+    const labels = `bucket_labels_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(labels)
+    })
+    await schema.createTable(labels, (table) => {
+      table.id()
+      table.string('day')
+    })
+
+    await expect(DB.table(events.tableName)
+      .join(labels, `${labels}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
+      .groupBy('day', `${labels}.day`)
+      .having('day', '2026-11-03')
+      .get()).rejects.toThrow(SecurityError)
+  })
+
+  it('rejects an unknown unit and a time zone abbreviation', async () => {
+    const events = await createEvents(driver)
+
+    expect(() => DB.table(events.tableName).selectDate('week' as 'day', 'occurred_at', { as: 'day' })).toThrow(SecurityError)
+    expect(() => DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'CET' })).toThrow(SecurityError)
+  })
+
+  it('needs to know whether the column holds a date or an instant', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    clearGeneratedTables()
+
+    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).get()).rejects.toThrow(ConfigurationError)
+  })
+})
+
+describe.runIf(mysqlIntegration)('date buckets filtered by having() without groupBy() on mysql', () => {
+  it('pages rows that share a day by the primary key', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents('mysql')
+    const page = (cursor: string | null) => DB.table(events).select('id').addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).having('day', '<', '2026-12-01').orderBy('day').cursorPaginate(1, cursor)
+
+    const ids: unknown[] = []
+    let cursor: string | null = null
+    do {
+      const result = await page(cursor)
+      ids.push(...result.data.map(row => row.id))
+      cursor = result.nextCursor
+    } while (cursor !== null)
+
+    expect(ids).toEqual([1, 2, 3, 4])
+  })
+})
+
+describe.runIf(postgresIntegration)('date buckets next to schema-qualified tables', () => {
+  it('reads a column qualified with its schema when another schema\'s table of the same name is joined', async () => {
+    useAppTimezone('UTC')
+    await openDatabase('postgres')
+    const reporting = defineGeneratedTable('reporting.events', { id: column.id(), at: column.datetime() })
+    const archive = defineGeneratedTable('archive.events', { id: column.id(), at: column.date() })
+    registerGeneratedTables({ reporting, archive })
+    onTestFinished(() => clearGeneratedTables())
+
+    const statement = DB.table(reporting)
+      .join(archive.tableName, 'archive.events.id', '=', 'reporting.events.id')
+      .selectDate('day', 'reporting.events.at', { as: 'day', timeZone: 'Asia/Tokyo' })
+      .toSQL()
+
+    expect(statement.sql).toContain('Asia/Tokyo')
+  })
+})
+
+describe.runIf(mysqlIntegration)('date buckets on mysql without time zone tables', () => {
+  it('throws a CapabilityError instead of returning null buckets', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents('mysql', {
+      wrapAdapter: adapter => new Proxy(adapter, {
+        get(target, property) {
+          const query = target.query.bind(target)
+          if (property !== 'query') return Reflect.get(target, property, target)
+          return async (...args: Parameters<typeof query>) => {
+            const result = await query(...args)
+            return typeof args[0] === 'string' && args[0].includes('CONVERT_TZ(\'2000-01-01 00:00:00\'')
+              ? { ...result, rows: result.rows.map(row => Object.fromEntries(Object.keys(row).map(key => [key, null]))) }
+              : result
+          }
+        },
+      }),
+    })
+
+    await expect(DB.table(events).selectDate('day', 'seen_at', { as: 'day', timeZone: 'Asia/Tokyo' }).get()).rejects.toThrow(CapabilityError)
+    await expect(DB.table(events).insertUsing(['billed_on'], DB.table(events).selectDate('day', 'seen_at', { as: 'day', timeZone: 'Asia/Tokyo' }))).rejects.toThrow(CapabilityError)
+    await expect(DB.table(events).whereIn('billed_on', DB.table(events).selectDate('day', 'seen_at', { as: 'day', timeZone: 'Asia/Tokyo' })).delete()).rejects.toThrow(CapabilityError)
+    expect(await DB.table(events).count()).toBe(6)
+    expect((await DB.table(events).where('id', 1).addSelectDate('day', 'seen_at', { as: 'day', timeZone: 'Asia/Tokyo' }).update({ tenant_id: 3 })).affectedRows).toBe(1)
+  })
+})

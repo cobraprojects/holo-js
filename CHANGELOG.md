@@ -4,6 +4,10 @@
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-061-to-070).
 
+### Added
+
+- Database: `selectDate()` and `addSelectDate()` select the calendar `'year'`, `'month'`, `'day'` or `'hour'` of a date column as a sortable string, such as `selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })` giving `'2026-11-05'`, on SQLite, PostgreSQL and MySQL. The alias works in `groupBy()`, `orderBy()`, `orderByDesc()`, `having()`, unions and `cursorPaginate()`, so per-day totals no longer need raw SQL. `timeZone` takes an IANA name and defaults to `app.timezone`. With a table definition the result is typed `DateBucket<'day'> | null`, and `DateColumnName` constrains a generic helper's column. See [Selecting date buckets](apps/docs/docs/database/query-builder/selects-and-filters.md#selecting-date-buckets).
+
 ### Changed
 
 - SvelteKit: apps register one Holo Vite plugin, `holoSvelteKit()` from `@holo-js/adapter-sveltekit/vite`, after `sveltekit()`. It replaces `holoSvelteKitRealtime()`, which is removed, and `holo prepare` rewrites existing `vite.config.ts` files. Browser validation schemas are now compiled in apps without realtime too.

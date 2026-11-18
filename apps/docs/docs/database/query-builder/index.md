@@ -29,6 +29,7 @@ Every query builder method, grouped by what it does. Each name links to its entr
 
 - [select()](/database/query-builder/selects-and-filters#select), [addSelect()](/database/query-builder/selects-and-filters#addselect), [distinct()](/database/query-builder/selects-and-filters#distinct)
 - [selectCount()](/database/query-builder/selects-and-filters#selectcount), [addSelectCount()](/database/query-builder/selects-and-filters#addselectcount), [selectSum()](/database/query-builder/selects-and-filters#selectsum), [addSelectSum()](/database/query-builder/selects-and-filters#addselectsum), [selectAvg()](/database/query-builder/selects-and-filters#selectavg), [addSelectAvg()](/database/query-builder/selects-and-filters#addselectavg), [selectMin()](/database/query-builder/selects-and-filters#selectmin), [addSelectMin()](/database/query-builder/selects-and-filters#addselectmin), [selectMax()](/database/query-builder/selects-and-filters#selectmax), [addSelectMax()](/database/query-builder/selects-and-filters#addselectmax)
+- [selectDate()](/database/query-builder/selects-and-filters#selectdate), [addSelectDate()](/database/query-builder/selects-and-filters#addselectdate)
 - [selectSub()](/database/query-builder/joins-and-subqueries#selectsub), [addSelectSub()](/database/query-builder/joins-and-subqueries#addselectsub), [unsafeSelect()](/database/query-builder/joins-and-subqueries#unsafeselect), [addUnsafeSelect()](/database/query-builder/joins-and-subqueries#addunsafeselect)
 
 **Filter rows**
@@ -373,6 +374,19 @@ const rows = await DB.table(posts)
 With a table definition, `select()`, `where()`, `orderBy()`, `groupBy()`, `pluck()`, and `value()` only accept real column names, and `select('title as heading')` renames the key in the result type.
 
 A table definition also sets how integer columns are read. `id()`, `integer()`, `bigInteger()`, and `foreignId()` columns come back as numbers on every driver, the same values a [model](/orm/) returns, including columns of a definition you pass to `join()`. Name-only queries use the same conversions when the generated schema contains the table; otherwise they keep the driver's values, such as PostgreSQL `bigint` text. A value above `Number.MAX_SAFE_INTEGER` throws a `HydrationError` on every database, MySQL included. Raw SQL selections keep the driver's values.
+
+**In a helper that's generic over the table**, return the query result without a type argument. When the helper builds an alias from a generic column, such as `` select(`${key} as key`) ``, TypeScript can't read the alias inside the helper, but every caller gets the resolved row:
+
+```ts
+function countBy<TTable extends TableDefinition, TKey extends keyof InferSelect<TTable> & string>(table: TTable, key: TKey) {
+  return DB.table(table).select(`${key} as key`).addSelectCount('total').groupBy(key).get()
+}
+
+const rows = await countBy(events, 'channel')
+// rows: { key: string, total: number }[]
+```
+
+Aliases you write literally, like `selectDate('day', column, { as: 'day' })` and `addSelectCount('total')`, are typed inside the helper too.
 
 **Or annotate the row type.** `get()`, `first()`, and `sole()` accept a row type:
 

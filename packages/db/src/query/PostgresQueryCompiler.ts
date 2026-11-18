@@ -1,6 +1,9 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
+import { getApplicationTimezone } from '../applicationTimezone'
+import type { DateBucketStorage } from './dateBuckets'
 import type { CompiledStatement } from '../core/types'
 import type {
+  QueryDateBucketSelection,
   InsertStatementOptions,
   QueryDatePredicate,
   QueryFullTextPredicate,
@@ -16,7 +19,30 @@ const POSTGRES_NUMERIC_INTEGER_DIGITS = 131072
 
 const POSTGRES_NUMERIC_FRACTION_DIGITS = 16383
 
+const POSTGRES_DATE_BUCKET_FORMATS: Readonly<Record<QueryDateBucketSelection['unit'], string>> = {
+  year: 'YYYY',
+  month: 'YYYY-MM',
+  day: 'YYYY-MM-DD',
+  hour: 'YYYY-MM-DD HH24:00',
+}
+
 export class PostgresQueryCompiler extends SQLQueryCompiler {
+  protected override compileDateBucket(bucket: QueryDateBucketSelection, storage: DateBucketStorage): string {
+    const column = this.compileColumnReference(bucket.column)
+    const applicationTimeZone = getApplicationTimezone()
+    const timeZone = this.createSqlStringLiteral(bucket.timeZone ?? applicationTimeZone)
+    const holdsInstant = `pg_typeof(timezone('UTC', ${column})) = 'timestamp without time zone'::regtype`
+    const instant = `CASE WHEN ${holdsInstant} THEN CAST(${column} AS TIMESTAMPTZ) ELSE CAST(${column} AS TIMESTAMP) AT TIME ZONE ${this.createSqlStringLiteral(applicationTimeZone)} END`
+    const format = POSTGRES_DATE_BUCKET_FORMATS[bucket.unit]
+    if (storage === 'calendar') {
+      return `CASE WHEN ${column} BETWEEN DATE '0001-01-01' AND DATE '9999-12-31' THEN to_char(CAST(${column} AS TIMESTAMP), '${format}') END`
+    }
+    const wallClock = `((${instant}) AT TIME ZONE ${timeZone})`
+    const formatted = `CASE WHEN ${wallClock} BETWEEN TIMESTAMP '0001-01-01 00:00:00' AND TIMESTAMP '9999-12-31 23:59:59.999999' THEN to_char(${wallClock}, '${format}') END`
+    const convertible = `CASE WHEN ${holdsInstant} THEN CAST(${column} AS TIMESTAMPTZ) BETWEEN TIMESTAMPTZ '0001-12-28 00:00:00+00 BC' AND TIMESTAMPTZ '10000-01-04 00:00:00+00' ELSE CAST(${column} AS TIMESTAMP) BETWEEN TIMESTAMP '0001-12-28 00:00:00 BC' AND TIMESTAMP '10000-01-04 00:00:00' END`
+    return `CASE WHEN ${convertible} THEN ${formatted} END`
+  }
+
   protected override readonly caseSensitiveIdentifiers = true
 
   protected override compileIntegerKey(expression: string): string {

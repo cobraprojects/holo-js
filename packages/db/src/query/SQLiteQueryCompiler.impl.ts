@@ -7,7 +7,8 @@ import { CompilerError } from '../core/errors'
 import { splitTablePath } from '../schema/identifiers'
 import { sameIdentifier } from '../schema/introspection/sqliteTokens'
 import { SQLITE_DECIMAL_TEXT_FUNCTION } from '../schema/normalization'
-import type { InsertStatementOptions, QueryColumnPredicate, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryOrderBy, QueryPredicate, SelectQueryPlan } from './ast'
+import type { DateBucketStorage } from './dateBuckets'
+import type { InsertStatementOptions, QueryColumnPredicate, QueryDateBucketSelection, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryOrderBy, QueryPredicate, SelectQueryPlan } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
   return `json_extract(${column}, ${pathLiteral})`
@@ -66,6 +67,13 @@ function convertLikePatternToGlob(pattern: string): string {
 }
 
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
+
+const SQLITE_DATE_BUCKET_FORMATS: Readonly<Record<QueryDateBucketSelection['unit'], string>> = {
+  year: '%Y',
+  month: '%Y-%m',
+  day: '%Y-%m-%d',
+  hour: '%Y-%m-%d %H:00',
+}
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
   protected override readonly dialect = 'sqlite'
@@ -257,6 +265,15 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     }
 
     return expression
+  }
+
+  protected override compileDateBucket(bucket: QueryDateBucketSelection, storage: DateBucketStorage): string {
+    const column = this.compileColumnReference(bucket.column)
+    const timeZone = bucket.timeZone ?? getApplicationTimezone()
+    const wallClock = storage === 'calendar'
+      ? `date(${this.compileAppWallClock(column)})`
+      : timeZone === 'UTC' ? `datetime(${column}, '+0 seconds')` : compileSQLiteWallClock(column, this.createSqlStringLiteral(timeZone))
+    return `CASE WHEN ${wallClock} >= '0001-01-01' AND ${wallClock} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*' THEN strftime('${SQLITE_DATE_BUCKET_FORMATS[bucket.unit]}', ${wallClock}) END`
   }
 
   private compileAppWallClock(column: string): string {

@@ -57,6 +57,8 @@ import {
   type ValueCursor,
 } from './pagination'
 import { cursorPredicate } from './cursorPredicate'
+import { assertDateBucketAlias, assertDateBucketTimeZone, assertDateBucketUnit } from './dateBuckets'
+import { assertDateBucketTimeZonesConvertible } from './mysqlDateBucketTimeZones'
 import {
   assertUnreservedTableAlias,
   createDeleteQueryPlan,
@@ -70,7 +72,10 @@ import {
   appendSelections,
   appendAggregateSelection,
   appendRawSelection,
+  appendDateBucketSelection,
   appendSubquerySelection,
+  dateBucketSelections,
+  withDateBucketSelection,
   withGroupBy,
   withHaving,
   withJoin,
@@ -107,6 +112,7 @@ import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, Unsaf
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type {
   QueryAggregateSelection,
+  QueryDateBucketSelection,
   QueryDirection,
   QueryJsonUpdateOperation,
   QueryJoinClause,
@@ -141,7 +147,7 @@ import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalizatio
 import { assertQueryTablePath, validateQueryPlan } from './validator'
 import { requalifyAliasedSource } from './requalifyAliasedSource'
 
-import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
+import type { AvailableTableColumns, ColumnSelection, DateBucketAlias, SelectedDateBuckets, UnreplacedDateBuckets, DateBucketAliasName, DateBucketOptions, DateBucketSelectionResult, DateBucketUnit, DateColumnName, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
 
 type SelectRow<TTableOrName extends string | TableDefinition>
   = TTableOrName extends TableDefinition ? InferSelect<TTableOrName> : Record<string, unknown>
@@ -411,7 +417,7 @@ export class TableQueryBuilder<
 
   addSelect<const TColumns extends readonly ColumnSelection<TAvailableColumns>[]>(
     ...columns: TColumns
-  ): TableQueryBuilder<TTableOrName, Omit<TSelectedRow, keyof SelectedColumns<TAvailableColumns, TColumns>> & SelectedColumns<TAvailableColumns, TColumns>, TAvailableColumns> {
+  ): TableQueryBuilder<TTableOrName, Omit<TSelectedRow, keyof SelectedColumns<TAvailableColumns, TColumns>> & UnreplacedDateBuckets<TSelectedRow, keyof SelectedColumns<TAvailableColumns, TColumns>> & SelectedColumns<TAvailableColumns, TColumns>, TAvailableColumns> {
     return this.clone(appendSelections(this.plan, columns))
   }
 
@@ -505,6 +511,23 @@ export class TableQueryBuilder<
     )
   }
 
+  selectDate<const TUnit extends DateBucketUnit, const TColumn extends DateColumnName<TAvailableColumns>, const TAlias extends string>(
+    unit: TUnit,
+    column: TColumn,
+    options: DateBucketOptions<TAlias & DateBucketAliasName<TAlias, TAvailableColumns>>,
+  ): TableQueryBuilder<TTableOrName, DateBucketSelectionResult<TAlias, TUnit>, TAvailableColumns> {
+    return this.clone(withDateBucketSelection(this.plan, this.createDateBucketSelection(unit, column, options)))
+  }
+
+  addSelectDate<const TUnit extends DateBucketUnit, const TColumn extends DateColumnName<TAvailableColumns>, const TAlias extends string>(
+    unit: TUnit,
+    column: TColumn,
+    options: DateBucketOptions<TAlias & DateBucketAliasName<TAlias, TAvailableColumns>>,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow & DateBucketSelectionResult<TAlias, TUnit>, TAvailableColumns> {
+    const projected = this.plan.selections.length === 0 ? appendSelections(this.plan, [`${this.source.alias ?? this.source.tableName}.*`]) : this.plan
+    return this.clone(appendDateBucketSelection(projected, this.createDateBucketSelection(unit, column, options)))
+  }
+
   unsafeSelect(
     sql: string,
     bindings: readonly unknown[],
@@ -537,7 +560,7 @@ export class TableQueryBuilder<
   addSelectSub(
     query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
     alias: string,
-  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, TAvailableColumns> {
+  ): TableQueryBuilder<TTableOrName, SelectedDateBuckets<TSelectedRow> & Record<string, unknown>, TAvailableColumns> {
     return this.clone(appendSubquerySelection(this.plan, query.getPlan(), alias))
   }
 
@@ -776,6 +799,19 @@ export class TableQueryBuilder<
       aggregate,
       column,
       alias,
+    })
+  }
+
+  private createDateBucketSelection(unit: DateBucketUnit, column: string, options: DateBucketOptions<string>): QueryDateBucketSelection {
+    assertDateBucketUnit(unit)
+    assertDateBucketAlias(options.as)
+    if (options.timeZone !== undefined) assertDateBucketTimeZone(options.timeZone)
+    return Object.freeze({
+      kind: 'date-bucket',
+      unit,
+      column,
+      alias: options.as,
+      ...(options.timeZone === undefined ? {} : { timeZone: options.timeZone }),
     })
   }
 
@@ -1486,7 +1522,7 @@ export class TableQueryBuilder<
     return this.whereJsonLengthWithBoolean('and', columnPath, operator, value)
   }
 
-  groupBy(...columns: readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  groupBy(...columns: readonly (DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow>)[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withGroupBy(this.plan, columns))
   }
 
@@ -1891,12 +1927,12 @@ export class TableQueryBuilder<
     )))
   }
 
-  orderByDesc(column: DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  orderByDesc(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'desc')
   }
 
   orderBy(
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow>,
     direction: QueryDirection = 'asc',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withOrderBy(this.plan, {
@@ -1923,16 +1959,16 @@ export class TableQueryBuilder<
     })]))
   }
 
-  latest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  latest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'desc')
   }
 
-  oldest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  oldest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'asc')
   }
 
   reorder(
-    column?: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+    column?: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow>,
     direction: QueryDirection = 'asc',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const reordered = replaceOrderBy(this.plan, [])
@@ -2094,6 +2130,7 @@ export class TableQueryBuilder<
   ): Promise<TRow[]> {
     await this.bindGeneratedTable()
     const statement = compileStatement()
+    await assertDateBucketTimeZonesConvertible(this.connection, this.plan)
     const cacheConfig = this.queryCacheConfig
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
     if (activeDependencyCollector || (canUseQueryCache(this.connection) && cacheConfig && !this.plan.lockMode)) {
@@ -2359,10 +2396,11 @@ export class TableQueryBuilder<
       })
     } else {
       if (normalizedCursor) {
+        const dateBuckets = dateBucketSelections(plan)
         const grouped = plan.predicates.some(predicate => predicate.boolean === 'or')
           ? withPredicate(withoutPredicates(plan, () => true), { kind: 'group', predicates: plan.predicates })
           : plan
-        plan = withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders, nullsLow))
+        plan = withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map(order => dateBuckets.has(order.column) ? { ...order, dateBucket: true as const } : order), nullsLow))
       }
       if (previous) plan = replaceOrderBy(plan, pageOrders(cursorOrders))
       const pageQuery = orderedQuery.clone(plan)
@@ -2843,6 +2881,7 @@ export class TableQueryBuilder<
 
     await this.prepareMutation()
     await query.bindGeneratedTable()
+    await assertDateBucketTimeZonesConvertible(this.connection, query.getPlan())
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertUsingQueryPlan(this.source, columns, query.getPlan(), { ignoreConflicts }),
     ))
@@ -2885,6 +2924,7 @@ export class TableQueryBuilder<
         internalPlanHandoff,
       ).update(values))
     }
+    await assertDateBucketTimeZonesConvertible(this.connection, createUpdateQueryPlan(this.source, this.plan.predicates, normalizedValues))
     const previousKeys = needsDecimalRows
       ? await this.readDecimalUpdateKeys(normalizedValues)
       : undefined
@@ -2918,6 +2958,7 @@ export class TableQueryBuilder<
 
   async delete(): Promise<DriverExecutionResult> {
     await this.prepareMutation()
+    await assertDateBucketTimeZonesConvertible(this.connection, createDeleteQueryPlan(this.source, this.plan.predicates))
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createDeleteQueryPlan(this.source, this.plan.predicates),
     ))
@@ -3406,6 +3447,11 @@ export class TableQueryBuilder<
       throw new SecurityError('Cursor pagination cannot use random ordering.')
     }
 
+    if (aggregatesRows(this.plan)) {
+      if (this.plan.orderBy.length === 0) throw new SecurityError('Cursor pagination over grouped or aggregated rows requires an explicit orderBy clause that is unique across the rows.')
+      return this
+    }
+
     const primaryKeys = this.source.table ? listTablePrimaryKeyColumns(this.source.table) : []
     if (this.plan.orderBy.length === 0 && primaryKeys.length === 0) {
       throw new SecurityError('Cursor pagination requires an explicit stable orderBy clause.')
@@ -3625,6 +3671,12 @@ export class TableQueryBuilder<
       })
     return owners.length === 1 ? { table: owners[0]!, column: name } : undefined
   }
+}
+
+function aggregatesRows(plan: SelectQueryPlan): boolean {
+  return plan.groupBy.length > 0
+    || plan.selections.some(selection => selection.kind === 'aggregate')
+    || plan.unions.some(union => aggregatesRows(union.query))
 }
 
 function withoutUnionCursorStorageTypes<TRow extends Record<string, unknown>>(row: TRow, aliases: readonly string[]): TRow {
