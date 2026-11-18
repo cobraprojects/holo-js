@@ -30,7 +30,7 @@ function parse(source: string): ts.SourceFile {
 
 function applyEdits(source: string, edits: readonly Edit[]): string {
   return [...edits]
-    .sort((left, right) => right.start - left.start)
+    .sort((left, right) => right.start - left.start || right.end - left.end)
     .reduce((patched, edit) => `${patched.slice(0, edit.start)}${edit.text}${patched.slice(edit.end)}`, source)
 }
 
@@ -56,23 +56,53 @@ function importedName(element: ts.ImportSpecifier): string {
   return (element.propertyName ?? element.name).text
 }
 
+function isTypeOnly(namedImport: NamedImport, element: ts.ImportSpecifier): boolean {
+  return namedImport.declaration.importClause?.isTypeOnly === true || element.isTypeOnly
+}
+
 function localBindings(imports: readonly NamedImport[], exportName: string): string[] {
-  return imports.flatMap(({ bindings }) => bindings.elements.filter(element => importedName(element) === exportName).map(element => element.name.text))
+  return imports.flatMap(namedImport => namedImport.bindings.elements
+    .filter(element => !isTypeOnly(namedImport, element) && importedName(element) === exportName)
+    .map(element => element.name.text))
 }
 
 function isCallTo(node: ts.Node, names: readonly string[]): node is ts.CallExpression {
   return ts.isCallExpression(node) && ts.isIdentifier(node.expression) && names.includes(node.expression.text)
 }
 
-function isReference(node: ts.Identifier): boolean {
-  const parent = node.parent
-  if (ts.isPropertyAccessExpression(parent) && parent.name === node) return false
-  if ((ts.isPropertyAssignment(parent) || ts.isMethodDeclaration(parent) || ts.isPropertyDeclaration(parent)) && parent.name === node) return false
-  return !ts.isImportSpecifier(parent)
+function createChecker(sourceFile: ts.SourceFile): ts.TypeChecker {
+  const options: ts.CompilerOptions = { noLib: true, noResolve: true, target: ts.ScriptTarget.Latest }
+  const host: ts.CompilerHost = {
+    ...ts.createCompilerHost(options),
+    getSourceFile: fileName => fileName === sourceFile.fileName ? sourceFile : undefined,
+  }
+  return ts.createProgram([sourceFile.fileName], options, host).getTypeChecker()
 }
 
-function renderSpecifier(imported: string, local: string): string {
-  return imported === local ? imported : `${imported} as ${local}`
+function referenceEdit(sourceFile: ts.SourceFile, checker: ts.TypeChecker, binding: ts.Symbol, node: ts.Identifier): Edit | undefined {
+  const parent = node.parent
+  const start = node.getStart(sourceFile)
+  if (ts.isShorthandPropertyAssignment(parent) && parent.name === node) {
+    return checker.getShorthandAssignmentValueSymbol(parent) === binding
+      ? { start, end: node.end, text: `${LEGACY_HOLO_VITE_PLUGIN}: ${HOLO_VITE_PLUGIN}` }
+      : undefined
+  }
+
+  return checker.getSymbolAtLocation(node) === binding ? { start, end: node.end, text: HOLO_VITE_PLUGIN } : undefined
+}
+
+function legacyReferenceEdits(sourceFile: ts.SourceFile, specifiers: readonly ts.ImportSpecifier[]): Edit[] {
+  if (specifiers.length === 0) return []
+  const checker = createChecker(sourceFile)
+  const symbols = specifiers.flatMap(specifier => checker.getSymbolAtLocation(specifier.name) ?? [])
+  return descendants(sourceFile)
+    .filter((node): node is ts.Identifier => ts.isIdentifier(node) && node.text === LEGACY_HOLO_VITE_PLUGIN && !ts.isImportSpecifier(node.parent))
+    .flatMap(node => symbols.flatMap(symbol => referenceEdit(sourceFile, checker, symbol, node) ?? []))
+}
+
+function renderSpecifier(element: ts.ImportSpecifier, imported: string, local: string): string {
+  const name = imported === local ? imported : `${imported} as ${local}`
+  return element.isTypeOnly ? `type ${name}` : name
 }
 
 function renderNamedImports(specifiers: readonly string[]): string {
@@ -89,16 +119,11 @@ function migrateLegacyPlugin(source: string): string {
       end: bindings.end,
       text: renderNamedImports(bindings.elements.map((element) => {
         const local = element.name.text === LEGACY_HOLO_VITE_PLUGIN ? HOLO_VITE_PLUGIN : element.name.text
-        return renderSpecifier(importedName(element) === LEGACY_HOLO_VITE_PLUGIN ? HOLO_VITE_PLUGIN : importedName(element), local)
+        return renderSpecifier(element, importedName(element) === LEGACY_HOLO_VITE_PLUGIN ? HOLO_VITE_PLUGIN : importedName(element), local)
       })),
     }))
-  const renamesReferences = imports.some(({ bindings }) => bindings.elements.some(element => element.name.text === LEGACY_HOLO_VITE_PLUGIN && importedName(element) === LEGACY_HOLO_VITE_PLUGIN))
-  const references = renamesReferences
-    ? descendants(sourceFile)
-      .filter((node): node is ts.Identifier => ts.isIdentifier(node) && node.text === LEGACY_HOLO_VITE_PLUGIN && isReference(node))
-      .map(node => ({ start: node.getStart(sourceFile), end: node.end, text: HOLO_VITE_PLUGIN }))
-    : []
-  return applyEdits(source, [...edits, ...references])
+  const unaliased = imports.flatMap(({ bindings }) => bindings.elements.filter(element => element.name.text === LEGACY_HOLO_VITE_PLUGIN && importedName(element) === LEGACY_HOLO_VITE_PLUGIN))
+  return applyEdits(source, [...edits, ...legacyReferenceEdits(sourceFile, unaliased)])
 }
 
 function propertyName(name: ts.PropertyName): string | undefined {
@@ -139,22 +164,35 @@ function importLine(specifier: string, moduleName: string): string {
   return `import { ${specifier} } from '${moduleName}'\n`
 }
 
+function importsPluginAsType(namedImport: NamedImport): boolean {
+  return namedImport.bindings.elements.some(element => isTypeOnly(namedImport, element) && element.name.text === HOLO_VITE_PLUGIN)
+}
+
+function pluginImportEdit(sourceFile: ts.SourceFile, target: NamedImport): Edit {
+  const typeOnlyDeclaration = target.declaration.importClause?.isTypeOnly === true
+  const specifiers = target.bindings.elements
+    .filter(element => !(isTypeOnly(target, element) && element.name.text === HOLO_VITE_PLUGIN))
+    .map(element => typeOnlyDeclaration ? `type ${element.getText(sourceFile)}` : element.getText(sourceFile))
+  const defaultImport = target.declaration.importClause?.name
+  const clause = `${defaultImport ? `${defaultImport.text}, ` : ''}${renderNamedImports([HOLO_VITE_PLUGIN, ...specifiers])}`
+  return { start: target.declaration.getStart(sourceFile), end: target.bindings.end, text: `import ${clause}` }
+}
+
 function importEdits(sourceFile: ts.SourceFile): Edit[] {
   const viteImports = namedImportsFrom(sourceFile, HOLO_VITE_MODULE)
   const hasPluginBinding = localBindings(viteImports, HOLO_VITE_PLUGIN).length > 0
   const hasWrapper = namedImportsFrom(sourceFile, CONFIG_WRAPPER_MODULE)
-    .some(({ bindings }) => bindings.elements.some(element => element.propertyName === undefined && element.name.text === CONFIG_WRAPPER))
-  const [viteImport] = viteImports
+    .some(({ declaration, bindings }) => declaration.importClause?.isTypeOnly !== true
+      && bindings.elements.some(element => !element.isTypeOnly && element.propertyName === undefined && element.name.text === CONFIG_WRAPPER))
+  const target = viteImports.find(importsPluginAsType) ?? viteImports.find(({ declaration }) => declaration.importClause?.isTypeOnly !== true)
   const firstImport = sourceFile.statements.find(ts.isImportDeclaration)
   const insertAt = firstImport ? firstImport.getStart(sourceFile) : 0
   const lines = [
     ...(hasWrapper ? [] : [importLine(CONFIG_WRAPPER, CONFIG_WRAPPER_MODULE)]),
-    ...(hasPluginBinding || viteImport ? [] : [importLine(HOLO_VITE_PLUGIN, HOLO_VITE_MODULE)]),
+    ...(hasPluginBinding || target ? [] : [importLine(HOLO_VITE_PLUGIN, HOLO_VITE_MODULE)]),
   ]
   const edits: Edit[] = lines.length > 0 ? [{ start: insertAt, end: insertAt, text: lines.join('') }] : []
-  if (hasPluginBinding || !viteImport) return edits
-  const existing = viteImport.bindings.elements.map(element => element.getText(sourceFile))
-  return [...edits, { start: viteImport.bindings.getStart(sourceFile), end: viteImport.bindings.end, text: renderNamedImports([HOLO_VITE_PLUGIN, ...existing]) }]
+  return hasPluginBinding || !target ? edits : [...edits, pluginImportEdit(sourceFile, target)]
 }
 
 export function patchSvelteKitViteConfig(original: string): string {
