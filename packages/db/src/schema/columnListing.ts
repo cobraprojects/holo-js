@@ -91,6 +91,15 @@ const tableDefinitions = createSchemaCache<TableDefinition | undefined>(
   table => table !== undefined,
 )
 
+const columnSqlTypes = createSchemaCache<ReadonlyMap<string, string>>(async (connection, tableName) => {
+  const structure = await createSchemaReader(connection).readTableStructure(tableName)
+  return new Map(structure?.columns.map(column => [column.name, column.fullType]) ?? [])
+}, types => types.size > 0)
+
+export function loadColumnSqlTypes(connection: DatabaseContext, tableName: string): Promise<ReadonlyMap<string, string>> {
+  return columnSqlTypes.load(connection, tableName)
+}
+
 export function loadColumnListing(connection: DatabaseContext, tableName: string): Promise<ReadonlySet<string>> {
   return columnListings.load(connection, tableName)
 }

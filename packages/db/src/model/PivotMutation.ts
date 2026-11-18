@@ -25,7 +25,8 @@ type Context = {
   scope: Attributes
   relatedColumn: string
   relatedKey: AnyColumnDefinition | undefined
-  loadRelatedKey?: () => Promise<AnyColumnDefinition | undefined>
+  loadTable?: () => Promise<TableDefinition | undefined>
+  loadColumnSqlTypes?: () => Promise<ReadonlyMap<string, string>>
   dialect: SchemaDialectName
   allowedColumns: readonly string[]
   timestamps: boolean
@@ -49,6 +50,7 @@ export class PivotMutation {
   private readonly storedKeyTextAlias = `holo_stored_key_${this.aliasSuffix}`
   private readonly matchingValuesAlias = `holo_matching_${this.aliasSuffix}`
   private relatedKey: AnyColumnDefinition | undefined
+  private loadedTable: TableDefinition | undefined
   private readonly targetKeyCache = new WeakMap<readonly Attributes[], unknown[]>()
   private relatedKeyLoaded = false
 
@@ -58,7 +60,11 @@ export class PivotMutation {
 
   private async loadRelatedKey(): Promise<void> {
     if (this.relatedKeyLoaded) return
-    this.relatedKey = this.context.relatedKey ?? await this.context.loadRelatedKey?.()
+    if (typeof this.context.table === 'string' && !getConnectionGeneratedTableDefinition(this.context.table, this.connection.getConnectionName())) {
+      this.loadedTable = await this.context.loadTable?.()
+    }
+    const table = this.tableDefinition()
+    this.relatedKey = this.context.relatedKey ?? (table ? ownEntry(table.columns, this.context.relatedColumn) : undefined)
     this.relatedKeyLoaded = true
   }
 
@@ -386,16 +392,18 @@ export class PivotMutation {
   }
 
   private updateFor(existing: readonly Attributes[], attributes: Attributes): PivotUpdate | undefined {
-    const dates = Object.entries(attributes).filter(([column, value]) => this.comparesInDatabase(column, value, existing)).map(([column]) => column)
+    const last = existing.at(-1)
+    if (!last || Object.keys(attributes).length === 0) return undefined
+    const dates = Object.entries(attributes).filter(([column, value]) => this.comparesInDatabase(column, value, last)).map(([column]) => column)
     const others = Object.entries(attributes).filter(([column]) => !dates.includes(column))
-    if (existing.some(row => others.some(([column, value]) => row[column] !== value))) return { when: 'always' }
+    if (others.some(([column, value]) => last[column] !== value)) return { when: 'always' }
     return dates.length === 0 ? undefined : { when: 'datesDiffer', columns: dates }
   }
 
-  private comparesInDatabase(column: string, value: unknown, existing: readonly Attributes[]): boolean {
+  private comparesInDatabase(column: string, value: unknown, existing: Attributes): boolean {
     const definition = this.tableDefinition()
     const columnDefinition = definition ? ownEntry(definition.columns, column) : undefined
-    return columnDefinition ? storesDate(columnDefinition) : value instanceof Date || existing.some(row => row[column] instanceof Date)
+    return columnDefinition ? storesDate(columnDefinition) : value instanceof Date || existing[column] instanceof Date
   }
 
   private calendarDateColumns(columns: readonly string[]): string[] {
@@ -409,18 +417,19 @@ export class PivotMutation {
 
   private tableDefinition(): TableDefinition | undefined {
     const table = this.context.table
-    return typeof table === 'string' ? getConnectionGeneratedTableDefinition(table, this.connection.getConnectionName()) : table
+    return typeof table === 'string' ? getConnectionGeneratedTableDefinition(table, this.connection.getConnectionName()) ?? this.loadedTable : table
   }
 
   private async updateRows(connection: DatabaseContext, keys: readonly unknown[], values: Attributes, update: PivotUpdate): Promise<boolean> {
     const compared = update.when === 'datesDiffer'
       ? Object.fromEntries(update.columns.map(column => [column, normalizeQueryWriteValue(this.tableDefinition(), this.context.dialect, column, values[column])]))
       : {}
+    const sqlTypes = update.when === 'datesDiffer' && this.context.dialect === 'postgres' ? await this.context.loadColumnSqlTypes?.() : undefined
     const batchSize = Math.max(1, this.idBatchSize() - Object.keys(values).length - Object.keys(compared).length)
     let changed = false
     for (let offset = 0; offset < keys.length; offset += batchSize) {
       const rows = this.whereKeys(this.query(connection), keys.slice(offset, offset + batchSize))
-      const result = await (update.when === 'always' ? rows : whereStoredValuesDiffer(rows, compared, this.calendarDateColumns(Object.keys(compared)))).update(values)
+      const result = await (update.when === 'always' ? rows : whereStoredValuesDiffer(rows, compared, this.calendarDateColumns(Object.keys(compared)), sqlTypes)).update(values)
       changed = changed || update.when === 'always' || (result.affectedRows ?? 0) > 0
     }
     return changed

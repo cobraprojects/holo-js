@@ -337,6 +337,33 @@ describe.each(drivers)('pivot keys given with more precision than the database k
   })
 })
 
+describe.each(drivers)('pivot date attributes of an unregistered or reduced-precision pivot on %s', (driver) => {
+  it('leaves an unchanged date attribute of an unregistered pivot alone', async () => {
+    const { names } = await openPivots(driver)
+    clearGeneratedTables()
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
+    const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey() })
+    registerGeneratedTables({ owners, tags })
+    const Tag = defineModel(tags, { timestamps: false })
+    const Untyped = defineModel(owners, { timestamps: false, relations: { tags: belongsToMany(() => Tag, names.ownerTags, 'owner_id', 'tag_id').withPivot('due_on') } })
+    const owner = await Untyped.findOrFail(1)
+    const due = new Date('2026-05-06T15:30:00Z')
+    await owner.attach('tags', 1, { due_on: due })
+    await owner.updateExistingPivot('tags', 1, { due_on: due })
+
+    expect(await owner.updateExistingPivot('tags', 1, { due_on: new Date(due.getTime()) })).toBe(0)
+  })
+
+  it.runIf(driver === 'postgres')('compares a timestamp at the precision its column keeps', async () => {
+    const { db, names, owner } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`ALTER TABLE ${quote(driver, names.ownerTags)} ALTER COLUMN ${quote(driver, 'expires_at')} TYPE timestamp(3)`))
+    await owner.attach('tags', 1, { expires_at: '2026-01-01 10:00:00' as never })
+
+    expect(await owner.updateExistingPivot('tags', 1, { expires_at: '2026-01-01 10:00:00.0004' as never })).toBe(0)
+    expect(await owner.updateExistingPivot('tags', 1, { expires_at: '2026-01-01 10:00:00.002' as never })).toBe(1)
+  })
+})
+
 describe.each(drivers)('pivot ids given as object keys on %s', (driver) => {
   it('keeps a leading-zero string key as text, as Laravel does', async () => {
     const { schema } = await openDatabase(driver)

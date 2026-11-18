@@ -3703,6 +3703,8 @@ export function selectMatchingValues<TTableOrName extends TableReference>(
   return append(createMatchingValuesSelection(dialect, column, values, alias)) as unknown as TableQueryBuilder<TTableOrName, Record<string, unknown>>
 }
 
+const POSTGRES_DATE_TYPE = /^(?:date|(?:timestamp|time)(?:\([0-6]\))?(?: with(?:out)? time zone)?)$/
+
 export function whereStoredValuesDiffer<
   TTableOrName extends TableReference,
   TSelectedRow extends Record<string, unknown>,
@@ -3711,6 +3713,7 @@ export function whereStoredValuesDiffer<
   query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
   values: Readonly<Record<string, unknown>>,
   calendarDateColumns: readonly string[] = [],
+  sqlTypes: ReadonlyMap<string, string> = new Map(),
 ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
   const appendTrusted = trustedRawWhereAppenders.get(query)
   const connection = query.getConnection()
@@ -3726,7 +3729,10 @@ export function whereStoredValuesDiffer<
   const dialect = connection.getDialect()
   const differs = (column: string) => {
     const quoted = dialect.quoteIdentifier(column)
-    if (dialect.name === 'postgres') return `${quoted} IS DISTINCT FROM ?`
+    if (dialect.name === 'postgres') {
+      const type = sqlTypes.get(column)
+      return type && POSTGRES_DATE_TYPE.test(type) ? `${quoted} IS DISTINCT FROM CAST(? AS ${type})` : `${quoted} IS DISTINCT FROM ?`
+    }
     if (dialect.name === 'mysql') return calendarDateColumns.includes(column) ? `NOT (${quoted} <=> DATE(?))` : `NOT (${quoted} <=> ?)`
     return `${quoted} IS NOT ?`
   }
