@@ -90,6 +90,14 @@ it('rejects date buckets on non-date columns, unknown units and aliases that sha
     DB.table(events).selectDate('day', 'channel', { as: 'day' })
     // @ts-expect-error a JSON column that only holds null is not a date column
     DB.table(events).selectDate('day', 'payload', { as: 'day' })
+    const either = 'first_day' as 'first_day' | 'last_day'
+    // @ts-expect-error the alias must be one string literal so the row type knows its key
+    DB.table(events).selectDate('day', 'occurred_at', { as: either })
+    const runtime: string = 'day'
+    // @ts-expect-error the alias must be one string literal so the row type knows its key
+    DB.table(events).selectDate('day', 'occurred_at', { as: runtime })
+    // @ts-expect-error a selected null-only JSON column is not a date bucket alias
+    DB.table(events).select('payload as missing').groupBy('missing')
     // @ts-expect-error unknown units are rejected
     DB.table(events).selectDate('week', 'occurred_at', { as: 'week' })
     // @ts-expect-error the alias must not reuse a column name

@@ -461,7 +461,10 @@ export class SQLQueryCompiler {
       resultMode: 'rows',
       selectedShape: {
         mode: plan.selections.length === 0 ? 'all' : 'projection',
-        columns: columnSelections.map(selection => selection.alias ?? selection.column),
+        columns: [
+          ...columnSelections.map(selection => selection.alias ?? selection.column),
+          ...plan.selections.flatMap(selection => selection.kind === 'date-bucket' ? [selection.alias] : []),
+        ],
         aggregates: aggregateSelections.map(selection => selection.alias),
         hasRawSelections: plan.selections.some(selection => selection.kind === 'raw'),
         hasSubqueries: plan.selections.some(selection => selection.kind === 'subquery'),

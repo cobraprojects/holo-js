@@ -233,6 +233,13 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .cursorPaginate(2)).rejects.toThrow(SecurityError)
   })
 
+  it('reports date bucket aliases in the compiled projection', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    expect(DB.table(events).selectDate('day', 'occurred_at', { as: 'day' }).toSQL().metadata?.selectedShape.columns).toEqual(['day'])
+  })
+
   it('rejects time zones that are not IANA names', async () => {
     const events = await createEventsTable(driver)
 
@@ -845,7 +852,7 @@ describe.each(drivers)('date buckets on %s', (driver) => {
   it('rejects another output whose name PostgreSQL would cut to the date bucket alias', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
-    const alias = `b${'u'.repeat(62)}`
+    const alias = 'buuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu'
 
     await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: alias }).addSelect(`tenant_id as ${alias}x`).get()).rejects.toThrow(SecurityError)
   })
@@ -872,7 +879,7 @@ describe.each(drivers)('date buckets on %s', (driver) => {
   it('rejects a joined wildcard column that PostgreSQL would cut to the date bucket alias', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
-    const alias = `b${'u'.repeat(62)}`
+    const alias = 'buuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu'
     const ghost = defineGeneratedTable('bucket_ghost', { id: column.id(), [`${alias}z`]: column.integer() })
     registerGeneratedTables({ events, ghost })
 
