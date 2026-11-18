@@ -1678,6 +1678,27 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
     }
   }, 10_000)
 
+  it('runs a probe of its own for a bucket query issued by a query logger', async () => {
+    useAppTimezone('Europe/Paris')
+    let nested: Promise<unknown> | undefined
+    let issueNested: (() => Promise<unknown>) | undefined
+    const events = await createEventsTable('mysql', {
+      logger: {
+        onQueryStart: async () => {
+          if (issueNested === undefined || nested !== undefined) return
+          nested = issueNested()
+          await nested
+        },
+      },
+    })
+    issueNested = () => DB.table(events).where('tenant_id', 2).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'Asia/Tokyo' }).get()
+
+    const rows = await DB.table(events).where('tenant_id', 2).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'Asia/Tokyo' }).get()
+
+    expect(rows).toEqual([{ day: '2026-11-04' }])
+    await expect(nested).resolves.toEqual([{ day: '2026-11-04' }])
+  }, 10_000)
+
   it('skips conversion for another spelling of the app time zone', async () => {
     useAppTimezone('America/New_York')
     const events = await createEventsTable('mysql')

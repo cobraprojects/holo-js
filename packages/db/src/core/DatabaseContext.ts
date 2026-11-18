@@ -135,6 +135,10 @@ let nextDatabaseContextId = 0
 
 const queryLoggerScope = new AsyncLocalStorage<true>()
 
+export function isEmittingQueryLog(): boolean {
+  return queryLoggerScope.getStore() === true
+}
+
 type SchemaOperation = { pending: number, settled: boolean, finished: boolean, transaction: TransactionFrame | undefined, owner: RuntimeState, session: Set<SchemaOperation> }
 
 const schemaOperation = new AsyncLocalStorage<SchemaOperation>()
