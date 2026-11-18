@@ -174,6 +174,41 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'billed_on', timeZone: 'UTC' }).get()).rejects.toThrow(SecurityError)
   })
 
+  it('rejects an alias that differs from a column of the query only in case where the database folds names', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const query = () => DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'BILLED_ON', timeZone: 'UTC' }).get()
+
+    if (driver === 'postgres') await expect(query()).resolves.toHaveLength(6)
+    else await expect(query()).rejects.toThrow(SecurityError)
+  })
+
+  it('reads the date column of the table a qualifier names when the same table is joined under an alias', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+
+    const day = await DB.table(events.tableName)
+      .join(`${events.tableName} as e`, 'e.id', '=', `${events.tableName}.id`)
+      .where(`${events.tableName}.id`, 2)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'Asia/Tokyo' })
+      .value('day')
+
+    expect(day).toBe('2026-11-04')
+  })
+
+  it('reads a bare date column next to a joined subquery that does not select it', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+
+    const day = await DB.table(events)
+      .joinSub(DB.table(events).select('id'), 'ids', 'ids.id', '=', `${events.tableName}.id`)
+      .where(`${events.tableName}.id`, 2)
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'Asia/Tokyo' })
+      .value('day')
+
+    expect(day).toBe('2026-11-04')
+  })
+
   it('rejects an unknown unit and a time zone abbreviation', async () => {
     const events = await createEvents(driver)
 
@@ -209,5 +244,7 @@ describe.runIf(mysqlIntegration)('date buckets on mysql without time zone tables
     })
 
     await expect(DB.table(events).selectDate('day', 'seen_at', { as: 'day', timeZone: 'Asia/Tokyo' }).get()).rejects.toThrow(CapabilityError)
+    await expect(DB.table(events).insertUsing(['billed_on'], DB.table(events).selectDate('day', 'seen_at', { as: 'day', timeZone: 'Asia/Tokyo' }))).rejects.toThrow(CapabilityError)
+    expect(await DB.table(events).count()).toBe(6)
   })
 })

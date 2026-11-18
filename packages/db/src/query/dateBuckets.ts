@@ -1,6 +1,7 @@
 import { CompilerError, ConfigurationError, SecurityError } from '../core/errors'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { qualifiesTable } from './modelRowProjection'
+import { splitTablePath } from '../schema/identifiers'
+import { knownJoinedColumns } from './modelRowProjection'
 import type { TableDefinition } from '../schema/types'
 import type { QueryDateBucketSelection, QueryDateBucketUnit, SelectQueryPlan } from './ast'
 
@@ -38,27 +39,36 @@ function isRegionTimeZone(timeZone: string): boolean {
   }
 }
 
-type QueryTable = { readonly qualifies: (qualifier: string) => boolean, readonly definition: TableDefinition | undefined }
+type QueryTable = { readonly name: string | undefined, readonly definition: TableDefinition | undefined, readonly columns: readonly string[] | undefined }
+
+function visibleName(tableName: string | undefined, alias: string | undefined): string | undefined {
+  return alias ?? (tableName === undefined ? undefined : splitTablePath(tableName).table)
+}
 
 function queryTables(plan: SelectQueryPlan, connectionName: string): readonly QueryTable[] {
   const generated = (tableName: string | undefined) => tableName === undefined ? undefined : getConnectionGeneratedTableDefinition(tableName, connectionName)
+  const sourceDefinition = plan.source.table ?? generated(plan.source.tableName)
   return [
-    { qualifies: qualifier => qualifiesTable(qualifier, plan.source.tableName, plan.source.alias), definition: plan.source.table ?? generated(plan.source.tableName) },
-    ...plan.joins.map(join => ({ qualifies: (qualifier: string) => qualifiesTable(qualifier, join.table, join.alias), definition: join.definition ?? generated(join.table) })),
+    { name: visibleName(plan.source.tableName, plan.source.alias), definition: sourceDefinition, columns: sourceDefinition && Object.keys(sourceDefinition.columns) },
+    ...plan.joins.map((join) => {
+      const definition = join.subquery ? undefined : join.definition ?? generated(join.table)
+      return { name: visibleName(join.table, join.alias), definition, columns: knownJoinedColumns(join, connectionName) }
+    }),
   ]
 }
 
-export function queryColumnNames(plan: SelectQueryPlan, connectionName: string): ReadonlySet<string> {
-  return new Set(queryTables(plan, connectionName).flatMap(table => Object.keys(table.definition?.columns ?? {})))
+export function queryColumnNames(plan: SelectQueryPlan, connectionName: string): readonly string[] {
+  return queryTables(plan, connectionName).flatMap(table => table.columns ?? [])
 }
 
 export function dateBucketStorage(plan: SelectQueryPlan, bucket: QueryDateBucketSelection, connectionName: string): DateBucketStorage {
   const separator = bucket.column.lastIndexOf('.')
   const name = bucket.column.slice(separator + 1)
   const tables = queryTables(plan, connectionName)
+  const qualifier = bucket.column.slice(0, separator)
   const owners = separator === -1
-    ? tables.filter(table => table.definition === undefined || Object.hasOwn(table.definition.columns, name))
-    : tables.filter(table => table.qualifies(bucket.column.slice(0, separator)))
+    ? tables.filter(table => table.columns === undefined || table.columns.includes(name))
+    : tables.filter(table => table.name === qualifier || table.name === splitTablePath(qualifier).table)
   if (owners.length > 1) {
     throw new CompilerError(`selectDate() column "${bucket.column}" may belong to more than one table of the query. Qualify it with its table or alias.`)
   }

@@ -2881,6 +2881,7 @@ export class TableQueryBuilder<
 
     await this.prepareMutation()
     await query.bindGeneratedTable()
+    await assertDateBucketTimeZonesConvertible(this.connection, query.getPlan())
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertUsingQueryPlan(this.source, columns, query.getPlan(), { ignoreConflicts }),
     ))

@@ -996,9 +996,10 @@ export class SQLQueryCompiler {
   private compileDateBuckets(plan: SelectQueryPlan): ReadonlyMap<string, string> {
     const buckets = dateBucketSelections(plan)
     if (buckets.size === 0) return new Map()
-    const columns = queryColumnNames(plan, this.connectionName)
+    const fold = (name: string) => this.caseSensitiveIdentifiers ? name : name.toLowerCase()
+    const columns = new Set(queryColumnNames(plan, this.connectionName).map(fold))
     return new Map([...buckets].map(([alias, bucket]) => {
-      if (columns.has(alias)) throw new SecurityError(`Date bucket alias "${alias}" is the name of a column of the query, so the database could read the column instead. Choose another alias.`)
+      if (columns.has(fold(alias))) throw new SecurityError(`Date bucket alias "${alias}" is the name of a column of the query, so the database could read the column instead. Choose another alias.`)
       return [alias, this.compileDateBucket(bucket, dateBucketStorage(plan, bucket, this.connectionName))]
     }))
   }

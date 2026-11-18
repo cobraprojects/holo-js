@@ -207,13 +207,14 @@ function assertColumnReference(
   assertKnownColumn(column, tableName, allowedColumns)
 }
 
-function assertDateBucketSelection(plan: SelectQueryPlan, selection: QueryDateBucketSelection, allowedColumns?: Set<string>): void {
+function assertDateBucketSelection(plan: SelectQueryPlan, selection: QueryDateBucketSelection, dialect: SchemaDialectName | undefined, allowedColumns?: Set<string>): void {
   assertIdentifier(selection.alias, 'Date bucket alias')
   assertDateBucketAlias(selection.alias)
   assertDateBucketUnit(selection.unit)
   if (selection.timeZone !== undefined) assertDateBucketTimeZone(selection.timeZone)
   assertColumnReference(selection.column, plan.source.tableName, allowedColumns)
-  if (plan.selections.some(other => other !== selection && selectionOutputName(other) === selection.alias)) {
+  const fold = (name: string | undefined) => dialect === 'postgres' ? name : name?.toLowerCase()
+  if (plan.selections.some(other => other !== selection && fold(selectionOutputName(other)) === fold(selection.alias))) {
     throw new SecurityError(`Date bucket alias "${selection.alias}" is already the name of another selected column.`)
   }
 }
@@ -642,7 +643,7 @@ export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName):
         }
 
         if (selection.kind === 'date-bucket') {
-          assertDateBucketSelection(plan, selection, allowedColumns)
+          assertDateBucketSelection(plan, selection, dialect, allowedColumns)
           continue
         }
 
