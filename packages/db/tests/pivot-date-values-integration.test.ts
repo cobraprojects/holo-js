@@ -337,6 +337,38 @@ describe.each(drivers)('pivot keys given with more precision than the database k
   })
 })
 
+describe.each(drivers)('pivot ids given as object keys on %s', (driver) => {
+  it('keeps a leading-zero string key as text, as Laravel does', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const names = { owners: `holo_code_owners_${suffix}`, codes: `holo_codes_${suffix}`, ownerCodes: `holo_owner_codes_${suffix}` }
+    await schema.createTable(names.owners, (table) => { table.integer('id').primaryKey() })
+    await schema.createTable(names.codes, (table) => { table.string('code').primaryKey() })
+    await schema.createTable(names.ownerCodes, (table) => {
+      table.integer('owner_id')
+      table.string('code')
+      table.string('note').nullable()
+    })
+    onTestFinished(async () => {
+      for (const name of Object.values(names)) await schema.dropTable(name)
+    })
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
+    const codes = defineGeneratedTable(names.codes, { code: column.string().primaryKey() })
+    const ownerCodes = defineGeneratedTable(names.ownerCodes, { owner_id: column.integer(), code: column.string(), note: column.string().nullable() })
+    registerGeneratedTables({ owners, codes, ownerCodes })
+    onTestFinished(() => clearGeneratedTables())
+    const Code = defineModel(codes, { timestamps: false })
+    const Owner = defineModel(owners, { timestamps: false, relations: { codes: belongsToMany(() => Code, ownerCodes, 'owner_id', 'code', 'id', 'code').withPivot('note') } })
+    await DB.table(owners).insert({ id: 1 })
+    await DB.table(ownerCodes).insert({ owner_id: 1, code: '001', note: 'old' })
+    const owner = await Owner.findOrFail(1)
+
+    expect(await owner.sync('codes', { '001': { note: 'new' } } as never)).toEqual({ attached: [], detached: [], updated: ['001'] })
+    expect(await DB.table(ownerCodes).select('code', 'note').get()).toEqual([{ code: '001', note: 'new' }])
+  })
+})
+
 describe.each(drivers)('pivot date attributes written again on %s', (driver) => {
   it('compares date attributes of a pivot referenced only by an unregistered table name', async () => {
     const { names, owner } = await openPivots(driver)

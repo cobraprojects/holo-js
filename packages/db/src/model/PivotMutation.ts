@@ -7,7 +7,7 @@ import { formatCalendarDate } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { assertQueryTablePath } from '../query/validator'
-import { normalizeDialectWriteValue, parseStoredDate, storesDate } from '../schema/normalization'
+import { normalizeDialectWriteValue, parseStoredDate, readsAsInteger, storesDate } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import { assertColumnWritable, canonicalStoredKey, ownEntry } from './entityRuntime'
@@ -49,6 +49,7 @@ export class PivotMutation {
   private readonly storedKeyTextAlias = `holo_stored_key_${this.aliasSuffix}`
   private readonly matchingValuesAlias = `holo_matching_${this.aliasSuffix}`
   private relatedKey: AnyColumnDefinition | undefined
+  private readonly targetKeyCache = new WeakMap<readonly Attributes[], unknown[]>()
   private relatedKeyLoaded = false
 
   constructor(private readonly context: Context, private readonly connection: DatabaseContext) {
@@ -208,7 +209,7 @@ export class PivotMutation {
     if (Array.isArray(ids)) return ids.map(id => ({ id: bindableId(id), attributes: { ...attributes } }))
     if (typeof ids === 'object' && !isScalarObjectId(ids)) {
       return Object.entries(ids as Record<string, Attributes>).map(([id, value]) => ({
-        id: /^-?\d+$/.test(id) ? Number(id) : id,
+        id: this.objectKey(id),
         attributes: { ...(value ?? {}) },
       }))
     }
@@ -227,7 +228,18 @@ export class PivotMutation {
   }
 
   private targetKeys(existing: readonly Attributes[], incoming: unknown): unknown[] {
-    return this.dateKeyColumn() ? this.storedKeys(existing) : [incoming]
+    if (!this.dateKeyColumn()) return [incoming]
+    const cached = this.targetKeyCache.get(existing)
+    if (cached) return cached
+    const keys = this.storedKeys(existing)
+    this.targetKeyCache.set(existing, keys)
+    return keys
+  }
+
+  private objectKey(id: string): unknown {
+    const column = this.relatedKeyLoaded ? this.relatedKey : this.context.relatedKey
+    if (column && !readsAsInteger(column)) return id
+    return /^-?\d+$/.test(id) ? Number(id) : id
   }
 
   private storedKeys(rows: readonly Attributes[]): unknown[] {
