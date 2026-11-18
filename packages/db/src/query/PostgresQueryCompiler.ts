@@ -196,14 +196,15 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
     const column = this.compileColumnReference(bucket.column)
     const applicationTimeZone = getApplicationTimezone()
     const timeZone = this.createSqlStringLiteral(bucket.timeZone ?? applicationTimeZone)
-    const instant = `CASE WHEN pg_typeof(${column}) = 'timestamp with time zone'::regtype THEN CAST(${column} AS TIMESTAMPTZ) ELSE CAST(${column} AS TIMESTAMP) AT TIME ZONE ${this.createSqlStringLiteral(applicationTimeZone)} END`
+    const holdsInstant = `pg_typeof(timezone('UTC', ${column})) = 'timestamp without time zone'::regtype`
+    const instant = `CASE WHEN ${holdsInstant} THEN CAST(${column} AS TIMESTAMPTZ) ELSE CAST(${column} AS TIMESTAMP) AT TIME ZONE ${this.createSqlStringLiteral(applicationTimeZone)} END`
     const format = POSTGRES_DATE_BUCKET_FORMATS[bucket.unit]
     if (storage === 'calendar') {
       return `CASE WHEN ${column} BETWEEN DATE '0001-01-01' AND DATE '9999-12-31' THEN to_char(CAST(${column} AS TIMESTAMP), '${format}') END`
     }
     const wallClock = `((${instant}) AT TIME ZONE ${timeZone})`
     const formatted = `CASE WHEN ${wallClock} BETWEEN TIMESTAMP '0001-01-01 00:00:00' AND TIMESTAMP '9999-12-31 23:59:59.999999' THEN to_char(${wallClock}, '${format}') END`
-    const convertible = `CASE WHEN pg_typeof(${column}) = 'timestamp with time zone'::regtype THEN CAST(${column} AS TIMESTAMPTZ) BETWEEN TIMESTAMPTZ '0001-12-30 00:00:00+00 BC' AND TIMESTAMPTZ '10000-01-02 00:00:00+00' ELSE CAST(${column} AS TIMESTAMP) BETWEEN TIMESTAMP '0001-12-30 00:00:00 BC' AND TIMESTAMP '10000-01-02 00:00:00' END`
+    const convertible = `CASE WHEN ${holdsInstant} THEN CAST(${column} AS TIMESTAMPTZ) BETWEEN TIMESTAMPTZ '0001-12-30 00:00:00+00 BC' AND TIMESTAMPTZ '10000-01-02 00:00:00+00' ELSE CAST(${column} AS TIMESTAMP) BETWEEN TIMESTAMP '0001-12-30 00:00:00 BC' AND TIMESTAMP '10000-01-02 00:00:00' END`
     return `CASE WHEN ${convertible} THEN ${formatted} END`
   }
 

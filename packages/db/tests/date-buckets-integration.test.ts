@@ -1744,6 +1744,59 @@ describe.runIf(postgresIntegration)('grouped date bucket cursors on postgres out
   })
 })
 
+describe.runIf(postgresIntegration)('date buckets next to postgres domains and vectors', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('reads a domain over timestamptz as an instant', async () => {
+    useAppTimezone('UTC')
+    const name = `bucket_domain_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const domain = `${name}_instant`
+    const db = createDatabase({
+      connectionName: 'default',
+      adapter: createPostgresAdapter({ config: { ...postgresTestConnection(), options: '-c TimeZone=Asia/Tokyo' } }),
+      dialect: createDialect('postgres'),
+    })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    const instants = defineGeneratedTable(name, { id: column.integer().primaryKey(), at: column.timestamp() })
+    try {
+      await db.executeCompiled({ sql: `CREATE DOMAIN "${domain}" AS timestamptz`, source: 'test' })
+      await db.executeCompiled({ sql: `CREATE TABLE "${name}" (id integer PRIMARY KEY, at "${domain}")`, source: 'test' })
+      await db.executeCompiled({ sql: `INSERT INTO "${name}" (id, at) VALUES (1, '2026-11-04 23:30:00+00')`, source: 'test' })
+
+      const day = await DB.table(instants).selectDate('day', 'at', { as: 'day', timeZone: 'UTC' }).value('day')
+
+      expect(day).toBe('2026-11-04')
+    } finally {
+      await db.executeCompiled({ sql: `DROP TABLE IF EXISTS "${name}"`, source: 'test' })
+      await db.executeCompiled({ sql: `DROP DOMAIN IF EXISTS "${domain}"`, source: 'test' })
+      await db.disconnect()
+    }
+  })
+
+  it('orders by vector similarity of a joined column named like a date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('postgres')
+    const connection = DB.connection()
+    const name = `bucket_vectors_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await createSchemaService(connection).dropTable(name)
+    })
+    await connection.executeCompiled({ sql: `CREATE TABLE "${name}" (id integer PRIMARY KEY, embedding vector(2))`, source: 'test' })
+    await connection.executeCompiled({ sql: `INSERT INTO "${name}" (id, embedding) VALUES (1, '[1,2]'), (2, '[9,9]')`, source: 'test' })
+    registerGeneratedTables({ events, vectors: defineGeneratedTable(name, { id: column.id(), embedding: column.vector({ dimensions: 2 }) }) })
+
+    const rows = await DB.table(events.tableName)
+      .join(name, `${name}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'embedding', timeZone: 'UTC' })
+      .orderByVectorSimilarity('embedding', [1, 2])
+      .get()
+
+    expect(rows).toEqual([{ embedding: '2026-11-03' }, { embedding: '2026-11-03' }])
+  })
+})
+
 describe.runIf(postgresIntegration)('date buckets on postgres before the common era', () => {
   afterEach(() => {
     resetDB()

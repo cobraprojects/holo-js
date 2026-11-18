@@ -210,10 +210,11 @@ export class SQLQueryCompiler {
     const enclosingDateBucketPlan = this.dateBucketPlan
     const enclosingDateBucketsFolded = this.dateBucketsFolded
     try {
-      this.dateBuckets = new Map([...dateBucketSelections(plan)].map(([alias, bucket]) => [alias, { bucket, storage: dateBucketStorage(plan, bucket, this.connectionName) }]))
-      this.dateBucketPlan = plan
+      const selections = dateBucketSelections(plan)
+      this.dateBuckets = new Map([...selections].map(([alias, bucket]) => [alias, { bucket, storage: dateBucketStorage(plan, bucket, this.connectionName) }]))
+      this.dateBucketPlan = selections.size === 0 ? undefined : plan
       this.dateBucketsFolded = new Map([...this.dateBuckets].map(([alias, resolved]) => [alias.toLowerCase(), resolved]))
-      assertDateBucketOutputsUnshadowed(plan, this.connectionName)
+      if (selections.size > 0) assertDateBucketOutputsUnshadowed(plan, this.connectionName)
       return this.compileSelectSqlWithinDateBuckets(plan, bindings, projection)
     } finally {
       this.dateBuckets = enclosingDateBuckets
@@ -976,7 +977,7 @@ export class SQLQueryCompiler {
     }
 
     if (orderBy.kind === 'vector') {
-      return `${this.compileVectorDistanceExpression(orderBy.column, orderBy.vector, bindings)} ASC`
+      return `${this.withDateBucketAliases('column', () => this.compileVectorDistanceExpression(orderBy.column, orderBy.vector, bindings))} ASC`
     }
 
     return `${this.compileColumnReference(orderBy.column)} ${orderBy.direction.toUpperCase()}`
