@@ -13,7 +13,7 @@ async function openPivots(driver: Driver) {
   const { db, schema } = await openDatabase(driver, { security: { allowUnsafeRawSql: true } })
   onTestFinished(() => resetDB())
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
-  const names = { owners: `holo_owners_${suffix}`, slots: `holo_slots_${suffix}`, ownerSlots: `holo_owner_slots_${suffix}`, tags: `holo_tags_${suffix}`, ownerTags: `holo_owner_tags_${suffix}`, ownerBadges: `holo_owner_badges_${suffix}` }
+  const names = { owners: `holo_owners_${suffix}`, slots: `holo_slots_${suffix}`, ownerSlots: `holo_owner_slots_${suffix}`, tags: `holo_tags_${suffix}`, ownerTags: `holo_owner_tags_${suffix}`, ownerBadges: `holo_owner_badges_${suffix}`, days: `holo_days_${suffix}`, ownerDays: `holo_owner_days_${suffix}` }
   await schema.createTable(names.owners, (table) => { table.integer('id').primaryKey() })
   await schema.createTable(names.slots, (table) => { table.datetime('starts_at').primaryKey() })
   await schema.createTable(names.ownerSlots, (table) => {
@@ -28,6 +28,12 @@ async function openPivots(driver: Driver) {
     table.string('note').nullable()
     table.timestamp('expires_at').nullable()
     table.date('due_on').nullable()
+  })
+  await schema.createTable(names.days, (table) => { table.date('day').primaryKey() })
+  await schema.createTable(names.ownerDays, (table) => {
+    table.integer('owner_id')
+    table.date('day')
+    table.string('note').nullable()
   })
   await schema.createTable(names.ownerBadges, (table) => {
     table.integer('owner_id')
@@ -45,7 +51,10 @@ async function openPivots(driver: Driver) {
   const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey() })
   const ownerTags = defineGeneratedTable(names.ownerTags, { owner_id: column.integer(), tag_id: column.integer(), note: column.string().nullable(), expires_at: column.timestamp().nullable(), due_on: column.date().nullable() })
   const ownerBadges = defineGeneratedTable(names.ownerBadges, { owner_id: column.integer(), tag_id: column.integer(), expires_at: column.timestamp().nullable(), created_at: column.timestamp().nullable(), updated_at: column.timestamp().nullable() })
-  registerGeneratedTables({ owners, slots, ownerSlots, tags, ownerTags, ownerBadges })
+  const days = defineGeneratedTable(names.days, { day: column.date().primaryKey() })
+  const ownerDays = defineGeneratedTable(names.ownerDays, { owner_id: column.integer(), day: column.date(), note: column.string().nullable() })
+  registerGeneratedTables({ owners, slots, ownerSlots, tags, ownerTags, ownerBadges, days, ownerDays })
+  const Day = defineModel(days, { timestamps: false })
   onTestFinished(() => clearGeneratedTables())
   const Slot = defineModel(slots, { timestamps: false })
   const Tag = defineModel(tags, { timestamps: false })
@@ -55,11 +64,12 @@ async function openPivots(driver: Driver) {
       slots: belongsToMany(() => Slot, ownerSlots, 'owner_id', 'starts_at', 'id', 'starts_at').withPivot('note'),
       tags: belongsToMany(() => Tag, ownerTags, 'owner_id', 'tag_id').withPivot('note', 'expires_at', 'due_on'),
       badges: belongsToMany(() => Tag, ownerBadges, 'owner_id', 'tag_id').withPivot('expires_at').withTimestamps(),
+      days: belongsToMany(() => Day, ownerDays, 'owner_id', 'day', 'id', 'day').withPivot('note'),
     },
   })
   await DB.table(owners).insert({ id: 1 })
   await DB.table(tags).insert([{ id: 1 }, { id: 2 }])
-  return { db, names, ownerSlots, ownerTags, ownerBadges, owner: await Owner.findOrFail(1) }
+  return { db, names, ownerSlots, ownerTags, ownerBadges, ownerDays, owner: await Owner.findOrFail(1) }
 }
 
 describe.each(integrationDrivers(['sqlite']))('pivot rows keyed by SQLite date text on %s', (driver) => {
@@ -169,6 +179,31 @@ describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as S
 
     expect(await untyped.updateExistingPivot('tags', 1, { expires_at: new Date('2026-01-01T10:00:00Z') })).toBe(0)
     expect(await untyped.updateExistingPivot('tags', 1, { expires_at: new Date('2026-01-01T11:00:00Z') })).toBe(1)
+  })
+})
+
+describe.each(integrationDrivers(['sqlite']))('pivot rows keyed by a SQLite calendar date on %s', (driver) => {
+  it('updates and detaches a day stored as calendar text through a midnight Date', async () => {
+    const { db, names, owner, ownerDays } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`INSERT INTO "${names.ownerDays}" ("owner_id", "day", "note") VALUES (1, '2026-01-01', 'old')`))
+
+    expect(await owner.updateExistingPivot('days', new Date('2026-01-01T00:00:00Z'), { note: 'new' })).toBe(1)
+    expect(await DB.table(ownerDays).pluck('note')).toEqual(['new'])
+    expect(await owner.detach('days', new Date('2026-01-01T00:00:00Z'))).toBe(1)
+    expect(await DB.table(ownerDays).count()).toBe(0)
+  })
+})
+
+describe.each(drivers)('pivot keys given with more precision than the database keeps on %s', (driver) => {
+  it('attaches a key once and detaches it by the same value', async () => {
+    const { owner, ownerSlots } = await openPivots(driver)
+    const key = '2026-01-01T10:00:00.000002Z' as never
+
+    await owner.attach('slots', key)
+    await owner.attach('slots', key)
+    expect(await DB.table(ownerSlots).count()).toBe(1)
+    expect(await owner.detach('slots', key)).toBe(1)
+    expect(await DB.table(ownerSlots).count()).toBe(0)
   })
 })
 

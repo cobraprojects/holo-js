@@ -1,7 +1,7 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder, selectStoredText, whereStoredValuesDiffer, whereStoredValuesIn } from '../query/TableQueryBuilder'
-import { normalizeQueryWriteValue } from '../query/queryValueNormalizer'
+import { normalizeDateColumnPredicateValue, normalizeQueryWriteValue } from '../query/queryValueNormalizer'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { assertQueryTablePath } from '../query/validator'
 import { normalizeDialectWriteValue, parseStoredDate, storesDate } from '../schema/normalization'
@@ -224,11 +224,18 @@ export class PivotMutation {
 
   private storedKeyIdentity(row: Attributes): unknown {
     const value = row[this.context.relatedColumn]
+    if (this.dateKeyColumn()?.kind === 'date') return this.calendarDayIdentity(value)
     return this.readsStoredKeyText() ? this.instantIdentity(value, row[storedKeyTextAlias]) : this.incomingKeyIdentity(value)
   }
 
   private incomingKeyIdentity(value: unknown): unknown {
-    return this.readsStoredKeyText() ? this.instantIdentity(this.writeKey(value), value) : this.keyIdentity(this.readKey(this.writeKey(value)))
+    if (this.dateKeyColumn()?.kind === 'date') return this.calendarDayIdentity(value)
+    const written = this.writeKey(value)
+    return this.readsStoredKeyText() ? this.instantIdentity(written, written) : this.keyIdentity(this.readKey(written))
+  }
+
+  private calendarDayIdentity(value: unknown): unknown {
+    return this.keyIdentity(normalizeDateColumnPredicateValue(this.tableDefinition(), this.context.dialect, this.context.relatedColumn, value, '=').value)
   }
 
   private instantIdentity(value: unknown, text: unknown): unknown {
