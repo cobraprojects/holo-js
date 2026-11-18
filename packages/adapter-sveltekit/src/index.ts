@@ -75,23 +75,27 @@ function toSvelteKitErrorStatus(status: number): SvelteKitErrorStatus {
 }
 
 const ROUTE_GROUP_SEGMENT = /^\([^)]+\)$/
-const REST_ROUTE_SEGMENT = /^\[\.\.\.[\w-]+?(?:=[\w-]+)?\]$/
 const ROUTE_SEGMENT_PART = /\[([ux])\+([^\]]+)\]|\[(\[)?(\.\.\.)?([\w-]+?)(?:=([\w-]+))?\]\]?/g
+const LITERAL_SLASH = '\u0000'
+
+function literalPathText(text: string): string {
+  return text.replaceAll('/', LITERAL_SLASH)
+}
 
 function routeSegmentPath(segment: string, params: Readonly<Record<string, SvelteKitParamValue | undefined>>): string {
-  return segment.replace(ROUTE_SEGMENT_PART, (_part, escapeType: string | undefined, escapeCode: string | undefined, _optional, _rest, name: string | undefined) => escapeType
-    ? String.fromCodePoint(...(escapeCode ?? '').split('-').map(codepoint => Number.parseInt(codepoint, 16)))
-    : String(params[name ?? ''] ?? ''))
+  return segment.replace(ROUTE_SEGMENT_PART, (_part, escapeType: string | undefined, escapeCode: string | undefined, _optional, rest: string | undefined, name: string | undefined) => {
+    if (escapeType) return literalPathText(String.fromCodePoint(...(escapeCode ?? '').split('-').map(codepoint => Number.parseInt(codepoint, 16))))
+    const value = String(params[name ?? ''] ?? '')
+    return rest ? value : literalPathText(value)
+  })
 }
 
 function firstAppPathSegment(routeId: string, params: Readonly<Record<string, SvelteKitParamValue | undefined>>): string | undefined {
-  for (const segment of routeId.slice(1).split('/')) {
-    if (segment === '' || ROUTE_GROUP_SEGMENT.test(segment)) continue
-    const path = routeSegmentPath(segment, params)
-    const first = REST_ROUTE_SEGMENT.test(segment) ? path.split('/').find(part => part !== '') : path
-    if (first) return first
-  }
-  return undefined
+  const path = routeId.slice(1).split('/')
+    .filter(segment => segment !== '' && !ROUTE_GROUP_SEGMENT.test(segment))
+    .map(segment => routeSegmentPath(segment, params))
+    .join('/')
+  return path.split('/').find(segment => segment !== '')?.replaceAll(LITERAL_SLASH, '/')
 }
 
 function isApiRoute(event: SvelteKitRequestEvent): boolean {

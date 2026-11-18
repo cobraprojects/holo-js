@@ -144,8 +144,11 @@ describe('SvelteKit validation hooks', () => {
     expect(flashed.size).toBe(0)
   })
 
-  it('answers a POST validation failure on an API route spelled with route escapes with 422 JSON', async () => {
-    const { event } = createEvent('invalid-email', 'text/html', '/dashboard/api/login', { routeId: '/a[x+70]i/login' })
+  it.each([
+    ['route escapes', '/dashboard/api/login', '/a[x+70]i/login', {}],
+    ['a rest parameter inside a mixed segment', '/api/login.json', '/[...path].json', { path: 'api/login' }],
+  ])('answers a POST validation failure on an API route spelled with %s with 422 JSON', async (_label, path, routeId, params) => {
+    const { event } = createEvent('invalid-email', 'text/html', path, { routeId, params })
     const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
     const response = await hooks.handle({ event, resolve: async (event) => {
       await validate(await event.request.formData(), loginSchema)
