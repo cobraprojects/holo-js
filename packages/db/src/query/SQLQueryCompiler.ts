@@ -622,7 +622,7 @@ export class SQLQueryCompiler {
   protected compileJoins(joins: readonly QueryJoinClause[], bindings: unknown[]): string {
     if (joins.length === 0) return ''
 
-    return joins.map((join) => {
+    return joins.map((join, index) => {
       const source = this.compileJoinSource(join, bindings)
       if (join.type === 'cross') {
         return ` CROSS JOIN ${source}`
@@ -632,7 +632,8 @@ export class SQLQueryCompiler {
         return ` ${join.type.toUpperCase()} JOIN ${source} ON TRUE`
       }
 
-      return ` ${join.type.toUpperCase()} JOIN ${source} ON ${this.compileKeyComparison(this.compileColumnReference(join.leftColumn!), join.keyCasts?.left, join.operator!.toUpperCase(), this.compileColumnReference(join.rightColumn!), join.keyCasts?.right)}`
+      const condition = this.withVisibleJoins(index + 1, () => this.compileKeyComparison(this.compileColumnReference(join.leftColumn!), join.keyCasts?.left, join.operator!.toUpperCase(), this.compileColumnReference(join.rightColumn!), join.keyCasts?.right))
+      return ` ${join.type.toUpperCase()} JOIN ${source} ON ${condition}`
     }).join('')
   }
 
@@ -1018,7 +1019,7 @@ export class SQLQueryCompiler {
       if (column === '*') {
         return `${fn!.toUpperCase()}(*)`
       }
-      return `${fn!.toUpperCase()}(${this.compileColumnReference(column!)})`
+      return `${fn!.toUpperCase()}(${this.withDateBucketAliases('expression', () => this.compileColumnReference(column!))})`
     }
 
     return this.compileColumnReference(expression)
@@ -1031,6 +1032,17 @@ export class SQLQueryCompiler {
       return compile()
     } finally {
       this.dateBucketAliasMode = enclosing
+    }
+  }
+
+  private withVisibleJoins<TResult>(count: number, compile: () => TResult): TResult {
+    const enclosing = this.dateBucketPlan
+    if (!enclosing) return compile()
+    this.dateBucketPlan = { ...enclosing, joins: enclosing.joins.slice(0, count) }
+    try {
+      return compile()
+    } finally {
+      this.dateBucketPlan = enclosing
     }
   }
 

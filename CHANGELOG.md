@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Database: `cursorPaginate()` on a grouped query no longer adds the primary key to `ORDER BY`, which PostgreSQL and MySQL rejected. A grouped query must order by every `groupBy()` column. See [Ordering rules](apps/docs/docs/database/pagination.md#ordering-rules).
+- Database: `cursorPaginate()` on a grouped query adds the primary key to `ORDER BY` only when every primary key column is grouped. Before, it always added it, which PostgreSQL and MySQL rejected for other grouped queries. A grouped query must order by every `groupBy()` column. See [Ordering rules](apps/docs/docs/database/pagination.md#ordering-rules).
 
 ## 0.6.1 - 2026-11-17
 

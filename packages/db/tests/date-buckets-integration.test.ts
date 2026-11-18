@@ -68,6 +68,21 @@ async function fillLabelsTable(labels: Awaited<ReturnType<typeof createLabelsTab
   ])
 }
 
+async function createKeyedTable(prefix: string, valueColumn: string, rows: readonly { readonly id: number, readonly value: number | null }[]) {
+  const schema = createSchemaService(DB.connection())
+  const name = `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+  onTestFinished(async () => {
+    await schema.dropTable(name)
+  })
+  await schema.createTable(name, (table) => {
+    table.id()
+    table.integer(valueColumn).nullable()
+  })
+  const keyed = defineGeneratedTable(name, { id: column.id(), [valueColumn]: column.integer().nullable() })
+  await DB.table(name).insert(rows.map(row => ({ id: row.id, [valueColumn]: row.value })))
+  return keyed
+}
+
 async function createFactsTable(driver: typeof drivers[number]) {
   const events = await createEventsTable(driver)
   const schema = createSchemaService(DB.connection())
@@ -391,6 +406,60 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
       .addSelect('tenant_id as BUCKET')
       .get()).rejects.toThrow(SecurityError)
+  })
+
+  it('counts the date bucket in a HAVING aggregate when a joined column shares its name', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const notes = await createKeyedTable('bucket_notes', 'bucket', [{ id: 1, value: null }, { id: 2, value: null }])
+    registerGeneratedTables({ events, notes })
+
+    const rows = await DB.table(events.tableName)
+      .join(notes.tableName, `${notes.tableName}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
+      .addSelectCount('total')
+      .groupBy('bucket')
+      .having('count(bucket)', '>', 0)
+      .get()
+
+    expect(rows).toEqual([{ bucket: '2026-11-03', total: 2 }])
+  })
+
+  it('cursor-paginates a query grouped by its qualified primary key', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const ids = () => DB.table(events).where('tenant_id', 1).select(`${events.tableName}.id`).groupBy(`${events.tableName}.id`)
+    const days = () => DB.table(events)
+      .where('tenant_id', 1)
+      .whereNotNull('occurred_at')
+      .select(`${events.tableName}.id`)
+      .addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .groupBy(`${events.tableName}.id`, 'day')
+      .orderBy('day')
+
+    const first = await ids().cursorPaginate(4)
+    const second = await ids().cursorPaginate(4, first.nextCursor)
+    const firstDays = await days().cursorPaginate(3)
+    const secondDays = await days().cursorPaginate(3, firstDays.nextCursor)
+
+    expect([...first.data, ...second.data].map(row => row.id)).toEqual([1, 2, 3, 4, 5, 6, 8])
+    expect([...firstDays.data, ...secondDays.data].map(row => row.id)).toEqual([1, 2, 3, 4, 5, 6])
+  })
+
+  it('resolves a join condition against the tables joined so far', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const first = await createKeyedTable('bucket_first', 'day', [{ id: 1, value: 1 }])
+    const second = await createKeyedTable('bucket_second', 'day', [{ id: 1, value: 7 }])
+    registerGeneratedTables({ events, first, second })
+
+    const rows = await DB.table(events.tableName)
+      .join(first.tableName, 'day', '=', `${events.tableName}.id`)
+      .join(second.tableName, `${second.tableName}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
+      .get()
+
+    expect(rows).toEqual([{ day: '2026-11-03' }])
   })
 
   it('rejects a joined wildcard spelled in another case whose column shares the date bucket alias', async () => {

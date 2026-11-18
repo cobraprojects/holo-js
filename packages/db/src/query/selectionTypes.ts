@@ -18,9 +18,9 @@ export type DateColumnName<TColumns extends Record<string, unknown>> = string ex
   ? string
   : { [TColumn in keyof TColumns & string]: [NonNullable<TColumns[TColumn]>] extends [never] ? never : NonNullable<TColumns[TColumn]> extends Date ? TColumn : never }[keyof TColumns & string]
 
-export type DateBucketAlias<TRow extends Record<string, unknown>> = {
-  [TColumn in keyof TRow & string]: NonNullable<TRow[TColumn]> extends DateBucket ? TColumn : never
-}[keyof TRow & string]
+export type DateBucketAlias<TRow extends Record<string, unknown>> = keyof {
+  [TColumn in keyof TRow as TColumn extends string ? string extends TColumn ? never : NonNullable<TRow[TColumn]> extends DateBucket ? TColumn : never : never]: true
+} & string
 
 export type DateBucketAliasName<TAlias extends string, TColumns extends Record<string, unknown>> = string extends keyof TColumns
   ? TAlias

@@ -55,6 +55,12 @@ it('keeps the table columns when a date bucket is the first added selection', as
   }
 })
 
+it('keeps date bucket aliases usable after an unsafe selection', () => {
+  if (false) {
+    DB.table(events).unsafeSelect('COUNT(*) AS total', []).addSelectDate('day', 'occurred_at', { as: 'day' }).groupBy('day').orderBy('day')
+  }
+})
+
 it('rejects date buckets on non-date columns, unknown units and aliases that shadow a column', () => {
   if (false) {
     // @ts-expect-error only date, datetime and timestamp columns can be bucketed
