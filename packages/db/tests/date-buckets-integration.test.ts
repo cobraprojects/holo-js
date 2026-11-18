@@ -1163,6 +1163,19 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect(compiler.compile(DB.table(events).addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).getPlan()).sql).toContain(`"${events.tableName}".*`)
   })
 
+  it('rejects union cursor pagination that compares a date bucket with a number column', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events.tableName)
+      .where('tenant_id', 1)
+      .select('id')
+      .addSelectDate('year', 'occurred_at', { as: 'year', timeZone: 'UTC' })
+      .unionAll(DB.table(events.tableName).where('tenant_id', 2).select('id', 'tenant_id as year'))
+      .orderBy('year')
+      .cursorPaginate(1)).rejects.toThrow(SecurityError)
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)

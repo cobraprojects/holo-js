@@ -6,7 +6,7 @@ import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
 import type { QueryDateBucketSelection, QueryRawSelection, QueryRelationKeysPredicate } from './ast'
-import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, assertGroupedOrderKeysUnshadowed, effectiveOutputName, groupedCursorKey, planHasDateBuckets, selectionMayOutputName, type GroupedKeyContext } from './dateBuckets'
+import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, assertGroupedOrderKeysUnshadowed, effectiveOutputName, groupedCursorKey, holdsText, planHasDateBuckets, selectionMayOutputName, type GroupedKeyContext } from './dateBuckets'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -2373,7 +2373,7 @@ export class TableQueryBuilder<
     const unionColumns = orderedQuery.plan.unions.length === 0
       ? undefined
       : unionCursorColumns(orderedQuery.plan, cursorOrders.map(order => order.column), this.connection.getConnectionName())
-    if (unionColumns) assertUnionCursorDistinguishesGroups(orderedQuery.plan)
+    if (unionColumns) assertDateBucketUnionCursor(orderedQuery.plan, unionColumns, this.connection.getConnectionName())
     const hiddenSelections = cursorOrders.flatMap((order, index) => {
       const hidden = hiddenCursorColumns[index]
       return hidden === undefined ? [] : [`${order.column} as ${hidden}`]
@@ -3738,10 +3738,22 @@ function withoutKeys<TRow extends Record<string, unknown>>(row: TRow, keys: read
   return copy
 }
 
-function assertUnionCursorDistinguishesGroups(plan: SelectQueryPlan): void {
+function assertDateBucketUnionCursor(plan: SelectQueryPlan, unionColumns: (branch: SelectQueryPlan) => readonly UnionCursorColumn[], connectionName: string): void {
   const branches = unionBranchPlans(plan)
-  if (branches.some(branch => branch.groupBy.length > 0) && branches.some(branch => dateBucketSelections(branch).size > 0)) {
+  if (!branches.some(branch => dateBucketSelections(branch).size > 0)) return
+  if (branches.some(branch => branch.groupBy.length > 0)) {
     throw new SecurityError('Cursor pagination cannot page a union with date buckets that has a grouped query, because its order cannot always tell the groups apart.')
+  }
+  const columns = branches.map(unionColumns)
+  const comparesAcrossTypes = (columns[0] ?? []).some((_column, index) => {
+    const bucketed = columns.some(branch => branch[index]?.selectionAlias === true)
+    return bucketed && branches.some((branch, branchIndex) => {
+      const column = columns[branchIndex]?.[index]
+      return column !== undefined && !column.selectionAlias && !holdsText(branch, column.column, connectionName)
+    })
+  })
+  if (comparesAcrossTypes) {
+    throw new SecurityError('Cursor pagination cannot order a union by a position that is a date bucket in some queries and a column in others, because the database compares them as different types.')
   }
 }
 
