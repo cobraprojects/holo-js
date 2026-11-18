@@ -1,23 +1,31 @@
-function requestAppBases(): WeakMap<Request, string> {
-  const runtime = globalThis as typeof globalThis & { __holoRequestAppBases__?: WeakMap<Request, string> }
+function requestAppBases(): WeakMap<object, string> {
+  const runtime = globalThis as typeof globalThis & { __holoRequestAppBases__?: WeakMap<object, string> }
   runtime.__holoRequestAppBases__ ??= new WeakMap()
   return runtime.__holoRequestAppBases__
 }
 
-function set(request: Request, base: string): void {
-  requestAppBases().set(request, base)
+function normalizeBase(base: string): string {
+  return new URL(`http://holo.local/${base.replace(/^\/+/, '')}`).pathname.replace(/\/+$/, '')
+}
+
+function set(owner: object, base: string): void {
+  requestAppBases().set(owner, normalizeBase(base))
+}
+
+function base(owner: object): string {
+  return requestAppBases().get(owner) ?? ''
 }
 
 function pathname(request: Request): string {
   const path = new URL(request.url).pathname
-  const base = requestAppBases().get(request) ?? ''
-  if (!base) return path
-  if (path === base || path === `${base}/`) return '/'
-  return path.startsWith(`${base}/`) ? path.slice(base.length) : path
+  const prefix = base(request)
+  if (!prefix) return path
+  if (path === prefix || path === `${prefix}/`) return '/'
+  return path.startsWith(`${prefix}/`) ? path.slice(prefix.length) : path
 }
 
 function withBase(request: Request, path: string): string {
-  return `${requestAppBases().get(request) ?? ''}${path}`
+  return `${base(request)}${path}`
 }
 
-export const requestAppBaseInternals = { set, pathname, withBase }
+export const requestAppBaseInternals = { set, base, pathname, withBase }

@@ -12,7 +12,7 @@ vi.mock('@holo-js/core', async importOriginal => ({
 vi.mock('#imports', () => ({
   defineNitroPlugin: <TPlugin>(plugin: TPlugin): TPlugin => plugin,
   useEvent: () => undefined,
-  useRuntimeConfig: () => ({ holo: { projectRoot: '/holo-project' } }),
+  useRuntimeConfig: () => ({ app: { baseURL: '/' }, holo: { projectRoot: '/holo-project' } }),
 }))
 
 type Deferred<TValue> = {

@@ -1,6 +1,9 @@
 import type { RuntimeConfigInput } from '@holo-js/db'
 
 interface HoloRuntimeConfig extends RuntimeConfigInput {
+  app: {
+    baseURL: string
+  }
   holo: NonNullable<RuntimeConfigInput['holo']> & {
     appUrl?: string
     projectRoot?: string

@@ -6,7 +6,7 @@ import {
 import { createNuxtAuthorizationError } from '../authorization-error'
 import { connectionAddress } from '../server/connection-address'
 import { initializeHoloAdapterProject } from '@holo-js/core'
-import { requestUrlInternals } from '@holo-js/kernel'
+import { requestAppBaseInternals, requestUrlInternals } from '@holo-js/kernel'
 import { captureErrorReporter } from '@holo-js/kernel/error-reporting'
 import type { H3Event } from 'h3'
 import { defineNitroPlugin, useEvent, useRuntimeConfig } from '#imports'
@@ -43,6 +43,7 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
 
   const onRequest = nitroApp.h3App.options.onRequest
   nitroApp.h3App.options.onRequest = async (event) => {
+    requestAppBaseInternals.set(event, config.app.baseURL)
     await project
     return await onRequest?.(event)
   }

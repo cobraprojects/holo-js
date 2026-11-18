@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type * as HoloCoreModule from '@holo-js/core'
 import { errorReportingInternals } from '@holo-js/kernel/error-reporting'
+import { requestAppBaseInternals } from '@holo-js/kernel'
+import type { H3Event } from 'h3'
 
 type CloseHandler = () => Promise<void>
 
@@ -15,13 +17,13 @@ vi.mock('#imports', () => ({
   createError: (error: unknown) => error,
   defineNitroPlugin: (plugin: unknown) => plugin,
   useEvent: () => ({ node: { req: { socket: undefined } } }),
-  useRuntimeConfig: () => ({ holo: { projectRoot: '/holo-nuxt-init-plugin' } }),
+  useRuntimeConfig: () => ({ app: { baseURL: '/dashboard/' }, holo: { projectRoot: '/holo-nuxt-init-plugin' } }),
 }))
 
-async function startPlugin(): Promise<{ readonly close: CloseHandler }> {
+async function startPlugin(): Promise<{ readonly close: CloseHandler, readonly request: (event: H3Event) => Promise<void> }> {
   const { default: initPlugin } = await import('../src/runtime/plugins/init')
   let closeHandler: CloseHandler | undefined
-  const nitroApp = {
+  const nitroApp: { h3App: { options: { onRequest?: (event: H3Event) => void | Promise<void> } }, hooks: { hook(name: 'close', handler: CloseHandler): void } } = {
     h3App: { options: {} },
     hooks: {
       hook(name: 'close', handler: CloseHandler) {
@@ -32,7 +34,7 @@ async function startPlugin(): Promise<{ readonly close: CloseHandler }> {
 
   initPlugin(nitroApp as Parameters<typeof initPlugin>[0])
   if (!closeHandler) throw new Error('The init plugin did not register a close hook.')
-  return { close: closeHandler }
+  return { close: closeHandler, request: async event => await nitroApp.h3App.options.onRequest?.(event) }
 }
 
 describe('nuxt init plugin shutdown', () => {
@@ -106,6 +108,14 @@ describe('nuxt init plugin shutdown', () => {
     })
     await closing
     await vi.waitFor(() => expect(reports).toEqual([failure]))
+  })
+
+  it('records the configured app.baseURL on each request for Holo security', async () => {
+    initializeHoloAdapterProject.mockResolvedValue({ runtime: { shutdown: vi.fn() } })
+    const plugin = await startPlugin()
+    const event = {} as H3Event
+    await plugin.request(event)
+    expect(requestAppBaseInternals.base(event)).toBe('/dashboard')
   })
 
   it('stays silent when the runtime shuts down cleanly', async () => {

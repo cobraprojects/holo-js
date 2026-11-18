@@ -63,20 +63,6 @@ async function readBoundedEventBody(event: H3Event): Promise<BufferedRequestBody
   return { bytes, contentType: buffered?.contentType }
 }
 
-function decodedPath(path: string): string {
-  try {
-    return decodeURI(path)
-  } catch {
-    return path
-  }
-}
-
-function mountedBase(request: Request, event: H3Event): string {
-  const pathname = decodedPath(new URL(request.url).pathname)
-  const inner = decodedPath(new URL(event.path, 'http://holo.local').pathname)
-  return pathname.endsWith(inner) ? pathname.slice(0, pathname.length - inner.length).replace(/\/+$/, '') : ''
-}
-
 async function createRequest(event: H3Event): Promise<Request> {
   if (event.web?.request) {
     const request = event.web.request.clone()
@@ -134,7 +120,7 @@ export function csrfProtection(): ReturnType<typeof defineEventHandler> {
 
     try {
       const request = await createRequest(event)
-      requestAppBaseInternals.set(request, mountedBase(request, event))
+      requestAppBaseInternals.set(request, requestAppBaseInternals.base(event))
       const preflight = cors.preflight(request)
       if (preflight) return preflight
       cors.headers(request).forEach((value, name) => setResponseHeader(event, name, value))
