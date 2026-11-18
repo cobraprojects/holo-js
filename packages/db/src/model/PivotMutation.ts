@@ -25,6 +25,7 @@ type Context = {
   scope: Attributes
   relatedColumn: string
   relatedKey: AnyColumnDefinition | undefined
+  loadRelatedKey?: () => Promise<AnyColumnDefinition | undefined>
   dialect: SchemaDialectName
   allowedColumns: readonly string[]
   timestamps: boolean
@@ -47,9 +48,17 @@ export class PivotMutation {
   private readonly aliasSuffix = randomUUID().replaceAll('-', '')
   private readonly storedKeyTextAlias = `holo_stored_key_${this.aliasSuffix}`
   private readonly matchingValuesAlias = `holo_matching_${this.aliasSuffix}`
+  private relatedKey: AnyColumnDefinition | undefined
+  private relatedKeyLoaded = false
 
   constructor(private readonly context: Context, private readonly connection: DatabaseContext) {
     assertQueryTablePath(typeof context.table === 'string' ? context.table : context.table.tableName)
+  }
+
+  private async loadRelatedKey(): Promise<void> {
+    if (this.relatedKeyLoaded) return
+    this.relatedKey = this.context.relatedKey ?? await this.context.loadRelatedKey?.()
+    this.relatedKeyLoaded = true
   }
 
   async attach(ids: unknown, attributes: Attributes): Promise<void> {
@@ -66,6 +75,7 @@ export class PivotMutation {
   }
 
   async detach(ids?: unknown): Promise<number> {
+    await this.loadRelatedKey()
     return this.connection.transaction(async connection => {
       if (ids == null) return this.delete(connection)
       const entries = this.normalize(ids)
@@ -82,6 +92,7 @@ export class PivotMutation {
   }
 
   async update(id: unknown, attributes: Attributes): Promise<number> {
+    await this.loadRelatedKey()
     this.validate(attributes)
     if (Object.keys(attributes).length === 0) return 0
     const entry = { id: bindableId(id), attributes }
@@ -96,6 +107,7 @@ export class PivotMutation {
   }
 
   private async mutate(kind: 'attach' | 'sync' | 'toggle', ids: unknown, attributes: Attributes = {}, detachMissing = false): Promise<Result> {
+    await this.loadRelatedKey()
     const normalized = this.normalize(ids, attributes)
     const entries = kind === 'attach' ? normalized : this.dedupe(normalized)
     for (const entry of entries) this.validate(entry.attributes)
@@ -254,9 +266,18 @@ export class PivotMutation {
   private async match(connection: DatabaseContext, entries: readonly Entry[], readAll: boolean): Promise<{ rowsFor(entry: Entry): Attributes[] | undefined, missing(): Promise<Attributes[][]> }> {
     if (this.comparesKeysInDatabase()) {
       const byEntry = new Map<Entry, Attributes[]>()
+      const representatives = new Map<unknown, Entry>()
+      const shared = new Map<Entry, Entry>()
+      for (const entry of entries) {
+        const identity = this.keyIdentity(this.writeKey(entry.id))
+        const representative = representatives.get(identity)
+        if (representative) shared.set(entry, representative)
+        else representatives.set(identity, entry)
+      }
+      const unique = [...representatives.values()]
       const batchSize = Math.max(1, Math.floor(this.idBatchSize() / 2))
-      for (let offset = 0; offset < entries.length; offset += batchSize) {
-        const batch = entries.slice(offset, offset + batchSize)
+      for (let offset = 0; offset < unique.length; offset += batchSize) {
+        const batch = unique.slice(offset, offset + batchSize)
         const ids = batch.map(entry => entry.id)
         const query = selectMatchingValues(
           this.query(connection).where(this.context.relatedColumn, 'in', ids) as never,
@@ -273,11 +294,18 @@ export class PivotMutation {
           }
         }
       }
+      for (const [entry, representative] of shared) {
+        const rows = byEntry.get(representative)
+        if (rows) byEntry.set(entry, rows)
+      }
       return {
         rowsFor: entry => byEntry.get(entry),
         missing: async () => {
           if (!readAll) return []
-          const kept = new Set([...byEntry.values()].flat().map(row => String(row[this.storedKeyTextAlias])))
+          const kept = new Set<string>()
+          for (const rows of new Set(byEntry.values())) {
+            for (const row of rows) kept.add(String(row[this.storedKeyTextAlias]))
+          }
           return [(await this.readWithStoredText(this.query(connection))).filter(row => row[this.context.relatedColumn] != null && !kept.has(String(row[this.storedKeyTextAlias])))]
         },
       }
@@ -320,7 +348,7 @@ export class PivotMutation {
   }
 
   private dateKeyColumn(): AnyColumnDefinition | undefined {
-    const column = this.context.relatedKey
+    const column = this.relatedKeyLoaded ? this.relatedKey : this.context.relatedKey
     return column && storesDate(column) ? column : undefined
   }
 

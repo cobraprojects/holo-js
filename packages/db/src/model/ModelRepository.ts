@@ -3530,11 +3530,13 @@ export class ModelRepository<
     const connection = this.getConnection()
     const table = this.resolvePivotTable(relation.pivotTable, connection)
     const relatedKey = typeof table === 'string' ? undefined : ownEntry(table.columns, relatedColumn)
+    const loadRelatedKey = typeof table === 'string' ? async () => (await this.loadPivotKeyColumns(relation)).relatedKey : undefined
     return new PivotMutation({
       table,
       scope,
       relatedColumn,
       relatedKey,
+      ...(loadRelatedKey ? { loadRelatedKey } : {}),
       dialect: connection.getDriver() as SchemaDialectName,
       allowedColumns: relation.pivotColumns,
       timestamps: relation.pivotTimestamps === true,

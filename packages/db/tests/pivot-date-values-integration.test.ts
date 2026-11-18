@@ -282,6 +282,34 @@ describe.each(drivers)('pivot rows that repeat a date key on %s', (driver) => {
   })
 })
 
+describe.each(drivers)('pivot rows keyed by date through an unregistered pivot table on %s', (driver) => {
+  it('detaches a key stored as other text for the same instant', async () => {
+    const { db, names } = await openPivots(driver)
+    clearGeneratedTables()
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
+    const slots = defineGeneratedTable(names.slots, { starts_at: column.datetime().primaryKey() })
+    registerGeneratedTables({ owners, slots })
+    const Slot = defineModel(slots, { timestamps: false })
+    const Untyped = defineModel(owners, { timestamps: false, relations: { slots: belongsToMany(() => Slot, names.ownerSlots, 'owner_id', 'starts_at', 'id', 'starts_at') } })
+    const owner = await Untyped.findOrFail(1)
+    const stored = driver === 'sqlite' ? '2026-01-01T10:00:00Z' : '2026-01-01 10:00:00'
+    await db.unsafeExecute(unsafeSql(`INSERT INTO ${quote(driver, names.ownerSlots)} (${quote(driver, 'owner_id')}, ${quote(driver, 'starts_at')}) VALUES (1, '${stored}')`))
+
+    expect(await owner.detach('slots', new Date('2026-01-01T10:00:00Z'))).toBe(1)
+  })
+})
+
+describe.each(drivers)('pivot rows that repeat a date id many times on %s', (driver) => {
+  it('attaches a repeated key once per row without copying matches per id', async () => {
+    const { owner, ownerSlots } = await openPivots(driver)
+    const key = new Date('2026-01-01T10:00:00Z')
+    await owner.attach('slots', key)
+
+    await owner.attach('slots', Array.from({ length: 2000 }, () => key))
+    expect(await DB.table(ownerSlots).count()).toBe(1)
+  })
+})
+
 describe.each(drivers)('pivot rows keyed by a calendar date on %s', (driver) => {
   it('matches a day key given as a Date or as text for that day', async () => {
     const { owner, ownerDays } = await openPivots(driver)
