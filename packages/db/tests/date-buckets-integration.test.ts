@@ -1608,6 +1608,22 @@ describe('date buckets next to sqlite wildcards of case-variant aliases', () => 
       .get()).resolves.toEqual([{ day: '2026-11-03' }])
   })
 
+  it('rejects raw where clauses while a date bucket name is in scope', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('sqlite', { security: { allowUnsafeRawSql: true } })
+    const lookups = await createKeyedTable('bucket_lookups', 'code', [{ id: 1, value: 1 }])
+    registerGeneratedTables({ events, lookups })
+
+    await expect(DB.table(events)
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .whereExists(DB.table(lookups.tableName).unsafeWhere('day = ?', ['2026-11-03']))
+      .get()).rejects.toThrow(CompilerError)
+    await expect(DB.table(events)
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .unsafeWhere('day = ?', ['2026-11-03'])
+      .get()).rejects.toThrow(CompilerError)
+  })
+
   it('keeps subquery GROUP BY and HAVING from reading the outer date bucket', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable('sqlite')

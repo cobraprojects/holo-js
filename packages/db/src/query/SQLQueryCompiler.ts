@@ -725,6 +725,9 @@ export class SQLQueryCompiler {
     }
 
     if (predicate.kind === 'raw') {
+      if (this.guardedBucketNames.size > 0 && !isTrustedRawPredicate(predicate)) {
+        throw new CompilerError('A raw where clause can\'t be checked against the date bucket names in scope, so SQLite might read a bucket instead of a column. Use where() or give the date bucket an alias no raw clause uses.')
+      }
       return this.compileRawSql(predicate.sql, predicate.bindings, bindings)
     }
 
