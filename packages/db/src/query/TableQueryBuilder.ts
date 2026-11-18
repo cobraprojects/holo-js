@@ -167,6 +167,7 @@ export const hasQueryCache = Symbol('hasQueryCache')
 export const whereResolvedColumn = Symbol('whereResolvedColumn')
 export const resolveAggregateSource = Symbol('resolveAggregateSource')
 export const projectModelRows = Symbol('projectModelRows')
+export const readStoredRows = Symbol('readStoredRows')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -2077,6 +2078,10 @@ export class TableQueryBuilder<
 
   async get<TRow extends Record<string, unknown> = TSelectedRow>(): Promise<TRow[]> {
     return this.getCompiledRows<TRow>(() => this.toSQL())
+  }
+
+  async [readStoredRows]<TRow extends Record<string, unknown>>(): Promise<TRow[]> {
+    return this.getCompiledRows<TRow>(() => this.toSQL(), true, false, false)
   }
 
   private async getCompiledRows<TRow extends Record<string, unknown>>(

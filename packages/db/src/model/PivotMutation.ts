@@ -1,6 +1,6 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
-import { TableQueryBuilder } from '../query/TableQueryBuilder'
+import { readStoredRows, TableQueryBuilder } from '../query/TableQueryBuilder'
 import { assertQueryTablePath } from '../query/validator'
 import { normalizeDialectWriteValue, parseStoredDate, storesDate } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -195,10 +195,11 @@ export class PivotMutation {
   }
 
   private readKey(value: unknown): unknown {
-    return this.dateKeyColumn() ? this.readDate(value) : value
+    return this.readDate(this.dateKeyColumn(), value)
   }
 
-  private readDate(value: unknown): unknown {
+  private readDate(column: AnyColumnDefinition | undefined, value: unknown): unknown {
+    if (!column || this.context.dialect === 'sqlite') return value
     const parsed = parseStoredDate(this.context.dialect, value)
     return parsed instanceof Date && Number.isNaN(parsed.getTime()) ? value : parsed
   }
@@ -230,12 +231,17 @@ export class PivotMutation {
   }
 
   private changed(existing: Attributes, attributes: Attributes): boolean {
-    return Object.entries(attributes).some(([key, value]) => !sameValue(this.readAttribute(key, existing[key]), this.readAttribute(key, value)))
+    return Object.entries(attributes).some(([key, value]) => {
+      const column = this.dateAttributeColumn(key)
+      return column
+        ? !sameValue(this.readDate(column, existing[key]), this.readDate(column, normalizeDialectWriteValue(this.context.dialect, column, value)))
+        : existing[key] !== value
+    })
   }
 
-  private readAttribute(column: string, value: unknown): unknown {
+  private dateAttributeColumn(column: string): AnyColumnDefinition | undefined {
     const definition = typeof this.context.table === 'string' ? undefined : ownEntry(this.context.table.columns, column)
-    return definition && storesDate(definition) ? this.readDate(value) : value
+    return definition && storesDate(definition) ? definition : undefined
   }
 
   private query(connection: DatabaseContext): TableQueryBuilder<string | TableDefinition> {
@@ -249,11 +255,11 @@ export class PivotMutation {
   }
 
   private async read(connection: DatabaseContext, ids?: readonly unknown[]): Promise<Attributes[]> {
-    if (!ids) return this.query(connection).get<Attributes>()
+    if (!ids) return this.query(connection)[readStoredRows]<Attributes>()
     const rows: Attributes[] = []
     const unique = [...new Set(ids)]
     for (let offset = 0; offset < unique.length; offset += this.idBatchSize()) {
-      rows.push(...await this.query(connection).where(this.context.relatedColumn, 'in', unique.slice(offset, offset + this.idBatchSize())).get<Attributes>())
+      rows.push(...await this.query(connection).where(this.context.relatedColumn, 'in', unique.slice(offset, offset + this.idBatchSize()))[readStoredRows]<Attributes>())
     }
     return rows
   }

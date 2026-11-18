@@ -256,6 +256,35 @@ describe.each(integrationDrivers(['sqlite']))('stored SQLite date text on %s', (
     expect(values).toHaveLength(4)
   })
 
+  it('keeps date-keyed pivot rows apart by their full stored text', async () => {
+    const { db, schema, events } = await openEvents(driver)
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const slotsName = `holo_slots_${suffix}`
+    const pivotName = `holo_event_slots_${suffix}`
+    await schema.createTable(slotsName, (table) => { table.timestamp('starts_at').primaryKey() })
+    onTestFinished(() => schema.dropTable(slotsName))
+    await schema.createTable(pivotName, (table) => {
+      table.integer('event_id')
+      table.timestamp('starts_at')
+    })
+    onTestFinished(() => schema.dropTable(pivotName))
+    const slots = defineGeneratedTable(slotsName, { starts_at: column.timestamp().primaryKey() })
+    const eventSlots = defineGeneratedTable(pivotName, { event_id: column.integer(), starts_at: column.timestamp() })
+    registerGeneratedTables({ events, slots, eventSlots })
+    onTestFinished(() => clearGeneratedTables())
+    const Slot = defineModel(slots, { timestamps: false })
+    const SlottedEvent = defineModel(events, {
+      timestamps: false,
+      relations: { slots: belongsToMany(() => Slot, eventSlots, 'event_id', 'starts_at', 'id', 'starts_at') },
+    })
+    await DB.table(events).insert({ id: 1, label: 'set', happened_at: null, scheduled_for: null, due_on: null })
+    await db.unsafeExecute(unsafeSql(`INSERT INTO "${pivotName}" ("event_id", "starts_at") VALUES (1, '2026-01-02 03:04:05.000001'), (1, '2026-01-02 03:04:05.000002')`))
+    const event = await SlottedEvent.findOrFail(1)
+
+    expect(await event.sync('slots', ['2026-01-02 03:04:05.000001' as never])).toEqual({ attached: [], detached: ['2026-01-02 03:04:05.000002'], updated: [] })
+    expect(await DB.table(eventSlots).unsafeSelect('"starts_at" AS "stored"', []).get()).toEqual([{ stored: '2026-01-02 03:04:05.000001' }])
+  })
+
   it('keeps a union column as text when a branch reads it from a non-date column', async () => {
     const { events } = await openEvents(driver)
     await DB.table(events).insert({ id: 1, label: 'set', happened_at: happened, scheduled_for: null, due_on: null })
