@@ -181,8 +181,8 @@ const feed = await Post.where('status', 'published').latest().cursorPaginate(20,
 
 Cursor pagination needs a stable sort order:
 
-- Order by real columns. `inRandomOrder()` and `unsafeOrderBy()` aren't allowed.
-- If you don't call `orderBy()`, Holo orders by the primary key it knows from the model or table definition. When Holo has no primary-key metadata for the table, call `orderBy()` yourself.
+- Order by real columns or [date bucket](/database/query-builder/selects-and-filters#selecting-date-buckets) aliases. `inRandomOrder()` and `unsafeOrderBy()` aren't allowed.
+- If you don't call `orderBy()`, Holo orders by the primary key it knows from the model or table definition. When Holo has no primary-key metadata for the table, call `orderBy()` yourself. A query grouped by a date bucket needs its own `orderBy()` unless it is a single-table query grouped by its primary key.
 - When Holo knows the table's primary key, it adds it as a tie-breaker, so sorting by a non-unique column such as `created_at` is safe. Without that metadata, add a unique column yourself: `.orderBy('created_at').orderBy('id')`.
 - A grouped query with a date bucket must order by exactly its `groupBy()` columns, since each group is one row. Holo adds the primary key to it only when it groups by the primary key, and only a single-table query grouped by its primary key may order by other columns. A date bucket query with an aggregate needs `groupBy()` to be cursor-paginated. A union with a date bucket can't be cursor-paginated when any of its queries is grouped, aggregated or has a raw selection, because the order can't always tell the groups apart. An ordered position that holds a date bucket in one query of a union must hold a date bucket in every query.
 

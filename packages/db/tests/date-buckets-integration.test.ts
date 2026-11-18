@@ -1153,6 +1153,33 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect(page.data).toEqual([{ id: 1, __holo_cursor_0: 42, at: expect.anything(), day: '2026-11-03' }])
   })
 
+  it('orders a primary-key grouped date bucket by the primary key when no order is given', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const page = (cursor: string | null) => DB.table(events)
+      .where('tenant_id', 1)
+      .select('id')
+      .addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .groupBy('id', 'day')
+      .cursorPaginate(2, cursor)
+    const all = await DB.table(events).where('tenant_id', 1).orderBy('id').pluck('id')
+
+    const first = await page(null)
+    const second = await page(first.nextCursor)
+
+    expect([...first.data, ...second.data].map(row => row.id)).toEqual(all.slice(0, 4))
+  })
+
+  it('requires an explicit order for a query grouped only by a date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events)
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .groupBy('day')
+      .cursorPaginate(2)).rejects.toThrow(SecurityError)
+  })
+
   it('names hidden cursor columns past selected names that take the first candidates', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
