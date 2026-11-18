@@ -16,6 +16,9 @@ See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-fr
 
 - SvelteKit: Holo's built-in routes (auth, broadcasting, storage, realtime) and their redirects work under `paths.base`. `holoSvelteKit()` reads the base path from your SvelteKit config.
 - `logoutWithClerk()` and `logoutWithWorkos()` honor `returnTo` when there is no provider session to end.
+- Apps served under a base path (Next `basePath`, Nuxt `app.baseURL`, SvelteKit `paths.base`): realtime queries, mutations and live updates, Flux, and the browser auth client (`/api/auth/user`) now send their requests under the base. Before, they called the site root and failed.
+- Security: CSRF exceptions, including `/broadcasting/auth`, and CORS `paths` now match the path inside the app's base path. Before, under a base path, Flux private and presence channels were rejected with 419.
+- Security: on SvelteKit, `authOnly()` and `guestOnly()` now match routes inside `paths.base` and redirect within it. Before, under a base path, their routes never matched, so pages they should protect were served to signed-out visitors. On Next, their redirects now keep `basePath`.
 
 ## 0.6.1 - 2026-11-17
 

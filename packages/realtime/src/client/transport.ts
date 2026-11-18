@@ -251,7 +251,7 @@ export function createBroadcastRealtimeTransport(options: {
       WebSocket: WebSocketConstructor,
       failureMessage: unavailableTransportMessage,
       async resolveUrl() {
-        const config = await resolveBroadcastClientConfig(options.configEndpoint ?? '/broadcasting/config', globals)
+        const config = await resolveBroadcastClientConfig(options.configEndpoint ?? broadcastBrowserInternals.appPath('/broadcasting/config'), globals)
         return broadcastBrowserInternals.formatUrl({
           ...config,
           scheme: resolveWebSocketScheme(config.scheme, globals),
@@ -337,7 +337,7 @@ export function createBroadcastRealtimeTransport(options: {
   return {
     async query<TResult>(name: string, args: Record<string, unknown>) {
       return await executeRealtimeRequest<RealtimeSubscriptionSnapshot<TResult>>(
-        '/holo/realtime/query',
+        broadcastBrowserInternals.appPath('/holo/realtime/query'),
         name,
         args,
       )
@@ -348,7 +348,7 @@ export function createBroadcastRealtimeTransport(options: {
         return liveResult
       }
       return await executeRealtimeRequest<RealtimeExecutionResult<TResult>>(
-        '/holo/realtime/mutation',
+        broadcastBrowserInternals.appPath('/holo/realtime/mutation'),
         name,
         args,
       )

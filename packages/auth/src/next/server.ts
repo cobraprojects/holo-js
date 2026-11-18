@@ -36,7 +36,7 @@ export type AuthOnlyOptions = RouteProtectionOptions
 
 type NextRouteProtectionRequest = NextAuthRequestLike & {
   readonly method?: string
-  readonly nextUrl?: URL
+  readonly nextUrl?: URL & { readonly basePath?: string }
   readonly url: string
 }
 
@@ -80,6 +80,10 @@ function matchesRoute(route: RouteMatcher, pathname: string): boolean {
 
 function matchesRoutes(routes: readonly RouteMatcher[] | undefined, pathname: string): boolean {
   return (routes ?? ['/*']).some(route => matchesRoute(route, pathname))
+}
+
+function withAppBase(redirectTo: string, base: string): string {
+  return redirectTo.startsWith('/') && !redirectTo.startsWith('//') ? `${base}${redirectTo}` : redirectTo
 }
 
 function isSameUrl(left: URL, right: URL): boolean {
@@ -147,8 +151,8 @@ function createRouteProtectionProxy(
         return undefined
       }
 
-      const redirectUrl = new URL(options.redirectTo, request.url)
-      if (isSameUrl(requestUrl, redirectUrl)) {
+      const redirectUrl = new URL(withAppBase(options.redirectTo, request.nextUrl?.basePath ?? ''), request.url)
+      if (isSameUrl(new URL(request.url), redirectUrl)) {
         return undefined
       }
 

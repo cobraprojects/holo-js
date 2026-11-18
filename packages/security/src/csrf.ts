@@ -1,4 +1,4 @@
-import { cookieEncryptionInternals, HoloRequestBodyTooLargeError, readBoundedRequestBody, resolveRequestUrl } from '@holo-js/kernel'
+import { cookieEncryptionInternals, HoloRequestBodyTooLargeError, readBoundedRequestBody, requestAppBaseInternals, resolveRequestUrl } from '@holo-js/kernel'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import {
   SecurityCsrfError,
@@ -47,7 +47,7 @@ function matchesPathPattern(pathname: string, pattern: string): boolean {
 
 function isExcludedPath(request: Request): boolean {
   const { except } = getSecurityRuntime().config.csrf
-  const pathname = new URL(request.url).pathname
+  const pathname = requestAppBaseInternals.pathname(request)
   return pathname === '/broadcasting/auth' || except.some(pattern => matchesPathPattern(pathname, pattern))
 }
 

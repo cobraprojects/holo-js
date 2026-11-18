@@ -9,7 +9,7 @@ import {
 } from '@holo-js/core'
 import { type SerializedValidationException, validationInternals } from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
-import { cookieEncryptionInternals, responseCookieInternals, createCookieWriteUnavailableError, requestUrlInternals, sameOriginRedirectPath } from '@holo-js/kernel'
+import { cookieEncryptionInternals, responseCookieInternals, createCookieWriteUnavailableError, requestAppBaseInternals, requestUrlInternals, sameOriginRedirectPath } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 export {
   holoSvelteKitTransport,
@@ -603,6 +603,7 @@ export function runWithSvelteKitRequestEvent<TValue>(
 }
 
 export function createSvelteKitHoloHooks(hooks: {
+  readonly base?: string
   readonly handle: Handle
   readonly handleError?: HandleServerError
 }): {
@@ -611,6 +612,7 @@ export function createSvelteKitHoloHooks(hooks: {
 } {
   return {
     handle: ({ event, resolve }) => runWithSvelteKitRequestEvent(event, async () => {
+      requestAppBaseInternals.set(event.request, hooks.base ?? '')
       const state: ValidationRequestState = { active: true }
       validationRequests.set(event.request, state)
       try {

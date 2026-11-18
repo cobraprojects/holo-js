@@ -1,5 +1,6 @@
 import type { NormalizedHoloCorsConfig } from './config'
 import type { SecurityCorsFacade } from './contracts'
+import { requestAppBaseInternals } from '@holo-js/kernel'
 import { getSecurityRuntime } from './runtime'
 
 function matchesPathPattern(pathname: string, pattern: string): boolean {
@@ -47,7 +48,7 @@ function normalizeDomain(value: string): string {
 }
 
 function isCorsPath(config: NormalizedHoloCorsConfig, request: Request): boolean {
-  const pathname = new URL(request.url).pathname
+  const pathname = requestAppBaseInternals.pathname(request)
   return config.paths.some(pattern => matchesPathPattern(pathname, pattern))
 }
 

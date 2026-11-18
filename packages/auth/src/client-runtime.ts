@@ -1,3 +1,4 @@
+import { appPath } from '@holo-js/kernel/internal/app-base'
 import type {
   AuthClientConfig,
   AuthClientRequestOptions,
@@ -5,7 +6,6 @@ import type {
   HoloAuthUser,
 } from './contracts'
 
-const DEFAULT_CURRENT_USER_ENDPOINT = '/api/auth/user'
 
 type ResolvedClientConfig = {
   readonly endpoint: string
@@ -32,7 +32,7 @@ function getDefaultFetch(): typeof fetch {
 
 function resolveClientConfig(options: AuthClientRequestOptions = {}): ResolvedClientConfig {
   return {
-    endpoint: options.endpoint ?? clientState.config?.endpoint ?? DEFAULT_CURRENT_USER_ENDPOINT,
+    endpoint: options.endpoint ?? clientState.config?.endpoint ?? appPath('/api/auth/user'),
     guard: options.guard ?? clientState.config?.guard,
     headers: options.headers ?? clientState.config?.headers,
     fetchImpl: options.endpoint || options.guard || options.headers || clientState.config?.fetch

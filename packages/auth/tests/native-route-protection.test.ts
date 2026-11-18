@@ -5,6 +5,7 @@ import { readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, onTestFinished } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
+import { requestAppBaseInternals } from '@holo-js/kernel'
 import auth, { configureAuthRuntime, createAsyncAuthContext, resetAuthRuntime, type AuthProviderAdapter } from '../src'
 import type NativeUser from './support/models/User'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
@@ -147,6 +148,22 @@ it('uses persisted auth with SvelteKit guard matching, continuation, and cross-o
   const redirected = await app.run(request, () => svelteGuestOnly({ routes: ['/login'], redirectTo: 'https://other.test/login' })({ event: { url: request.nextUrl }, resolve }))
   expect(redirected.status).toBe(303)
   expect(redirected.headers.get('location')).toBe('https://other.test/login')
+})
+
+it('protects routes and redirects inside the app base path', async () => {
+  const app = await nativeAuth()
+  const nextRequest = new NextRequest(new URL('/dashboard/admin/posts', 'https://app.test'), { nextConfig: { basePath: '/dashboard' } })
+  const nextResponse = await app.run(nextRequest, () => authOnly({ routes: ['/admin/*'], redirectTo: '/login' })(nextRequest))
+  expect(nextResponse?.headers.get('location')).toBe('https://app.test/dashboard/login')
+  const loginRequest = new NextRequest(new URL('/dashboard/login', 'https://app.test'), { nextConfig: { basePath: '/dashboard' }, headers: nextRequest.headers })
+  await expect(app.run(loginRequest, () => authOnly({ routes: ['/login'], redirectTo: '/login' })(loginRequest))).resolves.toBeUndefined()
+  const resolve = () => new Response('Native continuation')
+  const request = new Request('https://app.test/dashboard/admin/posts')
+  requestAppBaseInternals.set(request, '/dashboard')
+  const response = await app.run(nextRequest, () => svelteAuthOnly({ routes: ['/admin/*'], redirectTo: '/login' })({ event: { url: new URL(request.url), request }, resolve }))
+  expect(response.headers.get('location')).toBe('https://app.test/dashboard/login')
+  const external = await app.run(nextRequest, () => svelteAuthOnly({ routes: ['/admin/*'], redirectTo: 'https://other.test/login' })({ event: { url: new URL(request.url), request }, resolve }))
+  expect(external.headers.get('location')).toBe('https://other.test/login')
 })
 
 it('deduplicates Svelte client refreshes over real HTTP outside component initialization and refreshes persisted auth again', async () => {

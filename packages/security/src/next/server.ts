@@ -1,4 +1,4 @@
-import { HoloRequestBodyTooLargeError, readBoundedRequestFormData } from '@holo-js/kernel'
+import { HoloRequestBodyTooLargeError, readBoundedRequestFormData, requestAppBaseInternals } from '@holo-js/kernel'
 import { protect } from '../index'
 import { cors } from '../cors'
 import { getSecurityRuntime } from '../runtime'
@@ -6,7 +6,7 @@ import { prepareCsrfCookies } from '../cookie-issuance'
 import { createSecurityRejectionResponse, isSecurityRejection } from '../rejection-response'
 
 type NextCsrfRequest = Request & {
-  readonly nextUrl?: URL
+  readonly nextUrl?: URL & { readonly basePath?: string }
   readonly cookies?: {
     get(name: string): string | { readonly value?: string } | undefined
   }
@@ -74,7 +74,7 @@ async function issueCsrfCookie(request: NextCsrfRequest): Promise<Response | und
   return response
 }
 
-async function actionRequest(request: Request): Promise<Request> {
+async function actionRequest(request: NextCsrfRequest): Promise<Request> {
   const { field, header } = getSecurityRuntime().config.csrf
   if (!request.headers.has('next-action')
     || request.headers.get(header)?.trim()
@@ -94,7 +94,9 @@ async function actionRequest(request: Request): Promise<Request> {
       if (typeof token !== 'string') continue
       const headers = new Headers(request.headers)
       headers.set(header, token)
-      return new Request(request.clone(), { headers })
+      const tokenRequest = new Request(request.clone(), { headers })
+      requestAppBaseInternals.set(tokenRequest, request.nextUrl?.basePath ?? '')
+      return tokenRequest
     }
   } catch (error) {
     if (error instanceof HoloRequestBodyTooLargeError) throw error
@@ -105,6 +107,7 @@ async function actionRequest(request: Request): Promise<Request> {
 
 export function csrfProtection(): NextCsrfMiddleware {
   return async (request) => {
+    requestAppBaseInternals.set(request, request.nextUrl?.basePath ?? '')
     const preflight = cors.preflight(request)
     if (preflight) return preflight
 

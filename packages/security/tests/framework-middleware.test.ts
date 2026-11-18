@@ -90,6 +90,23 @@ describe('native csrf middleware', () => {
     expect(broadcastAuth).toBeUndefined()
   })
 
+  it('matches CSRF exceptions on the path inside the app base path', async () => {
+    configureSecurity(true, [], memoryCsrfSessions({ 'browser-a': 'session-token' }))
+    const headers = { cookie: 'browser=browser-a' }
+    const nextConfig = { basePath: '/dashboard' }
+    const nextStatus = async (path: string) => (await nextCsrfProtection()(new NextRequest(`https://app.test${path}`, { method: 'POST', headers, nextConfig })))?.status
+    expect(await nextStatus('/dashboard/broadcasting/auth')).toBeUndefined()
+    expect(await nextStatus('/dashboard/webhooks/provider')).toBeUndefined()
+    expect(await nextStatus('/dashboard/api/login')).toBe(419)
+    const app = createApp()
+    app.use('/dashboard', nuxtCsrfProtection())
+    app.use(defineEventHandler(() => 'handled'))
+    const nuxtStatus = async (path: string) => (await toWebHandler(app)(new Request(`https://app.test${path}`, { method: 'POST', headers }))).status
+    expect(await nuxtStatus('/dashboard/broadcasting/auth')).toBe(200)
+    expect(await nuxtStatus('/dashboard/webhooks/provider')).toBe(200)
+    expect(await nuxtStatus('/dashboard/api/login')).toBe(419)
+  })
+
   it('leaves CSRF checks off when the csrf block sets enabled to false', async () => {
     configureSecurityRuntime({
       config: { csrf: { enabled: false } },

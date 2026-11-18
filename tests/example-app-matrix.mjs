@@ -49,7 +49,7 @@ async function withMysqlAdmin(task) {
   }
 }
 
-async function runApp(framework, driver) {
+async function runApp(framework, driver, journey = { script: 'tests/run.mjs', label: driver }) {
   assert.ok(['next', 'nuxt', 'sveltekit'].includes(framework))
   assert.ok(exampleAppDrivers.includes(driver))
   const fixture = await createExampleAppFixture(root, framework)
@@ -58,7 +58,7 @@ async function runApp(framework, driver) {
   const insertOnlyRole = `${name}_writer`
   const password = randomUUID()
   const filename = join(projectRoot, 'storage', `${name}.sqlite`)
-  const env = { ...process.env, [exampleAppRunVariable]: name, DB_DRIVER: driver, SESSION_DRIVER: 'database', SESSION_CONNECTION: 'main' }
+  const env = { ...process.env, ...journey.env, [exampleAppRunVariable]: name, DB_DRIVER: driver, SESSION_DRIVER: 'database', SESSION_CONNECTION: 'main' }
   const provisioning = exampleAppServerProvisioning(driver, {
     postgres: {
       create: () => withPostgresAdmin(async (admin) => {
@@ -83,7 +83,7 @@ async function runApp(framework, driver) {
       drop: () => withMysqlAdmin(admin => admin.query(`DROP DATABASE IF EXISTS ${name}`)),
     },
   })
-  const logPath = join(root, 'coverage', `app-${framework}-${driver}.log`)
+  const logPath = join(root, 'coverage', `app-${framework}-${journey.label}.log`)
   const fileWatch = watchExampleAppFiles(fixture.directory)
   const compiledAt = []
   let output = ''
@@ -104,7 +104,7 @@ async function runApp(framework, driver) {
     log = createWriteStream(logPath)
     // A failed log write must not crash the run; closeWriteStream reports it during cleanup.
     log.on('error', () => {})
-    const child = spawn(process.execPath, ['tests/run.mjs'], { cwd: projectRoot, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, [journey.script], { cwd: projectRoot, env, stdio: ['ignore', 'pipe', 'pipe'] })
     const capture = (chunk) => {
       const searchFrom = Math.max(0, output.length - compiledMarker.length + 1)
       output += chunk.toString()
@@ -154,7 +154,7 @@ async function runApp(framework, driver) {
   await attempt(async () => {
     await mkdir(join(root, 'coverage'), { recursive: true })
     await writeFile(logPath, output)
-    await writeFile(join(root, 'coverage', `app-${framework}-${driver}-files.log`), fileWatch.log())
+    await writeFile(join(root, 'coverage', `app-${framework}-${journey.label}-files.log`), fileWatch.log())
   })
   if (log) await attempt(() => closeWriteStream(log))
   for (const drop of provisioning.cleanups()) await attempt(drop)
@@ -169,6 +169,12 @@ test('real example app database matrix', { concurrency: 3 }, async suite => {
   await Promise.all(frameworks.map(framework => suite.test(framework, async app => {
     for (const driver of drivers) {
       await app.test(driver, () => runApp(framework, driver))
+    }
+    if (drivers.includes('sqlite')) {
+      await app.test('sqlite under a base path', () => runApp(framework, 'sqlite', { script: '../../tests/example-app-base-path.mjs', label: 'sqlite-base-path' }))
+      if (framework === 'next') {
+        await app.test('sqlite under a base path with webpack', () => runApp(framework, 'sqlite', { script: '../../tests/example-app-base-path.mjs', label: 'sqlite-base-path-webpack', env: { HOLO_EXAMPLE_NEXT_BUNDLER: 'webpack' } }))
+      }
     }
   })))
 })

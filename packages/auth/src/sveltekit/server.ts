@@ -1,3 +1,4 @@
+import { requestAppBaseInternals } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitRequestEvent } from '@holo-js/adapter-shared/sveltekit/request-context'
 import holoAuth, { authRuntimeInternals, provider as currentProvider, user as currentUser } from '../index'
@@ -159,7 +160,8 @@ function createRouteProtectionHandle(
 ): SvelteKitHandle {
   return async ({ event, resolve }) => {
     return runWithSvelteKitRequestEvent(event, async () => {
-      if (!matchesRoutes(options.routes, event.url.pathname)) {
+      const request = 'request' in event && event.request instanceof Request ? event.request : undefined
+      if (!matchesRoutes(options.routes, request ? requestAppBaseInternals.pathname(request) : event.url.pathname)) {
         return resolve(event)
       }
 
@@ -168,7 +170,10 @@ function createRouteProtectionHandle(
         return resolve(event)
       }
 
-      const redirectUrl = new URL(options.redirectTo, event.url)
+      const redirectTo = request && options.redirectTo.startsWith('/') && !options.redirectTo.startsWith('//')
+        ? requestAppBaseInternals.withBase(request, options.redirectTo)
+        : options.redirectTo
+      const redirectUrl = new URL(redirectTo, event.url)
       if (isSameUrl(event.url, redirectUrl)) {
         return resolve(event)
       }

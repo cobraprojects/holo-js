@@ -1,4 +1,4 @@
-import { readBoundedBufferedBody, readBoundedNodeRequestBody, requestBodyLimitFor, type BufferedRequestBody } from '@holo-js/kernel'
+import { readBoundedBufferedBody, readBoundedNodeRequestBody, requestAppBaseInternals, requestBodyLimitFor, type BufferedRequestBody } from '@holo-js/kernel'
 import {
   createError,
   defineEventHandler,
@@ -63,6 +63,13 @@ async function readBoundedEventBody(event: H3Event): Promise<BufferedRequestBody
   return { bytes, contentType: buffered?.contentType }
 }
 
+function mountedBase(request: Request, event: H3Event): string {
+  const pathname = new URL(request.url).pathname
+  const inner = new URL(event.path, 'http://holo.local').pathname
+  const base = pathname.endsWith(inner) ? pathname.slice(0, pathname.length - inner.length) : pathname
+  return base.replace(/\/+$/, '')
+}
+
 async function createRequest(event: H3Event): Promise<Request> {
   if (event.web?.request) {
     const request = event.web.request.clone()
@@ -120,6 +127,7 @@ export function csrfProtection(): ReturnType<typeof defineEventHandler> {
 
     try {
       const request = await createRequest(event)
+      requestAppBaseInternals.set(request, mountedBase(request, event))
       const preflight = cors.preflight(request)
       if (preflight) return preflight
       cors.headers(request).forEach((value, name) => setResponseHeader(event, name, value))

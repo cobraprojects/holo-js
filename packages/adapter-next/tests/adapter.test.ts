@@ -253,6 +253,11 @@ export default defineConfig({
     }
   })
 
+  it('defines the Next basePath as the app base for Holo browser clients', () => {
+    expect(withHolo({ basePath: '/dashboard', compiler: { define: { CUSTOM: '"1"' } } }).compiler?.define).toEqual({ CUSTOM: '"1"', __HOLO_APP_BASE__: '/dashboard' })
+    expect(withHolo({ compiler: { define: {} } }).compiler?.define).toEqual({ __HOLO_APP_BASE__: '' })
+  })
+
   it('excludes Next config files from output file tracing', () => {
     const config = withHolo({
       outputFileTracingExcludes: {

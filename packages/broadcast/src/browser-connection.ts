@@ -1,3 +1,4 @@
+import { appPath } from '@holo-js/kernel/internal/app-base'
 type BrowserSocket = {
   readonly readyState: number
   send(data: string): void
@@ -200,4 +201,4 @@ function formatUrl(config: {
   return `${config.scheme}://${config.host}:${config.port}${path}/${encodeURIComponent(config.key)}`
 }
 
-export const broadcastBrowserInternals = { createConnection, discoverConfig, formatUrl }
+export const broadcastBrowserInternals = { appPath, createConnection, discoverConfig, formatUrl }
