@@ -11494,6 +11494,68 @@ export default defineConfig({
     expect(await readFile(join(projectRoot, 'vite.config.ts'), 'utf8')).toBe(viteConfig)
   }, 30000)
 
+  it('keeps an aliased holoSvelteKitRealtime() registration as the single Holo plugin', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    linkNativeFramework(projectRoot, 'sveltekit')
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'vite.config.ts', [
+      'import { holoSvelteKitRealtime as realtime } from \'@holo-js/adapter-sveltekit/vite\'',
+      'import { sveltekit } from \'@sveltejs/kit/vite\'',
+      'import { defineConfig } from \'vite\'',
+      '',
+      'export default defineConfig({ plugins: [realtime(), sveltekit()] })',
+      '',
+    ].join('\n'))
+
+    await runProjectPrepare(projectRoot, undefined, { syncFramework: false })
+    const viteConfig = await readFile(join(projectRoot, 'vite.config.ts'), 'utf8')
+    expect(viteConfig).toContain('import { holoSvelteKit as realtime } from \'@holo-js/adapter-sveltekit/vite\'')
+    expect(viteConfig).toContain('plugins: [realtime(), sveltekit(withHoloSvelteKit())]')
+
+    await runProjectPrepare(projectRoot, undefined, { syncFramework: false })
+    expect(await readFile(join(projectRoot, 'vite.config.ts'), 'utf8')).toBe(viteConfig)
+  }, 30000)
+
+  it('imports holoSvelteKit when the only existing import is commented out', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    linkNativeFramework(projectRoot, 'sveltekit')
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'vite.config.ts', [
+      '// import { holoSvelteKit } from \'@holo-js/adapter-sveltekit/vite\'',
+      'import { sveltekit } from \'@sveltejs/kit/vite\'',
+      'import { defineConfig } from \'vite\'',
+      '',
+      'export default defineConfig({ plugins: [sveltekit()] })',
+      '',
+    ].join('\n'))
+
+    await runProjectPrepare(projectRoot, undefined, { syncFramework: false })
+    const viteConfig = await readFile(join(projectRoot, 'vite.config.ts'), 'utf8')
+    expect(viteConfig.split('\n')).toContain('import { holoSvelteKit } from \'@holo-js/adapter-sveltekit/vite\'')
+    expect(viteConfig).toContain('plugins: [sveltekit(withHoloSvelteKit()), holoSvelteKit()]')
+  }, 30000)
+
+  it('fails prepare when sveltekit() is nested inside another call in the plugins array', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    linkNativeFramework(projectRoot, 'sveltekit')
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'vite.config.ts', [
+      'import { sveltekit } from \'@sveltejs/kit/vite\'',
+      'import { defineConfig } from \'vite\'',
+      '',
+      'const choose = (useFirst: boolean, ...plugins: unknown[]) => plugins',
+      'export default defineConfig({ plugins: [choose(false, sveltekit())] })',
+      '',
+    ].join('\n'))
+
+    await expect(runProjectPrepare(projectRoot, undefined, { syncFramework: false })).rejects.toThrow(
+      'Could not add holoSvelteKit() to vite.config.ts. Put sveltekit() directly in the plugins array so holo prepare can add the Holo plugin next to it.',
+    )
+  }, 30000)
+
   it('fails prepare when sveltekit() is not an element of the plugins array', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

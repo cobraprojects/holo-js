@@ -528,8 +528,8 @@ const SVELTE_CONFIG_UNSUPPORTED_MESSAGE = 'svelte.config.js is not supported by 
 const VITE_CONFIG_WRAP_MESSAGE = 'Could not patch vite.config.ts with withHoloSvelteKit(). Call sveltekit() in vite.config.ts so holo prepare can manage the SvelteKit integration.'
 
 const WRAPPER_IMPORT_PATTERN = /import\s*\{([^}]*)\}\s*from\s*['"]@holo-js\/adapter-sveltekit\/config['"]/g
-const HOLO_VITE_PLUGIN_CALL = 'holoSvelteKit('
-const HOLO_VITE_IMPORT_PATTERN = /import\s*\{([^}]*)\}\s*from\s*(['"])@holo-js\/adapter-sveltekit\/vite\2/
+const HOLO_VITE_PLUGIN = 'holoSvelteKit'
+const HOLO_VITE_IMPORT_PATTERN = /import\s*\{([^}]*)\}\s*from\s*(['"])@holo-js\/adapter-sveltekit\/vite\2/g
 const VITE_PLUGIN_ADD_MESSAGE = 'Could not add holoSvelteKit() to vite.config.ts. Put sveltekit() directly in the plugins array so holo prepare can add the Holo plugin next to it.'
 const REGEX_PRECEDING_KEYWORD = /(^|[^\w$])(return|typeof|case|do|else|in|of|new|delete|void|throw|yield|await)$/
 
@@ -707,29 +707,86 @@ function renameLegacyRealtimeVitePlugin(contents: string): string {
   return renamed + contents.slice(offset)
 }
 
+interface ImportSpecifier {
+  readonly imported: string
+  readonly local: string
+}
+
+function parseImportSpecifier(text: string): ImportSpecifier {
+  const [imported = '', local = imported] = text.split(/\s+as\s+/).map(part => part.trim())
+  return { imported, local }
+}
+
+function renderImportSpecifier({ imported, local }: ImportSpecifier): string {
+  return imported === local ? imported : `${imported} as ${local}`
+}
+
+function findHoloViteImport(contents: string): RegExpExecArray | undefined {
+  const code = maskNonCode(contents)
+  return [...contents.matchAll(HOLO_VITE_IMPORT_PATTERN)].find(match => code.startsWith('import', match.index))
+}
+
+function holoViteImportSpecifiers(contents: string): readonly ImportSpecifier[] {
+  const existing = findHoloViteImport(contents)
+  return (existing?.[1] ?? '').split(',').map(specifier => specifier.trim()).filter(Boolean).map(parseImportSpecifier)
+}
+
+function holoVitePluginBindings(contents: string): readonly string[] {
+  return holoViteImportSpecifiers(contents).filter(specifier => specifier.imported === HOLO_VITE_PLUGIN).map(specifier => specifier.local)
+}
+
+function escapeIdentifier(identifier: string): string {
+  return identifier.replace(/\$/g, '\\$')
+}
+
+function registersHoloVitePlugin(code: string, bindings: readonly string[]): boolean {
+  return bindings.some(binding => new RegExp(`(?<![\\w$.])${escapeIdentifier(binding)}\\s*\\(`).test(code))
+}
+
 function ensureHoloVitePluginImport(contents: string): string {
-  const existing = HOLO_VITE_IMPORT_PATTERN.exec(contents)
+  const existing = findHoloViteImport(contents)
   if (existing) {
-    const specifiers = (existing[1] ?? '').split(',').map(specifier => specifier.trim()).filter(Boolean)
-    const unique = [...new Set(['holoSvelteKit', ...specifiers])]
-    if (specifiers.includes('holoSvelteKit') && unique.length === specifiers.length) return contents
-    return contents.replace(HOLO_VITE_IMPORT_PATTERN, `import { ${unique.join(', ')} } from ${existing[2]}@holo-js/adapter-sveltekit/vite${existing[2]}`)
+    const specifiers = holoViteImportSpecifiers(contents).map(renderImportSpecifier)
+    const required = holoVitePluginBindings(contents).length > 0 ? [] : [HOLO_VITE_PLUGIN]
+    const unique = [...new Set([...required, ...specifiers])]
+    const rendered = `import { ${unique.join(', ')} } from ${existing[2]}@holo-js/adapter-sveltekit/vite${existing[2]}`
+    return `${contents.slice(0, existing.index)}${rendered}${contents.slice(existing.index + existing[0].length)}`
   }
 
   const firstImport = maskNonCode(contents).search(/^import\s/m)
-  const holoImport = 'import { holoSvelteKit } from \'@holo-js/adapter-sveltekit/vite\''
+  const holoImport = `import { ${HOLO_VITE_PLUGIN} } from '@holo-js/adapter-sveltekit/vite'`
   return firstImport === -1 ? `${holoImport}\n${contents}` : `${contents.slice(0, firstImport)}${holoImport}\n${contents.slice(firstImport)}`
+}
+
+function enclosingOpener(code: string, index: number): string | undefined {
+  let depth = 0
+  for (let position = index - 1; position >= 0; position -= 1) {
+    const char = code[position]
+    if (char === ')' || char === ']' || char === '}') {
+      depth += 1
+    } else if (char === '(' || char === '[' || char === '{') {
+      if (depth === 0) return char
+      depth -= 1
+    }
+  }
+
+  return undefined
+}
+
+function isArrayElement(code: string, callIndex: number): boolean {
+  const preceding = code.slice(0, callIndex).trimEnd().at(-1)
+  return (preceding === '[' || preceding === ',') && enclosingOpener(code, callIndex) === '['
 }
 
 function addHoloVitePlugin(contents: string, callIndex: number, closeIndex: number): string {
   const code = maskNonCode(contents)
-  if (code.includes(HOLO_VITE_PLUGIN_CALL)) return contents
-  const preceding = code.slice(0, callIndex).trimEnd().at(-1)
-  if (preceding !== '[' && preceding !== ',') {
+  const bindings = holoVitePluginBindings(contents)
+  if (registersHoloVitePlugin(code, bindings)) return contents
+  if (!isArrayElement(code, callIndex)) {
     throw new Error(VITE_PLUGIN_ADD_MESSAGE)
   }
 
-  return `${contents.slice(0, closeIndex + 1)}, ${HOLO_VITE_PLUGIN_CALL})${contents.slice(closeIndex + 1)}`
+  return `${contents.slice(0, closeIndex + 1)}, ${bindings[0] ?? HOLO_VITE_PLUGIN}()${contents.slice(closeIndex + 1)}`
 }
 
 function patchViteConfigWithHoloWrapper(original: string): string | undefined {
