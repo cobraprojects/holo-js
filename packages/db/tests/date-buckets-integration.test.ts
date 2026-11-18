@@ -275,7 +275,7 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect([...first.data, ...second.data]).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }])
   })
 
-  it('filters each union query by what it sorts at the cursor position', async () => {
+  it('rejects a union cursor position that is a date bucket in one query and a column in another', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
     const labels = await createLabelsTable()
@@ -293,11 +293,7 @@ describe.each(drivers)('date buckets on %s', (driver) => {
         .addSelectDate('day', `${labels.tableName}.at`, { as: 'label', timeZone: 'UTC' }))
       .orderBy('sort')
 
-    const first = await query().cursorPaginate(1)
-    const second = await query().cursorPaginate(1, first.nextCursor)
-
-    expect(first.data).toEqual([{ id: 1, sort: '2026-11-03', extra: '2026-11-03' }])
-    expect(second.data).toEqual([{ id: 2, sort: '2026-11-04', extra: '2026-11-01' }])
+    await expect(query().cursorPaginate(1)).rejects.toThrow(SecurityError)
   })
 
   it('rejects union cursor pagination when a grouped query puts a date bucket at the ordered position', async () => {
@@ -1140,6 +1136,23 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     const page = await DB.table(hidden).addSelectDate('day', 'at', { as: 'day', timeZone: 'UTC' }).groupBy('id', 'day').orderBy('id').cursorPaginate(5)
 
     expect(page.data).toEqual([{ id: 1, __holo_cursor_0: 42, at: expect.anything(), day: '2026-11-03' }])
+  })
+
+  it('names hidden cursor columns past selected names that take the first candidates', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    const page = await DB.table(events)
+      .where('tenant_id', 1)
+      .whereNotNull('occurred_at')
+      .select('tenant_id as __holo_cursor_0', 'tenant_id as __holo_cursor_0_1')
+      .addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .groupBy('tenant_id', 'day')
+      .orderBy('tenant_id')
+      .orderBy('day')
+      .cursorPaginate(1)
+
+    expect(page.data).toEqual([{ __holo_cursor_0: 1, __holo_cursor_0_1: 1, day: '2026-11-03' }])
   })
 
   it('rejects distinct grouped date bucket cursors ordered by another column', async () => {

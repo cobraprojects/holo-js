@@ -149,13 +149,6 @@ function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectio
   return find(sameIdentifierExactly) ?? find(sameIdentifierFolded)
 }
 
-const TEXT_COLUMN_KINDS: ReadonlySet<string> = new Set(['string', 'text', 'enum', 'ulid'])
-
-export function holdsText(plan: SelectQueryPlan, column: string, connectionName: string | undefined): boolean {
-  const definition = bucketColumnDefinition(plan, column, connectionName)
-  return definition !== undefined && TEXT_COLUMN_KINDS.has(definition.kind)
-}
-
 export function selectionMayOutputName(
   plan: SelectQueryPlan,
   selection: SelectQueryPlan['selections'][number],
