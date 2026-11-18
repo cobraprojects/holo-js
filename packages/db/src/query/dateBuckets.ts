@@ -54,9 +54,19 @@ type VisibleTable = {
   readonly columns: () => readonly string[] | undefined
 }
 
+function sameIdentifierFolded(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase()
+}
+
 function isVisibleAs(qualifier: string, { tableName, alias }: VisibleTable): boolean {
-  if (alias !== undefined) return qualifier === alias
-  return tableName !== undefined && (qualifier === tableName || qualifier === splitTablePath(tableName).table)
+  if (alias !== undefined) return sameIdentifierFolded(qualifier, alias)
+  return tableName !== undefined && (sameIdentifierFolded(qualifier, tableName) || sameIdentifierFolded(qualifier, splitTablePath(tableName).table))
+}
+
+function columnDefinitionFolded(table: TableDefinition | undefined, name: string): AnyColumnDefinition | undefined {
+  if (!table) return undefined
+  const key = Object.keys(table.columns).find(column => sameIdentifierFolded(column, name))
+  return key === undefined ? undefined : table.columns[key]
 }
 
 function visibleTables(plan: SelectQueryPlan, connectionName: string | undefined): readonly VisibleTable[] {
@@ -82,7 +92,7 @@ function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectio
   const qualifier = separator === -1 ? undefined : column.slice(0, separator)
   return visibleTables(plan, connectionName)
     .filter(table => qualifier === undefined || isVisibleAs(qualifier, table))
-    .map(table => table.definition?.columns[name])
+    .map(table => columnDefinitionFolded(table.definition, name))
     .find(definition => definition !== undefined)
 }
 
@@ -101,23 +111,26 @@ export function selectionMayOutputName(
     .filter(table => wildcardTable === undefined || isVisibleAs(wildcardTable, table))
     .some((table) => {
       const columns = table.columns()
-      return columns === undefined ? whenUnknown : columns.includes(name)
+      return columns === undefined ? whenUnknown : columns.some(column => sameIdentifierFolded(column, name))
     })
 }
 
 export function bareColumnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined): string {
-  const folded = name.toLowerCase()
   const tables = visibleTables(plan, connectionName)
-  const owners = tables.filter(table => table.columns()?.some(column => column.toLowerCase() === folded))
-  if (owners.length > 1) {
-    throw new CompilerError(`Column "${name}" is ambiguous next to the date bucket of the same name. Qualify it with its table.`)
+  const owners = tables.filter(table => table.columns()?.some(column => sameIdentifierFolded(column, name)))
+  if (owners.length > 1 || (owners.length === 0 && tables.some(table => table.columns() === undefined))) {
+    throw new CompilerError(`Column "${name}" shares its name with a date bucket and Holo can't tell which table owns it. Qualify it with its table.`)
   }
   const owner = owners[0] ?? tables[0]!
   return owner.alias ?? owner.tableName ?? plan.source.tableName
 }
 
 export function assertDateBucketOutputsUnshadowed(plan: SelectQueryPlan, connectionName: string | undefined): void {
+  const sourceColumns = visibleTables(plan, connectionName)[0]!.columns() ?? []
   for (const alias of dateBucketSelections(plan).keys()) {
+    if (sourceColumns.some(column => sameIdentifierFolded(column, alias))) {
+      throw new SecurityError(`Date bucket alias "${alias}" must not reuse a column name of table "${plan.source.tableName}".`)
+    }
     if (plan.selections.some(selection => selectionMayOutputName(plan, selection, alias, connectionName, false))) {
       throw new SecurityError(`Date bucket alias "${alias}" must not be reused by a column of a selected wildcard.`)
     }

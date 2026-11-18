@@ -2,7 +2,9 @@ import { CompilerError } from '../core/errors'
 import { dateBucketSelections, unionBranchPlans, type QuerySelection, type SelectQueryPlan } from './ast'
 import { knownJoinedColumns, knownTableColumns, qualifiesTable, selectionOutputName } from './modelRowProjection'
 
-type UnionOutput = { readonly names: readonly string[] | undefined, readonly column?: string, readonly positioned: boolean }
+type UnionOutput = { readonly names: readonly string[] | undefined, readonly column?: string, readonly dateBucket?: true, readonly positioned: boolean }
+
+export type UnionCursorColumn = { readonly column: string, readonly selectionAlias: boolean }
 
 function unpositioned(names: readonly string[] | undefined): UnionOutput {
   return { names, positioned: false }
@@ -20,7 +22,7 @@ function sourceColumns(branch: SelectQueryPlan, connectionName: string): readonl
 
 function selectionOutput(branch: SelectQueryPlan, selection: QuerySelection, connectionName: string): UnionOutput {
   if (selection.kind === 'raw') return unpositioned(undefined)
-  if (selection.kind === 'date-bucket') return { names: [selection.alias], column: selection.alias, positioned: true }
+  if (selection.kind === 'date-bucket') return { names: [selection.alias], column: selection.alias, dateBucket: true, positioned: true }
   const name = selectionOutputName(selection)
   if (selection.kind !== 'column') return { names: typeof name === 'string' ? [name] : undefined, positioned: true }
   if (selection.column === '*') {
@@ -55,14 +57,15 @@ function outputPosition(plan: SelectQueryPlan, column: string, connectionName: s
   return outputs.slice(0, position + 1).every(output => output.positioned) ? position : undefined
 }
 
-function namedBranchColumn(branch: SelectQueryPlan, column: string): string {
+function namedBranchColumn(branch: SelectQueryPlan, column: string): UnionCursorColumn {
   const aliased = branch.selections.find(selection => selection.kind === 'column' && selection.alias === column)
-  if (aliased?.kind === 'column') return aliased.column
-  if (branch.joins.length === 0 || column.includes('.') || !branch.source.table || !Object.hasOwn(branch.source.table.columns, column)) return column
-  return `${branch.source.alias ?? branch.source.tableName}.${column}`
+  if (aliased?.kind === 'column') return { column: aliased.column, selectionAlias: false }
+  if (dateBucketSelections(branch).has(column)) return { column, selectionAlias: true }
+  if (branch.joins.length === 0 || column.includes('.') || !branch.source.table || !Object.hasOwn(branch.source.table.columns, column)) return { column, selectionAlias: false }
+  return { column: `${branch.source.alias ?? branch.source.tableName}.${column}`, selectionAlias: false }
 }
 
-function positionedBranchColumn(branch: SelectQueryPlan, column: string, position: number, connectionName: string): string {
+function positionedBranchColumn(branch: SelectQueryPlan, column: string, position: number, connectionName: string): UnionCursorColumn {
   const outputs = branchOutputs(branch, connectionName)
   assertKnownPosition(outputs.slice(0, position + 1), column)
   if (!outputs.slice(0, position + 1).every(output => output.positioned)) return namedBranchColumn(branch, column)
@@ -70,10 +73,10 @@ function positionedBranchColumn(branch: SelectQueryPlan, column: string, positio
   if (!output?.column) {
     throw new CompilerError(`Cannot cursor paginate a union by "${column}": a query in the union doesn't select a table column at its position. Select a column at the same position in each query.`)
   }
-  return output.column
+  return { column: output.column, selectionAlias: output.dateBucket === true }
 }
 
-export function unionCursorColumns(plan: SelectQueryPlan, columns: readonly string[], connectionName: string): (branch: SelectQueryPlan) => readonly string[] {
+export function unionCursorColumns(plan: SelectQueryPlan, columns: readonly string[], connectionName: string): (branch: SelectQueryPlan) => readonly UnionCursorColumn[] {
   const positions = columns.map(column => outputPosition(plan, column, connectionName))
   const rootDateBuckets = dateBucketSelections(plan)
   const branchColumns = (branch: SelectQueryPlan) => columns.map((column, index) => {

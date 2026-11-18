@@ -47,6 +47,27 @@ async function createEventsTable(driver: typeof drivers[number]) {
   return events
 }
 
+async function createLabelsTable() {
+  const schema = createSchemaService(DB.connection())
+  const name = `bucket_labels_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+  onTestFinished(async () => {
+    await schema.dropTable(name)
+  })
+  await schema.createTable(name, (table) => {
+    table.id()
+    table.string('label')
+    table.datetime('at')
+  })
+  return defineGeneratedTable(name, { id: column.id(), label: column.string(), at: column.datetime() })
+}
+
+async function fillLabelsTable(labels: Awaited<ReturnType<typeof createLabelsTable>>) {
+  await DB.table(labels).insert([
+    { label: '2026-11-05', at: new Date('2026-11-03T10:00:00Z') },
+    { label: '2026-11-04', at: new Date('2026-11-01T10:00:00Z') },
+  ])
+}
+
 async function createFactsTable(driver: typeof drivers[number]) {
   const events = await createEventsTable(driver)
   const schema = createSchemaService(DB.connection())
@@ -203,16 +224,111 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect(() => DB.table(events).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'Mars/Olympus' })).toThrow(SecurityError)
   })
 
-  it('keeps where clauses on the column when a date bucket alias reuses its name on a table passed by name', async () => {
+  it('rejects a date bucket alias that reuses a column of a table passed by name', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
 
-    const rows = await DB.table(events.tableName)
-      .where('tenant_id', 2)
-      .selectDate('day', 'occurred_at', { as: 'tenant_id', timeZone: 'UTC' })
-      .get()
+    await expect(DB.table(events.tableName).where('tenant_id', 2).selectDate('day', 'occurred_at', { as: 'tenant_id' }).get()).rejects.toThrow(SecurityError)
+    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'ID' }).orderBy('ID').cursorPaginate(1)).rejects.toThrow(SecurityError)
+  })
 
-    expect(rows).toEqual([{ tenant_id: '2026-11-04' }])
+  it('pages day buckets in chunks', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const days: (string | null)[] = []
+
+    await DB.table(events)
+      .where('tenant_id', 1)
+      .whereNotNull('occurred_at')
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .orderBy('bucket')
+      .chunk(2, (rows) => {
+        days.push(...rows.map(row => row.bucket))
+      })
+
+    expect(days).toEqual(['2026-11-03', '2026-11-03', '2026-11-04', '2026-11-04', '2026-11-05', '2026-12-31'])
+  })
+
+  it('keeps the default primary key order for a query grouped by its primary key', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    const first = await DB.table(events).where('tenant_id', 1).select('id').groupBy('id').cursorPaginate(2)
+    const second = await DB.table(events).where('tenant_id', 1).select('id').groupBy('id').cursorPaginate(2, first.nextCursor)
+
+    expect([...first.data, ...second.data]).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }])
+  })
+
+  it('filters each union query by what it sorts at the cursor position', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const labels = await createLabelsTable()
+    registerGeneratedTables({ events, labels })
+    await fillLabelsTable(labels)
+    const query = () => DB.table(labels.tableName)
+      .where('id', 1)
+      .select('id')
+      .addSelectDate('day', 'at', { as: 'sort', timeZone: 'UTC' })
+      .addSelectDate('day', 'at', { as: 'extra', timeZone: 'UTC' })
+      .unionAll(DB.table(events.tableName)
+        .join(labels.tableName, `${labels.tableName}.id`, '=', `${events.tableName}.id`)
+        .where(`${events.tableName}.id`, 2)
+        .select(`${events.tableName}.id`, 'label as sort_key')
+        .addSelectDate('day', `${labels.tableName}.at`, { as: 'label', timeZone: 'UTC' }))
+      .orderBy('sort')
+
+    const first = await query().cursorPaginate(1)
+    const second = await query().cursorPaginate(1, first.nextCursor)
+
+    expect(first.data).toEqual([{ id: 1, sort: '2026-11-03', extra: '2026-11-03' }])
+    expect(second.data).toEqual([{ id: 2, sort: '2026-11-04', extra: '2026-11-01' }])
+  })
+
+  it('rejects union cursor pagination when a grouped query puts a date bucket at the ordered position', async () => {
+    useAppTimezone('UTC')
+    await openDatabase(driver)
+    const labels = await createLabelsTable()
+    registerGeneratedTables({ labels })
+    onTestFinished(() => clearGeneratedTables())
+    await fillLabelsTable(labels)
+
+    await expect(DB.table(labels)
+      .select('label')
+      .groupBy('label')
+      .unionAll(DB.table(labels).selectDate('day', 'at', { as: 'other', timeZone: 'UTC' }).groupBy('other'))
+      .orderBy('label')
+      .cursorPaginate(1)).rejects.toThrow(SecurityError)
+  })
+
+  it('asks for a qualified column when an unregistered join may own a bare column named like the date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const schema = createSchemaService(DB.connection())
+    const extras = `bucket_extras_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(extras)
+    })
+    await schema.createTable(extras, (table) => {
+      table.id()
+      table.string('bucket')
+    })
+
+    await expect(DB.table(events.tableName)
+      .join(extras, `${extras}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .where('bucket', 'first')
+      .get()).rejects.toThrow(CompilerError)
+  })
+
+  it('rejects a joined wildcard spelled in another case whose column shares the date bucket alias', async () => {
+    useAppTimezone('UTC')
+    const { events, facts } = await createFactsTable(driver)
+
+    await expect(DB.table(events.tableName)
+      .join(`${facts} as f`, 'f.id', '=', `${events.tableName}.id`)
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .addSelect('F.*')
+      .get()).rejects.toThrow(SecurityError)
   })
 
   it('orders a union of grouped queries by a date bucket', async () => {

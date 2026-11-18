@@ -99,7 +99,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, LogicalColumnKind, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { isAwaitingGeneratedTableIdentity, getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { unionCursorColumns } from './unionCursorColumns'
+import { unionCursorColumns, type UnionCursorColumn } from './unionCursorColumns'
 import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
 import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
@@ -2364,26 +2364,29 @@ export class TableQueryBuilder<
     const unionColumns = orderedQuery.plan.unions.length === 0
       ? undefined
       : unionCursorColumns(orderedQuery.plan, cursorOrders.map(order => order.column), this.connection.getConnectionName())
+    if (unionColumns) assertUnionCursorDistinguishesGroups(orderedQuery.plan, unionColumns)
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     if (decodedCursor) {
       const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
       const nullsLow = !this.connection.getDialect().name.includes('postgres')
-      const filter = (branch: SelectQueryPlan, columns: readonly string[]): SelectQueryPlan => {
+      const filter = (branch: SelectQueryPlan, columns: readonly UnionCursorColumn[]): SelectQueryPlan => {
         const grouped = branch.predicates.some(predicate => predicate.boolean === 'or')
           ? withPredicate(withoutPredicates(branch, () => true), { kind: 'group', predicates: branch.predicates })
           : branch
-        const dateBuckets = dateBucketSelections(branch)
         return withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map((order, index) => ({
           ...order,
-          column: columns[index]!,
-          ...(dateBuckets.has(columns[index]!) ? { selectionAlias: true as const } : {}),
+          column: columns[index]!.column,
+          ...(columns[index]!.selectionAlias ? { selectionAlias: true as const } : {}),
         })), nullsLow))
       }
-      const filterUnion = (branch: SelectQueryPlan, branchColumns: (branch: SelectQueryPlan) => readonly string[]): SelectQueryPlan => Object.freeze({
+      const filterUnion = (branch: SelectQueryPlan, branchColumns: (branch: SelectQueryPlan) => readonly UnionCursorColumn[]): SelectQueryPlan => Object.freeze({
         ...filter(branch, branchColumns(branch)),
         unions: Object.freeze(branch.unions.map(union => Object.freeze({ ...union, query: filterUnion(union.query, branchColumns) }))),
       })
-      plan = unionColumns ? filterUnion(plan, unionColumns) : filter(plan, cursorOrders.map(order => order.column))
+      const dateBuckets = dateBucketSelections(plan)
+      plan = unionColumns
+        ? filterUnion(plan, unionColumns)
+        : filter(plan, cursorOrders.map(order => ({ column: order.column, selectionAlias: dateBuckets.has(order.column) })))
     }
     if (previous) plan = replaceOrderBy(plan, cursorOrders.map(order => ({ kind: 'column', column: order.column, direction: order.direction === 'asc' ? 'desc' : 'asc' })))
     const pageQuery = orderedQuery.clone(plan)
@@ -3426,21 +3429,17 @@ export class TableQueryBuilder<
       throw new SecurityError('Cursor pagination cannot use random ordering.')
     }
 
-    const branches = unionBranchPlans(this.plan)
-    const ordersByDateBucket = this.plan.orderBy.some(orderBy => orderBy.kind === 'column' && branches.some(branch => dateBucketSelections(branch).has(orderBy.column)))
-    if (this.plan.unions.length > 0 && ordersByDateBucket && branches.some(branch => branch.groupBy.length > 0)) {
-      throw new SecurityError('Cursor pagination cannot page a union of grouped queries by a date bucket, because the same bucket can appear in more than one of them.')
-    }
-
+    const primaryKeys = this.source.table ? listTablePrimaryKeyColumns(this.source.table) : []
     if (this.plan.groupBy.length > 0) {
-      const orderedColumns = new Set(this.plan.orderBy.flatMap(orderBy => orderBy.kind === 'column' ? [orderBy.column] : []))
-      if (!this.plan.groupBy.every(column => orderedColumns.has(column))) {
+      const groupsByPrimaryKey = primaryKeys.length > 0 && primaryKeys.every(key => this.plan.groupBy.some(column => this.resolveSourceColumnName(column) === key))
+      const ordered = this.plan.orderBy.length === 0 && groupsByPrimaryKey ? this.withPrimaryKeyTieBreakers(primaryKeys) : this
+      const orderedColumns = new Set(ordered.plan.orderBy.flatMap(orderBy => orderBy.kind === 'column' ? [orderBy.column] : []))
+      if (!ordered.plan.groupBy.every(column => orderedColumns.has(column) || [...orderedColumns].some(ordered => this.resolveSourceColumnName(ordered) === column))) {
         throw new SecurityError('Cursor pagination over grouped rows must order by every groupBy column.')
       }
-      return this
+      return ordered
     }
 
-    const primaryKeys = this.source.table ? listTablePrimaryKeyColumns(this.source.table) : []
     if (this.plan.orderBy.length === 0 && primaryKeys.length === 0) {
       throw new SecurityError('Cursor pagination requires an explicit stable orderBy clause.')
     }
@@ -3679,6 +3678,14 @@ export function whereRelationKeys<TQuery extends TableQueryBuilder<TableReferenc
     ? definition.idStrategy === 'autoIncrement' ? 'integer' : definition.idStrategy === 'uuid' ? 'uuid' : undefined
     : definition ? RELATION_KEY_VALUE_TYPES[definition.kind] : undefined
   return query.withPredicates([...query.getPlan().predicates, { kind: 'relation-keys', column, values: predicate.value, valueType }]) as TQuery
+}
+
+function assertUnionCursorDistinguishesGroups(plan: SelectQueryPlan, unionColumns: (branch: SelectQueryPlan) => readonly UnionCursorColumn[]): void {
+  const branches = unionBranchPlans(plan)
+  if (!branches.some(branch => branch.groupBy.length > 0)) return
+  if (branches.some(branch => unionColumns(branch).some(column => column.selectionAlias))) {
+    throw new SecurityError('Cursor pagination cannot page a union of grouped queries by a date bucket, because the same bucket can appear in more than one of them.')
+  }
 }
 
 export function addSelectDateExtrema(
