@@ -2,7 +2,7 @@ import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { assertQueryTablePath } from '../query/validator'
-import { normalizeDialectWriteValue, parseStoredDate } from '../schema/normalization'
+import { normalizeDialectWriteValue, parseStoredDate, storesDate } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import { assertColumnWritable, canonicalStoredKey, ownEntry } from './entityRuntime'
@@ -26,6 +26,10 @@ const bindingBudget = 900
 
 function bindableId(id: unknown): unknown {
   return ArrayBuffer.isView(id) && !(id instanceof Uint8Array) ? new Uint8Array(id.buffer, id.byteOffset, id.byteLength) : id
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return left instanceof Date && right instanceof Date ? left.getTime() === right.getTime() : left === right
 }
 
 function isScalarObjectId(id: unknown): id is Date | ArrayBufferView {
@@ -191,7 +195,10 @@ export class PivotMutation {
   }
 
   private readKey(value: unknown): unknown {
-    if (!this.dateKeyColumn()) return value
+    return this.dateKeyColumn() ? this.readDate(value) : value
+  }
+
+  private readDate(value: unknown): unknown {
     const parsed = parseStoredDate(this.context.dialect, value)
     return parsed instanceof Date && Number.isNaN(parsed.getTime()) ? value : parsed
   }
@@ -223,7 +230,12 @@ export class PivotMutation {
   }
 
   private changed(existing: Attributes, attributes: Attributes): boolean {
-    return Object.entries(attributes).some(([key, value]) => existing[key] !== value)
+    return Object.entries(attributes).some(([key, value]) => !sameValue(this.readAttribute(key, existing[key]), this.readAttribute(key, value)))
+  }
+
+  private readAttribute(column: string, value: unknown): unknown {
+    const definition = typeof this.context.table === 'string' ? undefined : ownEntry(this.context.table.columns, column)
+    return definition && storesDate(definition) ? this.readDate(value) : value
   }
 
   private query(connection: DatabaseContext): TableQueryBuilder<string | TableDefinition> {

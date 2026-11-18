@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, expectTypeOf, it, onTestFinished } from 'vitest'
-import { DB, column, defineGeneratedTable, defineModel, resetDB, unsafeSql } from '../src'
+import { DB, type CursorPaginatedResult, belongsToMany, clearGeneratedTables, column, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB, unsafeSql } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'])
@@ -27,7 +27,7 @@ async function openEvents(driver: Driver) {
     due_on: column.date().nullable(),
   })
   const Event = defineModel(events, { timestamps: false })
-  return { db, events, Event, name }
+  return { db, schema, events, Event, name }
 }
 
 const happened = new Date('2026-01-01T10:00:00Z')
@@ -68,6 +68,78 @@ describe.each(drivers)('date-like columns read through the table query builder o
     expect(extrema!.first_at).toBeInstanceOf(Date)
     expect(union.map(row => row.happened_at).sort((left, right) => left!.getTime() - right!.getTime())).toEqual([happened, scheduled])
     expect(union[0]!.happened_at).toBeInstanceOf(Date)
+  })
+})
+
+async function openJoinedNotes(driver: Driver) {
+  const { schema, events } = await openEvents(driver)
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+  const notesName = `holo_notes_${suffix}`
+  const tagsName = `holo_tags_${suffix}`
+  const pivotName = `holo_event_tags_${suffix}`
+  await schema.createTable(notesName, (table) => {
+    table.integer('id').primaryKey()
+    table.integer('event_id')
+    table.timestamp('noted_at')
+  })
+  onTestFinished(() => schema.dropTable(notesName))
+  await schema.createTable(tagsName, (table) => { table.integer('id').primaryKey() })
+  onTestFinished(() => schema.dropTable(tagsName))
+  await schema.createTable(pivotName, (table) => {
+    table.integer('event_id')
+    table.integer('tag_id')
+    table.timestamp('expires_at').nullable()
+  })
+  onTestFinished(() => schema.dropTable(pivotName))
+  const notes = defineGeneratedTable(notesName, { id: column.integer().primaryKey(), event_id: column.integer(), noted_at: column.timestamp() })
+  const tags = defineGeneratedTable(tagsName, { id: column.integer().primaryKey() })
+  const eventTags = defineGeneratedTable(pivotName, { event_id: column.integer(), tag_id: column.integer(), expires_at: column.timestamp().nullable() })
+  registerGeneratedTables({ events, notes, tags, eventTags })
+  onTestFinished(() => clearGeneratedTables())
+  const Tag = defineModel(tags, { timestamps: false })
+  const TaggedEvent = defineModel(events, {
+    timestamps: false,
+    relations: { tags: belongsToMany(() => Tag, eventTags, 'event_id', 'tag_id').withPivot('expires_at') },
+  })
+  return { events, notes, notesName, tags, TaggedEvent }
+}
+
+describe.each(drivers)('date-like columns that other query builder features read back on %s', (driver) => {
+  it('pages through a cursor ordered by a joined timestamp', async () => {
+    const { events, notes, notesName } = await openJoinedNotes(driver)
+    await DB.table(events).insert([1, 2, 3].map(id => ({ id, label: `event ${id}`, happened_at: null, scheduled_for: null, due_on: null })))
+    await DB.table(notes).insert([10, 11, 12].map((hour, index) => ({ id: index + 1, event_id: index + 1, noted_at: new Date(`2026-01-01T${hour}:00:00Z`) })))
+
+    const labels: unknown[] = []
+    const notedAt: unknown[] = []
+    let cursor: string | null = null
+    for (let page = 0; page < 5; page++) {
+      const result: CursorPaginatedResult<{ label: string, noted_at: unknown }> = await DB.table(events).join(notesName, `${notesName}.event_id`, '=', `${events.tableName}.id`)
+        .select(`${events.tableName}.id`, `${events.tableName}.label`, `${notesName}.noted_at`)
+        .orderBy(`${notesName}.noted_at`)
+        .cursorPaginate(1, cursor)
+      labels.push(...result.data.map(row => row.label))
+      notedAt.push(...result.data.map(row => row.noted_at))
+      cursor = result.nextCursor
+      if (!cursor) break
+    }
+
+    expect(labels).toEqual(['event 1', 'event 2', 'event 3'])
+    expect(notedAt).toEqual([10, 11, 12].map(hour => new Date(`2026-01-01T${hour}:00:00Z`)))
+  })
+
+  it('leaves a pivot row alone when its date attribute is written again unchanged', async () => {
+    const { events, tags, TaggedEvent } = await openJoinedNotes(driver)
+    await DB.table(events).insert({ id: 1, label: 'set', happened_at: null, scheduled_for: null, due_on: null })
+    await DB.table(tags).insert([{ id: 1 }, { id: 2 }])
+    const event = await TaggedEvent.findOrFail(1)
+    await event.attach('tags', 1, { expires_at: happened })
+    await event.attach('tags', 2, { expires_at: '2026-01-01 10:00:00' as never })
+
+    expect(await event.updateExistingPivot('tags', 1, { expires_at: new Date(happened.getTime()) })).toBe(0)
+    expect(await event.updateExistingPivot('tags', 2, { expires_at: '2026-01-01 10:00:00' as never })).toBe(0)
+    expect(await event.sync('tags', { 1: { expires_at: new Date(happened.getTime()) }, 2: { expires_at: '2026-01-01 10:00:00' as never } })).toEqual({ attached: [], detached: [], updated: [] })
+    expect(await event.updateExistingPivot('tags', 1, { expires_at: scheduled })).toBe(1)
   })
 })
 
@@ -123,6 +195,24 @@ describe.each(integrationDrivers(['sqlite']))('stored SQLite date text on %s', (
       expect(rows[index]!.happened_at).toBeInstanceOf(Date)
       expect(rows[index]!.happened_at!.getTime()).toBe(model.get('happened_at')!.getTime())
     }
+  })
+
+  it('pages through a cursor ordered by stored calendar text with ties', async () => {
+    const { db, events, name } = await openEvents(driver)
+    for (const [id, text] of [[1, '2026-05-06'], [2, '2026-05-06'], [3, '2026-05-07'], [4, '2026-05-07 00:00:00']] as const) {
+      await db.unsafeExecute(unsafeSql(`INSERT INTO "${name}" ("id", "label", "due_on") VALUES (?, ?, ?)`, [id, `event ${id}`, text]))
+    }
+
+    const ids: unknown[] = []
+    let cursor: string | null = null
+    for (let page = 0; page < 6; page++) {
+      const result: CursorPaginatedResult<{ id: number }> = await DB.table(events).select('id', 'due_on').orderBy('due_on').orderBy('id').cursorPaginate(1, cursor)
+      ids.push(...result.data.map(row => row.id))
+      cursor = result.nextCursor
+      if (!cursor) break
+    }
+
+    expect(ids).toEqual([1, 2, 3, 4])
   })
 
   it('keeps a union column as text when a branch reads it from a non-date column', async () => {

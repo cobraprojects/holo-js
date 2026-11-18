@@ -63,4 +63,15 @@ describe('@holo-js/db query pagination helpers', () => {
       createError,
     )).toThrow('Cursor is malformed.')
   })
+
+  it('round-trips Date cursor values as Dates and rejects malformed ones', () => {
+    const instant = new Date('2026-01-01T10:00:00.123Z')
+    const encode = (values: unknown[]) => Buffer.from(JSON.stringify({ values }), 'utf8').toString('base64url')
+
+    expect(decodeValueCursor(encodeValueCursor([instant, 'Ava']), createError)).toEqual({ values: [instant, 'Ava'] })
+    expect(decodeValueCursor(encode(['2026-01-01T10:00:00.123Z']), createError)).toEqual({ values: ['2026-01-01T10:00:00.123Z'] })
+    for (const value of [{ date: 'yesterday' }, { date: '2026-01-01' }, { date: 1 }, { date: '2026-01-01T10:00:00.123Z', extra: true }, {}, ['2026']]) {
+      expect(() => decodeValueCursor(encode([value]), createError)).toThrow('Cursor is malformed.')
+    }
+  })
 })
