@@ -140,15 +140,16 @@ export class PivotMutation {
           if (update) actions.push({ ...entry, kind: 'update', keys: this.targetKeys(existing, entry.id), update, onUpdated: () => result.updated.push(entry.id) })
         }
       }
+      const detachments: Action[] = []
       if (detachMissing) {
         for (const missing of await matches.missing()) {
           const keys = this.storedKeys(missing)
           if (keys.length === 0) continue
-          actions.push({ kind: 'delete', keys })
+          detachments.push({ kind: 'delete', keys })
           for (const row of missing) result.detached.push(this.readKey(row[this.context.relatedColumn]))
         }
       }
-      await this.execute(connection, actions)
+      await this.execute(connection, [...detachments, ...actions])
     })
     return result
   }
@@ -289,7 +290,7 @@ export class PivotMutation {
       const representatives = new Map<unknown, Entry>()
       const shared = new Map<Entry, Entry>()
       for (const entry of entries) {
-        const identity = this.keyIdentity(this.writeKey(entry.id))
+        const identity = this.keyIdentity(this.comparedKey(entry.id))
         const representative = representatives.get(identity)
         if (representative) shared.set(entry, representative)
         else representatives.set(identity, entry)
@@ -342,8 +343,8 @@ export class PivotMutation {
   }
 
   private comparedKey(id: unknown): unknown {
-    const table = this.tableDefinition()
-    return this.dateKeyColumn()?.kind === 'date'
+    const table = this.writtenTableDefinition()
+    return table && this.dateKeyColumn()?.kind === 'date'
       ? normalizeDateColumnPredicateValue(table, this.context.dialect, this.context.relatedColumn, id, '=').value
       : normalizeQueryPredicateValue(table, this.context.dialect, this.context.relatedColumn, id)
   }

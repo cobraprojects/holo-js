@@ -390,6 +390,44 @@ describe.each(drivers)('pivot date attributes of an unregistered or reduced-prec
   })
 })
 
+describe.each(drivers)('pivot keys of an unregistered pivot table on %s', (driver) => {
+  async function openUnregistered() {
+    const fixture = await openPivots(driver)
+    clearGeneratedTables()
+    const owners = defineGeneratedTable(fixture.names.owners, { id: column.integer().primaryKey() })
+    const slots = defineGeneratedTable(fixture.names.slots, { starts_at: column.datetime().primaryKey() })
+    const days = defineGeneratedTable(fixture.names.days, { day: column.date().primaryKey() })
+    registerGeneratedTables({ owners, slots, days })
+    const Slot = defineModel(slots, { timestamps: false })
+    const Day = defineModel(days, { timestamps: false })
+    const Untyped = defineModel(owners, {
+      timestamps: false,
+      relations: {
+        slots: belongsToMany(() => Slot, fixture.names.ownerSlots, 'owner_id', 'starts_at', 'id', 'starts_at'),
+        days: belongsToMany(() => Day, fixture.names.ownerDays, 'owner_id', 'day', 'id', 'day'),
+      },
+    })
+    return { ...fixture, owner: await Untyped.findOrFail(1) }
+  }
+
+  it.runIf(driver === 'mysql')('detaches a key with fractional seconds the column keeps', async () => {
+    const { db, names, owner, ownerSlots } = await openUnregistered()
+    await db.unsafeExecute(unsafeSql(`ALTER TABLE ${quote(driver, names.ownerSlots)} MODIFY ${quote(driver, 'starts_at')} DATETIME(6)`))
+    await owner.attach('slots', '2026-01-01 10:00:00.123456' as never)
+
+    expect(await owner.detach('slots', '2026-01-01 10:00:00.123456' as never)).toBe(1)
+    expect(await DB.table(ownerSlots).count()).toBe(0)
+  })
+
+  it('detaches before it attaches, so a replacement the database stores as the same day survives', async () => {
+    const { db, names, owner, ownerDays } = await openUnregistered()
+    await db.unsafeExecute(unsafeSql(`INSERT INTO ${quote(driver, names.ownerDays)} (${quote(driver, 'owner_id')}, ${quote(driver, 'day')}) VALUES (1, '2026-01-01')`))
+
+    await owner.sync('days', ['2026-01-01 15:30:00' as never])
+    expect(await DB.table(ownerDays).count()).toBe(1)
+  })
+})
+
 describe.each(drivers)('pivot ids given as object keys on %s', (driver) => {
   it('keeps a leading-zero string key as text, as Laravel does', async () => {
     const { schema } = await openDatabase(driver)
