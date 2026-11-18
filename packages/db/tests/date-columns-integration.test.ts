@@ -97,4 +97,42 @@ describe.each(integrationDrivers(['sqlite']))('stored SQLite date text on %s', (
       expect([row.happened_at, row.scheduled_for, row.due_on]).toEqual([model.get('happened_at'), model.get('scheduled_for'), model.get('due_on')])
     }
   })
+
+  it('stores Dates as UTC text that reads back as the same Date', async () => {
+    const { events } = await openEvents(driver)
+    await DB.table(events).insert({ id: 1, label: 'set', happened_at: new Date('2026-01-01T10:00:00.123Z'), scheduled_for: scheduled, due_on: new Date('2026-05-06T00:00:00Z') })
+
+    const stored = await DB.table(events).unsafeSelect('"happened_at" AS "happened", "scheduled_for" AS "scheduled", "due_on" AS "due"', []).first()
+    const read = await DB.table(events).select('happened_at', 'scheduled_for', 'due_on').first()
+
+    expect(stored).toEqual({ happened: '2026-01-01 10:00:00.123', scheduled: '2026-03-04 05:06:07', due: '2026-05-06 00:00:00' })
+    expect(read).toEqual({ happened_at: new Date('2026-01-01T10:00:00.123Z'), scheduled_for: scheduled, due_on: new Date('2026-05-06T00:00:00Z') })
+  })
+
+  it('reads stored text that is not a valid date exactly as model hydration does', async () => {
+    const { db, events, Event, name } = await openEvents(driver)
+    const impossible = ['2025-02-30', '2025-13-01', '2025-02-28 24:30:00']
+    for (const [index, text] of impossible.entries()) {
+      await db.unsafeExecute(unsafeSql(`INSERT INTO "${name}" ("id", "label", "happened_at") VALUES (?, ?, ?)`, [index + 1, text, text]))
+    }
+
+    const rows = await DB.table(events).select('id', 'happened_at').orderBy('id').get()
+
+    for (const [index] of impossible.entries()) {
+      const model = await Event.findOrFail(index + 1)
+      expect(rows[index]!.happened_at).toBeInstanceOf(Date)
+      expect(rows[index]!.happened_at!.getTime()).toBe(model.get('happened_at')!.getTime())
+    }
+  })
+
+  it('keeps a union column as text when a branch reads it from a non-date column', async () => {
+    const { events } = await openEvents(driver)
+    await DB.table(events).insert({ id: 1, label: 'set', happened_at: happened, scheduled_for: null, due_on: null })
+
+    const rows = await DB.table(events).select('happened_at')
+      .unionAll(DB.table(events).select('label'))
+      .get()
+
+    expect(rows.map(row => row.happened_at as unknown).sort()).toEqual(['2026-01-01 10:00:00', 'set'])
+  })
 })

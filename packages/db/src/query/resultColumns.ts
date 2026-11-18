@@ -1,4 +1,4 @@
-import { coerceBoolean, parseInteger, parseStoredDate, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDecimal, storesDate } from '../schema/normalization'
+import { coerceBoolean, parseInteger, parseStoredDate, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDate, readsAsSQLiteDecimal } from '../schema/normalization'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { splitTablePath } from '../schema/identifiers'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -31,7 +31,7 @@ function readSQLiteDate(value: unknown): unknown {
 
 function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | undefined): ColumnReader | undefined {
   if (!column) return undefined
-  if (dialect === 'sqlite' && storesDate(column)) return readSQLiteDate
+  if (readsAsSQLiteDate(dialect, column)) return readSQLiteDate
   if (readsAsInteger(column)) return readIntegerResult
   if (readsAsCoercedBoolean(dialect, column)) return coerceBoolean
   return readsAsSQLiteDecimal(dialect, column) ? value => readSQLiteDecimal(value, column.decimalPlaces) : undefined

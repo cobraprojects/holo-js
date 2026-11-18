@@ -44,7 +44,7 @@ async function openRedemptionsFixture(driver: 'sqlite' | 'postgres' | 'mysql') {
 }
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('selected extrema on %s', driver => {
-  it('returns extrema exactly as the driver returns the selected column', async () => {
+  it('returns extrema as the query builder reads the selected column', async () => {
     const { redemptions, early, late } = await openRedemptionsFixture(driver)
     const [lowest, highest] = await DB.table(redemptions).select('redeemed_at', 'code', 'points', 'amount').orderBy('id', 'desc').get()
 
