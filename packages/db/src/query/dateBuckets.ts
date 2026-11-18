@@ -101,9 +101,9 @@ export function selectionMayOutputName(
   selection: SelectQueryPlan['selections'][number],
   name: string,
   connectionName: string | undefined,
-  whenUnknown: boolean,
+  unknown: { readonly raw: boolean, readonly wildcard: boolean },
 ): boolean {
-  if (selection.kind === 'raw') return whenUnknown
+  if (selection.kind === 'raw') return unknown.raw
   if (selection.kind !== 'column' || selection.alias) return false
   const wildcardTable = selection.column === '*' ? undefined : readAllColumnsSelectionTable(selection.column)
   if (selection.column !== '*' && wildcardTable === undefined) return false
@@ -111,20 +111,41 @@ export function selectionMayOutputName(
     .filter(table => wildcardTable === undefined || isVisibleAs(wildcardTable, table))
     .some((table) => {
       const columns = table.columns()
-      return columns === undefined ? whenUnknown : columns.some(column => sameIdentifierFolded(column, name))
+      return columns === undefined ? unknown.wildcard : columns.some(column => sameIdentifierFolded(column, name))
     })
 }
 
-export function bareColumnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined): string {
+export function columnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined): string | undefined {
   const candidates = visibleTables(plan, connectionName).filter((table) => {
     const columns = table.columns()
     return columns === undefined || columns.some(column => sameIdentifierFolded(column, name))
   })
   const owner = candidates.length === 1 ? candidates[0] : undefined
-  if (!owner) {
+  return owner && (owner.alias ?? owner.tableName ?? plan.source.tableName)
+}
+
+export function bareColumnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined): string {
+  const owner = columnOwner(plan, name, connectionName)
+  if (owner === undefined) {
     throw new CompilerError(`Column "${name}" shares its name with a date bucket and Holo can't tell which table owns it. Qualify it with its table.`)
   }
-  return owner.alias ?? owner.tableName ?? plan.source.tableName
+  return owner
+}
+
+export function assertDateBucketSpelling(plan: SelectQueryPlan): void {
+  const aliases = new Map([...dateBucketSelections(plan).keys()].map(alias => [alias.toLowerCase(), alias]))
+  if (aliases.size === 0) return
+  const references = [
+    ...plan.groupBy,
+    ...plan.orderBy.flatMap(orderBy => orderBy.kind === 'column' ? [orderBy.column] : []),
+    ...plan.having.map(clause => clause.expression.match(/^\w+\((\w+)\)$/)?.[1] ?? clause.expression),
+  ]
+  for (const reference of references) {
+    const alias = aliases.get(reference.toLowerCase())
+    if (alias !== undefined && alias !== reference) {
+      throw new CompilerError(`Refer to the date bucket "${alias}" by its exact name, not "${reference}".`)
+    }
+  }
 }
 
 export function assertDateBucketOutputsUnshadowed(plan: SelectQueryPlan, connectionName: string | undefined): void {
@@ -133,7 +154,7 @@ export function assertDateBucketOutputsUnshadowed(plan: SelectQueryPlan, connect
     if (sourceColumns.some(column => sameIdentifierFolded(column, alias))) {
       throw new SecurityError(`Date bucket alias "${alias}" must not reuse a column name of table "${plan.source.tableName}".`)
     }
-    if (plan.selections.some(selection => selectionMayOutputName(plan, selection, alias, connectionName, false))) {
+    if (plan.selections.some(selection => selectionMayOutputName(plan, selection, alias, connectionName, { raw: false, wildcard: true }))) {
       throw new SecurityError(`Date bucket alias "${alias}" must not be reused by a column of a selected wildcard.`)
     }
   }

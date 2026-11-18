@@ -2,7 +2,7 @@ import { rawSqlPlaceholders } from './rawSql'
 import { SecurityError } from '../core/errors'
 import { dateBucketSelections, isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
 import { storesJson } from '../schema/normalization'
-import { assertDateBucketTimeZone, assertDateBucketUnit } from './dateBuckets'
+import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketUnit } from './dateBuckets'
 import { tablePathSegments } from '../schema/identifiers'
 import type { TableColumnsShape } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -672,6 +672,7 @@ export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName):
 
         assertColumnSelection(selection, plan.source.tableName, allowedColumns)
       }
+      assertDateBucketSpelling(plan)
       assertUniqueDateBucketOutputs(plan)
       const referenceableColumns = withDateBucketAliases(plan, allowedColumns)
 

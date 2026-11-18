@@ -244,7 +244,7 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     const events = await createEventsTable(driver)
 
     await expect(DB.table(events.tableName).where('tenant_id', 2).selectDate('day', 'occurred_at', { as: 'tenant_id' }).get()).rejects.toThrow(SecurityError)
-    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'ID' }).orderBy('ID').cursorPaginate(1)).rejects.toThrow(SecurityError)
+    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'ID' }).orderBy('ID').cursorPaginate(1)).rejects.toThrow(DatabaseError)
   })
 
   it('pages day buckets in chunks', async () => {
@@ -379,6 +379,45 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .having('COUNT(BUCKET)', '>', 0)
       .get()).rejects.toThrow(CompilerError)
     await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'bucket' }).groupBy('BUCKET').get()).rejects.toThrow(CompilerError)
+    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'bucket' }).groupBy('BUCKET').orderBy('bucket').cursorPaginate(1)).rejects.toThrow(CompilerError)
+  })
+
+  it('cursor-paginates a join grouped by the source primary key and a bare source column', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const notes = await createKeyedTable('bucket_notes', 'bucket', [{ id: 1, value: null }, { id: 2, value: null }])
+    registerGeneratedTables({ events, notes })
+    const page = (cursor: string | null) => DB.table(events.tableName)
+      .join(notes.tableName, `${notes.tableName}.id`, '=', `${events.tableName}.id`)
+      .select(`${events.tableName}.id`, 'tenant_id')
+      .groupBy(`${events.tableName}.id`, 'tenant_id')
+      .orderBy(`${events.tableName}.id`)
+      .cursorPaginate(1, cursor)
+
+    const first = await page(null)
+    const second = await page(first.nextCursor)
+
+    expect([...first.data, ...second.data]).toEqual([{ id: 1, tenant_id: 1 }, { id: 2, tenant_id: 1 }])
+  })
+
+  it('rejects a wildcard of a join without schema metadata next to a date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const schema = createSchemaService(DB.connection())
+    const legacy = `bucket_legacy_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(legacy)
+    })
+    await schema.createTable(legacy, (table) => {
+      table.id()
+      table.string('bucket')
+    })
+
+    await expect(DB.table(events.tableName)
+      .join(legacy, `${legacy}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .addSelect(`${legacy}.*`)
+      .get()).rejects.toThrow(SecurityError)
   })
 
   it('cursor-paginates a join grouped by the source primary key and source columns', async () => {

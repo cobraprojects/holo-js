@@ -6,7 +6,7 @@ import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
 import type { QueryDateBucketSelection, QueryRawSelection, QueryRelationKeysPredicate } from './ast'
-import { assertDateBucketTimeZonesConvertible, assertDateBucketUnit, normalizeDateBucketTimeZone, selectionMayOutputName } from './dateBuckets'
+import { assertDateBucketSpelling, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, columnOwner, normalizeDateBucketTimeZone, selectionMayOutputName } from './dateBuckets'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -3425,6 +3425,7 @@ export class TableQueryBuilder<
   }
 
   private prepareCursorPaginationQuery(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    for (const branch of unionBranchPlans(this.plan)) assertDateBucketSpelling(branch)
     if (this.plan.orderBy.some(orderBy => orderBy.kind === 'random')) {
       throw new SecurityError('Cursor pagination cannot use random ordering.')
     }
@@ -3435,8 +3436,11 @@ export class TableQueryBuilder<
       const groupsByPrimaryKey = primaryKeys.length > 0 && primaryKeys.every(key => this.plan.groupBy.some(column => identity(column) === key))
       const ordered = groupsByPrimaryKey ? this.withPrimaryKeyTieBreakers(primaryKeys) : this
       const sourceTable = this.source.alias ?? this.source.tableName
-      const groupsSourceRowsOnly = this.plan.unions.length === 0 && (this.plan.joins.length === 0
-        || this.plan.groupBy.every(column => column.includes('.') && qualifiesTable(column.slice(0, column.lastIndexOf('.')), sourceTable, undefined)))
+      const connectionName = this.connection.getConnectionName()
+      const belongsToSource = (column: string): boolean => column.includes('.')
+        ? qualifiesTable(column.slice(0, column.lastIndexOf('.')), sourceTable, undefined)
+        : !dateBucketSelections(this.plan).has(column) && columnOwner(this.plan, column, connectionName) === sourceTable
+      const groupsSourceRowsOnly = this.plan.unions.length === 0 && (this.plan.joins.length === 0 || this.plan.groupBy.every(belongsToSource))
       if (groupsByPrimaryKey && groupsSourceRowsOnly) return ordered
       const orderedColumns = new Set(ordered.plan.orderBy.flatMap(orderBy => orderBy.kind === 'column' ? [identity(orderBy.column)] : []))
       if (!ordered.plan.groupBy.every(column => orderedColumns.has(identity(column)))) {
@@ -3480,7 +3484,7 @@ export class TableQueryBuilder<
   private assertDateBucketCursorKey(branch: SelectQueryPlan, alias: string): void {
     if (!dateBucketSelections(branch).has(alias)) return
     const connectionName = this.connection.getConnectionName()
-    if (branch.selections.some(selection => selectionMayOutputName(branch, selection, alias, connectionName, true))) {
+    if (branch.selections.some(selection => selectionMayOutputName(branch, selection, alias, connectionName, { raw: true, wildcard: true }))) {
       throw new SecurityError(`Cursor pagination by the date bucket "${alias}" needs every other selected column to have a different name, so select it under a name no raw or wildcard selection can produce.`)
     }
   }
