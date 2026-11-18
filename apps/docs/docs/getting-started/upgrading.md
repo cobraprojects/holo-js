@@ -4,7 +4,7 @@
 
 ### SvelteKit: one Holo Vite plugin
 
-SvelteKit apps now register a single Holo Vite plugin, `holoSvelteKit()`, after `sveltekit()`. It replaces `holoSvelteKitRealtime()`, which is removed. Run `holo prepare` and it updates `vite.config.ts` for you: it renames `holoSvelteKitRealtime` to `holoSvelteKit`, or adds `holoSvelteKit()` after `sveltekit()` if your app has no Holo plugin yet. To make the change by hand:
+SvelteKit apps now register a single Holo Vite plugin, `holoSvelteKit()`. It replaces `holoSvelteKitRealtime()`, which is removed. Run `holo prepare` and it updates `vite.config.ts` for you: it renames `holoSvelteKitRealtime` to `holoSvelteKit` in place, keeping its position in the `plugins` array. If your app has no Holo plugin yet, it adds `holoSvelteKit()` after `sveltekit()`. To make the change by hand:
 
 ```ts [vite.config.ts]
 import { holoSvelteKitRealtime } from '@holo-js/adapter-sveltekit/vite' // [!code --]
