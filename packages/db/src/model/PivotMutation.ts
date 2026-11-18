@@ -217,14 +217,19 @@ export class PivotMutation {
 
   private normalize(ids: unknown, attributes: Attributes = {}): Entry[] {
     if (ids == null) return []
-    if (Array.isArray(ids)) return ids.map(id => ({ id: bindableId(id), attributes: { ...attributes } }))
+    if (Array.isArray(ids)) return ids.map(id => ({ id: this.castId(bindableId(id)), attributes: { ...attributes } }))
     if (typeof ids === 'object' && !isScalarObjectId(ids)) {
       return Object.entries(ids as Record<string, Attributes>).map(([id, value]) => ({
         id: this.objectKey(id),
         attributes: { ...(value ?? {}) },
       }))
     }
-    return [{ id: bindableId(ids), attributes: { ...attributes } }]
+    return [{ id: this.castId(bindableId(ids)), attributes: { ...attributes } }]
+  }
+
+  private castId(id: unknown): unknown {
+    const column = this.relatedKeyLoaded ? this.relatedKey : this.context.relatedKey
+    return typeof id === 'string' && column && readsAsInteger(column) ? this.objectKey(id) : id
   }
 
   private groupByKey(rows: readonly Attributes[]): Map<unknown, Attributes[]> {

@@ -488,6 +488,14 @@ describe.each(drivers)('pivot keys of an unregistered pivot table on %s', (drive
 })
 
 describe.each(drivers)('pivot ids given as object keys on %s', (driver) => {
+  it('matches a numeric string id to an integer key', async () => {
+    const { owner, ownerTags } = await openPivots(driver)
+    await owner.attach('tags', 1)
+
+    expect(await owner.toggle('tags', ['01' as never])).toEqual({ attached: [], detached: [1] })
+    expect(await DB.table(ownerTags).count()).toBe(0)
+  })
+
   it.runIf(driver === 'sqlite')('keeps an object-form big integer key exact', async () => {
     const { schema } = await openDatabase(driver, { security: { allowUnsafeRawSql: true } })
     onTestFinished(() => resetDB())
