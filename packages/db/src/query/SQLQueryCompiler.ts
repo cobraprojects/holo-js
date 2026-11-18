@@ -53,6 +53,7 @@ const UNKNOWN_KIND_KEY_ALIAS = '__holo_key'
 const UNKNOWN_KIND_KEYS_ALIAS = '__holo_keys'
 
 const NO_DATE_BUCKETS: ReadonlyMap<string, ResolvedDateBucket> = new Map()
+const NO_GUARDED_BUCKET_NAMES: ReadonlySet<string> = new Set()
 
 export type DateBucketAliasMode = 'expression' | 'output' | 'column'
 
@@ -63,6 +64,7 @@ export class SQLQueryCompiler {
   private dateBuckets: ReadonlyMap<string, ResolvedDateBucket> = NO_DATE_BUCKETS
   private dateBucketPlan: SelectQueryPlan | undefined = undefined
   private dateBucketsFolded: ReadonlyMap<string, ResolvedDateBucket> = NO_DATE_BUCKETS
+  private guardedBucketNames: ReadonlySet<string> = NO_GUARDED_BUCKET_NAMES
   private dateBucketAliasMode: DateBucketAliasMode = 'column'
 
   constructor(
@@ -211,23 +213,27 @@ export class SQLQueryCompiler {
     const enclosingDateBuckets = this.dateBuckets
     const enclosingDateBucketPlan = this.dateBucketPlan
     const enclosingDateBucketsFolded = this.dateBucketsFolded
+    const enclosingGuardedBucketNames = this.guardedBucketNames
     try {
       const selections = dateBucketSelections(plan)
       if (selections.size === 0) {
         this.dateBuckets = NO_DATE_BUCKETS
-        this.dateBucketPlan = undefined
         this.dateBucketsFolded = NO_DATE_BUCKETS
       } else {
         this.dateBuckets = new Map([...selections].map(([alias, bucket]) => [alias, { bucket, storage: dateBucketStorage(plan, bucket, this.connectionName, this.foldsColumnNames()) }]))
-        this.dateBucketPlan = plan
         this.dateBucketsFolded = new Map([...this.dateBuckets].map(([alias, resolved]) => [alias.toLowerCase(), resolved]))
         assertDateBucketOutputsUnshadowed(plan, this.connectionName, this.foldsColumnNames())
       }
+      if (selections.size > 0 && this.resolvesSelectAliasesInColumnReferences()) {
+        this.guardedBucketNames = new Set([...enclosingGuardedBucketNames, ...this.dateBucketsFolded.keys()])
+      }
+      this.dateBucketPlan = selections.size > 0 || this.guardedBucketNames.size > 0 ? plan : undefined
       return this.compileSelectSqlWithinDateBuckets(plan, bindings, projection)
     } finally {
       this.dateBuckets = enclosingDateBuckets
       this.dateBucketPlan = enclosingDateBucketPlan
       this.dateBucketsFolded = enclosingDateBucketsFolded
+      this.guardedBucketNames = enclosingGuardedBucketNames
     }
   }
 
@@ -1083,7 +1089,7 @@ export class SQLQueryCompiler {
       throw new CompilerError(`Refer to the date bucket "${dateBucket.bucket.alias}" by its exact name, not "${reference}".`)
     }
     if (dateBucket && this.dateBucketAliasMode === 'expression') return this.compileDateBucketExpression(dateBucket)
-    if (this.dateBucketAliasMode === 'column' && this.dateBucketPlan && dateBucket && this.resolvesSelectAliasesInColumnReferences()) {
+    if (this.dateBucketAliasMode === 'column' && this.dateBucketPlan && !reference.includes('.') && this.guardedBucketNames.has(reference.toLowerCase())) {
       return `${this.compileTableReference(bareColumnOwner(this.dateBucketPlan, reference, this.connectionName, this.foldsColumnNames()))}.${this.quoteIdentifier(reference)}`
     }
     const { schema: table, table: column } = splitTablePath(reference)

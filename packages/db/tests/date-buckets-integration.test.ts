@@ -1590,6 +1590,24 @@ describe('date buckets next to sqlite wildcards of case-variant aliases', () => 
     await expect(DB.table(reports.tableName).select('id').addSelectSub(innerDay(`${reports.tableName}.day`), 'inner_day').get()).resolves.toEqual([{ id: 1, inner_day: '2026-11-04' }])
   })
 
+  it('keeps a subquery from reading the outer date bucket through a bare column', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('sqlite')
+    const lookups = await createKeyedTable('bucket_lookups', 'code', [{ id: 1, value: 1 }])
+    const dayLookups = await createKeyedTable('bucket_day_lookups', 'day', [{ id: 1, value: 1 }])
+    registerGeneratedTables({ events, lookups, dayLookups })
+
+    await expect(DB.table(events)
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .whereExists(DB.table(lookups.tableName).where('day', '2026-11-03'))
+      .get()).rejects.toThrow(CompilerError)
+    await expect(DB.table(events)
+      .where('id', 1)
+      .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .whereExists(DB.table(dayLookups.tableName).where('day', 1))
+      .get()).resolves.toEqual([{ day: '2026-11-03' }])
+  })
+
   it('checks a joined subquery whose wildcard SQLite matches regardless of case', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable('sqlite')
