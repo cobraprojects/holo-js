@@ -3492,6 +3492,12 @@ export class TableQueryBuilder<
     }
   }
 
+  private readOutputValue(row: Record<string, unknown>, output: string): unknown {
+    if (Object.hasOwn(row, output) || !this.groupedKeyContext().foldsColumnNames) return row[output]
+    const key = Object.keys(row).find(candidate => candidate.toLowerCase() === output.toLowerCase())
+    return key === undefined ? undefined : row[key]
+  }
+
   private groupedKeyContext(): GroupedKeyContext {
     return { connectionName: this.connection.getConnectionName(), foldsColumnNames: !this.connection.getDialect().name.startsWith('postgres') }
   }
@@ -3501,20 +3507,32 @@ export class TableQueryBuilder<
     const context = this.groupedKeyContext()
     const key = groupedCursorKey(this.plan, column, context)
     const selections = this.plan.selections
-    const folded = selections.map(selection => selectionOutputName(selection)?.toLowerCase())
-    const surviving = selections.flatMap((candidate, index) => {
+    const matching = selections.flatMap((candidate, index) => {
       if (candidate.kind !== 'column' || candidate.column === '*' || readAllColumnsSelectionTable(candidate.column) !== undefined) return []
       if (groupedCursorKey(this.plan, candidate.column, context) !== key) return []
       const output = selectionOutputName(candidate)
-      return output !== undefined && !folded.slice(index + 1).includes(output.toLowerCase()) ? [output] : []
+      return output === undefined ? [] : [{ output, index }]
     })
-    return surviving[0]
+    if (matching.length === 0) return undefined
+    const isWildcard = (selection: QuerySelection) => selection.kind === 'column' && !selection.alias
+      && (selection.column === '*' || readAllColumnsSelectionTable(selection.column) !== undefined)
+    const overwrites = (output: string, index: number) => selections.slice(index + 1).some((later) => {
+      if (later.kind === 'raw' || isWildcard(later)) {
+        return selectionMayOutputName(this.plan, later, output, context.connectionName, { raw: true, wildcard: true })
+      }
+      return selectionOutputName(later)?.toLowerCase() === output.toLowerCase()
+    })
+    const surviving = matching.find(({ output, index }) => !overwrites(output, index))
+    if (!surviving) {
+      throw new SecurityError(`Cursor pagination by "${column}" needs a selected column that holds its value, but later selections overwrite every one.`)
+    }
+    return surviving.output
   }
 
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
     if (dateBucketSelections(this.plan).has(column)) return row[column]
     const groupedOutput = this.groupedDateBucketCursorOutput(column)
-    if (groupedOutput !== undefined) return row[groupedOutput]
+    if (groupedOutput !== undefined) return this.readOutputValue(row, groupedOutput)
     const sourceColumn = this.resolveSourceColumnName(column)
     const selections = this.plan.selections
     const ownColumns = Object.keys(this.source.table?.columns ?? {})

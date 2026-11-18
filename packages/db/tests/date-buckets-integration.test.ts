@@ -1053,6 +1053,29 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     ])
   })
 
+  it('reads a grouped cursor key past a later wildcard that overwrites it', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const tenants = await createKeyedTable('bucket_tenants', 'code', [{ id: 30, value: 1 }])
+    registerGeneratedTables({ events, tenants })
+    const page = (cursor: string | null) => DB.table(events.tableName)
+      .join(tenants.tableName, `${tenants.tableName}.code`, '=', `${events.tableName}.tenant_id`)
+      .whereIn(`${events.tableName}.id`, [1, 2])
+      .select(`${events.tableName}.id`, `${tenants.tableName}.*`, `${events.tableName}.id as event_id`)
+      .addSelectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
+      .groupBy(`${events.tableName}.id`, `${tenants.tableName}.id`, `${tenants.tableName}.code`, 'day')
+      .orderBy(`${events.tableName}.id`)
+      .orderBy(`${tenants.tableName}.id`)
+      .orderBy(`${tenants.tableName}.code`)
+      .orderBy('day')
+      .cursorPaginate(1, cursor)
+
+    const first = await page(null)
+    const second = await page(first.nextCursor)
+
+    expect([...first.data, ...second.data].map(row => row.event_id)).toEqual([1, 2])
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)
@@ -1230,6 +1253,25 @@ describe.each(integrationDrivers(['sqlite', 'mysql'] as const))('date buckets be
 describe.each(integrationDrivers(['sqlite', 'mysql'] as const))('grouped date bucket cursors on %s', (driver) => {
   afterEach(() => {
     resetDB()
+  })
+
+  it('reads a grouped cursor value selected in another case', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const page = (cursor: string | null) => DB.table(events.tableName)
+      .whereIn('tenant_id', [1, 2])
+      .whereNotNull('occurred_at')
+      .select('TENANT_ID')
+      .addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .groupBy('tenant_id', 'day')
+      .orderBy('tenant_id')
+      .orderBy('day')
+      .cursorPaginate(3, cursor)
+
+    const first = await page(null)
+    const second = await page(first.nextCursor)
+
+    expect([...first.data, ...second.data].map(row => row.day)).toEqual(['2026-11-03', '2026-11-04', '2026-11-05', '2026-12-31', '2026-11-04'])
   })
 
   it('compares grouped column keys the way the database folds their case', async () => {
@@ -1497,6 +1539,36 @@ describe.runIf(postgresIntegration)('date buckets with postgres qualifiers that 
       .join(`${labels.tableName} as Tags`, 'Tags.id', '=', `${events.tableName}.id`)
       .selectDate('day', 'tags.at', { as: 'bucket', timeZone: 'UTC' })
       .get()).rejects.toThrow(ConfigurationError)
+  })
+})
+
+describe.runIf(postgresIntegration)('grouped date bucket cursors on postgres columns that differ only in case', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('resolves a bare grouped column to the table with its exact spelling', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('postgres')
+    const connection = DB.connection()
+    const name = `bucket_upper_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await createSchemaService(connection).dropTable(name)
+    })
+    await connection.executeCompiled({ sql: `CREATE TABLE "${name}" (id integer PRIMARY KEY, "TENANT_ID" integer)`, source: 'test' })
+    await connection.executeCompiled({ sql: `INSERT INTO "${name}" (id, "TENANT_ID") VALUES (5, 99)`, source: 'test' })
+    registerGeneratedTables({ events, upper: defineGeneratedTable(name, { id: column.id(), TENANT_ID: column.integer() }) })
+
+    const page = await DB.table(events.tableName)
+      .join(name, `${name}.id`, '=', `${events.tableName}.id`)
+      .select(`${events.tableName}.tenant_id`)
+      .addSelectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
+      .groupBy('tenant_id', 'day')
+      .orderBy(`${events.tableName}.tenant_id`)
+      .orderBy('day')
+      .cursorPaginate(5)
+
+    expect(page.data).toEqual([{ tenant_id: 1, day: '2026-11-05' }])
   })
 })
 

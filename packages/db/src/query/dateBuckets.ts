@@ -149,10 +149,10 @@ export function selectionMayOutputName(
     })
 }
 
-export function columnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined): string | undefined {
+export function columnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined, matches: IdentifierMatch = sameIdentifierFolded): string | undefined {
   const candidates = visibleTables(plan, connectionName).filter((table) => {
     const columns = table.columns()
-    return columns === undefined || columns.some(column => sameIdentifierFolded(column, name))
+    return columns === undefined || columns.some(column => matches(column, name))
   })
   const owner = candidates.length === 1 ? candidates[0] : undefined
   return owner && (owner.alias ?? owner.tableName ?? plan.source.tableName)
@@ -166,7 +166,7 @@ export function groupedCursorKey(plan: SelectQueryPlan, column: string, context:
   const separator = column.lastIndexOf('.')
   const name = context.foldsColumnNames ? column.slice(separator + 1).toLowerCase() : column.slice(separator + 1)
   if (separator === -1) {
-    const owner = columnOwner(plan, column, connectionName)
+    const owner = columnOwner(plan, column, connectionName, context.foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly)
     return owner === undefined ? name : `${owner}.${name}`
   }
   const table = boundTables(visibleTables(plan, connectionName), column.slice(0, separator))[0]
