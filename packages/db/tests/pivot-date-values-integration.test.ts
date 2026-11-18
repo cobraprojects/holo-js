@@ -205,6 +205,22 @@ describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as S
     expect(await DB.table(ownerSlots).count()).toBe(0)
   }, 60000)
 
+  it('detaches many rows for one instant when the same id is passed many times', async () => {
+    const { db, names, owner, ownerSlots } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000) INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, '2026-01-01 10:00:00', 'old' FROM n`))
+
+    expect(await owner.detach('slots', Array.from({ length: 1000 }, () => new Date('2026-01-01T10:00:00Z')))).toBe(50000)
+    expect(await DB.table(ownerSlots).count()).toBe(0)
+  }, 60000)
+
+  it('compares a non-date pivot key\'s attributes with the last row read, as before', async () => {
+    const { db, names, owner, ownerTags } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`INSERT INTO "${names.ownerTags}" ("owner_id", "tag_id", "note") VALUES (1, 1, 'old'), (1, 1, 'same')`))
+
+    expect(await owner.syncWithoutDetaching('tags', { 1: { note: 'same' } })).toEqual({ attached: [], detached: [], updated: [] })
+    expect(await DB.table(ownerTags).orderBy('note').pluck('note')).toEqual(['old', 'same'])
+  })
+
   it('updates more rows stored for one instant than one statement can bind', async () => {
     const { db, names, owner, ownerSlots } = await openPivots(driver)
     await db.unsafeExecute(unsafeSql(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 33000) INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, '2026-01-01T10:00:00.000' || printf('%05d', i) || 'Z', 'old' FROM n`))

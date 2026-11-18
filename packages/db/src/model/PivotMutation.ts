@@ -71,9 +71,13 @@ export class PivotMutation {
       const entries = this.normalize(ids)
       if (entries.length === 0) return 0
       if (!this.dateKeyColumn()) return this.delete(connection, entries.map(entry => entry.id))
-      const matches = await this.match(connection, entries, false)
-      const keys = [...new Set(entries.flatMap(entry => this.storedKeys(matches.rowsFor(entry) ?? [])))]
-      return keys.length === 0 ? 0 : this.delete(connection, keys)
+      const unique = this.dedupe(entries)
+      const matches = await this.match(connection, unique, false)
+      const keys = new Set<unknown>()
+      for (const entry of unique) {
+        for (const key of this.storedKeys(matches.rowsFor(entry) ?? [])) keys.add(key)
+      }
+      return keys.size === 0 ? 0 : this.delete(connection, [...keys])
     })
   }
 
@@ -281,7 +285,10 @@ export class PivotMutation {
     const current = this.groupByKey(await this.read(connection, readAll ? undefined : entries.map(entry => entry.id)))
     const desired = new Set(entries.map(entry => this.incomingKeyIdentity(entry.id)))
     return {
-      rowsFor: entry => current.get(this.incomingKeyIdentity(entry.id)),
+      rowsFor: (entry) => {
+        const rows = current.get(this.incomingKeyIdentity(entry.id))
+        return rows && !this.dateKeyColumn() ? rows.slice(-1) : rows
+      },
       missing: async () => [...current].filter(([identity]) => !desired.has(identity)).map(([, rows]) => rows),
     }
   }
@@ -398,7 +405,7 @@ export class PivotMutation {
     const rows: Attributes[] = []
     const unique = [...new Set(ids)]
     for (let offset = 0; offset < unique.length; offset += this.idBatchSize()) {
-      rows.push(...await this.query(connection).where(this.context.relatedColumn, 'in', unique.slice(offset, offset + this.idBatchSize())).get<Attributes>())
+      for (const row of await this.query(connection).where(this.context.relatedColumn, 'in', unique.slice(offset, offset + this.idBatchSize())).get<Attributes>()) rows.push(row)
     }
     return rows
   }
