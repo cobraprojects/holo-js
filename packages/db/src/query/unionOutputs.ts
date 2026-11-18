@@ -65,7 +65,9 @@ function wildcardOwnerColumn(plan: SelectQueryPlan, name: string, connectionName
   return undefined
 }
 
-export function pageableUnionOutputNames(plan: SelectQueryPlan, names: readonly string[], connectionName: string, caseSensitiveNames: boolean): readonly string[] {
+export type PageableUnionOutputs = { readonly orderNames: readonly string[], readonly outputs: readonly string[] }
+
+export function pageableUnionOutputs(plan: SelectQueryPlan, names: readonly string[], connectionName: string, caseSensitiveNames: boolean): PageableUnionOutputs {
   const selections: readonly QuerySelection[] = plan.selections.length === 0 ? [{ kind: 'column', column: '*' }] : plan.selections
   const outputs = selections.map(selection => selectionNames(plan, selection, connectionName))
   if (outputs.some(output => output === undefined)) {
@@ -78,11 +80,22 @@ export function pageableUnionOutputNames(plan: SelectQueryPlan, names: readonly 
   if (duplicate !== undefined) {
     throw new CompilerError(`Cannot cursor paginate a union whose first query selects more than one column named "${identifier(duplicate)}". Select each column under a name no other column has.`)
   }
-  return names.map((name) => {
+  const orderNames = names.map((name) => {
     const output = known.find(candidate => identifier(candidate) === identifier(name))
     if (output === undefined) {
       throw new CompilerError(`Cannot cursor paginate a union by "${name}": the first query in the union doesn't select it. Select the order column in each query.`)
     }
     return output
+  })
+  return { orderNames, outputs: known }
+}
+
+export function unionCursorStorageTypeAliases(outputs: readonly string[], count: number): readonly string[] {
+  const taken = new Set(outputs.map(output => output.toLowerCase()))
+  return Array.from({ length: count }, (_, index) => {
+    let alias = `__holo_cursor_type_${index}`
+    while (taken.has(alias.toLowerCase())) alias = `_${alias}`
+    taken.add(alias.toLowerCase())
+    return alias
   })
 }

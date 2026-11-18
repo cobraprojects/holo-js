@@ -224,6 +224,46 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     expect((await pageThrough(query)).map(row => String(row.big))).toEqual(bigs.map(String))
   })
 
+  it.each([
+    ['fractional', ['1.25', '2.50', '3.75']],
+    ['integral', ['1.00', '2.00', '3.00']],
+  ])('pages a union of %s decimal values', async (_label, amounts) => {
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_amounts', ['grp'])
+    await schema.table(name, table => { table.decimal('amount', 8, 2) })
+    const amountsTable = registered(defineGeneratedTable(name, { grp: column.integer(), amount: column.decimal(undefined, 8, 2) }))
+    await DB.table(amountsTable).insert(amounts.map((amount, index) => ({ grp: index === 1 ? 2 : 1, amount })))
+    const query = DB.table(amountsTable.tableName).select('amount').where('grp', 1).unionAll(DB.table(amountsTable.tableName).select('amount').where('grp', 2)).orderBy('amount')
+    expect((await pageThrough(query)).map(row => Number(row.amount))).toEqual(amounts.map(Number))
+  })
+
+  it.skipIf(driver === 'postgres')('pages a union of datetimes and date-like text forward and back', async () => {
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_moments', ['grp'], ['label'])
+    await schema.table(name, table => { table.datetime('stamp') })
+    const moments = registered(defineGeneratedTable(name, { grp: column.integer(), label: column.string(), stamp: column.datetime() }))
+    await DB.table(moments).insert([
+      { grp: 1, label: 'x', stamp: new Date('2026-01-01T00:00:00Z') },
+      { grp: 2, label: '2026-02-01T00:00:00Z', stamp: new Date('2026-01-01T00:00:00Z') },
+      { grp: 2, label: '2026-03-01T00:00:00Z', stamp: new Date('2026-01-01T00:00:00Z') },
+    ])
+    const query = DB.table(moments.tableName).select('stamp as k').where('grp', 1).unionAll(DB.table(moments.tableName).select('label as k').where('grp', 2)).orderBy('k')
+    const all = (await query.get()).map(row => String(row.k))
+    const forward = await pageThrough(query)
+    expect(forward.map(row => String(row.k))).toEqual(all)
+    const last = await query.cursorPaginate(1, (await query.cursorPaginate(1, (await query.cursorPaginate(1)).nextCursor)).nextCursor)
+    const back = await query.cursorPaginate(1, last.prevCursor)
+    expect(back.data.map(row => String(row.k))).toEqual([all[1]])
+  })
+
+  it('keeps application outputs named like Holo\'s cursor metadata', async () => {
+    const { schema } = await openDatabase(driver)
+    const users = registered(defineGeneratedTable(await createTable(schema, 'union_users', ['id', 'grp']), { id: column.integer(), grp: column.integer() }))
+    await DB.table(users).insert([{ id: 1, grp: 10 }, { id: 2, grp: 20 }])
+    const query = DB.table(users.tableName).select('grp as __holo_cursor_type_0').where('id', 1).unionAll(DB.table(users.tableName).select('grp').where('id', 2)).orderBy('__holo_cursor_type_0')
+    expect((await pageThrough(query)).map(row => Number(row.__holo_cursor_type_0))).toEqual([10, 20])
+  })
+
   it('pages a union by the first query\'s exact output spelling', async () => {
     const { schema } = await openDatabase(driver)
     const users = registered(defineGeneratedTable(await createTable(schema, 'union_users', ['id']), { id: column.integer() }))

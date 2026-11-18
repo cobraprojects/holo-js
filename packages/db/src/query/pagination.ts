@@ -71,7 +71,7 @@ export type ValueCursor = {
 export function encodeValueCursor(values: readonly unknown[], previous = false): string {
   if (values.some(value => value === undefined)) throw new Error('Cursor pagination requires selected orderBy columns.')
   if (values.some(value => value !== null && typeof value !== 'string' && typeof value !== 'boolean' && typeof value !== 'bigint' && !(typeof value === 'number' && Number.isFinite(value)) && !(value instanceof Date && Number.isFinite(value.getTime())))) throw new Error('Cursor pagination requires scalar orderBy values.')
-  const serializedValues = values.map(value => typeof value === 'bigint' ? { bigint: value.toString() } : value)
+  const serializedValues = values.map(value => typeof value === 'bigint' ? { bigint: value.toString() } : value instanceof Date ? { date: value.toISOString() } : value)
   return Buffer.from(JSON.stringify({ values: serializedValues, ...(previous ? { previous: true } : {}) }), 'utf8').toString('base64url')
 }
 
@@ -117,6 +117,8 @@ function decodeCursorValue(value: unknown): unknown {
   if (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 1) {
     const bigint: unknown = Reflect.get(value, 'bigint')
     if (typeof bigint === 'string' && BIGINT_CURSOR_VALUE.test(bigint)) return BigInt(bigint)
+    const date: unknown = Reflect.get(value, 'date')
+    if (typeof date === 'string' && Number.isFinite(Date.parse(date))) return new Date(date)
   }
   throw new Error('invalid cursor value')
 }

@@ -53,7 +53,6 @@ const UNKNOWN_KIND_KEY_ALIAS = '__holo_key'
 const UNKNOWN_KIND_KEYS_ALIAS = '__holo_keys'
 
 const UNION_CURSOR_OPERATORS: ReadonlySet<unknown> = new Set(['>', '<', '='])
-export const UNION_CURSOR_STORAGE_TYPE_PREFIX = '__holo_cursor_type_'
 
 export class SQLQueryCompiler {
   protected readonly dialect: SchemaDialectName | undefined = undefined
@@ -185,7 +184,7 @@ export class SQLQueryCompiler {
     })
   }
 
-  compileUnionCursorPage(plan: SelectQueryPlan, cursor: QueryPredicateNode | undefined, orderBy: readonly QueryOrderBy[], limit: number): CompiledStatement {
+  compileUnionCursorPage(plan: SelectQueryPlan, cursor: QueryPredicateNode | undefined, orderBy: readonly QueryOrderBy[], limit: number, storageTypeAliases: readonly string[] = []): CompiledStatement {
     const statement = this.compile({ ...plan, orderBy: [], limit: undefined, offset: undefined })
     const bindings = [...statement.bindings ?? []]
     const whereClause = cursor ? this.compilePredicates([this.unionCursorPredicate(cursor)], bindings) : ''
@@ -193,7 +192,7 @@ export class SQLQueryCompiler {
     return this.withMetadata({
       ...statement,
       bindings,
-      sql: `SELECT *${this.compileUnionCursorStorageTypes(orderBy)} FROM (${statement.sql}) AS ${this.quoteIdentifier('__holo_union_page')}${whereClause} ORDER BY ${orderClause} LIMIT ${limit}`,
+      sql: `SELECT *${this.compileUnionCursorStorageTypes(orderBy, storageTypeAliases)} FROM (${statement.sql}) AS ${this.quoteIdentifier('__holo_union_page')}${whereClause} ORDER BY ${orderClause} LIMIT ${limit}`,
     }, this.createSelectMetadata(plan))
   }
 
@@ -212,7 +211,11 @@ export class SQLQueryCompiler {
     return this.quoteIdentifier(output)
   }
 
-  protected compileUnionCursorStorageTypes(_orderBy: readonly QueryOrderBy[]): string {
+  capturesUnionCursorStorageTypes(): boolean {
+    return false
+  }
+
+  protected compileUnionCursorStorageTypes(_orderBy: readonly QueryOrderBy[], _aliases: readonly string[]): string {
     return ''
   }
 

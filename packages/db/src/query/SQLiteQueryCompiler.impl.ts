@@ -1,4 +1,4 @@
-import { SQLQueryCompiler, UNION_CURSOR_STORAGE_TYPE_PREFIX } from './SQLQueryCompiler'
+import { SQLQueryCompiler } from './SQLQueryCompiler'
 import { compileSQLiteWallClock, formatSQLiteDateTime } from '../sqliteDateTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type { CompiledStatement } from '../core/types'
@@ -74,9 +74,13 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     return `+${this.quoteIdentifier(output)}`
   }
 
-  protected override compileUnionCursorStorageTypes(orderBy: readonly QueryOrderBy[]): string {
-    return orderBy.map((order, index) => order.kind === 'column'
-      ? `, typeof(${this.compileUnionCursorOperand(order.column)}) AS ${this.quoteIdentifier(`${UNION_CURSOR_STORAGE_TYPE_PREFIX}${index}`)}`
+  override capturesUnionCursorStorageTypes(): boolean {
+    return true
+  }
+
+  protected override compileUnionCursorStorageTypes(orderBy: readonly QueryOrderBy[], aliases: readonly string[]): string {
+    return orderBy.map((order, index) => order.kind === 'column' && aliases[index] !== undefined
+      ? `, typeof(${this.compileUnionCursorOperand(order.column)}) AS ${this.quoteIdentifier(aliases[index])}`
       : '').join('')
   }
 

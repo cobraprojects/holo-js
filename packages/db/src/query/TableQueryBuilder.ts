@@ -96,7 +96,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, LogicalColumnKind, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { isAwaitingGeneratedTableIdentity, getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { pageableUnionOutputNames, unionOutputName, unionOutputValueColumn } from './unionOutputs'
+import { pageableUnionOutputs, unionCursorStorageTypeAliases, unionOutputName, unionOutputValueColumn } from './unionOutputs'
 import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
 import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
@@ -139,7 +139,6 @@ import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolv
 import { currentRootTransaction } from '../core/openTransactions'
 import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalization, deferPredicateNormalization } from './deferredPredicateValues'
 import { assertQueryTablePath, validateQueryPlan } from './validator'
-import { UNION_CURSOR_STORAGE_TYPE_PREFIX } from './SQLQueryCompiler'
 import { requalifyAliasedSource } from './requalifyAliasedSource'
 
 import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
@@ -2330,10 +2329,13 @@ export class TableQueryBuilder<
     const orderedQuery = this.prepareCursorPaginationQuery()
     const cursorOrders = orderedQuery.resolveCursorOrders()
     const caseSensitiveNames = this.connection.getDialect().name.includes('postgres')
-    const unionOutputNames = orderedQuery.plan.unions.length === 0
+    const unionOutputs = orderedQuery.plan.unions.length === 0
       ? undefined
-      : pageableUnionOutputNames(orderedQuery.plan, cursorOrders.map(order => unionOutputName(orderedQuery.plan, order.column, caseSensitiveNames)), this.connection.getConnectionName(), caseSensitiveNames)
-    const unionOrders = unionOutputNames && cursorOrders.map((order, index) => ({ ...order, column: unionOutputNames[index]! }))
+      : pageableUnionOutputs(orderedQuery.plan, cursorOrders.map(order => unionOutputName(orderedQuery.plan, order.column, caseSensitiveNames)), this.connection.getConnectionName(), caseSensitiveNames)
+    const unionOrders = unionOutputs && cursorOrders.map((order, index) => ({ ...order, column: unionOutputs.orderNames[index]! }))
+    const storageTypeAliases = unionOutputs && orderedQuery.getCompiler().capturesUnionCursorStorageTypes()
+      ? unionCursorStorageTypeAliases(unionOutputs.outputs, cursorOrders.length)
+      : undefined
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
     const previous = decodedCursor?.previous === true
@@ -2344,10 +2346,10 @@ export class TableQueryBuilder<
     const unionCursorValues = new WeakMap<Record<string, unknown>, readonly unknown[]>()
     if (unionOrders) {
       const predicate = normalizedCursor && cursorPredicate(normalizedCursor, unionOrders, nullsLow)
-      const unionRows = await orderedQuery.getCompiledRows<TRow>(() => orderedQuery.getCompiler().compileUnionCursorPage(orderedQuery.plan, predicate, pageOrders(unionOrders), perPage + 1), true, true, 'values')
+      const unionRows = await orderedQuery.getCompiledRows<TRow>(() => orderedQuery.getCompiler().compileUnionCursorPage(orderedQuery.plan, predicate, pageOrders(unionOrders), perPage + 1, storageTypeAliases), true, true, false)
       storedRows = unionRows.map((row) => {
-        const page = withoutUnionCursorStorageTypes(row, unionOrders.length)
-        unionCursorValues.set(page, unionOrders.map((order, index) => unionCursorStorageValue(row[order.column], row[`${UNION_CURSOR_STORAGE_TYPE_PREFIX}${index}`])))
+        const page = orderedQuery.convertRows('values', [withoutUnionCursorStorageTypes(row, storageTypeAliases ?? [])])[0]!
+        unionCursorValues.set(page, unionOrders.map((order, index) => unionCursorStorageValue(row[order.column], storageTypeAliases && row[storageTypeAliases[index]!])))
         return page
       })
     } else {
@@ -3432,9 +3434,7 @@ export class TableQueryBuilder<
   }
 
   private normalizeUnionCursorValue(column: string | undefined, value: unknown): unknown {
-    if (column === undefined || value === null) return value
-    const definition = this.joinedColumnTable(column)?.table.columns[column.slice(column.lastIndexOf('.') + 1)] ?? this.getSourceColumnDefinition(column)
-    return readsAsColumnValue(definition, value) ? this.normalizePredicateValueForColumn(column, value) : value
+    return column !== undefined && value instanceof Date ? this.normalizePredicateValueForColumn(column, value) : value
   }
 
   private decodePageCursor(cursor: string | null, orderCount: number, plan: SelectQueryPlan, invalidCursor: () => InvalidCursorException): ValueCursor | null {
@@ -3622,23 +3622,14 @@ export class TableQueryBuilder<
   }
 }
 
-function withoutUnionCursorStorageTypes<TRow extends Record<string, unknown>>(row: TRow, count: number): TRow {
+function withoutUnionCursorStorageTypes<TRow extends Record<string, unknown>>(row: TRow, aliases: readonly string[]): TRow {
   const page = { ...row }
-  for (let index = 0; index < count; index += 1) delete page[`${UNION_CURSOR_STORAGE_TYPE_PREFIX}${index}`]
+  for (const alias of aliases) delete page[alias]
   return page
 }
 
 function unionCursorStorageValue(value: unknown, storageType: unknown): unknown {
   return storageType === 'integer' && typeof value === 'string' ? BigInt(value) : value
-}
-
-const DATE_COLUMN_KINDS: ReadonlySet<LogicalColumnKind> = new Set(['date', 'datetime', 'timestamp'])
-
-function readsAsColumnValue(definition: AnyColumnDefinition | undefined, value: unknown): boolean {
-  if (!definition) return typeof value === 'boolean'
-  if (definition.kind === 'boolean') return typeof value === 'boolean'
-  if (DATE_COLUMN_KINDS.has(definition.kind)) return typeof value === 'string' && !Number.isNaN(Date.parse(value))
-  return typeof value !== 'number'
 }
 
 function internalSelectionContext(query: TableQueryBuilder<string, Record<string, unknown>>) {
