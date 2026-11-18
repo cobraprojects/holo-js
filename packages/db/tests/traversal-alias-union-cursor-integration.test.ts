@@ -84,6 +84,31 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     expect((await pageThrough(shadowed)).map(row => row.id)).toEqual([25, 50, 100])
   })
 
+  it('rejects union outputs a derived page cannot address before any page runs', async () => {
+    const { schema } = await openDatabase(driver)
+    const users = registered(defineGeneratedTable(await createTable(schema, 'union_users', ['id', 'n']), { id: column.integer(), n: column.integer() }))
+    const duplicated = DB.table(users.tableName).select('id', 'id as same', 'n as same').unionAll(DB.table(users.tableName).select('id', 'n', 'n')).orderBy('id')
+    const missing = DB.table(users.tableName).select('n').unionAll(DB.table(users.tableName).select('n')).orderBy('id')
+    for (const cursor of [null, 'abc']) {
+      await expect(duplicated.cursorPaginate(1, cursor)).rejects.toThrow(
+        new CompilerError('Cannot cursor paginate a union whose first query selects more than one column named "same". Select each column under a name no other column has.'),
+      )
+      await expect(missing.cursorPaginate(1, cursor)).rejects.toThrow(
+        new CompilerError('Cannot cursor paginate a union by "id": the first query in the union doesn\'t select it. Select the order column in each query.'),
+      )
+    }
+  })
+
+  it('reads cursor values through the column behind an aliased union output', async () => {
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_flags', ['n'])
+    await schema.table(name, table => { table.boolean('active').default(false) })
+    const flags = registered(defineGeneratedTable(name, { n: column.integer(), active: column.boolean() }))
+    await DB.table(flags).insert([{ n: 25 }, { n: 50 }, { n: 100 }])
+    const query = DB.table(flags.tableName).select('n as active').where('n', 25).unionAll(DB.table(flags.tableName).select('n as active').where('n', '>', 25)).orderBy('active')
+    expect((await pageThrough(query)).map(row => Number(row.active))).toEqual([25, 50, 100])
+  })
+
   it('pages a union whose next branch selects the wildcard order column under another name', async () => {
     const { schema } = await openDatabase(driver)
     const left = registered(defineGeneratedTable(await createTable(schema, 'union_left', ['id'], ['label']), { id: column.integer(), label: column.string() }))

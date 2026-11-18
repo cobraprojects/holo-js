@@ -96,7 +96,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, LogicalColumnKind, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { isAwaitingGeneratedTableIdentity, getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { assertUnambiguousUnionOutputs, unionOutputName } from './unionOutputs'
+import { assertPageableUnionOutputs, unionOutputColumn, unionOutputName } from './unionOutputs'
 import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
 import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
@@ -2331,11 +2331,11 @@ export class TableQueryBuilder<
     const unionOrders = orderedQuery.plan.unions.length === 0
       ? undefined
       : cursorOrders.map(order => ({ ...order, column: unionOutputName(orderedQuery.plan, order.column) }))
-    if (unionOrders) assertUnambiguousUnionOutputs(orderedQuery.plan, unionOrders.map(order => order.column), this.connection.getConnectionName())
+    if (unionOrders) assertPageableUnionOutputs(orderedQuery.plan, unionOrders.map(order => order.column), this.connection.getConnectionName())
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
     const previous = decodedCursor?.previous === true
-    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) } : undefined
+    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizeCursorValue(unionOrders ? unionOutputColumn(orderedQuery.plan, unionOrders[index]!.column) : cursorOrders[index]!.column, value)) } : undefined
     const nullsLow = !this.connection.getDialect().name.includes('postgres')
     const pageOrders = (orders: readonly CursorOrderDefinition[]) => orders.map((order): QueryOrderBy => ({ kind: 'column', column: order.column, direction: previous === (order.direction === 'asc') ? 'desc' : 'asc' }))
     let storedRows: TRow[]
@@ -3422,6 +3422,10 @@ export class TableQueryBuilder<
         direction: orderBy.direction,
       }
     })
+  }
+
+  private normalizeCursorValue(column: string | undefined, value: unknown): unknown {
+    return column === undefined ? value : this.normalizePredicateValueForColumn(column, value)
   }
 
   private decodePageCursor(cursor: string | null, orderCount: number, plan: SelectQueryPlan, invalidCursor: () => InvalidCursorException): ValueCursor | null {

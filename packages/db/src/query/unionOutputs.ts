@@ -30,12 +30,26 @@ function selectionNames(plan: SelectQueryPlan, selection: QuerySelection, connec
   return join && knownJoinedColumns(join, connectionName)
 }
 
-export function assertUnambiguousUnionOutputs(plan: SelectQueryPlan, names: readonly string[], connectionName: string): void {
+export function unionOutputColumn(plan: SelectQueryPlan, name: string): string | undefined {
+  const selected = plan.selections.find(selection => selectionOutputName(selection) === name)
+  if (!selected) return name
+  return selected.kind === 'column' ? selected.column : undefined
+}
+
+export function assertPageableUnionOutputs(plan: SelectQueryPlan, names: readonly string[], connectionName: string): void {
   const selections: readonly QuerySelection[] = plan.selections.length === 0 ? [{ kind: 'column', column: '*' }] : plan.selections
   const outputs = selections.map(selection => selectionNames(plan, selection, connectionName))
-  const hidesNames = outputs.some(output => output === undefined)
-  const ambiguous = names.find(name => hidesNames || outputs.flat().filter(output => output === name).length > 1)
-  if (ambiguous !== undefined) {
-    throw new CompilerError(`Cannot cursor paginate a union by "${ambiguous}": more than one of its selected columns may be named "${ambiguous}". Select it under a name no other column has.`)
+  if (outputs.some(output => output === undefined)) {
+    const name = names[0]!
+    throw new CompilerError(`Cannot cursor paginate a union by "${name}": more than one of its selected columns may be named "${name}". Select it under a name no other column has.`)
+  }
+  const known = outputs.flat()
+  const duplicate = known.find((output, index) => output !== undefined && known.indexOf(output) !== index)
+  if (duplicate !== undefined) {
+    throw new CompilerError(`Cannot cursor paginate a union whose first query selects more than one column named "${duplicate}". Select each column under a name no other column has.`)
+  }
+  const missing = names.find(name => !known.includes(name))
+  if (missing !== undefined) {
+    throw new CompilerError(`Cannot cursor paginate a union by "${missing}": the first query in the union doesn't select it. Select the order column in each query.`)
   }
 }
