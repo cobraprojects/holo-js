@@ -2331,15 +2331,13 @@ export class TableQueryBuilder<
       : unionCursorColumns(orderedQuery.plan, cursorOrders.map(order => order.column), this.connection.getConnectionName())
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     if (decodedCursor) {
-      const cursorValues = decodedCursor.values.map((value, index) => this.normalizeCursorValue(cursorOrders[index]!.column, value))
-      const normalizedCursor = { ...decodedCursor, values: cursorValues.map(cursorValue => cursorValue.value) }
-      const valueTypes = cursorValues.map(cursorValue => cursorValue.valueType)
+      const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
       const nullsLow = !this.connection.getDialect().name.includes('postgres')
       const filter = (branch: SelectQueryPlan, columns: readonly string[]): SelectQueryPlan => {
         const grouped = branch.predicates.some(predicate => predicate.boolean === 'or')
           ? withPredicate(withoutPredicates(branch, () => true), { kind: 'group', predicates: branch.predicates })
           : branch
-        return withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map((order, index) => ({ ...order, column: columns[index]! })), nullsLow, valueTypes))
+        return withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map((order, index) => ({ ...order, column: columns[index]! })), nullsLow))
       }
       const filterUnion = (branch: SelectQueryPlan, branchColumns: (branch: SelectQueryPlan) => readonly string[]): SelectQueryPlan => Object.freeze({
         ...filter(branch, branchColumns(branch)),
@@ -2349,14 +2347,13 @@ export class TableQueryBuilder<
     }
     if (previous) plan = replaceOrderBy(plan, cursorOrders.map(order => ({ kind: 'column', column: order.column, direction: order.direction === 'asc' ? 'desc' : 'asc' })))
     const pageQuery = orderedQuery.clone(plan)
-    const rows = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true)
-    const pageRows = rows
-    const hasMorePages = pageRows.length > perPage
-    const data = pageRows.slice(0, perPage)
-    if (previous) data.reverse()
-    const firstRow = data.at(0)
-    const lastRow = data.at(-1)
-    const result = createCursorPaginator(data, {
+    const storedRows = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true, false)
+    const hasMorePages = storedRows.length > perPage
+    const pageRows = storedRows.slice(0, perPage)
+    if (previous) pageRows.reverse()
+    const firstRow = pageRows.at(0)
+    const lastRow = pageRows.at(-1)
+    const result = createCursorPaginator(pageQuery.convertRows(true, pageRows), {
       perPage,
       cursorName,
       nextCursor: (previous ? cursor !== null : hasMorePages) && lastRow
@@ -3569,10 +3566,6 @@ export class TableQueryBuilder<
       value: this.normalizePredicateValueForColumn(columnName, value, operator),
       ...(this.source.table?.columns[sourceColumn]?.kind === 'json' ? { valueType: 'json' as const } : {}),
     }
-  }
-
-  private normalizeCursorValue(columnName: string, value: unknown): Pick<QueryPredicate, 'value' | 'valueType'> {
-    return this.isDateColumn(columnName) ? this.normalizeComparisonValue(columnName, value, '=') : { value: this.normalizePredicateValueForColumn(columnName, value) }
   }
 
   private normalizePredicateValueForColumn(columnName: string, value: unknown, operator: unknown = '='): unknown {

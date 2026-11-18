@@ -197,22 +197,63 @@ describe.each(integrationDrivers(['sqlite']))('stored SQLite date text on %s', (
     }
   })
 
-  it('pages through a cursor ordered by stored calendar text with ties', async () => {
+  it('pages through cursors in the order SQLite sorts the stored text', async () => {
     const { db, events, name } = await openEvents(driver)
-    for (const [id, text] of [[1, '2026-05-06'], [2, '2026-05-06'], [3, '2026-05-07'], [4, '2026-05-07 00:00:00']] as const) {
-      await db.unsafeExecute(unsafeSql(`INSERT INTO "${name}" ("id", "label", "due_on") VALUES (?, ?, ?)`, [id, `event ${id}`, text]))
+    const rows = [
+      [2, '2026-05-06', '2026-05-06 10:00:00.000'],
+      [1, '2026-05-06 00:00:00', '2026-05-06 10:00:00.000'],
+      [4, '2026-05-06', '2026-05-06 11:00:00'],
+      [3, '2026-05-07', '2026-05-06 10:00:00.5'],
+    ] as const
+    for (const [id, day, at] of rows) {
+      await db.unsafeExecute(unsafeSql(`INSERT INTO "${name}" ("id", "label", "due_on", "happened_at") VALUES (?, ?, ?, ?)`, [id, `event ${id}`, day, at]))
     }
 
-    const ids: unknown[] = []
+    for (const column of ['due_on', 'happened_at'] as const) {
+      const ordered = DB.table(events).select('id', column).orderBy(column).orderBy('id')
+      const expected = (await ordered.get()).map(row => row.id)
+      const forward: unknown[] = []
+      let cursor: string | null = null
+      let last: CursorPaginatedResult<Record<string, unknown>> | undefined
+      for (let page = 0; page < 8; page++) {
+        last = await ordered.cursorPaginate(1, cursor)
+        forward.push(...last.data.map(row => row.id))
+        cursor = last.nextCursor
+        if (!cursor) break
+      }
+      const backward: unknown[] = []
+      cursor = last!.prevCursor
+      for (let page = 0; page < 8 && cursor; page++) {
+        const result: CursorPaginatedResult<Record<string, unknown>> = await ordered.cursorPaginate(1, cursor)
+        backward.unshift(...result.data.map(row => row.id))
+        cursor = result.prevCursor
+      }
+
+      expect({ column, forward }).toEqual({ column, forward: expected })
+      expect({ column, backward }).toEqual({ column, backward: expected.slice(0, -1) })
+      expect(last!.data[0]![column]).toBeInstanceOf(Date)
+    }
+  })
+
+  it('pages through a cursor over a union of a date column and a string column', async () => {
+    const { events } = await openEvents(driver)
+    await DB.table(events).insert([
+      { id: 1, label: 'zzz', happened_at: null, scheduled_for: null, due_on: new Date('2026-05-06T00:00:00Z') },
+      { id: 2, label: 'aaa', happened_at: null, scheduled_for: null, due_on: new Date('2026-05-07T00:00:00Z') },
+    ])
+    const union = () => DB.table(events).select('id', 'due_on').unionAll(DB.table(events).select('id', 'label')).orderBy('due_on')
+
+    const values: unknown[] = []
     let cursor: string | null = null
-    for (let page = 0; page < 6; page++) {
-      const result: CursorPaginatedResult<{ id: number }> = await DB.table(events).select('id', 'due_on').orderBy('due_on').orderBy('id').cursorPaginate(1, cursor)
-      ids.push(...result.data.map(row => row.id))
+    for (let page = 0; page < 8; page++) {
+      const result: CursorPaginatedResult<{ due_on: unknown }> = await union().cursorPaginate(1, cursor)
+      values.push(...result.data.map(row => row.due_on))
       cursor = result.nextCursor
       if (!cursor) break
     }
 
-    expect(ids).toEqual([1, 2, 3, 4])
+    expect(values).toEqual((await union().get()).map(row => row.due_on))
+    expect(values).toHaveLength(4)
   })
 
   it('keeps a union column as text when a branch reads it from a non-date column', async () => {

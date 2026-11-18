@@ -67,16 +67,8 @@ export type ValueCursor = {
 export function encodeValueCursor(values: readonly unknown[], previous = false): string {
   if (values.some(value => value === undefined)) throw new Error('Cursor pagination requires selected orderBy columns.')
   if (values.some(value => value !== null && typeof value !== 'string' && typeof value !== 'boolean' && typeof value !== 'bigint' && !(typeof value === 'number' && Number.isFinite(value)) && !(value instanceof Date && Number.isFinite(value.getTime())))) throw new Error('Cursor pagination requires scalar orderBy values.')
-  const serializedValues = values.map(value => typeof value === 'bigint' ? value.toString() : value instanceof Date ? { date: value.toISOString() } : value)
+  const serializedValues = values.map(value => typeof value === 'bigint' ? value.toString() : value)
   return Buffer.from(JSON.stringify({ values: serializedValues, ...(previous ? { previous: true } : {}) }), 'utf8').toString('base64url')
-}
-
-function decodeCursorValue(value: unknown): unknown {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return value
-  const date = typeof value === 'object' && Object.keys(value).length === 1 ? (value as { date?: unknown }).date : undefined
-  const instant = typeof date === 'string' ? new Date(date) : undefined
-  if (!instant || Number.isNaN(instant.getTime()) || instant.toISOString() !== date) throw new Error('invalid cursor value')
-  return instant
 }
 
 export function decodeValueCursor(
@@ -89,11 +81,11 @@ export function decodeValueCursor(
 
   try {
     const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { values?: unknown, previous?: unknown }
-    if (!Array.isArray(decoded.values) || decoded.previous !== undefined && typeof decoded.previous !== 'boolean') {
+    if (!Array.isArray(decoded.values) || decoded.values.some(value => value !== null && typeof value !== 'string' && typeof value !== 'boolean' && (typeof value !== 'number' || !Number.isFinite(value))) || decoded.previous !== undefined && typeof decoded.previous !== 'boolean') {
       throw new Error('invalid cursor values')
     }
 
-    return { values: decoded.values.map(decodeCursorValue), ...(decoded.previous === true ? { previous: true } : {}) }
+    return { values: decoded.values, ...(decoded.previous === true ? { previous: true } : {}) }
   } catch {
     throw createError('Cursor is malformed.')
   }
