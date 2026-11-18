@@ -26,6 +26,7 @@ import {
   toPosixSlashes,
   isRecursiveWatchUnsupported,
   isIgnorableWatchError,
+  isVanishedEntryUnderWatchRoot,
   normalizeWatchedFilePath,
 } from './watch-paths'
 import { runProjectPrepare } from './project-prepare'
@@ -620,9 +621,9 @@ export async function runQueueListen(
         })
     }
 
-    const reportWatchError = (error: Error): void => {
-      if (session.signal.aborted || isIgnorableWatchError(error)) return
-      io.stderr.write(`Holo could not keep watching for queue changes: ${error.message}\n`)
+    const keepWatchingPast = (watchRoot: string) => (error: Error): void => {
+      if (session.signal.aborted || isVanishedEntryUnderWatchRoot(error, watchRoot)) return
+      throw error
     }
 
     closeWatchers = (() => {
@@ -634,7 +635,7 @@ export async function runQueueListen(
 
           rerunPrepare()
         })
-        watcher.on('error', reportWatchError)
+        watcher.on('error', keepWatchingPast(projectRoot))
 
         return () => watcher.close()
       } catch (error) {
@@ -667,7 +668,7 @@ export async function runQueueListen(
 
                 rerunPrepare()
               })
-              watcher.on('error', reportWatchError)
+              watcher.on('error', keepWatchingPast(projectRoot))
               watchers.push(watcher)
             } catch (watchError) {
               if (!isIgnorableWatchError(watchError)) {

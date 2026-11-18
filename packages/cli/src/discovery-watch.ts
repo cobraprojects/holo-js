@@ -8,7 +8,7 @@ import type { ObservedPrepareChange } from './framework-restart'
 import { isUnchangedWrittenOutput, PACKAGE_MANIFEST_DISCOVERY_PATHS } from './written-outputs'
 import { resolveProjectPlugins } from './project/plugins'
 import { normalizeArtifactPath } from './project/plugin-prepare/paths'
-import { isIgnorableWatchError, isRecursiveWatchUnsupported, normalizeWatchedFilePath, toPosixSlashes } from './watch-paths'
+import { isIgnorableWatchError, isRecursiveWatchUnsupported, isVanishedEntryUnderWatchRoot, normalizeWatchedFilePath, toPosixSlashes } from './watch-paths'
 
 export { PACKAGE_MANIFEST_DISCOVERY_PATHS }
 
@@ -544,8 +544,8 @@ export async function startDiscoveryWatch({
       else dispatch(path, eventType)
     })
     handle.on('error', (error) => {
-      if (closed || signal.aborted || isIgnorableWatchError(error)) return
-      writeWarning(`Holo could not keep watching "${relative(projectRoot, root) || '.'}" for changes: ${error.message}\n`)
+      if (closed || signal.aborted || isVanishedEntryUnderWatchRoot(error, root)) return
+      throw error
     })
     if (closed || signal.aborted) handle.close()
     else handles.push(handle)

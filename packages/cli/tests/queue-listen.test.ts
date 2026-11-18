@@ -317,7 +317,7 @@ it('does not relaunch a worker that exits cleanly after a restart signal written
   }
 })
 
-it('keeps listening when the platform watcher reports an error', async () => {
+it('keeps listening past a folder that vanished under the watched root and fails on other watcher errors', async () => {
   const projectRoot = await createQueueListenProject()
   try {
     let notifyChange = () => {}
@@ -338,19 +338,17 @@ it('keeps listening when the platform watcher reports an error', async () => {
       resolveFirstWorker()
       return worker
     }
-    const errors: string[] = []
-    const stderr = Object.assign(Object.create(process.stderr) as NodeJS.WriteStream, { write: (chunk: string) => errors.push(chunk) })
-    const listening = runQueueListen({ cwd: projectRoot, stdin: process.stdin, stdout: process.stdout, stderr }, projectRoot, {}, spawnWorker, createWatcher, async () => {})
+    const listening = runQueueListen({ cwd: projectRoot, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }, projectRoot, {}, spawnWorker, createWatcher, async () => {})
 
     await firstWorkerStarted
     const [firstWorker] = workers
     if (!firstWorker?.stdout) throw new Error('first worker did not start')
     await once(firstWorker.stdout, 'data')
-    const fail = (code: string) => Object.assign(new Error(`${code}: scandir 'server/jobs/tmp'`), { code })
-    for (const handle of handles) expect(() => handle.emit('error', fail('ENOENT'))).not.toThrow()
-    expect(errors).toEqual([])
-    expect(() => handles[0]!.emit('error', fail('EACCES'))).not.toThrow()
-    expect(errors).toEqual([expect.stringContaining('EACCES')])
+    const fail = (code: string, path?: string) => Object.assign(new Error(`${code}: scandir '${path}'`), { code, ...(path ? { path, syscall: 'scandir' } : {}) })
+    const [handle] = handles
+    expect(() => handle!.emit('error', fail('ENOENT', join(projectRoot, 'server/jobs/tmp')))).not.toThrow()
+    expect(() => handle!.emit('error', fail('ENOENT', projectRoot))).toThrow('ENOENT')
+    expect(() => handle!.emit('error', fail('EPERM'))).toThrow('EPERM')
     notifyChange()
 
     await expect(listening).resolves.toBeUndefined()

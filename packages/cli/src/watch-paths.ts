@@ -1,4 +1,4 @@
-import { relative, resolve } from 'node:path'
+import { isAbsolute, relative, resolve } from 'node:path'
 
 export function toPosixSlashes(value: string): string {
   return value.replaceAll('\\', '/')
@@ -19,6 +19,13 @@ export function isIgnorableWatchError(error: unknown): boolean {
       (error as { code?: string }).code === 'ENOENT'
       || (error as { code?: string }).code === 'EPERM'
     )
+}
+
+export function isVanishedEntryUnderWatchRoot(error: unknown, watchRoot: string): boolean {
+  const path = error instanceof Error && 'code' in error && error.code === 'ENOENT' && 'path' in error ? error.path : undefined
+  if (typeof path !== 'string') return false
+  const entry = relative(resolve(watchRoot), resolve(path))
+  return entry !== '' && !entry.startsWith('..') && !isAbsolute(entry)
 }
 
 export function normalizeWatchedFilePath(

@@ -848,15 +848,14 @@ it('replays a startup-excluded watch root deleted during startup as deleted', as
   expect(changes).toEqual([{ path: 'resources/demo', kind: 'deleted' }])
 })
 
-it('keeps watching when the platform watcher reports an error for a folder that went away', async () => {
+it('keeps watching past a folder that vanished under the watched root and fails on other watcher errors', async () => {
   const root = await createProject()
   const handles: (EventEmitter & { listener: (eventType: string, fileName: string) => void })[] = []
-  const warnings: string[] = []
   const captured = captureChanges()
   const watcher = await startDiscoveryWatch({
     projectRoot: root,
     signal: new AbortController().signal,
-    writeWarning: message => { warnings.push(message) },
+    writeWarning: message => { throw new Error(message) },
     project: { config: defaultProjectConfig() },
     observe: captured.observe,
     createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
@@ -868,14 +867,12 @@ it('keeps watching when the platform watcher reports an error for a folder that 
   onTestFinished(() => watcher.close())
   handles.forEach(handle => handle.listener('change', DISCOVERY_WATCH_PROBE_PATH))
   await watcher.ready
-  const fail = (code: string) => Object.assign(new Error(`${code}: scandir '.holo-js/runtime/cli/bundle-1'`), { code })
+  const fail = (code: string, path?: string) => Object.assign(new Error(`${code}: scandir '${path}'`), { code, ...(path ? { path, syscall: 'scandir' } : {}) })
+  const [handle] = handles
 
-  for (const handle of handles) {
-    expect(() => handle.emit('error', fail('ENOENT'))).not.toThrow()
-  }
-  expect(warnings).toEqual([])
-  expect(() => handles[0]!.emit('error', fail('EACCES'))).not.toThrow()
-  expect(warnings).toEqual([expect.stringContaining('EACCES')])
-  handles.forEach(handle => handle.listener('change', 'config/app.ts'))
+  expect(() => handle!.emit('error', fail('ENOENT', join(root, '.holo-js/runtime/cli/bundle-1')))).not.toThrow()
+  expect(() => handle!.emit('error', fail('ENOENT', root))).toThrow('ENOENT')
+  expect(() => handle!.emit('error', fail('EPERM'))).toThrow('EPERM')
+  handle!.listener('change', 'config/app.ts')
   await vi.waitFor(() => expect(captured.changes).toEqual([{ path: 'config/app.ts', kind: 'changed' }]))
 })
