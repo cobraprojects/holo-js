@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { CompilerError, DB, column, defineGeneratedTable, resetDB } from '../src'
+import { CompilerError, DB, clearGeneratedTables, column, defineGeneratedTable, registerGeneratedTables, resetDB, type TableDefinition } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal aliases and union cursors on %s', driver => {
@@ -34,7 +35,305 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     expect(rows).toEqual([{ id: 1, __holo_chunk_0: 'first' }, { id: 2, __holo_chunk_0: 'second' }])
   })
 
-  it.each(['first', 'second'] as const)('rejects a union cursor when the %s branch hides column positions behind an undefined joined wildcard', async wildcardBranch => {
+  async function pageThrough<TRow extends Record<string, unknown>>(query: { cursorPaginate(perPage: number, cursor?: string | null): Promise<{ data: readonly TRow[], nextCursor: string | null, prevCursor: string | null }> }) {
+    const pages: TRow[][] = []
+    let cursor: string | null = null
+    do {
+      const page = await query.cursorPaginate(1, cursor)
+      pages.push([...page.data])
+      cursor = page.nextCursor
+    } while (cursor !== null && pages.length < 10)
+    return pages.flat()
+  }
+
+  async function createTable(schema: Awaited<ReturnType<typeof openDatabase>>['schema'], prefix: string, integers: readonly string[], strings: readonly string[] = []) {
+    const name = `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(() => schema.dropTable(name))
+    await schema.createTable(name, table => {
+      for (const columnName of integers) table.integer(columnName)
+      for (const columnName of strings) table.string(columnName)
+    })
+    return name
+  }
+
+  function registered<TTable extends TableDefinition>(table: TTable): TTable {
+    registerGeneratedTables({ [table.tableName]: table })
+    onTestFinished(() => clearGeneratedTables())
+    return table
+  }
+
+  it('pages unions whose branches name the order column differently by the first query\'s output names', async () => {
+    const { schema } = await openDatabase(driver)
+    const left = registered(defineGeneratedTable(await createTable(schema, 'union_left', ['n'], ['value']), { n: column.integer(), value: column.string() }))
+    const right = registered(defineGeneratedTable(await createTable(schema, 'union_right', ['other_n'], ['value']), { other_n: column.integer(), value: column.string() }))
+    await DB.table(left).insert([{ n: 1, value: 'a' }, { n: 3, value: 'c' }])
+    await DB.table(right).insert([{ other_n: 2, value: 'b' }, { other_n: 4, value: 'd' }])
+    const aliasedFirst = DB.table(left.tableName).select('n as sort_key', 'value').unionAll(DB.table(right.tableName)).orderBy('sort_key')
+    expect((await pageThrough(aliasedFirst)).map(row => row.value)).toEqual(['a', 'b', 'c', 'd'])
+    const wildcardFirst = DB.table(left.tableName).unionAll(DB.table(right.tableName).select('other_n', 'value')).orderBy('n', 'desc')
+    expect((await pageThrough(wildcardFirst)).map(row => row.value)).toEqual(['d', 'c', 'b', 'a'])
+  })
+
+  it('pages a union by the output column even when a branch puts another column under that name', async () => {
+    const { schema } = await openDatabase(driver)
+    const users = registered(defineGeneratedTable(await createTable(schema, 'union_users', ['id', 'n']), { id: column.integer(), n: column.integer() }))
+    await DB.table(users).insert([{ id: 1, n: 100 }, { id: 2, n: 50 }, { id: 3, n: 25 }])
+    const swapped = DB.table(users.tableName).where('id', 3).unionAll(DB.table(users.tableName).select('n', 'id').where('id', '<', 3)).orderBy('id')
+    expect((await pageThrough(swapped)).map(row => row.id)).toEqual([3, 50, 100])
+    const shadowed = DB.table(users.tableName).select('id as other', 'n as id').unionAll(DB.table(users.tableName).select('id', 'n').where('id', 0)).orderBy('id')
+    expect((await shadowed.get()).map(row => row.id)).toEqual([25, 50, 100])
+    expect((await pageThrough(shadowed)).map(row => row.id)).toEqual([25, 50, 100])
+    if (driver !== 'postgres') {
+      const differentCase = DB.table(users.tableName).select('id as other', 'n as ID').unionAll(DB.table(users.tableName).select('id', 'n').where('id', 0)).orderBy('id')
+      expect((await differentCase.get()).map(row => Number(row.ID))).toEqual([25, 50, 100])
+      expect((await pageThrough(differentCase)).map(row => Number(row.ID))).toEqual([25, 50, 100])
+    }
+  })
+
+  it('rejects union outputs a derived page cannot address before any page runs', async () => {
+    const { schema } = await openDatabase(driver)
+    const users = registered(defineGeneratedTable(await createTable(schema, 'union_users', ['id', 'n']), { id: column.integer(), n: column.integer() }))
+    const duplicated = DB.table(users.tableName).select('id', 'id as same', 'n as same').unionAll(DB.table(users.tableName).select('id', 'n', 'n')).orderBy('id')
+    const missing = DB.table(users.tableName).select('n').unionAll(DB.table(users.tableName).select('n')).orderBy('id')
+    for (const cursor of [null, 'abc']) {
+      await expect(duplicated.cursorPaginate(1, cursor)).rejects.toThrow(
+        new CompilerError('Cannot cursor paginate a union whose first query selects more than one column named "same". Select each column under a name no other column has.'),
+      )
+      await expect(missing.cursorPaginate(1, cursor)).rejects.toThrow(
+        new CompilerError('Cannot cursor paginate a union by "id": the first query in the union doesn\'t select it. Select the order column in each query.'),
+      )
+    }
+  })
+
+  it('reads cursor values through the column behind an aliased union output', async () => {
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_flags', ['n'])
+    await schema.table(name, table => { table.boolean('active').default(false) })
+    const flags = registered(defineGeneratedTable(name, { n: column.integer(), active: column.boolean() }))
+    await DB.table(flags).insert([{ n: 25 }, { n: 50 }, { n: 100 }])
+    const query = DB.table(flags.tableName).select('n as active').where('n', 25).unionAll(DB.table(flags.tableName).select('n as active').where('n', '>', 25)).orderBy('active')
+    expect((await pageThrough(query)).map(row => Number(row.active))).toEqual([25, 50, 100])
+  })
+
+  it('reads cursor values through the joined table that owns a wildcard union output', async () => {
+    const { schema } = await openDatabase(driver)
+    const ownersName = await createTable(schema, 'union_owners', ['id'])
+    await schema.table(ownersName, table => { table.boolean('active').default(false) })
+    const owners = registered(defineGeneratedTable(ownersName, { id: column.integer(), active: column.boolean() }))
+    const items = registered(defineGeneratedTable(await createTable(schema, 'union_items', ['owner_id', 'active']), { owner_id: column.integer(), active: column.integer() }))
+    await DB.table(owners).insert([{ id: 1, active: true }, { id: 2, active: false }])
+    await DB.table(items).insert([{ owner_id: 1, active: 25 }, { owner_id: 2, active: 50 }, { owner_id: 1, active: 100 }])
+    const branch = (ownerId: number) => DB.table(owners.tableName).join(items.tableName, `${items.tableName}.owner_id`, '=', `${owners.tableName}.id`).select(`${items.tableName}.*`).where(`${owners.tableName}.id`, ownerId)
+    for (const order of [`${items.tableName}.active`, 'active']) {
+      const query = branch(1).unionAll(branch(2)).orderBy(order)
+      expect((await pageThrough(query)).map(row => Number(row.active))).toEqual([25, 50, 100])
+    }
+  })
+
+  it('reads MIN and MAX union outputs through their date column in the application timezone', async () => {
+    configureConfigRuntime({ app: { timezone: 'Asia/Tokyo' } } as never)
+    onTestFinished(() => resetConfigRuntime())
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_events', ['grp'])
+    await schema.table(name, table => { table.datetime('stamp') })
+    const events = registered(defineGeneratedTable(name, { grp: column.integer(), stamp: column.datetime() }))
+    await DB.table(events).insert([
+      { grp: 1, stamp: new Date('2026-01-01T01:00:00Z') },
+      { grp: 2, stamp: new Date('2026-01-02T01:00:00Z') },
+      { grp: 3, stamp: new Date('2026-01-03T01:00:00Z') },
+    ])
+    const branch = (groups: readonly number[]) => DB.table(events.tableName).select('grp').addSelectMin('min_stamp', 'stamp').whereIn('grp', groups).groupBy('grp')
+    const query = branch([1]).unionAll(branch([2, 3])).orderBy('min_stamp')
+    expect((await pageThrough(query)).map(row => Number(row.grp))).toEqual([1, 2, 3])
+    if (driver !== 'postgres') {
+      const raw = DB.table(events.tableName).whereIn('grp', [1]).unionAll(DB.table(events.tableName).whereIn('grp', [2, 3])).orderBy('STAMP')
+      expect((await pageThrough(raw)).map(row => Number(row.grp))).toEqual([1, 2, 3])
+    }
+  })
+
+  it('reads joined datetime cursor values in the application timezone both ways', async () => {
+    configureConfigRuntime({ app: { timezone: 'Asia/Tokyo' } } as never)
+    onTestFinished(() => resetConfigRuntime())
+    const { schema } = await openDatabase(driver)
+    const owners = registered(defineGeneratedTable(await createTable(schema, 'union_owners', ['id']), { id: column.integer() }))
+    const name = await createTable(schema, 'union_events', ['owner_id'])
+    await schema.table(name, table => { table.datetime('stamp') })
+    const events = registered(defineGeneratedTable(name, { owner_id: column.integer(), stamp: column.datetime() }))
+    await DB.table(owners).insert([{ id: 1 }, { id: 2 }])
+    const stamps = ['2026-01-01T01:00:00Z', '2026-01-02T01:00:00Z', '2026-01-03T01:00:00Z'].map(stamp => new Date(stamp))
+    await DB.table(events).insert(stamps.map((stamp, index) => ({ owner_id: index === 1 ? 2 : 1, stamp })))
+    const joined = () => DB.table(owners.tableName).join(events.tableName, `${events.tableName}.owner_id`, '=', `${owners.tableName}.id`)
+    const wildcard = (ownerId: number) => joined().select(`${events.tableName}.*`).where(`${owners.tableName}.id`, ownerId)
+    const unqualified = (ownerId: number) => joined().select('owner_id', 'stamp').where(`${owners.tableName}.id`, ownerId)
+    for (const query of [wildcard(1).unionAll(wildcard(2)).orderBy(`${events.tableName}.stamp`), unqualified(1).unionAll(unqualified(2)).orderBy('stamp')]) {
+      const first = await query.cursorPaginate(1)
+      const second = await query.cursorPaginate(1, first.nextCursor)
+      const third = await query.cursorPaginate(1, second.nextCursor)
+      expect([first, second, third].map(page => Number(page.data[0]?.owner_id))).toEqual([1, 2, 1])
+      expect(third.nextCursor).toBeNull()
+      expect((await query.cursorPaginate(1, third.prevCursor)).data.map(row => Number(row.owner_id))).toEqual([2])
+    }
+    for (const stamp of [`${events.tableName}.stamp`, 'stamp']) {
+      expect(await joined().where(stamp, '>=', stamps[1]!).count()).toBe(2)
+    }
+  })
+
+  it('pages a union ordered by a qualified or unqualified spelling of an aliased column', async () => {
+    const { schema } = await openDatabase(driver)
+    const items = registered(defineGeneratedTable(await createTable(schema, 'union_items', ['n']), { n: column.integer() }))
+    await DB.table(items).insert([{ n: 1 }, { n: 2 }, { n: 3 }])
+    const qualifiedOrder = DB.table(items.tableName).select('n as sort_key').where('n', 1).unionAll(DB.table(items.tableName).select('n').where('n', '>', 1)).orderBy(`${items.tableName}.n`)
+    const qualifiedSelection = DB.table(items.tableName).select(`${items.tableName}.n as sort_key`).where('n', 1).unionAll(DB.table(items.tableName).select('n').where('n', '>', 1)).orderBy('n')
+    for (const query of [qualifiedOrder, qualifiedSelection]) {
+      expect((await pageThrough(query)).map(row => Number(row.sort_key))).toEqual([1, 2, 3])
+    }
+  })
+
+  it.skipIf(driver === 'postgres')('pages a union whose branches return different types under one output name', async () => {
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_mixed', ['n'], ['label'])
+    await schema.table(name, table => { table.boolean('active').default(false) })
+    const mixed = registered(defineGeneratedTable(name, { n: column.integer(), label: column.string(), active: column.boolean() }))
+    await DB.table(mixed).insert([{ n: 2, label: 'c', active: false }, { n: 3, label: 'b', active: false }, { n: 4, label: 'a', active: false }])
+    const numbers = DB.table(mixed.tableName).select('active as k').where('n', 2).unionAll(DB.table(mixed.tableName).select('n as k').where('n', '<', 4)).orderBy('k')
+    const strings = DB.table(mixed.tableName).select('active as k').where('n', 2).unionAll(DB.table(mixed.tableName).select('label as k').where('n', '>', 2)).orderBy('k')
+    for (const query of [numbers, strings]) {
+      const all = (await query.get()).map(row => String(row.k))
+      expect(all).toHaveLength(3)
+      expect((await pageThrough(query)).map(row => String(row.k))).toEqual(all)
+    }
+  })
+
+  it.skipIf(driver === 'postgres')('pages a union of integers and numeric-looking text in the database\'s own order', async () => {
+    const { schema } = await openDatabase(driver)
+    const values = registered(defineGeneratedTable(await createTable(schema, 'union_values', ['n'], ['label']), { n: column.integer(), label: column.string() }))
+    await DB.table(values).insert([{ n: 2, label: 'x' }, { n: 9, label: '10' }, { n: 9, label: '20' }, { n: 9, label: '3' }])
+    const query = DB.table(values.tableName).select('n as k').where('n', 2).unionAll(DB.table(values.tableName).select('label as k').where('n', 9)).orderBy('k')
+    const all = (await query.get()).map(row => String(row.k))
+    expect(all).toHaveLength(4)
+    expect((await pageThrough(query)).map(row => String(row.k))).toEqual(all)
+  })
+
+  it('pages a union of big integers beyond the safe integer range', async () => {
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_bigints', ['grp'])
+    await schema.table(name, table => { table.bigInteger('big') })
+    const bigs = [9007199254740993n, 9007199254740995n, 9007199254740997n]
+    await DB.table(name).insert(bigs.map((big, index) => ({ grp: index === 1 ? 2 : 1, big })))
+    const query = DB.table(name).select('big').where('grp', 1).unionAll(DB.table(name).select('big').where('grp', 2)).orderBy('big')
+    expect((await pageThrough(query)).map(row => String(row.big))).toEqual(bigs.map(String))
+  })
+
+  it.each([
+    ['fractional', ['1.25', '2.50', '3.75']],
+    ['integral', ['1.00', '2.00', '3.00']],
+  ])('pages a union of %s decimal values', async (_label, amounts) => {
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_amounts', ['grp'])
+    await schema.table(name, table => { table.decimal('amount', 8, 2) })
+    const amountsTable = registered(defineGeneratedTable(name, { grp: column.integer(), amount: column.decimal(undefined, 8, 2) }))
+    await DB.table(amountsTable).insert(amounts.map((amount, index) => ({ grp: index === 1 ? 2 : 1, amount })))
+    const query = DB.table(amountsTable.tableName).select('amount').where('grp', 1).unionAll(DB.table(amountsTable.tableName).select('amount').where('grp', 2)).orderBy('amount')
+    expect((await pageThrough(query)).map(row => Number(row.amount))).toEqual(amounts.map(Number))
+  })
+
+  it.skipIf(driver === 'sqlite')('pages a union of precise decimal aggregates forward and back', async () => {
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_sums', ['grp'])
+    await schema.table(name, table => { table.decimal('amount', 30, 20) })
+    const sums = registered(defineGeneratedTable(name, { grp: column.integer(), amount: column.decimal(undefined, 30, 20) }))
+    await DB.table(sums).insert([
+      { grp: 1, amount: '0.10000000000000000003' },
+      { grp: 2, amount: '0.10000000000000000001' },
+      { grp: 3, amount: '0.10000000000000000002' },
+    ])
+    const branch = (groups: readonly number[]) => DB.table(sums.tableName).select('grp').addSelectSum('total', 'amount').whereIn('grp', groups).groupBy('grp')
+    const query = branch([1]).unionAll(branch([2, 3])).orderBy('total')
+    expect((await pageThrough(query)).map(row => Number(row.grp))).toEqual([2, 3, 1])
+    const second = await query.cursorPaginate(1, (await query.cursorPaginate(1)).nextCursor)
+    const last = await query.cursorPaginate(1, second.nextCursor)
+    expect((await query.cursorPaginate(1, last.prevCursor)).data.map(row => Number(row.grp))).toEqual([3])
+  })
+
+  it.skipIf(driver === 'postgres')('pages a union of datetimes and date-like text forward and back', async () => {
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_moments', ['grp'], ['label'])
+    await schema.table(name, table => { table.datetime('stamp') })
+    const moments = registered(defineGeneratedTable(name, { grp: column.integer(), label: column.string(), stamp: column.datetime() }))
+    await DB.table(moments).insert([
+      { grp: 1, label: 'x', stamp: new Date('2026-01-01T00:00:00Z') },
+      { grp: 2, label: '2026-02-01T00:00:00Z', stamp: new Date('2026-01-01T00:00:00Z') },
+      { grp: 2, label: '2026-03-01T00:00:00Z', stamp: new Date('2026-01-01T00:00:00Z') },
+    ])
+    const query = DB.table(moments.tableName).select('stamp as k').where('grp', 1).unionAll(DB.table(moments.tableName).select('label as k').where('grp', 2)).orderBy('k')
+    const all = (await query.get()).map(row => String(row.k))
+    const forward = await pageThrough(query)
+    expect(forward.map(row => String(row.k))).toEqual(all)
+    const last = await query.cursorPaginate(1, (await query.cursorPaginate(1, (await query.cursorPaginate(1)).nextCursor)).nextCursor)
+    const back = await query.cursorPaginate(1, last.prevCursor)
+    expect(back.data.map(row => String(row.k))).toEqual([all[1]])
+  })
+
+  it('keeps application outputs named like Holo\'s cursor metadata', async () => {
+    const { schema } = await openDatabase(driver)
+    const users = registered(defineGeneratedTable(await createTable(schema, 'union_users', ['id', 'grp']), { id: column.integer(), grp: column.integer() }))
+    await DB.table(users).insert([{ id: 1, grp: 10 }, { id: 2, grp: 20 }])
+    const query = DB.table(users.tableName).select('grp as __holo_cursor_type_0').where('id', 1).unionAll(DB.table(users.tableName).select('grp').where('id', 2)).orderBy('__holo_cursor_type_0')
+    expect((await pageThrough(query)).map(row => Number(row.__holo_cursor_type_0))).toEqual([10, 20])
+  })
+
+  it('pages a union by the first query\'s exact output spelling', async () => {
+    const { schema } = await openDatabase(driver)
+    const users = registered(defineGeneratedTable(await createTable(schema, 'union_users', ['id']), { id: column.integer() }))
+    await DB.table(users).insert([{ id: 1 }, { id: 2 }])
+    const query = DB.table(users.tableName).select('id').where('id', 1).unionAll(DB.table(users.tableName).select('id').where('id', 2)).orderBy('ID')
+    if (driver === 'postgres') {
+      await expect(query.cursorPaginate(1)).rejects.toThrow(CompilerError)
+      return
+    }
+    expect((await pageThrough(query)).map(row => Number(row.id))).toEqual([1, 2])
+  })
+
+  it('compares union output names the way the database compares identifiers', async () => {
+    const { schema } = await openDatabase(driver)
+    const users = registered(defineGeneratedTable(await createTable(schema, 'union_users', ['id', 'n']), { id: column.integer(), n: column.integer() }))
+    await DB.table(users).insert([{ id: 1, n: 10 }, { id: 2, n: 20 }])
+    const query = DB.table(users.tableName).select('id', 'n as label', 'n as LABEL').where('id', 1).unionAll(DB.table(users.tableName).select('id', 'n', 'n').where('id', 2)).orderBy('id')
+    if (driver === 'postgres') {
+      expect((await pageThrough(query)).map(row => Number(row.id))).toEqual([1, 2])
+      return
+    }
+    for (const cursor of [null, 'abc']) {
+      await expect(query.cursorPaginate(1, cursor)).rejects.toThrow(
+        new CompilerError('Cannot cursor paginate a union whose first query selects more than one column named "label". Select each column under a name no other column has.'),
+      )
+    }
+  })
+
+  it('pages a union whose next branch selects the wildcard order column under another name', async () => {
+    const { schema } = await openDatabase(driver)
+    const left = registered(defineGeneratedTable(await createTable(schema, 'union_left', ['id'], ['label']), { id: column.integer(), label: column.string() }))
+    await DB.table(left).insert([{ id: 1, label: 'a' }, { id: 3, label: 'c' }])
+    const query = DB.table(left.tableName).where('id', 3).unionAll(DB.table(left.tableName).select('id as user_id', 'label').where('id', 1)).orderBy('id')
+    expect((await pageThrough(query)).map(row => row.label)).toEqual(['a', 'c'])
+  })
+
+  it('pages a union of differently aliased joined wildcards ordered by a qualified column', async () => {
+    const { schema } = await openDatabase(driver)
+    const owners = registered(defineGeneratedTable(await createTable(schema, 'union_owners', ['id']), { id: column.integer() }))
+    const items = registered(defineGeneratedTable(await createTable(schema, 'union_items', ['owner_id', 'rank']), { owner_id: column.integer(), rank: column.integer() }))
+    await DB.table(owners).insert([{ id: 1 }, { id: 2 }])
+    await DB.table(items).insert([{ owner_id: 1, rank: 1 }, { owner_id: 2, rank: 2 }, { owner_id: 1, rank: 3 }, { owner_id: 2, rank: 4 }])
+    const branch = (alias: string, ownerId: number) => DB.table(owners.tableName)
+      .join(`${items.tableName} as ${alias}`, `${alias}.owner_id`, '=', `${owners.tableName}.id`)
+      .select(`${alias}.*`)
+      .where(`${owners.tableName}.id`, ownerId)
+    const query = branch('a', 1).unionAll(branch('b', 2)).orderBy('a.rank')
+    expect((await query.get()).map(row => row.rank)).toEqual([1, 2, 3, 4])
+    expect((await pageThrough(query)).map(row => row.rank)).toEqual([1, 2, 3, 4])
+  })
+
+  it.each(['first', 'second'] as const)('handles a union cursor when the %s branch hides columns behind an undefined joined wildcard', async wildcardBranch => {
     const { schema, table } = await openDatabase(driver)
     const name = `union_notes_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     onTestFinished(() => schema.dropTable(name))
@@ -48,10 +347,14 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     const second = wildcardBranch === 'second'
       ? joined().select(`${name}.*`, `${table.tableName}.id as other_key`).where(`${table.tableName}.id`, 2)
       : joined().select(`${name}.note_id`, `${table.tableName}.id as other_key`).where(`${table.tableName}.id`, 2)
-    for (const cursor of [null, 'abc']) {
-      await expect(first.unionAll(second).orderBy('sort_key').cursorPaginate(1, cursor)).rejects.toThrow(
-        new CompilerError('Cannot cursor paginate a union by "sort_key": its column position cannot be determined. Select the order column explicitly in each query without preceding wildcards.'),
-      )
+    if (wildcardBranch === 'first') {
+      for (const cursor of [null, 'abc']) {
+        await expect(first.unionAll(second).orderBy('sort_key').cursorPaginate(1, cursor)).rejects.toThrow(
+          new CompilerError('Cannot cursor paginate a union by "sort_key": more than one of its selected columns may be named "sort_key". Select it under a name no other column has.'),
+        )
+      }
+    } else {
+      expect((await pageThrough(first.unionAll(second).orderBy('sort_key'))).map(row => row.sort_key)).toEqual([1, 2])
     }
     const explicit = joined().select(`${name}.note_id`, `${table.tableName}.id as sort_key`).where(`${table.tableName}.id`, 1)
       .unionAll(joined().select(`${name}.note_id`, `${table.tableName}.id as other_key`).where(`${table.tableName}.id`, 2)).orderBy('sort_key')

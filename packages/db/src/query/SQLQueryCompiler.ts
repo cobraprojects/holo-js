@@ -3,6 +3,7 @@ import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError, SecurityError } from '../core/errors'
 import { isInlineIntegerValue, keyCastFor, readAllColumnsSelectionTable } from './ast'
 import { validateQueryPlan } from './validator'
+import { unionOutputOrder } from './unionOutputs'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import { isTrustedRawPredicate } from './trustedRawPredicate'
 import { isTrustedRawSelection } from './trustedRawSelection'
@@ -26,6 +27,7 @@ import type {
   InsertUsingQueryPlan,
   TruncateQueryPlan,
   UpsertQueryPlan,
+  QueryOrderBy,
   QueryPlan,
   QueryPredicateNode,
   QueryPredicate,
@@ -50,8 +52,11 @@ const UNKNOWN_KIND_KEY_ALIAS = '__holo_key'
 
 const UNKNOWN_KIND_KEYS_ALIAS = '__holo_keys'
 
+const UNION_CURSOR_OPERATORS: ReadonlySet<unknown> = new Set(['>', '<', '='])
+
 export class SQLQueryCompiler {
   protected readonly dialect: SchemaDialectName | undefined = undefined
+  protected readonly caseSensitiveIdentifiers: boolean = false
 
   constructor(
     protected readonly quoteIdentifier: IdentifierQuoter,
@@ -179,6 +184,41 @@ export class SQLQueryCompiler {
     })
   }
 
+  compileUnionCursorPage(plan: SelectQueryPlan, cursor: QueryPredicateNode | undefined, orderBy: readonly QueryOrderBy[], limit: number, storageTypeAliases: readonly string[] = []): CompiledStatement {
+    const statement = this.compile({ ...plan, orderBy: [], limit: undefined, offset: undefined })
+    const bindings = [...statement.bindings ?? []]
+    const whereClause = cursor ? this.compilePredicates([this.unionCursorPredicate(cursor)], bindings) : ''
+    const orderClause = orderBy.map(order => this.compileOrderBy(order, bindings)).join(', ')
+    return this.withMetadata({
+      ...statement,
+      bindings,
+      sql: `SELECT *${this.compileUnionCursorStorageTypes(orderBy, storageTypeAliases)} FROM (${statement.sql}) AS ${this.quoteIdentifier('__holo_union_page')}${whereClause} ORDER BY ${orderClause} LIMIT ${limit}`,
+    }, this.createSelectMetadata(plan))
+  }
+
+  private unionCursorPredicate(predicate: QueryPredicateNode): QueryPredicateNode {
+    if (predicate.kind === 'group') return { ...predicate, predicates: predicate.predicates.map(nested => this.unionCursorPredicate(nested)) }
+    if (predicate.kind !== 'comparison' || !UNION_CURSOR_OPERATORS.has(predicate.operator)) return predicate
+    return {
+      kind: 'raw',
+      ...(predicate.boolean === undefined ? {} : { boolean: predicate.boolean }),
+      sql: `${this.compileUnionCursorOperand(predicate.column)} ${predicate.operator} ?`,
+      bindings: [predicate.value],
+    }
+  }
+
+  protected compileUnionCursorOperand(output: string): string {
+    return this.quoteIdentifier(output)
+  }
+
+  capturesUnionCursorStorageTypes(): boolean {
+    return false
+  }
+
+  protected compileUnionCursorStorageTypes(_orderBy: readonly QueryOrderBy[], _aliases: readonly string[]): string {
+    return ''
+  }
+
   compileExists(plan: SelectQueryPlan): CompiledStatement {
     const statement = this.compile(plan)
     return this.withMetadata({
@@ -238,7 +278,7 @@ export class SQLQueryCompiler {
     const havingClause = this.compileHaving(plan.having, bindings)
     const orderClause = plan.orderBy.length === 0
       ? ''
-      : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', ')}`
+      : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(plan.unions.length > 0 ? unionOutputOrder(plan, orderBy, this.caseSensitiveIdentifiers) : orderBy, bindings)).join(', ')}`
     const lockOf = plan.joins.some(join => join.subquery !== undefined && isOneOfManyAggregatePlan(join.subquery))
       ? this.quoteIdentifier(plan.source.alias ?? splitTablePath(plan.source.tableName).table)
       : undefined
