@@ -964,6 +964,38 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .cursorPaginate(1)).rejects.toThrow(SecurityError)
   })
 
+  it('rejects a grouped cursor order key that a selected aggregate shadows', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events)
+      .select('tenant_id as tenant')
+      .addSelectCount('tenant_id')
+      .addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
+      .groupBy('tenant_id', 'day')
+      .orderBy('tenant_id')
+      .orderBy('day')
+      .cursorPaginate(1)).rejects.toThrow(SecurityError)
+  })
+
+  it('treats a bare joined column and its qualified spelling as the same grouped cursor key', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const ranks = await createKeyedTable('bucket_ranks', 'rank', [{ id: 1, value: 1 }, { id: 2, value: 2 }])
+    registerGeneratedTables({ events, ranks })
+
+    const page = await DB.table(events.tableName)
+      .join(ranks.tableName, `${ranks.tableName}.id`, '=', `${events.tableName}.id`)
+      .select('rank')
+      .addSelectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
+      .groupBy(`${ranks.tableName}.rank`, 'day')
+      .orderBy('rank')
+      .orderBy('day')
+      .cursorPaginate(5)
+
+    expect(page.data).toEqual([{ rank: 1, day: '2026-11-03' }, { rank: 2, day: '2026-11-03' }])
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)
@@ -1252,6 +1284,7 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
 
     await expect(dayIn('UTC')).resolves.toBe('1969-07-20')
     await expect(dayIn('Etc/UTC')).resolves.toBe('1969-07-20')
+    await expect(dayIn('etc/utc')).resolves.toBe('1969-07-20')
   })
 
   it('gives a null bucket for a datetime its server cannot convert', async () => {

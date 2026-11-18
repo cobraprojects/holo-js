@@ -6,7 +6,7 @@ import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
 import type { QueryDateBucketSelection, QueryRawSelection, QueryRelationKeysPredicate } from './ast'
-import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, planHasDateBuckets, selectionMayOutputName } from './dateBuckets'
+import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, assertGroupedOrderKeysUnshadowed, groupedCursorKey, planHasDateBuckets, selectionMayOutputName } from './dateBuckets'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -3436,15 +3436,10 @@ export class TableQueryBuilder<
 
     const primaryKeys = this.source.table ? listTablePrimaryKeyColumns(this.source.table) : []
     if (this.plan.groupBy.length > 0 && unionBranchPlans(this.plan).some(branch => dateBucketSelections(branch).size > 0)) {
+      const connectionName = this.connection.getConnectionName()
+      const identity = (column: string): string => groupedCursorKey(this.plan, column, connectionName)
       const visibleSource = this.source.alias ?? this.source.tableName
-      const identity = (column: string): string => {
-        const separator = column.lastIndexOf('.')
-        if (separator === -1) return column
-        const qualifier = column.slice(0, separator)
-        const namesSource = qualifier === visibleSource || (this.source.alias === undefined && qualifier === splitTablePath(this.source.tableName).table)
-        return namesSource ? column.slice(separator + 1) : column
-      }
-      const groupsByPrimaryKey = primaryKeys.length > 0 && primaryKeys.every(key => this.plan.groupBy.some(column => identity(column) === key))
+      const groupsByPrimaryKey = primaryKeys.length > 0 && primaryKeys.every(key => this.plan.groupBy.some(column => identity(column) === `${visibleSource}.${key}`))
       const ordered = groupsByPrimaryKey ? this.withPrimaryKeyTieBreakers(primaryKeys) : this
       if (groupsByPrimaryKey && this.plan.joins.length === 0 && this.plan.unions.length === 0) return ordered
       const orderedColumns = new Set(ordered.plan.orderBy.flatMap(orderBy => orderBy.kind === 'column' ? [identity(orderBy.column)] : []))
@@ -3452,6 +3447,7 @@ export class TableQueryBuilder<
       if (!ordered.plan.groupBy.every(column => orderedColumns.has(identity(column))) || ![...orderedColumns].every(column => groupedColumns.has(column))) {
         throw new SecurityError('Cursor pagination over grouped rows must order by exactly the groupBy columns.')
       }
+      assertGroupedOrderKeysUnshadowed(ordered.plan, connectionName)
       return ordered
     }
 

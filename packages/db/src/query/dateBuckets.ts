@@ -158,6 +158,34 @@ export function columnOwner(plan: SelectQueryPlan, name: string, connectionName:
   return owner && (owner.alias ?? owner.tableName ?? plan.source.tableName)
 }
 
+export function groupedCursorKey(plan: SelectQueryPlan, column: string, connectionName: string | undefined): string {
+  if (dateBucketSelections(plan).has(column)) return column
+  const separator = column.lastIndexOf('.')
+  const name = column.slice(separator + 1)
+  if (separator === -1) {
+    const owner = columnOwner(plan, column, connectionName)
+    return owner === undefined ? column : `${owner}.${name}`
+  }
+  const table = boundTables(visibleTables(plan, connectionName), column.slice(0, separator))[0]
+  return table ? `${table.alias ?? table.tableName ?? plan.source.tableName}.${name}` : column
+}
+
+export function assertGroupedOrderKeysUnshadowed(plan: SelectQueryPlan, connectionName: string | undefined): void {
+  for (const orderBy of plan.orderBy) {
+    if (orderBy.kind !== 'column' || orderBy.column.includes('.') || dateBucketSelections(plan).has(orderBy.column)) continue
+    const key = orderBy.column
+    const shadowed = plan.selections.some((selection) => {
+      if (selection.kind === 'raw' || selection.kind === 'date-bucket') return false
+      if (selection.kind !== 'column') return sameIdentifierFolded(selection.alias, key)
+      return selection.alias !== undefined && sameIdentifierFolded(selection.alias, key)
+        && groupedCursorKey(plan, selection.column, connectionName) !== groupedCursorKey(plan, key, connectionName)
+    })
+    if (shadowed) {
+      throw new SecurityError(`Cursor pagination cannot order grouped rows by "${key}" because a selected column of that name is not the grouped column.`)
+    }
+  }
+}
+
 export function bareColumnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined): string {
   const owner = columnOwner(plan, name, connectionName)
   if (owner === undefined) {
@@ -204,10 +232,10 @@ export function dateBucketStorage(plan: SelectQueryPlan, bucket: QueryDateBucket
   throw new SecurityError(`selectDate() needs a date, datetime or timestamp column, but "${bucket.column}" is a ${definition.kind} column.`)
 }
 
-const UTC_TIME_ZONES: ReadonlySet<string> = new Set(['UTC', 'Etc/UTC', 'Etc/UCT', 'Etc/Universal', 'Etc/Zulu', 'Etc/GMT', 'Etc/GMT0', 'Etc/GMT+0', 'Etc/GMT-0', 'Etc/Greenwich'])
+const UTC_TIME_ZONES: ReadonlySet<string> = new Set(['utc', 'etc/utc', 'etc/uct', 'etc/universal', 'etc/zulu', 'etc/gmt', 'etc/gmt0', 'etc/gmt+0', 'etc/gmt-0', 'etc/greenwich'])
 
 export function mysqlTimeZoneName(timeZone: string): string {
-  return UTC_TIME_ZONES.has(timeZone) ? '+00:00' : timeZone
+  return UTC_TIME_ZONES.has(timeZone.toLowerCase()) ? '+00:00' : timeZone
 }
 
 export function sameMySQLTimeZone(left: string, right: string): boolean {
