@@ -253,6 +253,10 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     return expression
   }
 
+  protected override resolvesSelectAliasesInColumnReferences(): boolean {
+    return true
+  }
+
   protected override compileDateBucket(bucket: QueryDateBucketSelection, storage: DateBucketStorage): string {
     const column = this.compileColumnReference(bucket.column)
     const wallClock = storage === 'calendar' ? `date(${this.compileAppWallClock(column)})` : this.compileInstantWallClock(column, bucket.timeZone ?? getApplicationTimezone())

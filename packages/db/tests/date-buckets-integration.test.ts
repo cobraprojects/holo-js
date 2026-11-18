@@ -519,13 +519,13 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     await expect(DB.table(events.tableName)
       .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
       .where('bucket', 'first')
-      .get()).rejects.toThrow(CompilerError)
+      .get()).rejects.toThrow(DatabaseError)
     await expect(DB.table(events.tableName)
       .join(facts, `${facts}.id`, '=', `${events.tableName}.id`)
       .join(extras, `${extras}.id`, '=', `${events.tableName}.id`)
       .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
       .where('bucket', 'first')
-      .get()).rejects.toThrow(CompilerError)
+      .get()).rejects.toThrow(DatabaseError)
   })
 
   it('rejects another selected column whose name differs from the date bucket alias only in case', async () => {
@@ -1469,6 +1469,42 @@ describe('date buckets on sqlite end-of-day timestamps', () => {
 
     await expect(hourIn('UTC')).resolves.toBe('2027-01-01 00:00')
     await expect(hourIn('Etc/UTC')).resolves.toBe('2027-01-01 00:00')
+  })
+})
+
+describe.each(integrationDrivers(['postgres', 'mysql'] as const))('date bucket aliases in where clauses on %s', (driver) => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('leaves a bare where column to the database when a bucket shares its name', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const schema = createSchemaService(DB.connection())
+    const days = `bucket_weekdays_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const notes = `bucket_plain_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(days)
+      await schema.dropTable(notes)
+    })
+    await schema.createTable(days, (table) => {
+      table.id()
+      table.string('day')
+    })
+    await schema.createTable(notes, (table) => {
+      table.id()
+    })
+    await DB.table(days).insert([{ id: 1, day: 'Monday' }, { id: 2, day: 'Tuesday' }])
+    await DB.table(notes).insert([{ id: 1 }, { id: 2 }])
+
+    const rows = await DB.table(events.tableName)
+      .join(days, `${days}.id`, '=', `${events.tableName}.id`)
+      .join(notes, `${notes}.id`, '=', `${events.tableName}.id`)
+      .where('day', 'Monday')
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
+      .get()
+
+    expect(rows).toEqual([{ day: '2026-11-03' }])
   })
 })
 
