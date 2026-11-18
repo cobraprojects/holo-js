@@ -69,6 +69,16 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('selected ext
     if (driver !== 'sqlite') expect(rows[0]!.last_redeemed_at).toBeInstanceOf(Date)
   })
 
+  it('keeps numeric extrema numeric when a union widens their SQL type', async () => {
+    const { redemptions } = await openRedemptionsFixture(driver)
+
+    const rows = await DB.table(redemptions).selectMax('value', 'points')
+      .unionAll(DB.table(redemptions).selectCount('value'))
+      .get()
+
+    expect(rows).toEqual([{ value: 10 }, { value: 2 }])
+  })
+
   it('returns null extrema for empty groups', async () => {
     const { redemptions } = await openRedemptionsFixture(driver)
 

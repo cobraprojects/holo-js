@@ -74,7 +74,7 @@ function selectedColumns(selection: QueryColumnSelection, tables: ReadonlyMap<st
   return [[selection.alias ?? name, table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined]]
 }
 
-export function readsAsColumnValue(selection: QueryAggregateSelection): boolean {
+function readsAsColumnValue(selection: QueryAggregateSelection): boolean {
   return selection.aggregate === 'min' || selection.aggregate === 'max'
 }
 
@@ -117,6 +117,14 @@ export function withResolvedDefinitions(plan: SelectQueryPlan, connectionName: s
 
 export function resultColumnDefinition(plan: SelectQueryPlan, key: string): AnyColumnDefinition | undefined {
   return resultColumnDefinitions(plan).get(key)
+}
+
+function readsAsNumber(column: AnyColumnDefinition | undefined): boolean {
+  return column !== undefined && (readsAsInteger(column) || column.kind === 'real')
+}
+
+export function readsAsNumericAggregate(plan: SelectQueryPlan, selection: QueryAggregateSelection): boolean {
+  return !readsAsColumnValue(selection) || readsAsNumber(resultColumnDefinition(plan, selection.alias))
 }
 
 export type ConvertedResultColumns = ReadonlyMap<string, ColumnReader>

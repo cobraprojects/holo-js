@@ -41,7 +41,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { readConvertedResultColumns, readInsertedKey, readIntegerColumns, readsAsColumnValue, resolveConvertedResultColumns, withResolvedDefinitions } from './resultColumns'
+import { readConvertedResultColumns, readInsertedKey, readIntegerColumns, readsAsNumericAggregate, resolveConvertedResultColumns, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -2180,7 +2180,8 @@ export class TableQueryBuilder<
 
   private async queryRows<TRow extends Record<string, unknown>>(statement: CompiledStatement): Promise<TRow[]> {
     const { rows } = await this.connection.queryCompiled<TRow>(statement)
-    const aggregates = this.plan.selections.filter((selection): selection is QueryAggregateSelection => selection.kind === 'aggregate' && !readsAsColumnValue(selection))
+    const plan = withResolvedDefinitions(this.plan, this.connection.getConnectionName())
+    const aggregates = plan.selections.filter((selection): selection is QueryAggregateSelection => selection.kind === 'aggregate' && readsAsNumericAggregate(plan, selection))
     if (aggregates.length === 0) return rows
     return rows.map(row => {
       const values: Record<string, unknown> = { ...row }
