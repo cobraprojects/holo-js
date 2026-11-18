@@ -221,18 +221,12 @@ export function assertGroupedOrderKeysUnshadowed(plan: SelectQueryPlan, context:
   }
 }
 
-export function bareColumnOwner(scopes: readonly SelectQueryPlan[], name: string, connectionName: string | undefined, foldsColumnNames: boolean): string {
-  const matches = foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly
-  for (const plan of scopes) {
-    const candidates = visibleTables(plan, connectionName, matches).filter((table) => {
-      const columns = table.columns()
-      return columns === undefined || columns.some(column => matches(column, name))
-    })
-    const [owner] = candidates
-    if (candidates.length === 1 && owner) return owner.alias ?? owner.tableName ?? plan.source.tableName
-    if (candidates.length > 1) break
+export function bareColumnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined, foldsColumnNames: boolean): string {
+  const owner = columnOwner(plan, name, connectionName, foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly)
+  if (owner === undefined) {
+    throw new CompilerError(`Column "${name}" shares its name with a date bucket and doesn't belong to exactly one table of the same query. Qualify it with its table.`)
   }
-  throw new CompilerError(`Column "${name}" shares its name with a date bucket and Holo can't tell which table owns it. Qualify it with its table.`)
+  return owner
 }
 
 export function assertDateBucketSpelling(plan: SelectQueryPlan, dateBuckets: ReadonlyMap<string, QueryDateBucketSelection> = dateBucketSelections(plan)): void {
