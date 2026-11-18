@@ -166,6 +166,20 @@ it('protects routes and redirects inside the app base path', async () => {
   expect(external.headers.get('location')).toBe('https://other.test/login')
 })
 
+it('protects SvelteKit data requests and encoded string routes', async () => {
+  const app = await nativeAuth()
+  const resolve = () => new Response('Native continuation')
+  const dataRequest = new Request('https://app.test/dashboard/admin/__data.json')
+  requestAppBaseInternals.set(dataRequest, '/dashboard')
+  const data = await app.run(app.request('/'), () => svelteAuthOnly({ routes: ['/admin'], redirectTo: '/login' })({ event: { url: new URL('https://app.test/dashboard/admin'), request: dataRequest }, resolve }))
+  expect(data.status).toBe(303)
+  const reportsRequest = new Request('https://app.test/private%20reports')
+  const reports = await app.run(app.request('/'), () => svelteAuthOnly({ routes: ['/private%20reports'], redirectTo: '/login' })({ event: { url: new URL(reportsRequest.url), request: reportsRequest }, resolve }))
+  expect(reports.status).toBe(303)
+  const nextReports = app.request('/private%20reports')
+  await expect(app.run(nextReports, () => authOnly({ routes: ['/private%20reports'], redirectTo: '/login' })(nextReports))).resolves.toMatchObject({ status: 303 })
+})
+
 it('protects routes reached through encoded paths', async () => {
   const app = await nativeAuth()
   const resolve = () => new Response('Native continuation')

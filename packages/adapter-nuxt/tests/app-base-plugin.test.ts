@@ -19,6 +19,11 @@ it.each([
 ])('serves Holo browser clients the runtime app.baseURL %s', async (baseURL, expected) => {
   runtimeConfig.app.baseURL = baseURL
   const { default: plugin } = await import('../src/runtime/plugins/app-base.client')
-  plugin()
+  plugin.setup()
   expect(appPath('/broadcasting/config')).toBe(expected)
+})
+
+it('runs before app plugins that enforce pre order', async () => {
+  const { default: plugin } = await import('../src/runtime/plugins/app-base.client')
+  expect(plugin.order).toBeLessThan(-20)
 })

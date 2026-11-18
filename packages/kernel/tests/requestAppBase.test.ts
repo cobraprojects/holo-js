@@ -38,9 +38,7 @@ describe('request app base', () => {
     ['https://app.test/dashboard/admin%2Fposts', '/admin/posts'],
     ['https://app.test/dashboard/100%25/report', '/100%/report'],
   ])('reads the route %s fully decoded for route guards', (url, expected) => {
-    const request = new Request(url)
-    requestAppBaseInternals.set(request, '/dashboard')
-    expect(requestAppBaseInternals.routePathname(request)).toBe(expected)
+    expect(requestAppBaseInternals.routePathname(new URL(url).pathname, '/dashboard')).toBe(expected)
   })
 
   it('uses the request path unchanged when no base was recorded', () => {

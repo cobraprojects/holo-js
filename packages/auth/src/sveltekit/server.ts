@@ -103,7 +103,7 @@ function matchesRoute(route: RouteMatcher, pathname: string): boolean {
     return route.test(normalizedPathname)
   }
 
-  const normalizedRoute = normalizePathname(route)
+  const normalizedRoute = normalizePathname(requestAppBaseInternals.decodePath(route))
   if (normalizedRoute.endsWith('/*')) {
     const prefix = normalizePathname(normalizedRoute.slice(0, -2))
     return normalizedPathname === prefix || normalizedPathname.startsWith(`${prefix}/`)
@@ -161,7 +161,7 @@ function createRouteProtectionHandle(
   return async ({ event, resolve }) => {
     return runWithSvelteKitRequestEvent(event, async () => {
       const request = 'request' in event && event.request instanceof Request ? event.request : undefined
-      if (!matchesRoutes(options.routes, request ? requestAppBaseInternals.routePathname(request) : requestAppBaseInternals.decodePath(event.url.pathname))) {
+      if (!matchesRoutes(options.routes, requestAppBaseInternals.routePathname(event.url.pathname, request ? requestAppBaseInternals.base(request) : ''))) {
         return resolve(event)
       }
 

@@ -34,8 +34,8 @@ function pathname(request: Request): string {
   return withoutBase(new URL(request.url).pathname, base(request))
 }
 
-function routePathname(request: Request): string {
-  return withoutBase(decodePath(new URL(request.url).pathname), decodePath(base(request)))
+function routePathname(pathname: string, prefix: string): string {
+  return withoutBase(decodePath(pathname), decodePath(prefix))
 }
 
 function withBase(request: Request, path: string): string {

@@ -70,7 +70,7 @@ function matchesRoute(route: RouteMatcher, pathname: string): boolean {
     return route.test(normalizedPathname)
   }
 
-  const normalizedRoute = normalizePathname(route)
+  const normalizedRoute = normalizePathname(requestAppBaseInternals.decodePath(route))
   if (normalizedRoute.endsWith('/*')) {
     const prefix = normalizePathname(normalizedRoute.slice(0, -2))
     return normalizedPathname === prefix || normalizedPathname.startsWith(`${prefix}/`)
