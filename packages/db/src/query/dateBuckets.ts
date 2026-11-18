@@ -240,7 +240,7 @@ export function assertDateBucketSpelling(plan: SelectQueryPlan, dateBuckets: Rea
 export function assertDateBucketOutputsUnshadowed(plan: SelectQueryPlan, connectionName: string | undefined): void {
   const sourceColumns = visibleTables(plan, connectionName)[0]!.columns() ?? []
   for (const alias of dateBucketSelections(plan).keys()) {
-    if (sourceColumns.some(column => sameIdentifierFolded(column, alias))) {
+    if (sourceColumns.some(column => effectiveOutputName(column) === effectiveOutputName(alias))) {
       throw new SecurityError(`Date bucket alias "${alias}" must not reuse a column name of table "${plan.source.tableName}".`)
     }
     if (plan.selections.some(selection => selectionMayOutputName(plan, selection, alias, connectionName, { raw: true, wildcard: true }))) {

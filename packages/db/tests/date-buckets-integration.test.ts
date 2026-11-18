@@ -1917,6 +1917,30 @@ describe.runIf(postgresIntegration)('grouped date bucket cursors on postgres out
       .cursorPaginate(1)).rejects.toThrow(SecurityError)
   })
 
+  it('rejects a date bucket alias that PostgreSQL would confuse with a longer source column', async () => {
+    useAppTimezone('UTC')
+    const { db } = await openDatabase('postgres')
+    const alias = 'keeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+    const name = `bucket_trunc_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await createSchemaService(db).dropTable(name)
+    })
+    await db.executeCompiled({ sql: `CREATE TABLE "${name}" (id integer PRIMARY KEY, "${alias}x" integer, at timestamp)`, source: 'test' })
+    const truncated = defineGeneratedTable(name, { id: column.id(), [`${alias}x`]: column.integer(), at: column.datetime() })
+
+    await expect(DB.table(truncated).selectDate('day', 'at', { as: alias, timeZone: 'UTC' }).get()).rejects.toThrow(SecurityError)
+  })
+
+  it('buckets a timestamp past the year boundary when two offsets bring it back', async () => {
+    useAppTimezone('Pacific/Kiritimati')
+    const events = await createEventsTable('postgres')
+    await DB.connection().executeCompiled({ sql: `INSERT INTO "${events.tableName}" (tenant_id, occurred_at) VALUES (14, '10000-01-02 00:30:00')`, source: 'test' })
+
+    const hour = await DB.table(events).where('tenant_id', 14).selectDate('hour', 'occurred_at', { as: 'hour', timeZone: 'Etc/GMT+12' }).value('hour')
+
+    expect(hour).toBe('9999-12-31 22:00')
+  })
+
   it('orders by a key that differs from an output alias only in case', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable('postgres')
