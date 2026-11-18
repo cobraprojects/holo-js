@@ -4,12 +4,12 @@ import { ValidationException, field, schema, validate } from '@holo-js/validatio
 import { InvalidCursorException } from '../../db/src/core/errors'
 import { adapterSvelteKitInternals, createSvelteKitHoloHooks } from '../src'
 
-function createEvent(value: string, accept = 'application/json', path = '/login', options: { readonly method?: string, readonly routeId?: string } = {}) {
+function createEvent(value: string, accept = 'application/json', path = '/login', options: { readonly method?: string, readonly routeId?: string, readonly params?: Record<string, string> } = {}) {
   const flashed = new Map<string, string>()
   const method = options.method ?? 'POST'
   const event: Partial<RequestEvent> = {
     url: new URL(`https://app.test${path}`),
-    ...(options.routeId === undefined ? {} : { route: { id: options.routeId } as RequestEvent['route'] }),
+    ...(options.routeId === undefined ? {} : { route: { id: options.routeId } as RequestEvent['route'], params: options.params ?? {} }),
     request: new Request(`https://app.test${path}`, {
       method,
       headers: { accept },
@@ -121,14 +121,14 @@ describe('SvelteKit validation hooks', () => {
   })
 
   it.each([
-    ['an API route under the base path', 'GET', 'application/json', '/dashboard/api/posts?after=abc', '/api/posts'],
-    ['a JSON endpoint outside /api/', 'GET', 'application/json', '/posts.json?after=abc', '/posts.json'],
-    ['a non-form method endpoint', 'DELETE', 'text/html', '/dashboard/posts/1?after=abc', '/posts/[id]'],
-    ['an API route behind an omitted optional parameter', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[[lang]]/api/posts'],
-    ['a catch-all route serving /api/ without a base path', 'GET', 'text/html', '/api/posts?after=abc', '/[...path]'],
-  ])('answers an invalid cursor on %s with 422 JSON and no flash cookie', async (_label, method, accept, path, routeId) => {
+    ['an API route under the base path', 'GET', 'application/json', '/dashboard/api/posts?after=abc', '/api/posts', {}],
+    ['a JSON endpoint outside /api/', 'GET', 'application/json', '/posts.json?after=abc', '/posts.json', {}],
+    ['a non-form method endpoint', 'DELETE', 'text/html', '/dashboard/posts/1?after=abc', '/posts/[id]', { id: '1' }],
+    ['an API route behind an omitted optional parameter', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[[lang]]/api/posts', {}],
+    ['a catch-all route serving api/ under the base path', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[...path]', { path: 'api/posts' }],
+  ])('answers an invalid cursor on %s with 422 JSON and no flash cookie', async (_label, method, accept, path, routeId, params) => {
     (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
-    const { event, flashed } = createEvent('ignored', accept, path, { method, routeId })
+    const { event, flashed } = createEvent('ignored', accept, path, { method, routeId, params })
     const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
     const response = await hooks.handle({ event, resolve: async (event) => {
       await hooks.handleError({ event, kind: 'unknown', error: new InvalidCursorException('after', 'Reload the feed.') })

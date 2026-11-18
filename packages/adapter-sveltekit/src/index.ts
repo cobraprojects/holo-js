@@ -74,11 +74,21 @@ function toSvelteKitErrorStatus(status: number): SvelteKitErrorStatus {
   return status >= 400 && status <= 599 ? status as SvelteKitErrorStatus : 500
 }
 
-const NON_PATH_ROUTE_SEGMENT = /^(\(.+\)|\[\[.+\]\])$/
+const ROUTE_GROUP_SEGMENT = /^\(.+\)$/
+const ROUTE_PARAMETER = /\[{1,2}(?:\.\.\.)?([^\]=]+)(?:=[^\]]+)?\]{1,2}/g
+
+function routePath(event: SvelteKitRequestEvent): string | undefined {
+  const routeId = event.route?.id
+  if (typeof routeId !== 'string') return undefined
+  return routeId.split('/')
+    .filter(segment => !ROUTE_GROUP_SEGMENT.test(segment))
+    .map(segment => segment.replace(ROUTE_PARAMETER, (_parameter, name: string) => event.params?.[name] ?? ''))
+    .join('/')
+}
 
 function isApiRoute(event: SvelteKitRequestEvent): boolean {
-  const firstRouteSegment = event.route?.id?.split('/').find(segment => segment !== '' && !NON_PATH_ROUTE_SEGMENT.test(segment))
-  return firstRouteSegment === 'api' || event.url?.pathname.startsWith('/api/') === true
+  const path = routePath(event) ?? event.url?.pathname ?? ''
+  return path.split('/').find(segment => segment !== '') === 'api'
 }
 
 function acceptsJson(event: SvelteKitRequestEvent): boolean {
