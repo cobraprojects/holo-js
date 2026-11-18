@@ -81,9 +81,9 @@ type IdentifierMatch = (left: string, right: string) => boolean
 
 const sameIdentifierExactly: IdentifierMatch = (left, right) => left === right
 
-function isVisibleAs(qualifier: string, { tableName, alias }: VisibleTable): boolean {
-  if (alias !== undefined) return qualifier === alias
-  return tableName !== undefined && (qualifier === tableName || qualifier === splitTablePath(tableName).table)
+function isVisibleAs(qualifier: string, { tableName, alias }: VisibleTable, matches: IdentifierMatch = sameIdentifierExactly): boolean {
+  if (alias !== undefined) return matches(qualifier, alias)
+  return tableName !== undefined && (matches(qualifier, tableName) || matches(qualifier, splitTablePath(tableName).table))
 }
 
 function matchingColumnDefinition(table: TableDefinition | undefined, name: string, matches: IdentifierMatch): AnyColumnDefinition | undefined {
@@ -135,8 +135,8 @@ function subqueryOutputNames(plan: SelectQueryPlan, connectionName: string | und
   return names.every((group): group is readonly string[] => group !== undefined) ? names.flat() : undefined
 }
 
-function boundTables(visible: readonly VisibleTable[], qualifier: string | undefined): readonly VisibleTable[] {
-  return qualifier === undefined ? visible : visible.filter(table => isVisibleAs(qualifier, table))
+function boundTables(visible: readonly VisibleTable[], qualifier: string | undefined, matches: IdentifierMatch = sameIdentifierExactly): readonly VisibleTable[] {
+  return qualifier === undefined ? visible : visible.filter(table => isVisibleAs(qualifier, table, matches))
 }
 
 function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectionName: string | undefined, foldsColumnNames: boolean): AnyColumnDefinition | undefined {
@@ -165,12 +165,13 @@ export function selectionMayOutputName(
   name: string,
   connectionName: string | undefined,
   unknown: { readonly raw: boolean, readonly wildcard: boolean },
+  foldsIdentifiers: boolean,
 ): boolean {
   if (selection.kind === 'raw') return unknown.raw
   if (selection.kind !== 'column' || selection.alias) return false
   const wildcardTable = selection.column === '*' ? undefined : readAllColumnsSelectionTable(selection.column)
   if (selection.column !== '*' && wildcardTable === undefined) return false
-  const tables = boundTables(visibleTables(plan, connectionName), wildcardTable)
+  const tables = boundTables(visibleTables(plan, connectionName), wildcardTable, foldsIdentifiers ? sameIdentifierFolded : sameIdentifierExactly)
   if (tables.length === 0) return unknown.wildcard
   return tables
     .some((table) => {
@@ -242,13 +243,13 @@ export function assertDateBucketSpelling(plan: SelectQueryPlan, dateBuckets: Rea
   }
 }
 
-export function assertDateBucketOutputsUnshadowed(plan: SelectQueryPlan, connectionName: string | undefined): void {
+export function assertDateBucketOutputsUnshadowed(plan: SelectQueryPlan, connectionName: string | undefined, foldsIdentifiers: boolean): void {
   const sourceColumns = visibleTables(plan, connectionName)[0]!.columns() ?? []
   for (const alias of dateBucketSelections(plan).keys()) {
     if (sourceColumns.some(column => effectiveOutputName(column) === effectiveOutputName(alias))) {
       throw new SecurityError(`Date bucket alias "${alias}" must not reuse a column name of table "${plan.source.tableName}".`)
     }
-    if (plan.selections.some(selection => selectionMayOutputName(plan, selection, alias, connectionName, { raw: true, wildcard: true }))) {
+    if (plan.selections.some(selection => selectionMayOutputName(plan, selection, alias, connectionName, { raw: true, wildcard: true }, foldsIdentifiers))) {
       throw new SecurityError(`Date bucket alias "${alias}" must not be reused by a wildcard or raw selection, and Holo can't verify the column names of raw selections or of wildcards of tables missing from the generated schema.`)
     }
   }

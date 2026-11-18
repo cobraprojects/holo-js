@@ -1508,6 +1508,27 @@ describe.each(integrationDrivers(['postgres', 'mysql'] as const))('date bucket a
   })
 })
 
+describe('date buckets next to sqlite wildcards of case-variant aliases', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('checks the wildcard of every alias SQLite matches regardless of case', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('sqlite')
+    const plain = await createKeyedTable('bucket_plain', 'amount', [{ id: 1, value: 1 }])
+    const tagged = await createKeyedTable('bucket_tagged', 'bucket', [{ id: 1, value: 1 }])
+    registerGeneratedTables({ events, plain, tagged })
+
+    await expect(DB.table(events.tableName)
+      .join(`${plain.tableName} as tags`, 'tags.id', '=', `${events.tableName}.id`)
+      .join(`${tagged.tableName} as Tags`, 'Tags.id', '=', `${events.tableName}.id`)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
+      .addSelect('tags.*')
+      .get()).rejects.toThrow(SecurityError)
+  })
+})
+
 describe.runIf(mysqlIntegration)('date buckets in mysql mutation subqueries', () => {
   afterEach(() => {
     resetDB()

@@ -3500,7 +3500,7 @@ export class TableQueryBuilder<
   private assertDateBucketCursorKey(branch: SelectQueryPlan, alias: string): void {
     if (!dateBucketSelections(branch).has(alias)) return
     const connectionName = this.connection.getConnectionName()
-    if (branch.selections.some(selection => selectionMayOutputName(branch, selection, alias, connectionName, { raw: true, wildcard: true }))) {
+    if (branch.selections.some(selection => selectionMayOutputName(branch, selection, alias, connectionName, { raw: true, wildcard: true }, this.groupedKeyContext().foldsColumnNames))) {
       throw new SecurityError(`Cursor pagination by the date bucket "${alias}" needs every other selected column to have a different name, so select it under a name no raw or wildcard selection can produce.`)
     }
   }
@@ -3517,7 +3517,7 @@ export class TableQueryBuilder<
       ...orders.map(order => effectiveOutputName(order.column)),
     ])
     const isTaken = (alias: string) => taken.has(effectiveOutputName(alias))
-      || this.plan.selections.some(selection => selectionMayOutputName(this.plan, selection, alias, connectionName, { raw: false, wildcard: false }))
+      || this.plan.selections.some(selection => selectionMayOutputName(this.plan, selection, alias, connectionName, { raw: false, wildcard: false }, this.groupedKeyContext().foldsColumnNames))
     const hidden = orders.map((order, index) => {
       if (dateBuckets.has(order.column)) return undefined
       let attempt = 0
