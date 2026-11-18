@@ -83,7 +83,7 @@ it('starts replacement queue workers after preparation finishes without watching
 })
 
 function createFakeWatcher(): ReturnType<typeof watch> {
-  return { close() {} } as unknown as ReturnType<typeof watch>
+  return Object.assign(new EventEmitter(), { close() {} }) as unknown as ReturnType<typeof watch>
 }
 
 async function createQueueListenProject(): Promise<string> {
@@ -313,6 +313,48 @@ it('does not relaunch a worker that exits cleanly after a restart signal written
   } finally {
     vi.useRealTimers()
     if (firstWorker && firstWorker.exitCode === null && firstWorker.signalCode === null) firstWorker.kill('SIGKILL')
+    await rm(projectRoot, { recursive: true, force: true })
+  }
+})
+
+it('keeps listening when the platform watcher reports an error', async () => {
+  const projectRoot = await createQueueListenProject()
+  try {
+    let notifyChange = () => {}
+    const handles: EventEmitter[] = []
+    const createWatcher: NonNullable<Parameters<typeof runQueueListen>[4]> = (_path, _options, listener) => {
+      notifyChange = () => listener('change', 'server/jobs/updated.ts')
+      const handle = createFakeWatcher()
+      handles.push(handle as unknown as EventEmitter)
+      return handle
+    }
+    const workers: ReturnType<typeof spawn>[] = []
+    let resolveFirstWorker = () => {}
+    const firstWorkerStarted = new Promise<void>(resolve => { resolveFirstWorker = resolve })
+    const spawnWorker: NonNullable<Parameters<typeof runQueueListen>[3]> = (command) => {
+      if (workers.length > 0) return spawn(command, ['-e', 'process.exit(0)'], { stdio: ['pipe', 'pipe', 'pipe'] })
+      const worker = spawn(command, ['-e', "process.on('SIGTERM', () => process.exit(0)); process.stdout.write('ready'); setInterval(() => {}, 1000)"], { stdio: ['pipe', 'pipe', 'pipe'] })
+      workers.push(worker)
+      resolveFirstWorker()
+      return worker
+    }
+    const errors: string[] = []
+    const stderr = Object.assign(Object.create(process.stderr) as NodeJS.WriteStream, { write: (chunk: string) => errors.push(chunk) })
+    const listening = runQueueListen({ cwd: projectRoot, stdin: process.stdin, stdout: process.stdout, stderr }, projectRoot, {}, spawnWorker, createWatcher, async () => {})
+
+    await firstWorkerStarted
+    const [firstWorker] = workers
+    if (!firstWorker?.stdout) throw new Error('first worker did not start')
+    await once(firstWorker.stdout, 'data')
+    const fail = (code: string) => Object.assign(new Error(`${code}: scandir 'server/jobs/tmp'`), { code })
+    for (const handle of handles) expect(() => handle.emit('error', fail('ENOENT'))).not.toThrow()
+    expect(errors).toEqual([])
+    expect(() => handles[0]!.emit('error', fail('EACCES'))).not.toThrow()
+    expect(errors).toEqual([expect.stringContaining('EACCES')])
+    notifyChange()
+
+    await expect(listening).resolves.toBeUndefined()
+  } finally {
     await rm(projectRoot, { recursive: true, force: true })
   }
 })

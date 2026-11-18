@@ -543,6 +543,10 @@ export async function startDiscoveryWatch({
       if (deferredEvents) defer(deferredEvents, path, eventType)
       else dispatch(path, eventType)
     })
+    handle.on('error', (error) => {
+      if (closed || signal.aborted || isIgnorableWatchError(error)) return
+      writeWarning(`Holo could not keep watching "${relative(projectRoot, root) || '.'}" for changes: ${error.message}\n`)
+    })
     if (closed || signal.aborted) handle.close()
     else handles.push(handle)
   }

@@ -620,6 +620,11 @@ export async function runQueueListen(
         })
     }
 
+    const reportWatchError = (error: Error): void => {
+      if (session.signal.aborted || isIgnorableWatchError(error)) return
+      io.stderr.write(`Holo could not keep watching for queue changes: ${error.message}\n`)
+    }
+
     closeWatchers = (() => {
       try {
         const watcher = createWatcher(projectRoot, { recursive: true }, (_eventType, fileName) => {
@@ -629,6 +634,7 @@ export async function runQueueListen(
 
           rerunPrepare()
         })
+        watcher.on('error', reportWatchError)
 
         return () => watcher.close()
       } catch (error) {
@@ -649,7 +655,7 @@ export async function runQueueListen(
           if (session.signal.aborted) return
           for (const watchRoot of watchRoots) {
             try {
-              watchers.push(createWatcher(watchRoot, { recursive: false }, (_eventType, fileName) => {
+              const watcher = createWatcher(watchRoot, { recursive: false }, (_eventType, fileName) => {
                 if (session.signal.aborted || typeof fileName !== 'string') {
                   return
                 }
@@ -660,7 +666,9 @@ export async function runQueueListen(
                 }
 
                 rerunPrepare()
-              }))
+              })
+              watcher.on('error', reportWatchError)
+              watchers.push(watcher)
             } catch (watchError) {
               if (!isIgnorableWatchError(watchError)) {
                 throw watchError
