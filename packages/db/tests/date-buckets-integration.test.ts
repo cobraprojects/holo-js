@@ -1527,6 +1527,22 @@ describe('date buckets next to sqlite wildcards of case-variant aliases', () => 
       .addSelect('tags.*')
       .get()).rejects.toThrow(SecurityError)
   })
+  it('checks a joined subquery whose wildcard SQLite matches regardless of case', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('sqlite')
+    const plain = await createKeyedTable('bucket_plain', 'amount', [{ id: 1, value: 1 }])
+    const tagged = await createKeyedTable('bucket_tagged', 'bucket', [{ id: 1, value: 42 }])
+    registerGeneratedTables({ events, plain, tagged })
+    const joined = DB.table(`${plain.tableName} as tags`)
+      .join(`${tagged.tableName} as Tags`, 'Tags.id', '=', 'tags.id')
+      .select('tags.*')
+
+    await expect(DB.table(events.tableName)
+      .joinSub(joined, 'j', 'j.id', '=', `${events.tableName}.id`)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
+      .addSelect('j.*')
+      .get()).rejects.toThrow(SecurityError)
+  })
 })
 
 describe.runIf(mysqlIntegration)('date buckets in mysql mutation subqueries', () => {

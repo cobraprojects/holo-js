@@ -92,7 +92,7 @@ function matchingColumnDefinition(table: TableDefinition | undefined, name: stri
   return key === undefined ? undefined : table.columns[key]
 }
 
-function visibleTables(plan: SelectQueryPlan, connectionName: string | undefined): readonly VisibleTable[] {
+function visibleTables(plan: SelectQueryPlan, connectionName: string | undefined, wildcardMatches: IdentifierMatch = sameIdentifierExactly): readonly VisibleTable[] {
   const sourceDefinition = plan.source.table ?? generatedDefinition(plan.source.tableName, connectionName)
   return [
     {
@@ -108,28 +108,28 @@ function visibleTables(plan: SelectQueryPlan, connectionName: string | undefined
         alias: join.alias,
         definition,
         columns: () => join.subquery
-          ? subqueryOutputNames(join.subquery, connectionName)
+          ? subqueryOutputNames(join.subquery, connectionName, wildcardMatches)
           : definition ? Object.keys(definition.columns) : connectionName === undefined ? undefined : knownJoinedColumns(join, connectionName),
       }
     }),
   ]
 }
 
-function wildcardOutputNames(plan: SelectQueryPlan, column: string, connectionName: string | undefined): readonly string[] | undefined {
+function wildcardOutputNames(plan: SelectQueryPlan, column: string, connectionName: string | undefined, matches: IdentifierMatch): readonly string[] | undefined {
   const qualifier = column === '*' ? undefined : readAllColumnsSelectionTable(column)
-  const tables = boundTables(visibleTables(plan, connectionName), qualifier)
+  const tables = boundTables(visibleTables(plan, connectionName, matches), qualifier, matches)
   if (tables.length === 0) return undefined
   const columns = tables.map(table => table.columns())
   return columns.every((names): names is readonly string[] => names !== undefined) ? columns.flat() : undefined
 }
 
-function subqueryOutputNames(plan: SelectQueryPlan, connectionName: string | undefined): readonly string[] | undefined {
+function subqueryOutputNames(plan: SelectQueryPlan, connectionName: string | undefined, matches: IdentifierMatch): readonly string[] | undefined {
   const selections: readonly SelectQueryPlan['selections'][number][] = plan.selections.length === 0 ? [{ kind: 'column', column: '*' }] : plan.selections
   const names = selections.map((selection): readonly string[] | undefined => {
     if (selection.kind === 'raw') return undefined
     if (selection.kind !== 'column') return [selection.alias]
     if (selection.alias) return [selection.alias]
-    if (selection.column === '*' || readAllColumnsSelectionTable(selection.column) !== undefined) return wildcardOutputNames(plan, selection.column, connectionName)
+    if (selection.column === '*' || readAllColumnsSelectionTable(selection.column) !== undefined) return wildcardOutputNames(plan, selection.column, connectionName, matches)
     return [selection.column.slice(selection.column.lastIndexOf('.') + 1)]
   })
   return names.every((group): group is readonly string[] => group !== undefined) ? names.flat() : undefined
@@ -171,7 +171,8 @@ export function selectionMayOutputName(
   if (selection.kind !== 'column' || selection.alias) return false
   const wildcardTable = selection.column === '*' ? undefined : readAllColumnsSelectionTable(selection.column)
   if (selection.column !== '*' && wildcardTable === undefined) return false
-  const tables = boundTables(visibleTables(plan, connectionName), wildcardTable, foldsIdentifiers ? sameIdentifierFolded : sameIdentifierExactly)
+  const matches = foldsIdentifiers ? sameIdentifierFolded : sameIdentifierExactly
+  const tables = boundTables(visibleTables(plan, connectionName, matches), wildcardTable, matches)
   if (tables.length === 0) return unknown.wildcard
   return tables
     .some((table) => {
