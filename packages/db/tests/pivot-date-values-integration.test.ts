@@ -233,6 +233,30 @@ describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as S
     expect(await DB.table(ownerTags.tableName).unsafeSelect('"expires_at" AS "stored"', []).first()).toEqual({ stored: '2026-01-01T10:00:00Z' })
   })
 
+  it('matches a key stored as date-only text', async () => {
+    const { db, names, owner, ownerSlots } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") VALUES (1, '2026-01-01', 'old')`))
+
+    expect(await owner.detach('slots', new Date('2026-01-01T00:00:00Z'))).toBe(1)
+    expect(await DB.table(ownerSlots).count()).toBe(0)
+  })
+
+  it('keeps zoned keys of an unregistered pivot apart when they differ below a millisecond', async () => {
+    const { names, ownerSlots } = await openPivots(driver)
+    clearGeneratedTables()
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
+    const slots = defineGeneratedTable(names.slots, { starts_at: column.datetime().primaryKey() })
+    registerGeneratedTables({ owners, slots })
+    const Slot = defineModel(slots, { timestamps: false })
+    const Untyped = defineModel(owners, { timestamps: false, relations: { slots: belongsToMany(() => Slot, names.ownerSlots, 'owner_id', 'starts_at', 'id', 'starts_at') } })
+    const owner = await Untyped.findOrFail(1)
+
+    await owner.sync('slots', ['2026-01-01T10:00:00.000001Z', '2026-01-01T10:00:00.000002Z'] as never[])
+    expect(await DB.table(ownerSlots.tableName).count()).toBe(2)
+    expect(await owner.detach('slots', '2026-01-01T10:00:00.000001Z' as never)).toBe(1)
+    expect(await DB.table(ownerSlots.tableName).count()).toBe(1)
+  })
+
   it('matches a key stored as offset-free text with a zero fraction', async () => {
     const { db, names, owner, ownerSlots } = await openPivots(driver)
     await db.unsafeExecute(unsafeSql(`INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") VALUES (1, '2026-01-01 10:00:00.000', 'old')`))
