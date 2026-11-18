@@ -237,6 +237,24 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     expect((await pageThrough(query)).map(row => Number(row.amount))).toEqual(amounts.map(Number))
   })
 
+  it.skipIf(driver === 'sqlite')('pages a union of precise decimal aggregates forward and back', async () => {
+    const { schema } = await openDatabase(driver)
+    const name = await createTable(schema, 'union_sums', ['grp'])
+    await schema.table(name, table => { table.decimal('amount', 30, 20) })
+    const sums = registered(defineGeneratedTable(name, { grp: column.integer(), amount: column.decimal(undefined, 30, 20) }))
+    await DB.table(sums).insert([
+      { grp: 1, amount: '0.10000000000000000003' },
+      { grp: 2, amount: '0.10000000000000000001' },
+      { grp: 3, amount: '0.10000000000000000002' },
+    ])
+    const branch = (groups: readonly number[]) => DB.table(sums.tableName).select('grp').addSelectSum('total', 'amount').whereIn('grp', groups).groupBy('grp')
+    const query = branch([1]).unionAll(branch([2, 3])).orderBy('total')
+    expect((await pageThrough(query)).map(row => Number(row.grp))).toEqual([2, 3, 1])
+    const second = await query.cursorPaginate(1, (await query.cursorPaginate(1)).nextCursor)
+    const last = await query.cursorPaginate(1, second.nextCursor)
+    expect((await query.cursorPaginate(1, last.prevCursor)).data.map(row => Number(row.grp))).toEqual([3])
+  })
+
   it.skipIf(driver === 'postgres')('pages a union of datetimes and date-like text forward and back', async () => {
     const { schema } = await openDatabase(driver)
     const name = await createTable(schema, 'union_moments', ['grp'], ['label'])

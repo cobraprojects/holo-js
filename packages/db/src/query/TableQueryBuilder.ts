@@ -2179,14 +2179,19 @@ export class TableQueryBuilder<
 
   private convertRows<TRow extends Record<string, unknown>>(reads: ResultReads | false, rows: TRow[]): TRow[] {
     if (!reads) return rows
+    const aggregated = this.convertNumericAggregates(rows)
     const plan = withResolvedDefinitions(this.plan, this.connection.getConnectionName())
     const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan, reads)
-    if (convertedColumns.size === 0) return rows
-    return rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
+    if (convertedColumns.size === 0) return aggregated
+    return aggregated.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
   }
 
   private async queryRows<TRow extends Record<string, unknown>>(statement: CompiledStatement): Promise<TRow[]> {
     const { rows } = await this.connection.queryCompiled<TRow>(statement)
+    return rows
+  }
+
+  private convertNumericAggregates<TRow extends Record<string, unknown>>(rows: TRow[]): TRow[] {
     const plan = withResolvedDefinitions(this.plan, this.connection.getConnectionName())
     const aggregates = plan.selections.filter((selection): selection is QueryAggregateSelection => selection.kind === 'aggregate' && readsAsNumericAggregate(plan, selection))
     if (aggregates.length === 0) return rows
