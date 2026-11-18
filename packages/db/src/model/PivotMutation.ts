@@ -33,17 +33,10 @@ type PivotQuery = TableQueryBuilder<string | TableDefinition>
 
 const bindingBudget = 900
 const storedKeyTextAlias = 'holo_stored_key_text'
-const FRACTION_DIGITS = /\d{2}:\d{2}:\d{2}\.(\d+)/
 const CALENDAR_DATE = /^\d{4,}-\d{2}-\d{2}$/
-const MAX_FRACTION_DIGITS = 6
 
 function bindableId(id: unknown): unknown {
   return ArrayBuffer.isView(id) && !(id instanceof Uint8Array) ? new Uint8Array(id.buffer, id.byteOffset, id.byteLength) : id
-}
-
-function subMillisecondDigits(value: unknown): string {
-  const fraction = typeof value === 'string' ? FRACTION_DIGITS.exec(value)?.[1] ?? '' : ''
-  return fraction.slice(3).replace(/0+$/, '')
 }
 
 function isScalarObjectId(id: unknown): id is Date | ArrayBufferView {
@@ -74,9 +67,8 @@ export class PivotMutation {
       const entries = this.normalize(ids)
       if (entries.length === 0) return 0
       if (!this.dateKeyColumn()) return this.delete(connection, entries.map(entry => entry.id))
-      const current = this.groupByKey(await this.read(connection))
-      const keys = [...new Set(entries.map(entry => this.incomingKeyIdentity(entry.id)))]
-        .flatMap(identity => this.storedKeys(current.get(identity) ?? []))
+      const matches = await this.match(connection, entries, false)
+      const keys = [...new Set(entries.flatMap(entry => this.storedKeys(matches.rowsFor(entry) ?? [])))]
       return keys.length === 0 ? 0 : this.delete(connection, keys)
     })
   }
@@ -84,14 +76,15 @@ export class PivotMutation {
   async update(id: unknown, attributes: Attributes): Promise<number> {
     this.validate(attributes)
     if (Object.keys(attributes).length === 0) return 0
-    const key = bindableId(id)
-    const rows = await this.read(this.connection, [key])
-    const existing = this.dateKeyColumn() ? this.groupByKey(rows).get(this.incomingKeyIdentity(key)) ?? [] : rows.slice(0, 1)
+    const entry = { id: bindableId(id), attributes }
+    const existing = this.dateKeyColumn()
+      ? (await this.match(this.connection, [entry], false)).rowsFor(entry) ?? []
+      : (await this.read(this.connection, [entry.id])).slice(0, 1)
     const update = existing.length === 0 ? undefined : this.updateFor(existing, attributes)
     if (!update) return 0
     const values = this.timestampAttributes(attributes, false)
     this.assertColumnsWritable(Object.keys(values))
-    return await this.updateRows(this.connection, this.targetKeys(existing, key), values, update) ? 1 : 0
+    return await this.updateRows(this.connection, this.targetKeys(existing, entry.id), values, update) ? 1 : 0
   }
 
   private async mutate(kind: 'attach' | 'sync' | 'toggle', ids: unknown, attributes: Attributes = {}, detachMissing = false): Promise<Result> {
@@ -103,10 +96,10 @@ export class PivotMutation {
     if (kind !== 'sync' && entries.length === 0) return result
 
     await this.connection.transaction(async connection => {
-      const current = this.groupByKey(await this.read(connection, kind === 'sync' ? undefined : entries.map(entry => entry.id)))
+      const matches = await this.match(connection, entries, kind === 'sync')
       const actions: Action[] = []
       for (const entry of entries) {
-        const existing = current.get(this.incomingKeyIdentity(entry.id))
+        const existing = matches.rowsFor(entry)
         if (kind === 'toggle' && existing) {
           actions.push({ kind: 'delete', keys: this.targetKeys(existing, entry.id) })
           result.detached.push(entry.id)
@@ -119,12 +112,13 @@ export class PivotMutation {
         }
       }
       if (detachMissing) {
-        const desired = new Set(entries.map(entry => this.incomingKeyIdentity(entry.id)))
-        for (const [identity, rows] of current) {
-          const keys = this.storedKeys(rows)
-          if (desired.has(identity) || keys.length === 0) continue
+        const kept = new Set(entries.flatMap(entry => matches.rowsFor(entry) ?? []))
+        for (const rows of matches.groups()) {
+          const missing = rows.filter(row => !kept.has(row))
+          const keys = this.storedKeys(missing)
+          if (keys.length === 0) continue
           actions.push({ kind: 'delete', keys })
-          result.detached.push(...rows.map(row => this.readKey(row[this.context.relatedColumn])))
+          result.detached.push(...missing.map(row => this.readKey(row[this.context.relatedColumn])))
         }
       }
       await this.execute(connection, actions)
@@ -223,37 +217,16 @@ export class PivotMutation {
   }
 
   private storedKey(row: Attributes): unknown {
-    return this.readsStoredKeyText() ? row[storedKeyTextAlias] : row[this.context.relatedColumn]
+    return this.comparesKeysInDatabase() ? row[storedKeyTextAlias] : row[this.context.relatedColumn]
   }
 
   private storedKeyIdentity(row: Attributes): unknown {
-    const value = row[this.context.relatedColumn]
-    if (this.dateKeyColumn()?.kind === 'date') return this.calendarDayIdentity(value)
-    return this.readsStoredKeyText() ? this.instantIdentity(value, row[storedKeyTextAlias]) : this.incomingKeyIdentity(value)
+    return this.incomingKeyIdentity(this.storedKey(row))
   }
 
   private incomingKeyIdentity(value: unknown): unknown {
-    if (this.dateKeyColumn()?.kind === 'date') return this.calendarDayIdentity(this.writeKey(value))
-    const written = this.writeKey(value)
-    if (!this.readsStoredKeyText()) return this.keyIdentity(this.readKey(written))
-    const stored = this.storedPrecision(written)
-    return this.instantIdentity(stored, stored)
-  }
-
-  private storedPrecision(written: unknown): unknown {
-    const match = typeof written === 'string' ? FRACTION_DIGITS.exec(written) : null
-    const fraction = match?.[1] ?? ''
-    if (fraction.length <= MAX_FRACTION_DIGITS) return written
-    const kept = fraction.slice(0, MAX_FRACTION_DIGITS)
-    const next = Number(fraction[MAX_FRACTION_DIGITS])
-    const rest = fraction.slice(MAX_FRACTION_DIGITS + 1)
-    const roundsUp = next > 5 || (next === 5 && (/[1-9]/.test(rest) || Number(kept.at(-1)) % 2 === 1))
-    const micro = Number(kept) + (roundsUp ? 1 : 0)
-    const text = written as string
-    const at = text.indexOf(`.${fraction}`)
-    if (micro < 10 ** MAX_FRACTION_DIGITS) return `${text.slice(0, at)}.${String(micro).padStart(MAX_FRACTION_DIGITS, '0')}${text.slice(at + fraction.length + 1)}`
-    const whole = this.readKey(`${text.slice(0, at)}${text.slice(at + fraction.length + 1)}`)
-    return whole instanceof Date ? new Date(whole.getTime() + 1000) : written
+    if (this.storesSQLiteDateKeys() && this.dateKeyColumn()?.kind === 'date') return this.calendarDayIdentity(this.writeKey(value))
+    return this.keyIdentity(this.readKey(this.writeKey(value)))
   }
 
   private calendarDayIdentity(value: unknown): unknown {
@@ -264,12 +237,32 @@ export class PivotMutation {
       : this.keyIdentity(value)
   }
 
-  private instantIdentity(value: unknown, text: unknown): unknown {
-    return `${String(this.keyIdentity(this.readKey(value)))}|${subMillisecondDigits(text)}`
+  private storesSQLiteDateKeys(): boolean {
+    return this.context.dialect === 'sqlite' && this.dateKeyColumn() !== undefined
   }
 
-  private readsStoredKeyText(): boolean {
+  private comparesKeysInDatabase(): boolean {
     return this.context.dialect !== 'sqlite' && this.dateKeyColumn() !== undefined
+  }
+
+  private async match(connection: DatabaseContext, entries: readonly Entry[], readAll: boolean): Promise<{ rowsFor(entry: Entry): Attributes[] | undefined, groups(): Iterable<Attributes[]> }> {
+    if (this.comparesKeysInDatabase()) {
+      const byEntry = new Map<Entry, Attributes[]>()
+      for (const entry of entries) byEntry.set(entry, await this.readWithStoredText(this.query(connection).where(this.context.relatedColumn, entry.id)))
+      const all = readAll ? await this.readWithStoredText(this.query(connection)) : []
+      const sameRow = (row: Attributes) => all.find(candidate => candidate[storedKeyTextAlias] === row[storedKeyTextAlias]) ?? row
+      for (const [entry, rows] of byEntry) byEntry.set(entry, rows.map(sameRow))
+      return {
+        rowsFor: entry => (byEntry.get(entry)?.length ?? 0) > 0 ? byEntry.get(entry) : undefined,
+        groups: () => [all],
+      }
+    }
+    const current = this.groupByKey(await this.read(connection, readAll ? undefined : entries.map(entry => entry.id)))
+    return { rowsFor: entry => current.get(this.incomingKeyIdentity(entry.id)), groups: () => current.values() }
+  }
+
+  private readWithStoredText(query: PivotQuery): Promise<Attributes[]> {
+    return selectStoredText(query.select(`${this.tableName()}.*` as never) as PivotQuery, this.context.relatedColumn, storedKeyTextAlias).get<Attributes>()
   }
 
   private writeKey(value: unknown): unknown {
@@ -369,10 +362,7 @@ export class PivotMutation {
   }
 
   private async read(connection: DatabaseContext, ids?: readonly unknown[]): Promise<Attributes[]> {
-    if (this.dateKeyColumn()) return this.readsStoredKeyText()
-      ? selectStoredText(this.query(connection).select(`${this.tableName()}.*` as never) as PivotQuery, this.context.relatedColumn, storedKeyTextAlias).get<Attributes>()
-      : this.query(connection).get<Attributes>()
-    if (!ids) return this.query(connection).get<Attributes>()
+    if (!ids || this.storesSQLiteDateKeys()) return this.query(connection).get<Attributes>()
     const rows: Attributes[] = []
     const unique = [...new Set(ids)]
     for (let offset = 0; offset < unique.length; offset += this.idBatchSize()) {

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { DB, belongsToMany, clearGeneratedTables, column, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB, unsafeSql } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
@@ -144,6 +145,31 @@ describe.each(integrationDrivers(['postgres']))('pivot keys a microsecond apart 
     await owner.attach('slots', key)
     await owner.attach('slots', key)
     expect(await DB.table(ownerSlots).count()).toBe(1)
+    expect(await owner.detach('slots', key)).toBe(1)
+    expect(await DB.table(ownerSlots).count()).toBe(0)
+  })
+
+  it.each([
+    ['rounded past six digits', '2026-01-01 10:00:00.0001265'],
+    ['rounded into the next second', '2026-01-01 00:59:59.9999995'],
+    ['with an offset the column ignores', '2026-01-01 10:00:00.000002+02:00'],
+  ])('attaches once and detaches a key %s', async (_case, key) => {
+    const { owner, ownerSlots } = await openPivots(driver)
+
+    await owner.attach('slots', key as never)
+    await owner.attach('slots', key as never)
+    expect(await DB.table(ownerSlots).count()).toBe(1)
+    expect(await owner.detach('slots', key as never)).toBe(1)
+    expect(await DB.table(ownerSlots).count()).toBe(0)
+  })
+
+  it('detaches a key that rounds into a repeated hour of app.timezone', async () => {
+    configureConfigRuntime({ app: { timezone: 'America/New_York' } } as never)
+    onTestFinished(() => resetConfigRuntime())
+    const { owner, ownerSlots } = await openPivots(driver)
+    const key = '2026-11-01 00:59:59.9999995' as never
+
+    await owner.attach('slots', key)
     expect(await owner.detach('slots', key)).toBe(1)
     expect(await DB.table(ownerSlots).count()).toBe(0)
   })
