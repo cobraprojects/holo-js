@@ -537,7 +537,7 @@ export class TableQueryBuilder<
   addUnsafeSelect(
     sql: string,
     bindings: readonly unknown[],
-  ): TableQueryBuilder<TTableOrName, SelectedDateBuckets<TSelectedRow> & Record<string, unknown>, TAvailableColumns> {
+  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, TAvailableColumns> {
     return this.clone(appendRawSelection(this.plan, {
       kind: 'raw',
       sql,
@@ -3431,7 +3431,7 @@ export class TableQueryBuilder<
     }
 
     const primaryKeys = this.source.table ? listTablePrimaryKeyColumns(this.source.table) : []
-    if (this.plan.groupBy.length > 0) {
+    if (this.plan.groupBy.length > 0 && unionBranchPlans(this.plan).some(branch => dateBucketSelections(branch).size > 0)) {
       const identity = (column: string): string => this.resolveSourceColumnName(column) ?? column
       const groupsByPrimaryKey = primaryKeys.length > 0 && primaryKeys.every(key => this.plan.groupBy.some(column => identity(column) === key))
       const ordered = groupsByPrimaryKey ? this.withPrimaryKeyTieBreakers(primaryKeys) : this

@@ -55,14 +55,6 @@ it('keeps the table columns when a date bucket is the first added selection', as
   }
 })
 
-it('keeps date bucket aliases usable after an unsafe selection', () => {
-  if (false) {
-    DB.table(events).unsafeSelect('COUNT(*) AS total', []).addSelectDate('day', 'occurred_at', { as: 'day' }).groupBy('day').orderBy('day')
-    DB.table(events).selectDate('day', 'occurred_at', { as: 'day' }).addUnsafeSelect('COUNT(*) AS total', []).groupBy('day')
-    DB.table(events).unsafeSelect('COUNT(*) AS total', []).addSelectDate('day', 'occurred_at', { as: 'day' }).addSelect('channel').groupBy('day')
-  }
-})
-
 it('keeps the date bucket type next to a wildcard of a table joined by name', async () => {
   if (false) {
     const row = await DB.table(events)

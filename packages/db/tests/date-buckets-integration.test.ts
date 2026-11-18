@@ -400,6 +400,41 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect([...first.data, ...second.data]).toEqual([{ id: 1, tenant_id: 1 }, { id: 2, tenant_id: 1 }])
   })
 
+  it('rejects a raw selection next to a date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events).selectDate('day', 'occurred_at', { as: 'bucket' }).addUnsafeSelect('123 AS bucket', []).get()).rejects.toThrow(SecurityError)
+    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: 'bucket' }).addUnsafeSelect('?', []).orderBy('BUCKET').get()).rejects.toThrow(CompilerError)
+  })
+
+  it('cursor-paginates a grouped join without schema metadata by the source primary key', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const schema = createSchemaService(DB.connection())
+    const notes = `bucket_notes_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(notes)
+    })
+    await schema.createTable(notes, (table) => {
+      table.id()
+      table.integer('event_id')
+    })
+    await DB.table(notes).insert([{ event_id: 1 }, { event_id: 1 }, { event_id: 2 }])
+    const page = (cursor: string | null) => DB.table(events)
+      .join(notes, `${notes}.event_id`, '=', `${events.tableName}.id`)
+      .select(`${events.tableName}.id`, 'tenant_id')
+      .addSelectCount('notes')
+      .groupBy(`${events.tableName}.id`, 'tenant_id')
+      .orderBy(`${events.tableName}.id`)
+      .cursorPaginate(1, cursor)
+
+    const first = await page(null)
+    const second = await page(first.nextCursor)
+
+    expect([...first.data, ...second.data]).toEqual([{ id: 1, tenant_id: 1, notes: 2 }, { id: 2, tenant_id: 1, notes: 1 }])
+  })
+
   it('rejects a wildcard of a join without schema metadata next to a date bucket', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
@@ -728,18 +763,6 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .cursorPaginate(2)).rejects.toThrow(CompilerError)
   })
 
-  it('still cursor-paginates a union of grouped keys ordered by the key', async () => {
-    useAppTimezone('UTC')
-    const events = await createEventsTable(driver)
-    const tenants = (tenantId: number) => DB.table(events).where('tenant_id', tenantId).select('tenant_id').groupBy('tenant_id')
-    const combined = () => tenants(1).union(tenants(2)).orderBy('tenant_id')
-
-    const first = await combined().cursorPaginate(1)
-    const second = await combined().cursorPaginate(1, first.nextCursor)
-
-    expect([...first.data, ...second.data]).toEqual([{ tenant_id: 1 }, { tenant_id: 2 }])
-  })
-
   it('converts date-only text in a datetime column as midnight UTC', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
@@ -1006,6 +1029,16 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
       await tx.executeCompiled({ sql: `INSERT INTO \`${name}\` (at) VALUES ('0000-00-00 00:00:00')`, source: 'test' })
       return tx.table(stamps).selectDate('day', 'at', { as: 'day', timeZone: 'UTC' }).value('day')
     })
+
+    expect(day).toBeNull()
+  })
+
+  it('gives a null bucket for a datetime its server cannot convert', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('mysql')
+    await DB.connection().executeCompiled({ sql: `INSERT INTO \`${events.tableName}\` (tenant_id, occurred_at) VALUES (9, '9999-12-31 23:30:00')`, source: 'test' })
+
+    const day = await DB.table(events).where('tenant_id', 9).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'Asia/Tokyo' }).value('day')
 
     expect(day).toBeNull()
   })

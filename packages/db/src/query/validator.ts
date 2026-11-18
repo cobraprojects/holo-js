@@ -646,6 +646,7 @@ export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName):
 
   switch (plan.kind) {
     case 'select': {
+      assertDateBucketSpelling(plan)
       for (const selection of plan.selections) {
         if (selection.kind === 'subquery') {
           validateQueryPlan(selection.query)
@@ -672,7 +673,6 @@ export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName):
 
         assertColumnSelection(selection, plan.source.tableName, allowedColumns)
       }
-      assertDateBucketSpelling(plan)
       assertUniqueDateBucketOutputs(plan)
       const referenceableColumns = withDateBucketAliases(plan, allowedColumns)
 

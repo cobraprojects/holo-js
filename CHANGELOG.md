@@ -6,10 +6,6 @@
 
 - Database: `selectDate()` and `addSelectDate()` select the calendar `'year'`, `'month'`, `'day'` or `'hour'` of a date column as a sortable string, such as `selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })` giving `'2026-11-05'`, on SQLite, PostgreSQL and MySQL. The alias works in `groupBy()`, `orderBy()`, `orderByDesc()`, `having()`, unions and `cursorPaginate()`, so per-day totals no longer need raw SQL. `timeZone` takes an IANA name and defaults to `app.timezone`. With a table definition the result is typed `DateBucket<'day'> | null`, and `DateColumnName` constrains a generic helper's column. See [Selecting date buckets](apps/docs/docs/database/query-builder/selects-and-filters.md#selecting-date-buckets).
 
-### Fixed
-
-- Database: `cursorPaginate()` on a grouped query adds the primary key to `ORDER BY` only when every primary key column is grouped. Before, it always added it, which PostgreSQL and MySQL rejected for other grouped queries. A grouped query must order by every `groupBy()` column. See [Ordering rules](apps/docs/docs/database/pagination.md#ordering-rules).
-
 ## 0.6.1 - 2026-11-17
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-060-to-061). Upgrade Next.js, Nuxt or SvelteKit to the releases below before you install it. No database migration and no app code changes are needed.

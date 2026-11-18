@@ -154,8 +154,8 @@ export function assertDateBucketOutputsUnshadowed(plan: SelectQueryPlan, connect
     if (sourceColumns.some(column => sameIdentifierFolded(column, alias))) {
       throw new SecurityError(`Date bucket alias "${alias}" must not reuse a column name of table "${plan.source.tableName}".`)
     }
-    if (plan.selections.some(selection => selectionMayOutputName(plan, selection, alias, connectionName, { raw: false, wildcard: true }))) {
-      throw new SecurityError(`Date bucket alias "${alias}" must not be reused by a column of a selected wildcard.`)
+    if (plan.selections.some(selection => selectionMayOutputName(plan, selection, alias, connectionName, { raw: true, wildcard: true }))) {
+      throw new SecurityError(`Date bucket alias "${alias}" must not be reused by a wildcard or raw selection, and Holo can't verify the column names of raw selections or of wildcards of tables missing from the generated schema.`)
     }
   }
 }

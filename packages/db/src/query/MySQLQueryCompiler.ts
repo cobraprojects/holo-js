@@ -12,8 +12,6 @@ import type { DeleteQueryPlan, InsertStatementOptions, QueryDateBucketSelection,
 
 const MYSQL_DECIMAL_DIGITS = 65
 
-const MYSQL_CONVERTIBLE_UTC_RANGE = { earliest: '1970-01-01 00:00:01', latest: '3001-01-18 23:59:59.999999' } as const
-
 const MYSQL_DATE_BUCKET_FORMATS: Readonly<Record<QueryDateBucketSelection['unit'], string>> = {
   year: '%Y',
   month: '%Y-%m',
@@ -175,9 +173,8 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
 
   private compileConvertedWallClock(column: string, from: string, to: string): string {
     const fromZone = this.createSqlStringLiteral(from)
-    const earliest = `CONVERT_TZ('${MYSQL_CONVERTIBLE_UTC_RANGE.earliest}', '+00:00', ${fromZone})`
-    const latest = `CONVERT_TZ('${MYSQL_CONVERTIBLE_UTC_RANGE.latest}', '+00:00', ${fromZone})`
-    return `CASE WHEN ${column} BETWEEN ${earliest} AND ${latest} THEN CONVERT_TZ(${column}, ${fromZone}, ${this.createSqlStringLiteral(to)}) END`
+    const converts = `CONVERT_TZ(${column}, ${fromZone}, '+00:00') <> CONVERT_TZ(${column}, ${fromZone}, '+01:00')`
+    return `CASE WHEN ${converts} THEN CONVERT_TZ(${column}, ${fromZone}, ${this.createSqlStringLiteral(to)}) END`
   }
 
   protected override createDateLiteral(value: Date): string {
