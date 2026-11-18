@@ -1510,6 +1510,28 @@ describe.runIf(mysqlIntegration)('date buckets on mysql timestamp columns', () =
     await expect(dayIn('etc/utc')).resolves.toBe('1969-07-20')
   })
 
+  it('probes every converted time zone once in one statement', async () => {
+    useAppTimezone('Europe/Paris')
+    let probes = 0
+    const events = await createEventsTable('mysql', {
+      wrapAdapter: adapter => new Proxy(adapter, {
+        get(target, property) {
+          if (property !== 'query') return Reflect.get(target, property, target)
+          return (sql: string, bindings: readonly unknown[], options: unknown) => {
+            if (sql.startsWith('SELECT CONVERT_TZ')) probes += 1
+            return target.query(sql, bindings, options as never)
+          }
+        },
+      }),
+    })
+    const days = () => DB.table(events).where('tenant_id', 1).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'Asia/Tokyo' }).get()
+
+    await Promise.all([days(), days()])
+    await days()
+
+    expect(probes).toBe(1)
+  })
+
   it('skips conversion for another spelling of the app time zone', async () => {
     useAppTimezone('America/New_York')
     const events = await createEventsTable('mysql')

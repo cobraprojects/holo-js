@@ -276,7 +276,7 @@ export function sameMySQLTimeZone(left: string, right: string): boolean {
   return canonicalTimeZone(left) === canonicalTimeZone(right)
 }
 
-const convertibleMySQLTimeZones = new WeakMap<DatabaseContext, Set<string>>()
+const convertibleMySQLTimeZones = new WeakMap<DatabaseContext, Map<string, Promise<void>>>()
 
 type PlannedDateBucket = { readonly plan: SelectQueryPlan, readonly bucket: QueryDateBucketSelection }
 
@@ -286,8 +286,12 @@ function predicateDateBuckets(predicate: QueryPredicateNode): readonly PlannedDa
   return []
 }
 
+const plannedDateBucketIndex = new WeakMap<SelectQueryPlan, readonly PlannedDateBucket[]>()
+
 function planDateBuckets(plan: SelectQueryPlan): readonly PlannedDateBucket[] {
-  return [
+  const indexed = plannedDateBucketIndex.get(plan)
+  if (indexed) return indexed
+  const planned = [
     ...plan.selections.flatMap(selection => selection.kind === 'date-bucket'
       ? [{ plan, bucket: selection }]
       : selection.kind === 'subquery' ? planDateBuckets(selection.query) : []),
@@ -295,6 +299,8 @@ function planDateBuckets(plan: SelectQueryPlan): readonly PlannedDateBucket[] {
     ...plan.unions.flatMap(union => planDateBuckets(union.query)),
     ...plan.predicates.flatMap(predicateDateBuckets),
   ]
+  plannedDateBucketIndex.set(plan, planned)
+  return planned
 }
 
 function convertedMySQLTimeZones(plan: SelectQueryPlan, connectionName: string): readonly string[] {
@@ -309,19 +315,31 @@ function convertedMySQLTimeZones(plan: SelectQueryPlan, connectionName: string):
 }
 
 export async function assertDateBucketTimeZonesConvertible(connection: DatabaseContext, plan: SelectQueryPlan): Promise<void> {
-  if (connection.getDialect().name !== 'mysql') return
-  const known = convertibleMySQLTimeZones.get(connection) ?? new Set<string>()
-  convertibleMySQLTimeZones.set(connection, known)
-  for (const timeZone of convertedMySQLTimeZones(plan, connection.getConnectionName())) {
-    if (known.has(timeZone)) continue
-    const { rows } = await connection.queryCompiled<{ converted: unknown }>({
-      sql: 'SELECT CONVERT_TZ(\'2000-01-01 00:00:00\', \'+00:00\', ?) AS converted',
-      bindings: [timeZone],
-      source: 'query:date-bucket-time-zone',
-    })
-    if (rows[0]?.converted == null) {
-      throw new CapabilityError(`MySQL can't convert dates to the "${timeZone}" time zone because its time zone tables are empty. Load them with mysql_tzinfo_to_sql.`)
+  if (connection.getDialect().name !== 'mysql' || !planHasDateBuckets(plan)) return
+  const checks = convertibleMySQLTimeZones.get(connection) ?? new Map<string, Promise<void>>()
+  convertibleMySQLTimeZones.set(connection, checks)
+  const zones = convertedMySQLTimeZones(plan, connection.getConnectionName())
+  const unchecked = zones.filter(zone => !checks.has(zone))
+  if (unchecked.length > 0) {
+    const probe = probeMySQLTimeZones(connection, unchecked)
+    for (const zone of unchecked) {
+      const check = probe.then((missing) => {
+        if (missing.includes(zone)) {
+          throw new CapabilityError(`MySQL can't convert dates to the "${zone}" time zone because its time zone tables are empty. Load them with mysql_tzinfo_to_sql.`)
+        }
+      })
+      checks.set(zone, check)
+      check.catch(() => checks.delete(zone))
     }
-    known.add(timeZone)
   }
+  await Promise.all(zones.map(zone => checks.get(zone)))
+}
+
+async function probeMySQLTimeZones(connection: DatabaseContext, zones: readonly string[]): Promise<readonly string[]> {
+  const { rows } = await connection.queryCompiled<Record<string, unknown>>({
+    sql: `SELECT ${zones.map((_zone, index) => `CONVERT_TZ('2000-01-01 00:00:00', '+00:00', ?) AS \`zone_${index}\``).join(', ')}`,
+    bindings: zones,
+    source: 'query:date-bucket-time-zone',
+  })
+  return zones.filter((_zone, index) => rows[0]?.[`zone_${index}`] == null)
 }

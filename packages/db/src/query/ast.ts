@@ -79,8 +79,17 @@ export function unionBranchPlans(plan: SelectQueryPlan): readonly SelectQueryPla
   return [plan, ...plan.unions.flatMap(union => unionBranchPlans(union.query))]
 }
 
+const NO_DATE_BUCKET_SELECTIONS: ReadonlyMap<string, QueryDateBucketSelection> = new Map()
+const dateBucketSelectionIndex = new WeakMap<SelectQueryPlan, ReadonlyMap<string, QueryDateBucketSelection>>()
+
 export function dateBucketSelections(plan: SelectQueryPlan): ReadonlyMap<string, QueryDateBucketSelection> {
-  return new Map(plan.selections.flatMap(selection => selection.kind === 'date-bucket' ? [[selection.alias, selection] as const] : []))
+  const indexed = dateBucketSelectionIndex.get(plan)
+  if (indexed) return indexed
+  const selections = plan.selections.some(selection => selection.kind === 'date-bucket')
+    ? new Map(plan.selections.flatMap(selection => selection.kind === 'date-bucket' ? [[selection.alias, selection] as const] : []))
+    : NO_DATE_BUCKET_SELECTIONS
+  dateBucketSelectionIndex.set(plan, selections)
+  return selections
 }
 
 export type QueryKeyCast = 'text' | 'integer' | 'decimal' | 'decimalText' | { readonly kind: 'decimalText', readonly places: number }
