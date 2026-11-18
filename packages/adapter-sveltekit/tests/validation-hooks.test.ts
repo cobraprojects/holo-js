@@ -122,14 +122,12 @@ describe('SvelteKit validation hooks', () => {
 
   it.each([
     ['an API route under the base path', 'GET', 'application/json', '/dashboard/api/posts?after=abc', '/api/posts', {}],
-    ['a JSON endpoint outside /api/', 'GET', 'application/json', '/posts.json?after=abc', '/posts.json', {}],
     ['a non-form method endpoint', 'DELETE', 'text/html', '/dashboard/posts/1?after=abc', '/posts/[id]', { id: '1' }],
     ['an API route behind an omitted optional parameter', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[[lang]]/api/posts', {}],
+    ['an API route behind an omitted optional parameter named like an Object property', 'POST', 'text/html', '/dashboard/api/posts', '/[[constructor]]/api/posts', {}],
     ['a catch-all route serving api/ under the base path', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[...path]', { path: 'api/posts' }],
     ['a hyphenated parameter that resolves to api/', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[api-section]/posts', { 'api-section': 'api' }],
     ['a multi-codepoint route escape spelling api/', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[u+0061-0070-0069]/posts', {}],
-    ['a GET whose Accept header names HTML in upper case', 'GET', 'application/json,TEXT/HTML', '/posts.json?after=abc', '/posts.json', {}],
-    ['a GET whose Accept header has a malformed quality', 'GET', '*/*;q=.,text/html,application/json', '/posts.json?after=abc', '/posts.json', {}],
     ['an API route whose numeric matcher value precedes api/', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[[version=integer]]/api/posts', {}],
   ])('answers an invalid cursor on %s with 422 JSON and no flash cookie', async (_label, method, accept, path, routeId, params) => {
     (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
@@ -159,14 +157,15 @@ describe('SvelteKit validation hooks', () => {
 
   it.each([
     ['a parameter whose value contains an encoded slash', 'POST', 'text/html', '/dashboard/api%2Fadmin/posts', '/[section]/posts', { section: 'api/admin' }],
-    ['a GET that accepts JSON but still lets SvelteKit pick the page', 'GET', 'application/json,text/html;q=0.5', '/dashboard/posts', '/posts', {}],
-    ['a GET that accepts anything', 'GET', '*/*', '/dashboard/posts', '/posts', {}],
+    ['a JSON GET outside api/', 'GET', 'application/json', '/posts.json?after=abc', '/posts.json', {}],
+    ['a client data request for a page under api/', 'GET', 'application/json', '/dashboard/api/search/__data.json', '/api/search', {}],
+    ['an omitted optional parameter named like an Object property', 'POST', 'text/html', '/dashboard/posts', '/[[constructor]]/posts', {}],
     ['an escaped literal bracket segment before api/', 'POST', 'text/html', '/dashboard/[section]/api/posts', '/[x+5b]section[x+5d]/api/posts', {}],
-    ['a GET that prefers HTML through a */html range', 'GET', 'application/json;q=0.5,*/html', '/dashboard/posts', '/posts', {}],
     ['a route whose numeric matcher value comes first', 'POST', 'text/html', '/dashboard/7/api/posts', '/[id=integer]/api/posts', { id: '7' }],
   ])('keeps the flash redirect for %s', async (_label, method, accept, path, routeId, params) => {
     (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
-    const { event } = createEvent('ignored', accept, path, { method, routeId, params })
+    const created = createEvent('ignored', accept, path, { method, routeId, params })
+    const event = path.endsWith('/__data.json') ? { ...created.event, isDataRequest: true } : created.event
     const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
     const response = await hooks.handle({ event, resolve: async (event) => {
       await hooks.handleError({ event, kind: 'unknown', error: new InvalidCursorException('after', 'Reload the feed.') })
