@@ -18,7 +18,6 @@ async function createEmbeddings() {
     resetCacheRuntime()
     await schema.dropTable(name)
   })
-  await db.executeCompiled({ sql: 'CREATE EXTENSION IF NOT EXISTS vector', source: 'schema' })
   await db.executeCompiled({ sql: `CREATE TABLE ${name} (id INTEGER PRIMARY KEY, embedding vector(3))`, source: 'schema' })
   registerGeneratedTables({ embeddings: defineGeneratedTable(name, { id: column.id(), embedding: column.text() }) })
   await DB.table(name).insert([{ id: 1, embedding: '[1,0,0]' }, { id: 2, embedding: '[0,0,1]' }])

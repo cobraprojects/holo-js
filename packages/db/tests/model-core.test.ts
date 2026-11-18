@@ -1734,7 +1734,6 @@ describe('model core slice', () => {
 
   it.runIf(postgresIntegration)('runs model vector similarity queries on PostgreSQL with pgvector', async () => {
     const { db, table, schema } = await openDatabase('postgres')
-    await db.executeCompiled({ sql: 'CREATE EXTENSION IF NOT EXISTS vector', source: 'schema' })
     await schema.table(table.tableName, table => { table.vector('embedding', { dimensions: 3 }).nullable() })
     const documents = defineTable(table.tableName, { ...table.columns, embedding: column.vector({ dimensions: 3 }).nullable() })
     const Document = defineModelFromTable(documents)

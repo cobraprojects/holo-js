@@ -2385,18 +2385,21 @@ export class TableQueryBuilder<
     let plan = withOffset(withLimit(hiddenSelections.length === 0 ? orderedQuery.plan : appendSelections(orderedQuery.plan, hiddenSelections), perPage + 1), undefined)
     const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
     const previous = decodedCursor?.previous === true
-    if (decodedCursor) {
-      const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
-      const nullsLow = !this.connection.getDialect().name.includes('postgres')
+    const nullsLow = !this.connection.getDialect().name.includes('postgres')
+    const normalizedCursor = decodedCursor && { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
+    const exhausted = normalizedCursor !== null && cursorPredicate(normalizedCursor, cursorOrders, nullsLow) === undefined
+    if (exhausted) plan = withLimit(plan, 0)
+    if (normalizedCursor && !exhausted) {
       const filter = (branch: SelectQueryPlan, columns: readonly UnionCursorColumn[]): SelectQueryPlan => {
         const grouped = branch.predicates.some(predicate => predicate.boolean === 'or')
           ? withPredicate(withoutPredicates(branch, () => true), { kind: 'group', predicates: branch.predicates })
           : branch
-        return withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map((order, index) => ({
+        const predicate = cursorPredicate(normalizedCursor, cursorOrders.map((order, index) => ({
           ...order,
           column: columns[index]!.column,
           ...(columns[index]!.selectionAlias ? { selectionAlias: true as const } : {}),
-        })), nullsLow))
+        })), nullsLow)
+        return predicate ? withPredicate(grouped, predicate) : grouped
       }
       const filterUnion = (branch: SelectQueryPlan, branchColumns: (branch: SelectQueryPlan) => readonly UnionCursorColumn[]): SelectQueryPlan => Object.freeze({
         ...filter(branch, branchColumns(branch)),

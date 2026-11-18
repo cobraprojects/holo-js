@@ -8,6 +8,7 @@ export default mergeConfig(workspaceTestConfig, defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     setupFiles: ['tests/setup.ts'],
+    globalSetup: ['tests/global-setup.ts'],
     testTimeout: 10000,
     coverage: {
       provider: 'v8',

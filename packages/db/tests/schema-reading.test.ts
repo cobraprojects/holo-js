@@ -301,7 +301,6 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
       const { db, schema } = await openDatabase(driver)
       const name = uniqueName('holo_read_vectors')
       onTestFinished(() => schema.dropTable(name))
-      await db.executeCompiled({ sql: 'CREATE EXTENSION IF NOT EXISTS vector', source: 'schema' })
       await schema.createTable(name, table => {
         table.uuid('id').primaryKey()
         table.vector('embedding', { dimensions: 3 }).nullable()
