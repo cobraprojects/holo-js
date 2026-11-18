@@ -228,7 +228,7 @@ function selectedOutputName(selection: SelectQueryPlan['selections'][number]): s
 
 function assertUniqueDateBucketOutputs(plan: SelectQueryPlan): void {
   for (const alias of dateBucketSelections(plan).keys()) {
-    if (plan.selections.filter(selection => selectedOutputName(selection) === alias).length > 1) {
+    if (plan.selections.filter(selection => selectedOutputName(selection)?.toLowerCase() === alias.toLowerCase()).length > 1) {
       throw new SecurityError(`Date bucket alias "${alias}" must not be reused by another selected column.`)
     }
   }

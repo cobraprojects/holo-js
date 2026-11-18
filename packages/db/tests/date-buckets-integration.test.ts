@@ -300,7 +300,7 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .cursorPaginate(1)).rejects.toThrow(SecurityError)
   })
 
-  it('asks for a qualified column when an unregistered join may own a bare column named like the date bucket', async () => {
+  it('resolves a bare column named like the date bucket to the only join that may own it', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
     const schema = createSchemaService(DB.connection())
@@ -312,12 +312,85 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       table.id()
       table.string('bucket')
     })
+    await DB.table(extras).insert({ id: 1, bucket: 'first' })
+
+    const rows = await DB.table(events.tableName)
+      .join(extras, `${extras}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .where('bucket', 'first')
+      .get()
+
+    expect(rows).toEqual([{ bucket: '2026-11-03' }])
+  })
+
+  it('rejects union cursor pagination with date buckets when a wildcard hides the ordered position', async () => {
+    useAppTimezone('UTC')
+    await openDatabase(driver)
+    const labels = await createLabelsTable()
+    registerGeneratedTables({ labels })
+    onTestFinished(() => clearGeneratedTables())
+    await fillLabelsTable(labels)
+
+    await expect(DB.table(labels.tableName)
+      .where('id', 1)
+      .select(`${labels.tableName}.*`, 'label as bucket')
+      .unionAll(DB.table(labels.tableName).where('id', 2).select('id').addSelectDate('day', 'at', { as: 'bucket', timeZone: 'UTC' }).addSelect('label', 'at'))
+      .orderBy('bucket')
+      .cursorPaginate(1)).rejects.toThrow(CompilerError)
+  })
+
+  it('adds the grouped primary key as a tie-breaker to an explicit order', async () => {
+    useAppTimezone('UTC')
+    await openDatabase(driver)
+    const labels = await createLabelsTable()
+    registerGeneratedTables({ labels })
+    onTestFinished(() => clearGeneratedTables())
+    await fillLabelsTable(labels)
+    const byLabel = () => DB.table(labels).select('id', 'label').groupBy('id').orderBy('label')
+    const perDay = () => DB.table(labels).select('id').addSelectDate('day', 'at', { as: 'bucket', timeZone: 'UTC' }).groupBy('bucket', 'id').orderBy('bucket')
+
+    const first = await byLabel().cursorPaginate(1)
+    const second = await byLabel().cursorPaginate(1, first.nextCursor)
+    const firstDay = await perDay().cursorPaginate(1)
+    const secondDay = await perDay().cursorPaginate(1, firstDay.nextCursor)
+
+    expect([...first.data, ...second.data]).toEqual([{ id: 2, label: '2026-11-04' }, { id: 1, label: '2026-11-05' }])
+    expect([...firstDay.data, ...secondDay.data]).toEqual([{ id: 2, bucket: '2026-11-01' }, { id: 1, bucket: '2026-11-03' }])
+  })
+
+  it('asks for a qualified column when no table or more than one may own a bare column named like the date bucket', async () => {
+    useAppTimezone('UTC')
+    const { events, facts } = await createFactsTable(driver)
+    const schema = createSchemaService(DB.connection())
+    const extras = `bucket_extras_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(extras)
+    })
+    await schema.createTable(extras, (table) => {
+      table.id()
+      table.string('bucket')
+    })
 
     await expect(DB.table(events.tableName)
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .where('bucket', 'first')
+      .get()).rejects.toThrow(CompilerError)
+    await expect(DB.table(events.tableName)
+      .join(facts, `${facts}.id`, '=', `${events.tableName}.id`)
       .join(extras, `${extras}.id`, '=', `${events.tableName}.id`)
       .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
       .where('bucket', 'first')
       .get()).rejects.toThrow(CompilerError)
+  })
+
+  it('rejects another selected column whose name differs from the date bucket alias only in case', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events.tableName)
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .addSelect('tenant_id as BUCKET')
+      .get()).rejects.toThrow(SecurityError)
   })
 
   it('rejects a joined wildcard spelled in another case whose column shares the date bucket alias', async () => {

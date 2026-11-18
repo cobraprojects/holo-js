@@ -116,12 +116,14 @@ export function selectionMayOutputName(
 }
 
 export function bareColumnOwner(plan: SelectQueryPlan, name: string, connectionName: string | undefined): string {
-  const tables = visibleTables(plan, connectionName)
-  const owners = tables.filter(table => table.columns()?.some(column => sameIdentifierFolded(column, name)))
-  if (owners.length > 1 || (owners.length === 0 && tables.some(table => table.columns() === undefined))) {
+  const candidates = visibleTables(plan, connectionName).filter((table) => {
+    const columns = table.columns()
+    return columns === undefined || columns.some(column => sameIdentifierFolded(column, name))
+  })
+  const owner = candidates.length === 1 ? candidates[0] : undefined
+  if (!owner) {
     throw new CompilerError(`Column "${name}" shares its name with a date bucket and Holo can't tell which table owns it. Qualify it with its table.`)
   }
-  const owner = owners[0] ?? tables[0]!
   return owner.alias ?? owner.tableName ?? plan.source.tableName
 }
 

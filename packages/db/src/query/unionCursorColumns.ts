@@ -78,12 +78,12 @@ function positionedBranchColumn(branch: SelectQueryPlan, column: string, positio
 
 export function unionCursorColumns(plan: SelectQueryPlan, columns: readonly string[], connectionName: string): (branch: SelectQueryPlan) => readonly UnionCursorColumn[] {
   const positions = columns.map(column => outputPosition(plan, column, connectionName))
-  const rootDateBuckets = dateBucketSelections(plan)
+  const usesDateBuckets = unionBranchPlans(plan).some(branch => dateBucketSelections(branch).size > 0)
   const branchColumns = (branch: SelectQueryPlan) => columns.map((column, index) => {
     const position = positions[index]
     if (typeof position === 'undefined') assertKnownPosition(branchOutputs(branch, connectionName), column)
-    if (rootDateBuckets.has(column) && (typeof position === 'undefined' || !branchOutputs(branch, connectionName).slice(0, position + 1).every(output => output.positioned))) {
-      throw new CompilerError(`Cannot cursor paginate a union by the date bucket "${column}": its column position cannot be determined in every query. Select the date bucket before any wildcard in each query.`)
+    if (usesDateBuckets && (typeof position === 'undefined' || !branchOutputs(branch, connectionName).slice(0, position + 1).every(output => output.positioned))) {
+      throw new CompilerError(`Cannot cursor paginate a union with date buckets by "${column}": its column position cannot be determined in every query. Select the ordered columns before any wildcard in each query.`)
     }
     return typeof position === 'undefined' ? namedBranchColumn(branch, column) : positionedBranchColumn(branch, column, position, connectionName)
   })
