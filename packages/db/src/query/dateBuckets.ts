@@ -2,7 +2,7 @@ import { CapabilityError, CompilerError, ConfigurationError, SecurityError } fro
 import { getApplicationTimezone } from '../applicationTimezone'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { splitTablePath } from '../schema/identifiers'
-import { knownJoinedColumns, knownTableColumns } from './modelRowProjection'
+import { knownJoinedColumns } from './modelRowProjection'
 import { dateBucketSelections, readAllColumnsSelectionTable } from './ast'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
@@ -90,19 +90,25 @@ function matchingColumnDefinition(table: TableDefinition | undefined, name: stri
 }
 
 function visibleTables(plan: SelectQueryPlan, connectionName: string | undefined): readonly VisibleTable[] {
+  const sourceDefinition = plan.source.table ?? generatedDefinition(plan.source.tableName, connectionName)
   return [
     {
       tableName: plan.source.tableName,
       alias: plan.source.alias,
-      definition: plan.source.table ?? generatedDefinition(plan.source.tableName, connectionName),
-      columns: () => connectionName === undefined ? undefined : knownTableColumns(plan.source.tableName, plan.source.table, connectionName),
+      definition: sourceDefinition,
+      columns: () => sourceDefinition ? Object.keys(sourceDefinition.columns) : undefined,
     },
-    ...plan.joins.map(join => ({
-      tableName: join.table,
-      alias: join.alias,
-      definition: join.definition ?? generatedDefinition(join.table, connectionName),
-      columns: () => join.subquery ? subqueryOutputNames(join.subquery, connectionName) : connectionName === undefined ? undefined : knownJoinedColumns(join, connectionName),
-    })),
+    ...plan.joins.map((join) => {
+      const definition = join.definition ?? generatedDefinition(join.table, connectionName)
+      return {
+        tableName: join.table,
+        alias: join.alias,
+        definition,
+        columns: () => join.subquery
+          ? subqueryOutputNames(join.subquery, connectionName)
+          : definition ? Object.keys(definition.columns) : connectionName === undefined ? undefined : knownJoinedColumns(join, connectionName),
+      }
+    }),
   ]
 }
 

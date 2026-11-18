@@ -1154,6 +1154,14 @@ describe.each(drivers)('date buckets on %s', (driver) => {
       .cursorPaginate(5)).rejects.toThrow(SecurityError)
   })
 
+  it('compiles a date bucket next to the table columns without a connection name', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const compiler = new SQLiteQueryCompiler(identifier => `"${identifier}"`, () => '?')
+
+    expect(compiler.compile(DB.table(events).addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).getPlan()).sql).toContain(`"${events.tableName}".*`)
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)
@@ -1366,6 +1374,22 @@ describe.each(integrationDrivers(['sqlite', 'mysql'] as const))('grouped date bu
       .cursorPaginate(5)
 
     expect(page.data).toEqual([{ tenant_id: 2, day: '2026-11-04' }])
+  })
+})
+
+describe('date buckets on sqlite end-of-day timestamps', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('rolls 24:00 over to the next day in every UTC spelling', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('sqlite')
+    await DB.connection().executeCompiled({ sql: `INSERT INTO "${events.tableName}" (tenant_id, occurred_at) VALUES (12, '2026-12-31 24:00:00')`, source: 'test' })
+    const hourIn = (timeZone: string) => DB.table(events).where('tenant_id', 12).selectDate('hour', 'occurred_at', { as: 'hour', timeZone }).value('hour')
+
+    await expect(hourIn('UTC')).resolves.toBe('2027-01-01 00:00')
+    await expect(hourIn('Etc/UTC')).resolves.toBe('2027-01-01 00:00')
   })
 })
 

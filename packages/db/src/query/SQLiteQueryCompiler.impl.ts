@@ -260,7 +260,7 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
   }
 
   private compileInstantWallClock(column: string, timeZone: string): string {
-    return timeZone === 'UTC' ? `datetime(${column})` : compileSQLiteWallClock(column, this.createSqlStringLiteral(timeZone))
+    return timeZone === 'UTC' ? `datetime(${column}, '+0 seconds')` : compileSQLiteWallClock(column, this.createSqlStringLiteral(timeZone))
   }
 
   private compileAppWallClock(column: string, timeZone = getApplicationTimezone()): string {
