@@ -7491,6 +7491,90 @@ export const providerFields = (actor: Actor): { email: string } | { employeeCode
     expect(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([])
   }, 90000)
 
+  it('types nested eager loads through cyclic relations declared by model name', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: { default: { driver: 'sqlite', url: './data.sqlite' } },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_rewards.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('tenants', table => {
+      table.id()
+      table.string('display_name')
+    })
+    await schema.createTable('rewards', table => {
+      table.id()
+      table.integer('tenant_id')
+    })
+    await schema.createTable('campaign_reward_allocations', table => {
+      table.id()
+      table.integer('reward_id')
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('campaign_reward_allocations')
+    await schema.dropTable('rewards')
+    await schema.dropTable('tenants')
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/models/Tenant.ts', `
+import { defineModel, hasMany } from '@holo-js/db'
+
+export default defineModel('tenants', { relations: { rewards: hasMany('Reward', 'tenant_id') } })
+`)
+    await writeProjectFile(projectRoot, 'server/models/Reward.ts', `
+import { belongsTo, defineModel, hasMany } from '@holo-js/db'
+
+export default defineModel('rewards', {
+  relations: {
+    tenant: belongsTo('Tenant', 'tenant_id'),
+    allocations: hasMany('CampaignRewardAllocation', 'reward_id'),
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/models/CampaignRewardAllocation.ts', `
+import { belongsTo, defineModel } from '@holo-js/db'
+
+export const CampaignRewardAllocation = defineModel('campaign_reward_allocations', {
+  relations: { reward: belongsTo('Reward', 'reward_id') },
+})
+`)
+
+    await mkdir(join(projectRoot, 'data'), { recursive: true })
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    await writeProjectFile(projectRoot, 'check-model-types.ts', `
+import './.holo-js/generated/model-registry'
+import { CampaignRewardAllocation } from './server/models/CampaignRewardAllocation'
+
+export async function tenantName(): Promise<string | undefined> {
+  const rows = await CampaignRewardAllocation.query().with('reward.tenant.rewards.allocations').get()
+  const allocationIds: number[] | undefined = rows[0]?.reward?.tenant?.rewards[0]?.allocations.map(allocation => allocation.reward_id)
+  void allocationIds
+  return rows[0]?.reward?.tenant?.display_name
+}
+`)
+    const program = ts.createProgram([join(projectRoot, 'check-model-types.ts')], {
+      strict: true,
+      noEmit: true,
+      skipLibCheck: true,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      target: ts.ScriptTarget.ES2022,
+    })
+    expect(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([])
+  }, 90000)
+
   it('types model timestamps stored in SQLite TEXT columns as dates in the model registry', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
