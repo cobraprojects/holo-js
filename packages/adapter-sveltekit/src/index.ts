@@ -74,17 +74,11 @@ function toSvelteKitErrorStatus(status: number): SvelteKitErrorStatus {
   return status >= 400 && status <= 599 ? status as SvelteKitErrorStatus : 500
 }
 
-const ROUTE_GROUP_SEGMENT = /^\(.+\)$/
-
-function routePathSegments(event: SvelteKitRequestEvent): readonly string[] | undefined {
-  const routeId = event.route?.id
-  if (typeof routeId !== 'string') return undefined
-  return routeId.split('/').filter(segment => segment !== '' && !ROUTE_GROUP_SEGMENT.test(segment))
-}
+const NON_PATH_ROUTE_SEGMENT = /^(\(.+\)|\[\[.+\]\])$/
 
 function isApiRoute(event: SvelteKitRequestEvent): boolean {
-  const segments = routePathSegments(event)
-  return segments ? segments[0] === 'api' : event.url?.pathname.startsWith('/api/') === true
+  const firstRouteSegment = event.route?.id?.split('/').find(segment => segment !== '' && !NON_PATH_ROUTE_SEGMENT.test(segment))
+  return firstRouteSegment === 'api' || event.url?.pathname.startsWith('/api/') === true
 }
 
 function acceptsJson(event: SvelteKitRequestEvent): boolean {
@@ -96,25 +90,27 @@ type AcceptedMediaRange = { readonly type: string, readonly subtype: string, rea
 function acceptedMediaRanges(accept: string): readonly AcceptedMediaRange[] {
   return accept.split(',').flatMap((range, index) => {
     const match = /^[ \t]*([^/ \t]+)\/([^; \t]+)[ \t]*(?:;[ \t]*q=([0-9.]+))?/.exec(range)
-    return match ? [{ type: match[1]!, subtype: match[2]!, quality: Number(match[3] ?? '1'), index }] : []
+    return match ? [{ type: match[1]!.toLowerCase(), subtype: match[2]!.toLowerCase(), quality: Number(match[3] ?? '1'), index }] : []
   }).sort((left, right) => right.quality - left.quality
     || Number(left.subtype === '*') - Number(right.subtype === '*')
     || Number(left.type === '*') - Number(right.type === '*')
     || left.index - right.index)
 }
 
-function prefersHtml(event: SvelteKitRequestEvent): boolean {
-  const ranges = acceptedMediaRanges(event.request.headers.get('accept') ?? '*/*')
-  const htmlRange = ranges.find(range => (range.type === 'text' || range.type === '*') && (range.subtype === 'html' || range.subtype === '*'))
-  return htmlRange?.type === 'text'
+function prefersJson(event: SvelteKitRequestEvent): boolean {
+  const preferred = acceptedMediaRanges(event.request.headers.get('accept') ?? '*/*').find(range =>
+    (range.type === 'application' && (range.subtype === 'json' || range.subtype === '*'))
+    || (range.type === 'text' && (range.subtype === 'html' || range.subtype === '*'))
+    || range.type === '*')
+  return preferred?.type === 'application'
 }
 
 function isEndpointRequest(event: SvelteKitRequestEvent): boolean {
   if (event.isDataRequest === true) return false
   const method = event.request.method?.toUpperCase() ?? 'GET'
-  if (method !== 'GET' && method !== 'HEAD' && method !== 'POST') return true
-  if (method === 'POST' && event.request.headers.get('x-sveltekit-action') === 'true') return false
-  return !prefersHtml(event)
+  if (method === 'POST') return false
+  if (method === 'GET' || method === 'HEAD') return prefersJson(event)
+  return true
 }
 
 function isApiEvent(event: SvelteKitRequestEvent): boolean {

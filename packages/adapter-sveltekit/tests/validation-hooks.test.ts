@@ -4,7 +4,7 @@ import { ValidationException, field, schema, validate } from '@holo-js/validatio
 import { InvalidCursorException } from '../../db/src/core/errors'
 import { adapterSvelteKitInternals, createSvelteKitHoloHooks } from '../src'
 
-function createEvent(value: string, accept = 'application/json', path = '/login', options: { readonly method?: string, readonly routeId?: string, readonly enhancedAction?: boolean } = {}) {
+function createEvent(value: string, accept = 'application/json', path = '/login', options: { readonly method?: string, readonly routeId?: string } = {}) {
   const flashed = new Map<string, string>()
   const method = options.method ?? 'POST'
   const event: Partial<RequestEvent> = {
@@ -12,7 +12,7 @@ function createEvent(value: string, accept = 'application/json', path = '/login'
     ...(options.routeId === undefined ? {} : { route: { id: options.routeId } as RequestEvent['route'] }),
     request: new Request(`https://app.test${path}`, {
       method,
-      headers: { accept, ...(options.enhancedAction === true ? { 'x-sveltekit-action': 'true' } : {}) },
+      headers: { accept },
       ...(method === 'POST' ? { body: new URLSearchParams({ email: value, password: 'private-password' }) } : {}),
     }),
     cookies: {
@@ -30,8 +30,8 @@ const loginSchema = schema({ email: field.string().required().email(), password:
 
 describe('SvelteKit validation hooks', () => {
   it('isolates concurrent submissions at the same URL across tracing clones', async () => {
-    const first = createEvent('first-invalid', 'application/json', '/login', { enhancedAction: true })
-    const second = createEvent('second-invalid', 'application/json', '/login', { enhancedAction: true })
+    const first = createEvent('first-invalid')
+    const second = createEvent('second-invalid')
     let releaseFirst: () => void = () => {}
     const waiting = new Promise<void>((resolve) => { releaseFirst = resolve })
     const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
@@ -124,6 +124,8 @@ describe('SvelteKit validation hooks', () => {
     ['an API route under the base path', 'GET', 'application/json', '/dashboard/api/posts?after=abc', '/api/posts'],
     ['a JSON endpoint outside /api/', 'GET', 'application/json', '/posts.json?after=abc', '/posts.json'],
     ['a non-form method endpoint', 'DELETE', 'text/html', '/dashboard/posts/1?after=abc', '/posts/[id]'],
+    ['an API route behind an omitted optional parameter', 'GET', 'text/html', '/dashboard/api/posts?after=abc', '/[[lang]]/api/posts'],
+    ['a catch-all route serving /api/ without a base path', 'GET', 'text/html', '/api/posts?after=abc', '/[...path]'],
   ])('answers an invalid cursor on %s with 422 JSON and no flash cookie', async (_label, method, accept, path, routeId) => {
     (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
     const { event, flashed } = createEvent('ignored', accept, path, { method, routeId })

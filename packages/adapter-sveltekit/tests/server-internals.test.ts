@@ -18,13 +18,13 @@ const payload = {
   errors: { title: ['Required.'] },
 }
 
-function createEvent(path = '/posts', method = 'POST', accept = 'text/html', enhancedAction = method === 'POST' && accept === 'application/json') {
+function createEvent(path = '/posts', method = 'POST', accept = 'text/html') {
   const values = new Map<string, string>()
   return {
     url: new URL(`https://example.test${path}`),
     request: {
       method,
-      headers: new Headers({ accept, ...(enhancedAction ? { 'x-sveltekit-action': 'true' } : {}) }),
+      headers: new Headers({ accept }),
     },
     cookies: {
       get: (name: string) => values.get(name),
@@ -139,9 +139,9 @@ describe('SvelteKit server adapter internals', () => {
 
     expect(await adapterSvelteKitInternals.mapValidationActionResponse(createEvent('/posts', 'GET') as never, original)).toBe(original)
 
-    const endpoint = createEvent('/posts', 'POST', 'application/json', false)
-    adapterSvelteKitInternals.rememberValidationActionFailure(endpoint as never, payload as never)
-    expect((await adapterSvelteKitInternals.mapValidationActionResponse(endpoint as never, original)).status).toBe(422)
+    const jsonEndpoint = createEvent('/posts.json', 'GET', 'application/json')
+    adapterSvelteKitInternals.rememberValidationActionFailure(jsonEndpoint as never, payload as never)
+    expect((await adapterSvelteKitInternals.mapValidationActionResponse(jsonEndpoint as never, original)).status).toBe(422)
 
     const pageVisit = createEvent('/posts', 'GET', 'text/html,application/xhtml+xml,*/*;q=0.8')
     adapterSvelteKitInternals.rememberValidationActionFailure(pageVisit as never, payload as never)
