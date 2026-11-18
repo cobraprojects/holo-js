@@ -4,7 +4,7 @@ import { column, DB, defineGeneratedTable, defineModel, hasMany, latestOfMany, o
 import { integrationDrivers, openDatabase } from './support/database'
 
 async function openRedemptionsFixture(driver: 'sqlite' | 'postgres' | 'mysql') {
-  const { schema } = await openDatabase(driver)
+  const { schema } = await openDatabase(driver, { security: { allowUnsafeRawSql: true } })
   onTestFinished(() => resetDB())
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
   const actorsName = `extrema_actors_${suffix}`
@@ -17,6 +17,7 @@ async function openRedemptionsFixture(driver: 'sqlite' | 'postgres' | 'mysql') {
     table.integer('actor_user_id')
     table.string('code')
     table.integer('points')
+    table.bigInteger('balance')
     table.decimal('amount', 8, 2)
     table.timestamp('redeemed_at')
   })
@@ -27,6 +28,7 @@ async function openRedemptionsFixture(driver: 'sqlite' | 'postgres' | 'mysql') {
     actor_user_id: column.integer(),
     code: column.string(),
     points: column.integer(),
+    balance: column.bigInteger(),
     amount: column.decimal(undefined, 8, 2),
     redeemed_at: column.timestamp(),
   })
@@ -35,8 +37,8 @@ async function openRedemptionsFixture(driver: 'sqlite' | 'postgres' | 'mysql') {
   const late = new Date('2026-02-01T10:00:00Z')
   await DB.table(actors).insert([{ id: 1 }])
   await DB.table(redemptions).insert([
-    { id: 1, tenant_id: 1, actor_user_id: 1, code: 'Zulu', points: 10, amount: '12.50', redeemed_at: late },
-    { id: 2, tenant_id: 1, actor_user_id: 1, code: 'Alpha', points: 2, amount: '3.25', redeemed_at: early },
+    { id: 1, tenant_id: 1, actor_user_id: 1, code: 'Zulu', points: 10, balance: 10, amount: '12.50', redeemed_at: late },
+    { id: 2, tenant_id: 1, actor_user_id: 1, code: 'Alpha', points: 2, balance: 2, amount: '3.25', redeemed_at: early },
   ])
   return { actors, redemptions, early, late }
 }
@@ -77,6 +79,14 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('selected ext
       .get()
 
     expect(rows).toEqual([{ value: 10 }, { value: 2 }])
+  })
+
+  it('keeps big integer extrema numeric alongside raw selections', async () => {
+    const { redemptions } = await openRedemptionsFixture(driver)
+
+    const row = await DB.table(redemptions).selectMax('highest_balance', 'balance').addUnsafeSelect('? as marker', ['raw']).first()
+
+    expect(row).toEqual({ highest_balance: 10, marker: 'raw' })
   })
 
   it('returns null extrema for empty groups', async () => {

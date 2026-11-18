@@ -78,11 +78,13 @@ function readsAsColumnValue(selection: QueryAggregateSelection): boolean {
   return selection.aggregate === 'min' || selection.aggregate === 'max'
 }
 
+function aggregatedColumns(selection: QueryAggregateSelection, tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
+  return selectedColumns({ kind: 'column', column: selection.column, alias: selection.alias }, tables)
+}
+
 function selectionResultColumns(selection: QuerySelection, tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
   if (selection.kind === 'column') return selectedColumns(selection, tables)
-  if (selection.kind === 'aggregate' && readsAsColumnValue(selection)) {
-    return selectedColumns({ kind: 'column', column: selection.column, alias: selection.alias }, tables)
-  }
+  if (selection.kind === 'aggregate' && readsAsColumnValue(selection)) return aggregatedColumns(selection, tables)
   return 'alias' in selection ? [[selection.alias, undefined]] : [[UNKNOWN_COLUMNS, undefined]]
 }
 
@@ -124,7 +126,7 @@ function readsAsNumber(column: AnyColumnDefinition | undefined): boolean {
 }
 
 export function readsAsNumericAggregate(plan: SelectQueryPlan, selection: QueryAggregateSelection): boolean {
-  return !readsAsColumnValue(selection) || readsAsNumber(resultColumnDefinition(plan, selection.alias))
+  return !readsAsColumnValue(selection) || aggregatedColumns(selection, queryTables(plan)).every(([, definition]) => readsAsNumber(definition))
 }
 
 export type ConvertedResultColumns = ReadonlyMap<string, ColumnReader>
