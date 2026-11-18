@@ -81,9 +81,11 @@ export type NamedModelReference<TName extends RegisteredModelName> = RegisteredM
 type NamedModelReferenceName<TReference>
   = TReference extends { readonly '~registeredModelName'?: infer TName extends RegisteredModelName } ? TName : never
 type ResolveModelDefinition<TReference>
-  = NamedModelReferenceName<TReference> extends infer TName extends keyof RegisteredModelDefinitions
-    ? [TName] extends [never] ? TReference : RegisteredModelDefinitions[TName]
-    : TReference
+  = TReference extends unknown
+    ? NamedModelReferenceName<TReference> extends infer TName extends keyof RegisteredModelDefinitions
+      ? [TName] extends [never] ? TReference : RegisteredModelDefinitions[TName]
+      : TReference
+    : never
 export type ModelDefinitionLike<TTable extends TableDefinition = TableDefinition>
   = | (AnyModelDefinition & { readonly table: TTable })
     | { readonly definition: AnyModelDefinition & { readonly table: TTable } }
@@ -576,9 +578,11 @@ export type RelationConstraintMapGuarded<
  * relation. This enables recursive type resolution for nested eager loads
  * like `'posts.comments'`.
  */
-export type RelatedRelationsOfDefinition<TRef>
-  = ResolveModelDefinition<TRef> extends { readonly relations: infer R extends RelationMap } ? R
-    : ResolveModelDefinition<TRef> extends { readonly definition: { readonly relations: infer R extends RelationMap } } ? R
+export type RelatedRelationsOfDefinition<TRef> = ModelRelationsOf<ResolveModelDefinition<TRef>>
+
+type ModelRelationsOf<TRef>
+  = TRef extends { readonly relations: infer R extends RelationMap } ? R
+    : TRef extends { readonly definition: { readonly relations: infer R extends RelationMap } } ? R
       : RelationMap
 
 export type RelatedRelationsOfRelation<TRelation extends RelationDefinition>
@@ -586,9 +590,11 @@ export type RelatedRelationsOfRelation<TRelation extends RelationDefinition>
     ? RelatedRelationsOfDefinition<TRef>
     : RelationMap
 
-export type RelatedScopesOfDefinition<TRef>
-  = ResolveModelDefinition<TRef> extends { readonly scopes: infer S extends ModelScopesDefinition } ? S
-    : ResolveModelDefinition<TRef> extends { readonly definition: { readonly scopes: infer S extends ModelScopesDefinition } } ? S
+export type RelatedScopesOfDefinition<TRef> = ModelScopesOf<ResolveModelDefinition<TRef>>
+
+type ModelScopesOf<TRef>
+  = TRef extends { readonly scopes: infer S extends ModelScopesDefinition } ? S
+    : TRef extends { readonly definition: { readonly scopes: infer S extends ModelScopesDefinition } } ? S
       : EmptyScopeMap
 
 export type RelatedScopesOfRelation<TRelation extends RelationDefinition>

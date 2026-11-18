@@ -1,7 +1,8 @@
 import { expectTypeOf, it } from 'vitest'
-import { belongsTo, scopeRelation } from '../src'
+import { belongsTo, defineModel, hasMany, scopeRelation } from '../src'
 import type {} from './fixtures/named-relations/model-registry'
 import NamedRelationAllocation from './fixtures/named-relations/models/NamedRelationAllocation'
+import NamedRelationReward from './fixtures/named-relations/models/NamedRelationReward'
 import NamedRelationTenant from './fixtures/named-relations/models/NamedRelationTenant'
 
 it('types a nested eager load through relations declared by model name', () => {
@@ -42,4 +43,18 @@ it('types scoped relation constraints against the named target columns', () => {
   scopeRelation(belongsTo('NamedRelationTenant', 'tenant_id'), query => query.where('display_name', 'Acme'))
   // @ts-expect-error tenants have no points column
   scopeRelation(belongsTo('NamedRelationTenant', 'tenant_id'), query => query.where('points', 1))
+})
+
+it('keeps relations and scopes of a resolver that returns either a model or its definition', () => {
+  const Tenant = defineModel('named_relation_tenants', {
+    relations: {
+      rewards: hasMany(() => Math.random() > 0.5 ? NamedRelationReward : NamedRelationReward.definition, 'tenant_id'),
+    },
+  })
+
+  if (false) {
+    const query = Tenant.query().with('rewards', rewards => rewards.generous()).with('rewards.tenant')
+    type Reward = NonNullable<Awaited<ReturnType<typeof query.first>>>['rewards'][number]
+    expectTypeOf<NonNullable<Reward['tenant']>['display_name']>().toEqualTypeOf<string>()
+  }
 })
