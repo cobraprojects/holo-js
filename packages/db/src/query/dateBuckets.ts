@@ -152,7 +152,7 @@ function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectio
 }
 
 function ownerTables(plan: SelectQueryPlan, name: string, connectionName: string | undefined, matches: IdentifierMatch): readonly VisibleTable[] {
-  const candidates = visibleTables(plan, connectionName).filter((table) => {
+  const candidates = visibleTables(plan, connectionName, matches).filter((table) => {
     const columns = table.columns()
     return columns === undefined || columns.some(column => matches(column, name))
   })

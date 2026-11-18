@@ -1225,6 +1225,22 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     await expect(branch(1).orderBy('id').cursorPaginate(1)).rejects.toThrow(SecurityError)
   })
 
+  it('paginates a join selecting two id columns next to a date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const tags = await createKeyedTable('bucket_tags', 'rank', [{ id: 1, value: 1 }, { id: 2, value: 2 }])
+    registerGeneratedTables({ events, tags })
+
+    const page = await DB.table(events.tableName)
+      .join(tags.tableName, `${tags.tableName}.id`, '=', `${events.tableName}.id`)
+      .select(`${events.tableName}.id`, `${tags.tableName}.id`)
+      .addSelectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
+      .paginate(10, 1)
+
+    expect(page.meta.total).toBe(2)
+    expect(page.data.map(row => row.bucket)).toEqual(['2026-11-03', '2026-11-03'])
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)
@@ -1527,6 +1543,21 @@ describe('date buckets next to sqlite wildcards of case-variant aliases', () => 
       .addSelect('tags.*')
       .get()).rejects.toThrow(SecurityError)
   })
+  it('resolves an unqualified bucket column past a joined subquery with a case-variant wildcard', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('sqlite')
+    const plain = await createKeyedTable('bucket_plain', 'amount', [{ id: 1, value: 1 }])
+    registerGeneratedTables({ events, plain })
+    const joined = DB.table(`${plain.tableName} as Tags`).select('tags.*')
+
+    const days = await DB.table(events.tableName)
+      .joinSub(joined, 'j', 'j.id', '=', `${events.tableName}.id`)
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .pluck('bucket')
+
+    expect(days).toEqual(['2026-11-03'])
+  })
+
   it('checks a joined subquery whose wildcard SQLite matches regardless of case', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable('sqlite')

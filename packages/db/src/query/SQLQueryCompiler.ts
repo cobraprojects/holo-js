@@ -163,7 +163,7 @@ export class SQLQueryCompiler {
       && plan.groupBy.length === 0
       && plan.having.length === 0
       && plan.unions.length === 0
-      && plan.selections.every(selection => selection.kind === 'column')
+      && plan.selections.every(selection => selection.kind === 'column' || selection.kind === 'date-bucket')
     if (
       countsRows
       && typeof plan.limit === 'undefined'
