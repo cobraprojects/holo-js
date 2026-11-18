@@ -172,6 +172,9 @@ test('real example app database matrix', { concurrency: 3 }, async suite => {
     }
     if (drivers.includes('sqlite')) {
       await app.test('sqlite under a base path', () => runApp(framework, 'sqlite', { script: '../../tests/example-app-base-path.mjs', label: 'sqlite-base-path' }))
+      if (framework === 'nuxt') {
+        await app.test('sqlite under a runtime NUXT_APP_BASE_URL', () => runApp(framework, 'sqlite', { script: '../../tests/example-app-base-path.mjs', label: 'sqlite-runtime-base-path', env: { HOLO_EXAMPLE_NUXT_RUNTIME_BASE: '1' } }))
+      }
       if (framework === 'next') {
         await app.test('sqlite under a base path with webpack', () => runApp(framework, 'sqlite', { script: '../../tests/example-app-base-path.mjs', label: 'sqlite-base-path-webpack', env: { HOLO_EXAMPLE_NEXT_BUNDLER: 'webpack' } }))
       }

@@ -23,13 +23,11 @@ function withoutBase(path: string, prefix: string): string {
 }
 
 function decodePath(path: string): string {
-  return path.split('%25').map((part) => {
-    try {
-      return decodeURI(part)
-    } catch {
-      return part
-    }
-  }).join('%25')
+  try {
+    return decodeURIComponent(path)
+  } catch {
+    return path
+  }
 }
 
 function pathname(request: Request): string {

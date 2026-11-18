@@ -170,13 +170,13 @@ it('protects routes reached through encoded paths', async () => {
   const app = await nativeAuth()
   const resolve = () => new Response('Native continuation')
   const guard = svelteAuthOnly({ routes: ['/admin/*'], redirectTo: '/login' })
-  for (const [url, base] of [['https://app.test/dashboard/%61dmin/posts', '/dashboard'], ['https://app.test/%64ashboard/admin/posts', '/dashboard'], ['https://app.test/%61dmin/posts', '']] as const) {
+  for (const [url, base] of [['https://app.test/dashboard/%61dmin/posts', '/dashboard'], ['https://app.test/%64ashboard/admin/posts', '/dashboard'], ['https://app.test/%61dmin/posts', ''], ['https://app.test/dashboard/admin%2Fposts', '/dashboard']] as const) {
     const request = new Request(url)
     requestAppBaseInternals.set(request, base)
     const response = await app.run(app.request('/'), () => guard({ event: { url: new URL(url), request }, resolve }))
     expect(response.status).toBe(303)
   }
-  for (const path of ['/dashboard/%61dmin/posts', '/%61dmin/posts']) {
+  for (const path of ['/dashboard/%61dmin/posts', '/%61dmin/posts', '/dashboard/admin%2Fposts']) {
     const request = new NextRequest(new URL(path, 'https://app.test'), path.startsWith('/dashboard') ? { nextConfig: { basePath: '/dashboard' } } : {})
     const response = await app.run(request, () => authOnly({ routes: ['/admin/*'], redirectTo: '/login' })(request))
     expect(response?.status).toBe(303)

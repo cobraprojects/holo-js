@@ -19,7 +19,7 @@ afterEach(() => {
   IdleSocket.opened = []
 })
 
-async function requestedEndpoints(): Promise<string[]> {
+async function requestedEndpoints(base?: string): Promise<string[]> {
   const requested: string[] = []
   vi.stubGlobal('WebSocket', IdleSocket)
   vi.stubGlobal('fetch', async (endpoint: string) => {
@@ -27,6 +27,7 @@ async function requestedEndpoints(): Promise<string[]> {
     return { ok: true, status: 200, json: async () => ({ key: 'key', host: '127.0.0.1', port: 8080, path: 'app', scheme: 'http' }) }
   })
   const transport = createBroadcastRealtimeTransport()
+  if (base !== undefined) vi.stubGlobal('__HOLO_APP_BASE__', base)
   await transport.query('posts.list', {})
   await transport.mutate('posts.save', {})
   const unsubscribe = transport.subscribe('posts.list', {}, () => {}, () => {})
@@ -39,7 +40,6 @@ it('uses root endpoints when no adapter defines an app base', async () => {
   expect(await requestedEndpoints()).toEqual(['/holo/realtime/query', '/holo/realtime/mutation', '/broadcasting/config'])
 })
 
-it('prefixes every endpoint with the app base an adapter defines', async () => {
-  vi.stubGlobal('__HOLO_APP_BASE__', '/dashboard')
-  expect(await requestedEndpoints()).toEqual(['/dashboard/holo/realtime/query', '/dashboard/holo/realtime/mutation', '/dashboard/broadcasting/config'])
+it('prefixes every endpoint with an app base set after the transport was created', async () => {
+  expect(await requestedEndpoints('/dashboard')).toEqual(['/dashboard/holo/realtime/query', '/dashboard/holo/realtime/mutation', '/dashboard/broadcasting/config'])
 })

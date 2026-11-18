@@ -35,8 +35,9 @@ describe('request app base', () => {
   it.each([
     ['https://app.test/dashboard/%61dmin/posts', '/admin/posts'],
     ['https://app.test/%64ashboard/admin/posts', '/admin/posts'],
-    ['https://app.test/dashboard/100%25/report', '/100%25/report'],
-  ])('reads the route %s decoded the way framework routers decode it', (url, expected) => {
+    ['https://app.test/dashboard/admin%2Fposts', '/admin/posts'],
+    ['https://app.test/dashboard/100%25/report', '/100%/report'],
+  ])('reads the route %s fully decoded for route guards', (url, expected) => {
     const request = new Request(url)
     requestAppBaseInternals.set(request, '/dashboard')
     expect(requestAppBaseInternals.routePathname(request)).toBe(expected)

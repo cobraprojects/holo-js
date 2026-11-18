@@ -11,6 +11,7 @@ import { stopExampleAppProcess } from './example-app-process.mjs'
 const base = '/dashboard'
 const cwd = process.cwd()
 const framework = basename(cwd).replace(/^blog-/, '')
+const nuxtRuntimeBase = framework === 'nuxt' && process.env.HOLO_EXAMPLE_NUXT_RUNTIME_BASE === '1'
 const configPatches = {
   next: ['next.config.ts', 'withHolo({', `withHolo({\n  basePath: '${base}',`],
   nuxt: ['nuxt.config.ts', "modules: ['@holo-js/adapter-nuxt'],", `modules: ['@holo-js/adapter-nuxt'],\n  app: { baseURL: '${base}/' },`],
@@ -86,11 +87,12 @@ async function patchFile(file, search, replacement) {
 }
 
 async function patchBasePath() {
-  await patchFile(...configPatches[framework])
+  if (!nuxtRuntimeBase) await patchFile(...configPatches[framework])
   await patchFile('config/broadcast.ts', '/broadcasting/auth`', `${base}/broadcasting/auth\``)
 }
 
 function startApp() {
+  if (nuxtRuntimeBase) return start(['run', 'start'], { PORT: port, HOST: host, NITRO_HOST: host, NUXT_APP_BASE_URL: `${base}/` })
   if (framework === 'sveltekit') return start(['run', 'dev', '--host', '127.0.0.1', '--port', port])
   const bundlerArgs = process.env.HOLO_EXAMPLE_NEXT_BUNDLER === 'webpack' ? ['--webpack'] : []
   start(['run', 'dev', ...bundlerArgs], { PORT: port, HOST: host, NITRO_HOST: host })
@@ -188,6 +190,7 @@ try {
   await patchBasePath()
   await run(['run', 'setup'])
   await run(['x', 'holo', 'migrate:fresh', '--seed'])
+  if (nuxtRuntimeBase) await run(['run', 'build'])
   start(['x', 'holo', 'broadcast:work'])
   startApp()
   await waitUntil(async () => (await fetch(`${origin}${base}/`)).ok, `The ${framework} app must serve its home page under ${base}.`, 180000)
