@@ -6,7 +6,7 @@ import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
 import type { QueryDateBucketSelection, QueryRawSelection, QueryRelationKeysPredicate } from './ast'
-import { assertDateBucketSpelling, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, columnOwner, normalizeDateBucketTimeZone, selectionMayOutputName } from './dateBuckets'
+import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketTimeZonesConvertible, assertDateBucketUnit, columnOwner, selectionMayOutputName } from './dateBuckets'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -143,7 +143,7 @@ import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalizatio
 import { assertQueryTablePath, validateQueryPlan } from './validator'
 import { requalifyAliasedSource } from './requalifyAliasedSource'
 
-import type { AvailableTableColumns, ColumnSelection, DateBucketAlias, SelectedDateBuckets, WithoutSelected, DateBucketAliasName, DateBucketOptions, DateBucketSelectionResult, DateBucketUnit, DateColumnName, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
+import type { AvailableTableColumns, ColumnSelection, DateBucketAlias, SelectedDateBuckets, UnreplacedDateBuckets, DateBucketAliasName, DateBucketOptions, DateBucketSelectionResult, DateBucketUnit, DateColumnName, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
 
 type SelectRow<TTableOrName extends string | TableDefinition>
   = TTableOrName extends TableDefinition ? InferSelect<TTableOrName> : Record<string, unknown>
@@ -412,7 +412,7 @@ export class TableQueryBuilder<
 
   addSelect<const TColumns extends readonly ColumnSelection<TAvailableColumns>[]>(
     ...columns: TColumns
-  ): TableQueryBuilder<TTableOrName, WithoutSelected<TSelectedRow, keyof SelectedColumns<TAvailableColumns, TColumns>> & SelectedColumns<TAvailableColumns, TColumns>, TAvailableColumns> {
+  ): TableQueryBuilder<TTableOrName, Omit<TSelectedRow, keyof SelectedColumns<TAvailableColumns, TColumns>> & UnreplacedDateBuckets<TSelectedRow, keyof SelectedColumns<TAvailableColumns, TColumns>> & SelectedColumns<TAvailableColumns, TColumns>, TAvailableColumns> {
     return this.clone(appendSelections(this.plan, columns))
   }
 
@@ -799,12 +799,13 @@ export class TableQueryBuilder<
 
   private createDateBucketSelection(unit: DateBucketUnit, column: string, options: DateBucketOptions<string>): QueryDateBucketSelection {
     assertDateBucketUnit(unit)
+    if (options.timeZone !== undefined) assertDateBucketTimeZone(options.timeZone)
     return Object.freeze({
       kind: 'date-bucket',
       unit,
       column,
       alias: options.as,
-      ...(options.timeZone === undefined ? {} : { timeZone: normalizeDateBucketTimeZone(options.timeZone) }),
+      ...(options.timeZone === undefined ? {} : { timeZone: options.timeZone }),
     })
   }
 
@@ -2121,8 +2122,8 @@ export class TableQueryBuilder<
     convertColumns = true,
   ): Promise<TRow[]> {
     await this.bindGeneratedTable()
-    await assertDateBucketTimeZonesConvertible(this.connection, this.plan)
     const statement = compileStatement()
+    await assertDateBucketTimeZonesConvertible(this.connection, this.plan)
     const cacheConfig = this.queryCacheConfig
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
     if (activeDependencyCollector || (canUseQueryCache(this.connection) && cacheConfig && !this.plan.lockMode)) {
@@ -2865,10 +2866,9 @@ export class TableQueryBuilder<
 
     await this.prepareMutation()
     await query.bindGeneratedTable()
+    const statement = this.getCompiler().compile(createInsertUsingQueryPlan(this.source, columns, query.getPlan(), { ignoreConflicts }))
     await assertDateBucketTimeZonesConvertible(this.connection, query.getPlan())
-    const result = await this.connection.executeCompiled(this.getCompiler().compile(
-      createInsertUsingQueryPlan(this.source, columns, query.getPlan(), { ignoreConflicts }),
-    ))
+    const result = await this.connection.executeCompiled(statement)
     await this.invalidateTableQueries()
     return {
       affectedRows: result.affectedRows,

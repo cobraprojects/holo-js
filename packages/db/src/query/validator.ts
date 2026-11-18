@@ -2,7 +2,7 @@ import { rawSqlPlaceholders } from './rawSql'
 import { SecurityError } from '../core/errors'
 import { dateBucketSelections, isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
 import { storesJson } from '../schema/normalization'
-import { assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketUnit } from './dateBuckets'
+import { assertDateBucketAliasLength, assertDateBucketSpelling, assertDateBucketTimeZone, assertDateBucketUnit } from './dateBuckets'
 import { tablePathSegments } from '../schema/identifiers'
 import type { TableColumnsShape } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -214,6 +214,7 @@ function assertDateBucketSelection(
   assertDateBucketUnit(selection.unit)
   assertColumnReference(selection.column, tableName, allowedColumns)
   assertIdentifier(selection.alias, 'Selection alias')
+  assertDateBucketAliasLength(selection.alias)
   if (allowedColumns?.has(selection.alias)) {
     throw new SecurityError(`Date bucket alias "${selection.alias}" must not reuse a column name of table "${tableName}".`)
   }

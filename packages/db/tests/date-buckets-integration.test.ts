@@ -833,15 +833,30 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect(rows).toEqual([{ day: '2026-11-05' }])
   })
 
-  it('reads a time zone link the way JavaScript does', async () => {
+  it('reads an IANA link name and rejects zone abbreviations', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
     await DB.table(events).insert({ tenant_id: 5, occurred_at: new Date('2026-07-15T12:00:00Z'), billed_on: null })
     const hourIn = (timeZone: string) => DB.table(events).where('tenant_id', 5).selectDate('hour', 'occurred_at', { as: 'hour', timeZone }).value('hour')
 
-    await expect(hourIn('CET')).resolves.toBe('2026-07-15 14:00')
     await expect(hourIn('US/Eastern')).resolves.toBe('2026-07-15 08:00')
-    await expect(hourIn('PST8PDT')).resolves.toBe('2026-07-15 05:00')
+    await expect(hourIn('Europe/Brussels')).resolves.toBe('2026-07-15 14:00')
+    expect(() => DB.table(events).selectDate('hour', 'occurred_at', { as: 'hour', timeZone: 'CET' })).toThrow(SecurityError)
+    expect(() => DB.table(events).selectDate('hour', 'occurred_at', { as: 'hour', timeZone: 'PST8PDT' })).toThrow(SecurityError)
+  })
+
+  it('rejects a date bucket alias longer than PostgreSQL keeps', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: `bucket_${'x'.repeat(57)}` }).get()).rejects.toThrow(SecurityError)
+  })
+
+  it('reports a misspelled date bucket before checking its column', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events.tableName).selectDate('day', 'tenant_id', { as: 'day' }).orderBy('Day').get()).rejects.toThrow(CompilerError)
   })
 
   it('needs a date, datetime or timestamp column it can identify', async () => {
@@ -948,6 +963,29 @@ describe.runIf(postgresIntegration)('date buckets on postgres with a session tim
     const rows = await DB.table(events).where('tenant_id', 1).whereNotNull('occurred_at').selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).orderBy('id').pluck('day')
 
     expect(rows).toEqual(['2026-11-03', '2026-11-03', '2026-11-04', '2026-11-04', '2026-11-05', '2026-12-31'])
+  })
+
+  it('buckets a timestamptz near year 10000 whatever the session time zone', async () => {
+    useAppTimezone('UTC')
+    const name = `bucket_instants_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const db = createDatabase({
+      connectionName: 'default',
+      adapter: createPostgresAdapter({ config: { ...postgresTestConnection(), options: '-c TimeZone=Pacific/Kiritimati' } }),
+      dialect: createDialect('postgres'),
+    })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    const instants = defineGeneratedTable(name, { id: column.integer().primaryKey(), at: column.timestamp() })
+    try {
+      await db.executeCompiled({ sql: `CREATE TABLE "${name}" (id integer PRIMARY KEY, at timestamptz)`, source: 'test' })
+      await db.executeCompiled({ sql: `INSERT INTO "${name}" (id, at) VALUES (1, '10000-01-01 11:00:00+00')`, source: 'test' })
+
+      const hour = await DB.table(instants).selectDate('hour', 'at', { as: 'hour', timeZone: 'Etc/GMT+12' }).value('hour')
+
+      expect(hour).toBe('9999-12-31 23:00')
+    } finally {
+      await createSchemaService(db).dropTable(name)
+      await db.disconnect()
+    }
   })
 })
 

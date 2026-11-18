@@ -10,16 +10,24 @@ import type { QueryDateBucketSelection, QueryDateBucketUnit, QueryPredicateNode,
 
 export type DateBucketStorage = 'calendar' | 'datetime' | 'timestamp'
 
+const MAX_ALIAS_BYTES = 63
+
+export function assertDateBucketAliasLength(alias: string): void {
+  if (new TextEncoder().encode(alias).length > MAX_ALIAS_BYTES) {
+    throw new SecurityError(`Date bucket alias "${alias}" must be at most ${MAX_ALIAS_BYTES} bytes, the longest name PostgreSQL keeps.`)
+  }
+}
+
 const DATE_BUCKET_UNITS: ReadonlySet<string> = new Set<QueryDateBucketUnit>(['year', 'month', 'day', 'hour'])
 const TIME_ZONE_NAME = /^[A-Za-z][A-Za-z0-9]*(?:[/_+-][A-Za-z0-9]+)*$/
 
-function resolvedTimeZone(timeZone: string): string | undefined {
-  if (!TIME_ZONE_NAME.test(timeZone)) return undefined
+function isRegionTimeZone(timeZone: string): boolean {
+  if (!TIME_ZONE_NAME.test(timeZone) || (timeZone !== 'UTC' && !timeZone.includes('/'))) return false
   try {
-    const resolved = new Intl.DateTimeFormat('en-US', { timeZone }).resolvedOptions().timeZone
-    return TIME_ZONE_NAME.test(resolved) ? resolved : undefined
+    new Intl.DateTimeFormat('en-US', { timeZone })
+    return true
   } catch {
-    return undefined
+    return false
   }
 }
 
@@ -29,17 +37,9 @@ export function assertDateBucketUnit(unit: string): asserts unit is QueryDateBuc
   }
 }
 
-export function normalizeDateBucketTimeZone(timeZone: string): string {
-  const resolved = resolvedTimeZone(timeZone)
-  if (resolved === undefined) {
-    throw new SecurityError(`Date bucket time zone "${timeZone}" must be an IANA time zone name such as "UTC" or "Europe/Paris".`)
-  }
-  return resolved
-}
-
 export function assertDateBucketTimeZone(timeZone: string): void {
-  if (resolvedTimeZone(timeZone) !== timeZone) {
-    throw new SecurityError(`Date bucket time zone "${timeZone}" must be a canonical IANA time zone name such as "UTC" or "Europe/Paris".`)
+  if (!isRegionTimeZone(timeZone)) {
+    throw new SecurityError(`Date bucket time zone "${timeZone}" must be "UTC" or an IANA Area/Location name such as "Europe/Paris", not an abbreviation such as "CET".`)
   }
 }
 

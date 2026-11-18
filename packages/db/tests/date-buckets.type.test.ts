@@ -55,6 +55,14 @@ it('keeps the table columns when a date bucket is the first added selection', as
   }
 })
 
+it('drops a replaced selection type when a projection of unknown name is added', async () => {
+  if (false) {
+    const projection: string = 'label as total'
+    const rows = await DB.table('bucket_events').selectCount('total').addSelect(projection).get()
+    expectTypeOf(rows[0]!.total).toEqualTypeOf<unknown>()
+  }
+})
+
 it('keeps the date bucket type next to a wildcard of a table joined by name', async () => {
   if (false) {
     const row = await DB.table(events)
