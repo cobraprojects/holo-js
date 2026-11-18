@@ -186,7 +186,7 @@ export function columnOwner(plan: SelectQueryPlan, name: string, connectionName:
   return owner && (owner.alias ?? owner.tableName ?? plan.source.tableName)
 }
 
-export type GroupedKeyContext = { readonly connectionName: string | undefined, readonly foldsColumnNames: boolean }
+export type GroupedKeyContext = { readonly connectionName: string | undefined, readonly foldsColumnNames: boolean, readonly foldsTableNames: boolean }
 
 export function groupedCursorKey(plan: SelectQueryPlan, column: string, context: GroupedKeyContext): string {
   if (dateBucketSelections(plan).has(column)) return column
@@ -197,7 +197,7 @@ export function groupedCursorKey(plan: SelectQueryPlan, column: string, context:
     const owner = columnOwner(plan, column, connectionName, context.foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly)
     return owner === undefined ? name : `${owner}.${name}`
   }
-  const qualifierMatches = context.foldsColumnNames ? sameIdentifierFolded : sameIdentifierExactly
+  const qualifierMatches = context.foldsTableNames ? sameIdentifierFolded : sameIdentifierExactly
   const table = boundTables(visibleTables(plan, connectionName, qualifierMatches), column.slice(0, separator), qualifierMatches)[0]
   return table ? `${table.alias ?? table.tableName ?? plan.source.tableName}.${name}` : `${column.slice(0, separator)}.${name}`
 }

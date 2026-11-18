@@ -3536,7 +3536,8 @@ export class TableQueryBuilder<
   }
 
   private groupedKeyContext(): GroupedKeyContext {
-    return { connectionName: this.connection.getConnectionName(), foldsColumnNames: !this.connection.getDialect().name.startsWith('postgres') }
+    const dialect = this.connection.getDialect().name
+    return { connectionName: this.connection.getConnectionName(), foldsColumnNames: !dialect.startsWith('postgres'), foldsTableNames: dialect.startsWith('sqlite') }
   }
 
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {

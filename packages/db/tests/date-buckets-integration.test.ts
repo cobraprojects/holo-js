@@ -1717,6 +1717,29 @@ describe('date buckets next to sqlite wildcards of case-variant aliases', () => 
   })
 })
 
+describe.runIf(mysqlIntegration)('grouped date bucket cursors on mysql case-distinct aliases', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('treats join aliases that differ only in case as different tables', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('mysql')
+    const kinds = await createKeyedTable('bucket_kinds', 'k', [{ id: 1, value: 1 }, { id: 2, value: 2 }])
+    registerGeneratedTables({ events, kinds })
+
+    await expect(DB.table(events.tableName)
+      .join(`${kinds.tableName} as d`, 'd.id', '=', `${events.tableName}.id`)
+      .join(`${kinds.tableName} as D`, 'D.id', '=', `${events.tableName}.id`)
+      .select('d.k', 'D.k as other_k')
+      .addSelectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
+      .groupBy('day', 'd.k', 'D.k')
+      .orderBy('day')
+      .orderBy('d.k')
+      .cursorPaginate(1)).rejects.toThrow(SecurityError)
+  })
+})
+
 describe.runIf(mysqlIntegration)('date buckets in mysql mutation subqueries', () => {
   afterEach(() => {
     resetDB()
