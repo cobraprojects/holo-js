@@ -250,7 +250,9 @@ export class PivotMutation {
   private objectKey(id: string): unknown {
     const column = this.relatedKeyLoaded ? this.relatedKey : this.context.relatedKey
     if (column && !readsAsInteger(column)) return id
-    return /^-?\d+$/.test(id) ? Number(id) : id
+    if (!/^-?\d+$/.test(id)) return id
+    const integer = Number(id)
+    return Number.isSafeInteger(integer) ? integer : id
   }
 
   private storedKeys(rows: readonly Attributes[]): unknown[] {

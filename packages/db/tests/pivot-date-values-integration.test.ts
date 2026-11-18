@@ -488,6 +488,35 @@ describe.each(drivers)('pivot keys of an unregistered pivot table on %s', (drive
 })
 
 describe.each(drivers)('pivot ids given as object keys on %s', (driver) => {
+  it.runIf(driver === 'sqlite')('keeps an object-form big integer key exact', async () => {
+    const { schema } = await openDatabase(driver, { security: { allowUnsafeRawSql: true } })
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const names = { owners: `holo_big_owners_${suffix}`, items: `holo_big_items_${suffix}`, ownerItems: `holo_owner_big_items_${suffix}` }
+    await schema.createTable(names.owners, (table) => { table.integer('id').primaryKey() })
+    await schema.createTable(names.items, (table) => { table.bigInteger('id').primaryKey() })
+    await schema.createTable(names.ownerItems, (table) => {
+      table.integer('owner_id')
+      table.bigInteger('item_id')
+      table.string('note').nullable()
+    })
+    onTestFinished(async () => {
+      for (const name of Object.values(names)) await schema.dropTable(name)
+    })
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
+    const items = defineGeneratedTable(names.items, { id: column.bigInteger().primaryKey() })
+    const ownerItems = defineGeneratedTable(names.ownerItems, { owner_id: column.integer(), item_id: column.bigInteger(), note: column.string().nullable() })
+    registerGeneratedTables({ owners, items, ownerItems })
+    onTestFinished(() => clearGeneratedTables())
+    const Item = defineModel(items, { timestamps: false })
+    const Owner = defineModel(owners, { timestamps: false, relations: { items: belongsToMany(() => Item, ownerItems, 'owner_id', 'item_id').withPivot('note') } })
+    await DB.table(owners).insert({ id: 1 })
+    const owner = await Owner.findOrFail(1)
+
+    await owner.attach('items', { '9007199254740993': { note: 'new' } } as never)
+    expect(await DB.table(ownerItems.tableName).unsafeSelect('CAST("item_id" AS TEXT) AS "stored"', []).first()).toEqual({ stored: '9007199254740993' })
+  })
+
   it('keeps a leading-zero string key as text, as Laravel does', async () => {
     const { schema } = await openDatabase(driver)
     onTestFinished(() => resetDB())
