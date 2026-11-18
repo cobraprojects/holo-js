@@ -140,6 +140,10 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('traversal al
     const branch = (groups: readonly number[]) => DB.table(events.tableName).select('grp').addSelectMin('min_stamp', 'stamp').whereIn('grp', groups).groupBy('grp')
     const query = branch([1]).unionAll(branch([2, 3])).orderBy('min_stamp')
     expect((await pageThrough(query)).map(row => Number(row.grp))).toEqual([1, 2, 3])
+    if (driver !== 'postgres') {
+      const raw = DB.table(events.tableName).whereIn('grp', [1]).unionAll(DB.table(events.tableName).whereIn('grp', [2, 3])).orderBy('STAMP')
+      expect((await pageThrough(raw)).map(row => Number(row.grp))).toEqual([1, 2, 3])
+    }
   })
 
   it('reads joined datetime cursor values in the application timezone both ways', async () => {

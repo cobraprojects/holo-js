@@ -2335,7 +2335,7 @@ export class TableQueryBuilder<
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
     const previous = decodedCursor?.previous === true
-    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => unionOrders ? this.normalizeUnionCursorValue(unionOutputValueColumn(orderedQuery.plan, cursorOrders[index]!.column, this.connection.getConnectionName()), value) : this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) } : undefined
+    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => unionOrders ? this.normalizeUnionCursorValue(unionOutputValueColumn(orderedQuery.plan, unionOrders[index]!.column, this.connection.getConnectionName()), value) : this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) } : undefined
     const nullsLow = !this.connection.getDialect().name.includes('postgres')
     const pageOrders = (orders: readonly CursorOrderDefinition[]) => orders.map((order): QueryOrderBy => ({ kind: 'column', column: order.column, direction: previous === (order.direction === 'asc') ? 'desc' : 'asc' }))
     let storedRows: TRow[]
