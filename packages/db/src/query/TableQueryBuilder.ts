@@ -1957,16 +1957,16 @@ export class TableQueryBuilder<
     })]))
   }
 
-  latest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  latest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'desc')
   }
 
-  oldest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  oldest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'asc')
   }
 
   reorder(
-    column?: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+    column?: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow>,
     direction: QueryDirection = 'asc',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const reordered = replaceOrderBy(this.plan, [])

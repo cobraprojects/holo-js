@@ -52,15 +52,17 @@ const UNKNOWN_KIND_KEY_ALIAS = '__holo_key'
 
 const UNKNOWN_KIND_KEYS_ALIAS = '__holo_keys'
 
+const NO_DATE_BUCKETS: ReadonlyMap<string, ResolvedDateBucket> = new Map()
+
 export type DateBucketAliasMode = 'expression' | 'output' | 'column'
 
 type ResolvedDateBucket = { readonly bucket: QueryDateBucketSelection, readonly storage: DateBucketStorage }
 
 export class SQLQueryCompiler {
   protected readonly dialect: SchemaDialectName | undefined = undefined
-  private dateBuckets: ReadonlyMap<string, ResolvedDateBucket> = new Map()
+  private dateBuckets: ReadonlyMap<string, ResolvedDateBucket> = NO_DATE_BUCKETS
   private dateBucketPlan: SelectQueryPlan | undefined = undefined
-  private dateBucketsFolded: ReadonlyMap<string, ResolvedDateBucket> = new Map()
+  private dateBucketsFolded: ReadonlyMap<string, ResolvedDateBucket> = NO_DATE_BUCKETS
   private dateBucketAliasMode: DateBucketAliasMode = 'column'
 
   constructor(
@@ -211,10 +213,16 @@ export class SQLQueryCompiler {
     const enclosingDateBucketsFolded = this.dateBucketsFolded
     try {
       const selections = dateBucketSelections(plan)
-      this.dateBuckets = new Map([...selections].map(([alias, bucket]) => [alias, { bucket, storage: dateBucketStorage(plan, bucket, this.connectionName) }]))
-      this.dateBucketPlan = selections.size === 0 ? undefined : plan
-      this.dateBucketsFolded = new Map([...this.dateBuckets].map(([alias, resolved]) => [alias.toLowerCase(), resolved]))
-      if (selections.size > 0) assertDateBucketOutputsUnshadowed(plan, this.connectionName)
+      if (selections.size === 0) {
+        this.dateBuckets = NO_DATE_BUCKETS
+        this.dateBucketPlan = undefined
+        this.dateBucketsFolded = NO_DATE_BUCKETS
+      } else {
+        this.dateBuckets = new Map([...selections].map(([alias, bucket]) => [alias, { bucket, storage: dateBucketStorage(plan, bucket, this.connectionName) }]))
+        this.dateBucketPlan = plan
+        this.dateBucketsFolded = new Map([...this.dateBuckets].map(([alias, resolved]) => [alias.toLowerCase(), resolved]))
+        assertDateBucketOutputsUnshadowed(plan, this.connectionName)
+      }
       return this.compileSelectSqlWithinDateBuckets(plan, bindings, projection)
     } finally {
       this.dateBuckets = enclosingDateBuckets

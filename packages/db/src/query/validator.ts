@@ -227,8 +227,8 @@ function selectedOutputName(selection: SelectQueryPlan['selections'][number]): s
   return selection.alias ?? selection.column.slice(selection.column.lastIndexOf('.') + 1)
 }
 
-function assertUniqueDateBucketOutputs(plan: SelectQueryPlan): void {
-  for (const alias of dateBucketSelections(plan).keys()) {
+function assertUniqueDateBucketOutputs(plan: SelectQueryPlan, dateBuckets: ReadonlyMap<string, QueryDateBucketSelection>): void {
+  for (const alias of dateBuckets.keys()) {
     const name = effectiveOutputName(alias)
     if (plan.selections.filter((selection) => {
       const output = selectedOutputName(selection)
@@ -237,12 +237,6 @@ function assertUniqueDateBucketOutputs(plan: SelectQueryPlan): void {
       throw new SecurityError(`Date bucket alias "${alias}" must not be reused by another selected column.`)
     }
   }
-}
-
-function withDateBucketAliases(plan: SelectQueryPlan, allowedColumns?: Set<string>): Set<string> | undefined {
-  if (!allowedColumns) return undefined
-  const aliases = [...dateBucketSelections(plan).keys()]
-  return aliases.length === 0 ? allowedColumns : new Set([...allowedColumns, ...aliases])
 }
 
 function assertColumnSelection(
@@ -651,7 +645,8 @@ export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName):
 
   switch (plan.kind) {
     case 'select': {
-      assertDateBucketSpelling(plan)
+      const dateBuckets = dateBucketSelections(plan)
+      if (dateBuckets.size > 0) assertDateBucketSpelling(plan, dateBuckets)
       for (const selection of plan.selections) {
         if (selection.kind === 'subquery') {
           validateQueryPlan(selection.query)
@@ -678,8 +673,8 @@ export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName):
 
         assertColumnSelection(selection, plan.source.tableName, allowedColumns)
       }
-      assertUniqueDateBucketOutputs(plan)
-      const referenceableColumns = withDateBucketAliases(plan, allowedColumns)
+      if (dateBuckets.size > 0) assertUniqueDateBucketOutputs(plan, dateBuckets)
+      const referenceableColumns = dateBuckets.size > 0 && allowedColumns ? new Set([...allowedColumns, ...dateBuckets.keys()]) : allowedColumns
 
       for (const join of plan.joins) {
         assertJoinClause(join)

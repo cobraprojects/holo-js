@@ -74,6 +74,16 @@ it('keeps the date bucket type next to a wildcard of a table joined by name', as
   }
 })
 
+it('accepts date bucket aliases wherever an order is set', () => {
+  if (false) {
+    DB.table(events).selectDate('day', 'occurred_at', { as: 'day' }).orderBy('day').reorder('day', 'desc')
+    DB.table(events).selectDate('day', 'occurred_at', { as: 'day' }).latest('day')
+    DB.table(events).selectDate('day', 'occurred_at', { as: 'day' }).oldest('day')
+    // @ts-expect-error reorder only accepts declared columns and selected date buckets
+    DB.table(events).selectDate('day', 'occurred_at', { as: 'day' }).reorder('week')
+  }
+})
+
 it('rejects date buckets on non-date columns, unknown units and aliases that shadow a column', () => {
   if (false) {
     // @ts-expect-error only date, datetime and timestamp columns can be bucketed

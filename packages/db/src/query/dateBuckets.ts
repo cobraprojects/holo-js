@@ -218,8 +218,8 @@ export function bareColumnOwner(plan: SelectQueryPlan, name: string, connectionN
   return owner
 }
 
-export function assertDateBucketSpelling(plan: SelectQueryPlan): void {
-  const aliases = new Map([...dateBucketSelections(plan).keys()].map(alias => [alias.toLowerCase(), alias]))
+export function assertDateBucketSpelling(plan: SelectQueryPlan, dateBuckets: ReadonlyMap<string, QueryDateBucketSelection> = dateBucketSelections(plan)): void {
+  const aliases = new Map([...dateBuckets.keys()].map(alias => [alias.toLowerCase(), alias]))
   if (aliases.size === 0) return
   const references = [
     ...plan.groupBy,
