@@ -1,5 +1,5 @@
 import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
-import { SQLQueryCompiler } from './SQLQueryCompiler'
+import { SQLQueryCompiler, type DateBucketAliasMode } from './SQLQueryCompiler'
 import { serializeRelationKeys, type QueryRelationKeysPredicate } from './ast'
 import { splitTablePath } from '../schema/identifiers'
 import type { CompiledStatement } from '../core/types'
@@ -144,14 +144,24 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
     return ` ON DUPLICATE KEY UPDATE ${updates}`
   }
 
+  protected override dateBucketHavingMode(): DateBucketAliasMode {
+    return 'output'
+  }
+
   protected override compileDateBucket(bucket: QueryDateBucketSelection, storage: DateBucketStorage): string {
     const column = this.compileColumnReference(bucket.column)
     const applicationTimeZone = getApplicationTimezone()
     const timeZone = bucket.timeZone ?? applicationTimeZone
     const wallClock = storage === 'calendar' || timeZone === applicationTimeZone
       ? column
-      : this.compileConvertedWallClock(column, mysqlTimeZoneName(applicationTimeZone), mysqlTimeZoneName(timeZone))
-    return `DATE_FORMAT(${wallClock}, '${MYSQL_DATE_BUCKET_FORMATS[bucket.unit]}')`
+      : storage === 'timestamp'
+        ? `CONVERT_TZ(${this.compileUtcWallClock(column)}, '+00:00', ${this.createSqlStringLiteral(mysqlTimeZoneName(timeZone))})`
+        : this.compileConvertedWallClock(column, mysqlTimeZoneName(applicationTimeZone), mysqlTimeZoneName(timeZone))
+    return `CASE WHEN ${wallClock} >= '0001-01-01' THEN DATE_FORMAT(${wallClock}, '${MYSQL_DATE_BUCKET_FORMATS[bucket.unit]}') END`
+  }
+
+  private compileUtcWallClock(timestampColumn: string): string {
+    return `DATE_ADD('1970-01-01 00:00:00', INTERVAL ROUND(UNIX_TIMESTAMP(${timestampColumn}) * 1000000) MICROSECOND)`
   }
 
   private compileConvertedWallClock(column: string, from: string, to: string): string {

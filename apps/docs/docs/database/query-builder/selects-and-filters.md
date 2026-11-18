@@ -205,7 +205,7 @@ const perDay = await DB.table(events)
 | `'day'` | `'2026-11-05'` |
 | `'hour'` | `'2026-11-05 14:00'` |
 
-Values are zero-padded strings, so they sort in date order. A `null` date gives a `null` bucket, as does a date before year 1.
+Values are zero-padded strings, so they sort in date order. A `null` date gives a `null` bucket, as does a date outside the years 1 to 9999.
 
 `timeZone` is an IANA time zone name such as `'UTC'` or `'Europe/Paris'`, and defaults to `app.timezone`. Holo reads a name the way JavaScript does, so a link such as `'US/Eastern'` or `'CET'` means the zone it links to (`'America/New_York'`, `'Europe/Brussels'`) on every database. Holo converts each timestamp to that zone before it takes the calendar part, so an event at `2026-11-04 23:30 UTC` falls on `2026-11-05` in `'Asia/Tokyo'`. `date()` columns hold a calendar day, not an instant, so they keep their day in every zone.
 

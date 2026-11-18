@@ -16,7 +16,7 @@ export type DateBucket<TUnit extends DateBucketUnit = DateBucketUnit> = string &
 
 export type DateColumnName<TColumns extends Record<string, unknown>> = string extends keyof TColumns
   ? string
-  : { [TColumn in keyof TColumns & string]: NonNullable<TColumns[TColumn]> extends Date ? TColumn : never }[keyof TColumns & string]
+  : { [TColumn in keyof TColumns & string]: [NonNullable<TColumns[TColumn]>] extends [never] ? never : NonNullable<TColumns[TColumn]> extends Date ? TColumn : never }[keyof TColumns & string]
 
 export type DateBucketAlias<TRow extends Record<string, unknown>> = {
   [TColumn in keyof TRow & string]: NonNullable<TRow[TColumn]> extends DateBucket ? TColumn : never

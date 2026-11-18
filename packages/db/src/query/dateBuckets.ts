@@ -2,11 +2,13 @@ import { CapabilityError, ConfigurationError, SecurityError } from '../core/erro
 import { getApplicationTimezone } from '../applicationTimezone'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { splitTablePath } from '../schema/identifiers'
+import { knownJoinedColumns, knownTableColumns } from './modelRowProjection'
+import { readAllColumnsSelectionTable } from './ast'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryDateBucketSelection, QueryDateBucketUnit, QueryPredicateNode, SelectQueryPlan } from './ast'
 
-export type DateBucketStorage = 'calendar' | 'instant'
+export type DateBucketStorage = 'calendar' | 'datetime' | 'timestamp'
 
 const DATE_BUCKET_UNITS: ReadonlySet<string> = new Set<QueryDateBucketUnit>(['year', 'month', 'day', 'hour'])
 const TIME_ZONE_NAME = /^[A-Za-z][A-Za-z0-9]*(?:[/_+-][A-Za-z0-9]+)*$/
@@ -45,7 +47,12 @@ function generatedDefinition(tableName: string | undefined, connectionName: stri
   return tableName === undefined || connectionName === undefined ? undefined : getConnectionGeneratedTableDefinition(tableName, connectionName)
 }
 
-type VisibleTable = { readonly tableName: string | undefined, readonly alias: string | undefined, readonly definition: TableDefinition | undefined }
+type VisibleTable = {
+  readonly tableName: string | undefined
+  readonly alias: string | undefined
+  readonly definition: TableDefinition | undefined
+  readonly columns: () => readonly string[] | undefined
+}
 
 function isVisibleAs(qualifier: string, { tableName, alias }: VisibleTable): boolean {
   if (alias !== undefined) return qualifier === alias
@@ -54,8 +61,18 @@ function isVisibleAs(qualifier: string, { tableName, alias }: VisibleTable): boo
 
 function visibleTables(plan: SelectQueryPlan, connectionName: string | undefined): readonly VisibleTable[] {
   return [
-    { tableName: plan.source.tableName, alias: plan.source.alias, definition: plan.source.table ?? generatedDefinition(plan.source.tableName, connectionName) },
-    ...plan.joins.map(join => ({ tableName: join.table, alias: join.alias, definition: join.definition ?? generatedDefinition(join.table, connectionName) })),
+    {
+      tableName: plan.source.tableName,
+      alias: plan.source.alias,
+      definition: plan.source.table ?? generatedDefinition(plan.source.tableName, connectionName),
+      columns: () => connectionName === undefined ? undefined : knownTableColumns(plan.source.tableName, plan.source.table, connectionName),
+    },
+    ...plan.joins.map(join => ({
+      tableName: join.table,
+      alias: join.alias,
+      definition: join.definition ?? generatedDefinition(join.table, connectionName),
+      columns: () => connectionName === undefined ? undefined : knownJoinedColumns(join, connectionName),
+    })),
   ]
 }
 
@@ -69,13 +86,26 @@ function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectio
     .find(definition => definition !== undefined)
 }
 
+export function selectionMayOutputName(plan: SelectQueryPlan, selection: SelectQueryPlan['selections'][number], name: string, connectionName: string): boolean {
+  if (selection.kind === 'raw') return true
+  if (selection.kind !== 'column' || selection.alias) return false
+  const wildcardTable = selection.column === '*' ? undefined : readAllColumnsSelectionTable(selection.column)
+  if (selection.column !== '*' && wildcardTable === undefined) return false
+  return visibleTables(plan, connectionName)
+    .filter(table => wildcardTable === undefined || isVisibleAs(wildcardTable, table))
+    .some((table) => {
+      const columns = table.columns()
+      return columns === undefined || columns.includes(name)
+    })
+}
+
 export function dateBucketStorage(plan: SelectQueryPlan, bucket: QueryDateBucketSelection, connectionName: string | undefined): DateBucketStorage {
   const definition = bucketColumnDefinition(plan, bucket.column, connectionName)
   if (!definition) {
     throw new ConfigurationError(`selectDate() can't tell whether "${bucket.column}" holds a date or a timestamp. Pass a table definition to DB.table() or generate the schema.`)
   }
   if (definition.kind === 'date') return 'calendar'
-  if (definition.kind === 'datetime' || definition.kind === 'timestamp') return 'instant'
+  if (definition.kind === 'datetime' || definition.kind === 'timestamp') return definition.kind
   throw new SecurityError(`selectDate() needs a date, datetime or timestamp column, but "${bucket.column}" is a ${definition.kind} column.`)
 }
 
@@ -107,7 +137,7 @@ function planDateBuckets(plan: SelectQueryPlan): readonly PlannedDateBucket[] {
 function convertedMySQLTimeZones(plan: SelectQueryPlan, connectionName: string): readonly string[] {
   const applicationTimeZone = getApplicationTimezone()
   const converted = planDateBuckets(plan)
-    .filter(({ plan: owner, bucket }) => bucket.timeZone !== undefined && bucket.timeZone !== applicationTimeZone && dateBucketStorage(owner, bucket, connectionName) === 'instant')
+    .filter(({ plan: owner, bucket }) => bucket.timeZone !== undefined && bucket.timeZone !== applicationTimeZone && dateBucketStorage(owner, bucket, connectionName) !== 'calendar')
   const zones = new Set(converted.flatMap(({ bucket }) => [applicationTimeZone, bucket.timeZone!]))
   return [...zones].filter(zone => mysqlTimeZoneName(zone) === zone)
 }

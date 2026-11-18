@@ -197,8 +197,12 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
     const applicationTimeZone = getApplicationTimezone()
     const timeZone = this.createSqlStringLiteral(bucket.timeZone ?? applicationTimeZone)
     const instant = `CASE WHEN pg_typeof(${column}) = 'timestamp with time zone'::regtype THEN CAST(${column} AS TIMESTAMPTZ) ELSE CAST(${column} AS TIMESTAMP) AT TIME ZONE ${this.createSqlStringLiteral(applicationTimeZone)} END`
-    const wallClock = storage === 'calendar' ? `CAST(${column} AS TIMESTAMP)` : `((${instant}) AT TIME ZONE ${timeZone})`
-    return `CASE WHEN ${wallClock} >= TIMESTAMP '0001-01-01 00:00:00' THEN to_char(${wallClock}, '${POSTGRES_DATE_BUCKET_FORMATS[bucket.unit]}') END`
+    const format = POSTGRES_DATE_BUCKET_FORMATS[bucket.unit]
+    if (storage === 'calendar') {
+      return `CASE WHEN ${column} BETWEEN DATE '0001-01-01' AND DATE '9999-12-31' THEN to_char(CAST(${column} AS TIMESTAMP), '${format}') END`
+    }
+    const wallClock = `((${instant}) AT TIME ZONE ${timeZone})`
+    return `CASE WHEN ${wallClock} BETWEEN TIMESTAMP '0001-01-01 00:00:00' AND TIMESTAMP '9999-12-31 23:59:59.999999' THEN to_char(${wallClock}, '${format}') END`
   }
 
   protected override compileDatePredicate(

@@ -8,6 +8,7 @@ const events = defineGeneratedTable('bucket_events', {
   channel: column.string(),
   occurred_at: column.datetime(),
   billed_on: column.date().nullable(),
+  payload: column.json<null>().nullable(),
 })
 
 function channelBreakdown<TTable extends TableDefinition, TKey extends keyof InferSelect<TTable> & string>(table: TTable, key: TKey) {
@@ -58,6 +59,8 @@ it('rejects date buckets on non-date columns, unknown units and aliases that sha
   if (false) {
     // @ts-expect-error only date, datetime and timestamp columns can be bucketed
     DB.table(events).selectDate('day', 'channel', { as: 'day' })
+    // @ts-expect-error a JSON column that only holds null is not a date column
+    DB.table(events).selectDate('day', 'payload', { as: 'day' })
     // @ts-expect-error unknown units are rejected
     DB.table(events).selectDate('week', 'occurred_at', { as: 'week' })
     // @ts-expect-error the alias must not reuse a column name

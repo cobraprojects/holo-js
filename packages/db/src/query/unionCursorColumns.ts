@@ -1,5 +1,5 @@
 import { CompilerError } from '../core/errors'
-import { unionBranchPlans, type QuerySelection, type SelectQueryPlan } from './ast'
+import { dateBucketSelections, unionBranchPlans, type QuerySelection, type SelectQueryPlan } from './ast'
 import { knownJoinedColumns, knownTableColumns, qualifiesTable, selectionOutputName } from './modelRowProjection'
 
 type UnionOutput = { readonly names: readonly string[] | undefined, readonly column?: string, readonly positioned: boolean }
@@ -75,9 +75,13 @@ function positionedBranchColumn(branch: SelectQueryPlan, column: string, positio
 
 export function unionCursorColumns(plan: SelectQueryPlan, columns: readonly string[], connectionName: string): (branch: SelectQueryPlan) => readonly string[] {
   const positions = columns.map(column => outputPosition(plan, column, connectionName))
+  const rootDateBuckets = dateBucketSelections(plan)
   const branchColumns = (branch: SelectQueryPlan) => columns.map((column, index) => {
     const position = positions[index]
     if (typeof position === 'undefined') assertKnownPosition(branchOutputs(branch, connectionName), column)
+    if (typeof position === 'undefined' && rootDateBuckets.has(column) && !dateBucketSelections(branch).has(column)) {
+      throw new CompilerError(`Cannot cursor paginate a union by "${column}": a query in the union doesn't select its date bucket under that name. Use the same alias in each query.`)
+    }
     return typeof position === 'undefined' ? namedBranchColumn(branch, column) : positionedBranchColumn(branch, column, position, connectionName)
   })
   for (const branch of unionBranchPlans(plan)) branchColumns(branch)

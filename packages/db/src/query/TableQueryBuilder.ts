@@ -6,7 +6,7 @@ import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { createDateExtremaSelection, createFractionalCountSelection } from './trustedRawSelection'
 import type { QueryDateBucketSelection, QueryRawSelection, QueryRelationKeysPredicate } from './ast'
-import { assertDateBucketTimeZonesConvertible, assertDateBucketUnit, normalizeDateBucketTimeZone } from './dateBuckets'
+import { assertDateBucketTimeZonesConvertible, assertDateBucketUnit, normalizeDateBucketTimeZone, selectionMayOutputName } from './dateBuckets'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
@@ -70,7 +70,6 @@ import {
   appendAggregateSelection,
   appendDateBucketSelection,
   dateBucketSelections,
-  readAllColumnsSelectionTable,
   unionBranchPlans,
   withDateBucketSelection,
   appendRawSelection,
@@ -101,7 +100,7 @@ import type { AnyColumnDefinition, InferSelect, LogicalColumnKind, TableDefiniti
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { isAwaitingGeneratedTableIdentity, getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { unionCursorColumns } from './unionCursorColumns'
-import { knownJoinedColumns, knownTableColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
+import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
 import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
@@ -3475,17 +3474,7 @@ export class TableQueryBuilder<
   private assertDateBucketCursorKey(branch: SelectQueryPlan, alias: string): void {
     if (!dateBucketSelections(branch).has(alias)) return
     const connectionName = this.connection.getConnectionName()
-    const mayOverwrite = branch.selections.some((selection) => {
-      if (selection.kind === 'raw') return true
-      if (selection.kind !== 'column') return false
-      const wildcardTable = selection.column === '*' ? undefined : readAllColumnsSelectionTable(selection.column)
-      if (selection.column !== '*' && (wildcardTable === undefined || selection.alias)) return false
-      const tables = selection.column === '*' || qualifiesTable(wildcardTable!, branch.source.tableName, branch.source.alias)
-        ? [knownTableColumns(branch.source.tableName, branch.source.table, connectionName), ...(selection.column === '*' ? branch.joins.map(join => knownJoinedColumns(join, connectionName)) : [])]
-        : branch.joins.filter(join => qualifiesTable(wildcardTable!, join.table, join.alias)).map(join => knownJoinedColumns(join, connectionName))
-      return tables.some(columns => columns === undefined || columns.includes(alias))
-    })
-    if (mayOverwrite) {
+    if (branch.selections.some(selection => selectionMayOutputName(branch, selection, alias, connectionName))) {
       throw new SecurityError(`Cursor pagination by the date bucket "${alias}" needs every other selected column to have a different name, so select it under a name no raw or wildcard selection can produce.`)
     }
   }
