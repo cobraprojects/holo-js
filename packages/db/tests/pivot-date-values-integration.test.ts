@@ -8,6 +8,16 @@ const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'])
 
 type Driver = typeof drivers[number]
 
+// The same instant, 2026-01-01T10:00:00Z, written with every UTC offset and with zero-only fractions of growing length.
+function sameInstantTexts(count: number): string {
+  return `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ${count - 1}),
+    t(m, k) AS (SELECT (i % 1681) - 840, i / 1681 FROM n)
+    SELECT replace(datetime('2026-01-01 10:00:00', printf('%+d minutes', m)), ' ', 'T')
+      || CASE WHEN k > 0 THEN '.' || substr('000000000000000000000000', 1, k) ELSE '' END
+      || CASE WHEN m < 0 THEN '-' ELSE '+' END || printf('%02d:%02d', abs(m) / 60, abs(m) % 60) AS text
+    FROM t`
+}
+
 const quote = (driver: Driver, identifier: string) => driver === 'mysql' ? `\`${identifier}\`` : `"${identifier}"`
 
 async function openPivots(driver: Driver, logger?: NonNullable<Parameters<typeof openDatabase>[1]>['logger']) {
@@ -234,6 +244,14 @@ describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as S
     expect(await DB.table(ownerTags.tableName).unsafeSelect('"expires_at" AS "stored"', []).first()).toEqual({ stored: '2026-01-01T10:00:00Z' })
   })
 
+  it('keeps a stored key a microsecond away from the instant it is given', async () => {
+    const { db, names, owner, ownerSlots } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") VALUES (1, '2026-01-01T10:00:00.000001Z', 'micro'), (1, '2026-01-01 10:00:00', 'whole')`))
+
+    expect(await owner.detach('slots', new Date('2026-01-01T10:00:00Z'))).toBe(1)
+    expect(await DB.table(ownerSlots).pluck('note')).toEqual(['micro'])
+  })
+
   it('matches a key stored as date-only text', async () => {
     const { db, names, owner, ownerSlots } = await openPivots(driver)
     await db.unsafeExecute(unsafeSql(`INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") VALUES (1, '2026-01-01', 'old')`))
@@ -277,8 +295,8 @@ describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as S
 
   it('rolls back every chunk of an update when a later chunk fails', async () => {
     const { db, names, owner, ownerSlots } = await openPivots(driver)
-    await db.unsafeExecute(unsafeSql(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 905) INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, '2026-01-01T10:00:00.000' || printf('%05d', i) || 'Z', 'old' FROM n`))
-    await db.unsafeExecute(unsafeSql(`CREATE TRIGGER "reject_last_${names.ownerSlots}" BEFORE UPDATE ON "${names.ownerSlots}" WHEN OLD."starts_at" = '2026-01-01T10:00:00.00000905Z' BEGIN SELECT RAISE(ABORT, 'rejected'); END`))
+    await db.unsafeExecute(unsafeSql(`INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, texts.text, 'old' FROM (${sameInstantTexts(905)}) AS texts`))
+    await db.unsafeExecute(unsafeSql(`CREATE TRIGGER "reject_last_${names.ownerSlots}" BEFORE UPDATE ON "${names.ownerSlots}" WHEN OLD.rowid = (SELECT MAX(rowid) FROM "${names.ownerSlots}") BEGIN SELECT RAISE(ABORT, 'rejected'); END`))
 
     await expect(owner.updateExistingPivot('slots', new Date('2026-01-01T10:00:00Z'), { note: 'new' })).rejects.toThrow('rejected')
     expect(await DB.table(ownerSlots).where('note', 'new').count()).toBe(0)
@@ -302,7 +320,7 @@ describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as S
 
   it('updates more rows stored for one instant than one statement can bind', async () => {
     const { db, names, owner, ownerSlots } = await openPivots(driver)
-    await db.unsafeExecute(unsafeSql(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 33000) INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, '2026-01-01T10:00:00.000' || printf('%05d', i) || 'Z', 'old' FROM n`))
+    await db.unsafeExecute(unsafeSql(`INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, texts.text, 'old' FROM (${sameInstantTexts(33000)}) AS texts`))
 
     expect(await owner.updateExistingPivot('slots', new Date('2026-01-01T10:00:00Z'), { note: 'new' })).toBe(1)
     expect(await DB.table(ownerSlots).where('note', 'new').count()).toBe(33000)
@@ -523,6 +541,8 @@ describe.each(drivers)('pivot ids given as object keys on %s', (driver) => {
     const owner = await Owner.findOrFail(1)
 
     await expect(owner.attach('items', { '9007199254740993': { note: 'new' } } as never)).rejects.toThrow(HydrationError)
+    await expect(owner.attach('items', 9007199254740992 as never)).rejects.toThrow(HydrationError)
+    await expect(owner.sync('items', [1, 9007199254740992] as never)).rejects.toThrow(HydrationError)
     expect(await DB.table(ownerItems.tableName).count()).toBe(0)
   })
 

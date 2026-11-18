@@ -229,7 +229,12 @@ export class PivotMutation {
 
   private castId(id: unknown): unknown {
     const column = this.relatedKeyLoaded ? this.relatedKey : this.context.relatedKey
-    return typeof id === 'string' && column && readsAsInteger(column) ? this.objectKey(id) : id
+    if (!column || !readsAsInteger(column)) return id
+    if (typeof id === 'string') return this.objectKey(id)
+    const unsafe = (typeof id === 'number' && Number.isInteger(id) && !Number.isSafeInteger(id))
+      || (typeof id === 'bigint' && (id > BigInt(Number.MAX_SAFE_INTEGER) || id < BigInt(Number.MIN_SAFE_INTEGER)))
+    if (unsafe) this.assertReadableInteger(id)
+    return id
   }
 
   private groupByKey(rows: readonly Attributes[]): Map<unknown, Attributes[]> {
@@ -258,8 +263,14 @@ export class PivotMutation {
     if (!/^-?\d+$/.test(id)) return id
     const integer = Number(id)
     if (Number.isSafeInteger(integer)) return integer
-    if (column) throw new HydrationError(`Integer value "${id}" cannot be represented as a safe integer.`)
+    this.assertReadableInteger(id)
     return id
+  }
+
+  private assertReadableInteger(id: unknown): void {
+    const table = this.writtenTableDefinition()
+    const column = table ? ownEntry(table.columns, this.context.relatedColumn) : undefined
+    if (column && readsAsInteger(column)) throw new HydrationError(`Integer value "${String(id)}" cannot be represented as a safe integer.`)
   }
 
   private storedKeys(rows: readonly Attributes[]): unknown[] {
@@ -271,22 +282,26 @@ export class PivotMutation {
   }
 
   private storedKeyIdentity(row: Attributes): unknown {
-    return this.incomingKeyIdentity(this.storedKey(row))
+    const stored = this.storedKey(row)
+    if (this.storesSQLiteDateKeys() && this.dateKeyColumn()?.kind !== 'date') return this.sqliteInstantIdentity(stored, stored)
+    return this.incomingKeyIdentity(stored)
   }
 
   private incomingKeyIdentity(value: unknown): unknown {
     if (this.storesSQLiteDateKeys()) {
-      return this.dateKeyColumn()?.kind === 'date' ? this.calendarDayIdentity(this.writeKey(value)) : this.sqliteInstantIdentity(value)
+      if (this.dateKeyColumn()?.kind === 'date') return this.calendarDayIdentity(this.writeKey(value))
+      const written = this.writeKey(value)
+      return this.sqliteInstantIdentity(written, written)
     }
     return this.keyIdentity(this.readKey(this.writeKey(value)))
   }
 
-  private sqliteInstantIdentity(value: unknown): unknown {
+  private sqliteInstantIdentity(value: unknown, precise: unknown): unknown {
     const written = this.writeKey(value)
     if (typeof written !== 'string') return this.keyIdentity(written)
     const instant = parseStoredDate('sqlite', written)
     if (!(instant instanceof Date) || Number.isNaN(instant.getTime())) return this.keyIdentity(written)
-    const fraction = SECONDS_FRACTION.exec(written)?.[1] ?? ''
+    const fraction = typeof precise === 'string' ? SECONDS_FRACTION.exec(precise)?.[1] ?? '' : ''
     return `instant:${instant.getTime()}|${fraction.slice(3).replace(/0+$/, '')}`
   }
 
