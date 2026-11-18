@@ -1,6 +1,7 @@
 import { CapabilityError } from '../core/errors'
 import { getApplicationTimezone } from '../applicationTimezone'
-import { isEmittingQueryLog, type DatabaseContext } from '../core/DatabaseContext'
+import type { DatabaseContext } from '../core/DatabaseContext'
+import { isEmittingQueryLog } from '../core/queryLogScope'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import { currentRootTransaction } from '../core/openTransactions'
 import { currentPinnedConnection } from '../concurrency/pinnedConnection'
