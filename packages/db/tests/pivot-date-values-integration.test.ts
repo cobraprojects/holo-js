@@ -205,6 +205,17 @@ describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as S
     expect(await DB.table(ownerSlots).count()).toBe(0)
   }, 60000)
 
+  it('updates many rows for one instant once per repeated attach', async () => {
+    let queries = 0
+    const { db, names, owner, ownerSlots } = await openPivots(driver, { onQuerySuccess: () => { queries++ } })
+    await db.unsafeExecute(unsafeSql(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000) INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, '2026-01-01 10:00:00', 'old' FROM n`))
+
+    queries = 0
+    await owner.attach('slots', Array.from({ length: 100 }, () => new Date('2026-01-01T10:00:00Z')), { note: 'new' })
+    expect(queries).toBeLessThanOrEqual(110)
+    expect(await DB.table(ownerSlots).where('note', 'new').count()).toBe(10000)
+  }, 60000)
+
   it('detaches many rows for one instant when the same id is passed many times', async () => {
     const { db, names, owner, ownerSlots } = await openPivots(driver)
     await db.unsafeExecute(unsafeSql(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000) INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, '2026-01-01 10:00:00', 'old' FROM n`))
@@ -227,21 +238,6 @@ describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as S
 
     expect(await owner.updateExistingPivot('slots', new Date('2026-01-01T10:00:00Z'), { note: 'new' })).toBe(1)
     expect(await DB.table(ownerSlots).where('note', 'new').count()).toBe(33000)
-  })
-
-  it('compares Date attributes of a pivot referenced only by an unregistered table name', async () => {
-    const { names, owner } = await openPivots(driver)
-    clearGeneratedTables()
-    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
-    const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey() })
-    registerGeneratedTables({ owners, tags })
-    const Tag = defineModel(tags, { timestamps: false })
-    const Untyped = defineModel(owners, { timestamps: false, relations: { tags: belongsToMany(() => Tag, names.ownerTags, 'owner_id', 'tag_id').withPivot('expires_at') } })
-    const untyped = await Untyped.findOrFail(owner.get('id'))
-    await untyped.attach('tags', 1, { expires_at: new Date('2026-01-01T10:00:00Z') })
-
-    expect(await untyped.updateExistingPivot('tags', 1, { expires_at: new Date('2026-01-01T10:00:00Z') })).toBe(0)
-    expect(await untyped.updateExistingPivot('tags', 1, { expires_at: new Date('2026-01-01T11:00:00Z') })).toBe(1)
   })
 })
 
@@ -314,6 +310,22 @@ describe.each(drivers)('pivot keys given with more precision than the database k
 })
 
 describe.each(drivers)('pivot date attributes written again on %s', (driver) => {
+  it('compares date attributes of a pivot referenced only by an unregistered table name', async () => {
+    const { names, owner } = await openPivots(driver)
+    clearGeneratedTables()
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
+    const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey() })
+    registerGeneratedTables({ owners, tags })
+    const Tag = defineModel(tags, { timestamps: false })
+    const Untyped = defineModel(owners, { timestamps: false, relations: { tags: belongsToMany(() => Tag, names.ownerTags, 'owner_id', 'tag_id').withPivot('expires_at') } })
+    const untyped = await Untyped.findOrFail(owner.get('id'))
+    await untyped.attach('tags', 1, { expires_at: new Date('2026-01-01T10:00:00Z') })
+
+    expect(await untyped.updateExistingPivot('tags', 1, { expires_at: new Date('2026-01-01T10:00:00Z') })).toBe(0)
+    expect(await untyped.updateExistingPivot('tags', 1, { expires_at: new Date('2026-01-01T11:00:00Z') })).toBe(1)
+    expect(await untyped.updateExistingPivot('tags', 1, { expires_at: '2026-01-01 11:00:00' as never })).toBe(0)
+  })
+
   it('leaves a row alone when a date attribute is given the instant it already holds', async () => {
     const { owner } = await openPivots(driver)
     const expiresAt = new Date('2026-01-01T10:00:00Z')

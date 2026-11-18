@@ -219,7 +219,7 @@ export class PivotMutation {
   }
 
   private storedKeys(rows: readonly Attributes[]): unknown[] {
-    return rows.map(row => this.storedKey(row)).filter(key => typeof key !== 'undefined')
+    return [...new Set(rows.map(row => this.storedKey(row)).filter(key => typeof key !== 'undefined'))]
   }
 
   private storedKey(row: Attributes): unknown {
@@ -346,16 +346,16 @@ export class PivotMutation {
   }
 
   private updateFor(existing: readonly Attributes[], attributes: Attributes): PivotUpdate | undefined {
-    const dates = Object.entries(attributes).filter(([column, value]) => this.comparesInDatabase(column, value)).map(([column]) => column)
+    const dates = Object.entries(attributes).filter(([column, value]) => this.comparesInDatabase(column, value, existing)).map(([column]) => column)
     const others = Object.entries(attributes).filter(([column]) => !dates.includes(column))
     if (existing.some(row => others.some(([column, value]) => row[column] !== value))) return { when: 'always' }
     return dates.length === 0 ? undefined : { when: 'datesDiffer', columns: dates }
   }
 
-  private comparesInDatabase(column: string, value: unknown): boolean {
+  private comparesInDatabase(column: string, value: unknown, existing: readonly Attributes[]): boolean {
     const definition = this.tableDefinition()
     const columnDefinition = definition ? ownEntry(definition.columns, column) : undefined
-    return columnDefinition ? storesDate(columnDefinition) : value instanceof Date
+    return columnDefinition ? storesDate(columnDefinition) : value instanceof Date || existing.some(row => row[column] instanceof Date)
   }
 
   private calendarDateColumns(columns: readonly string[]): string[] {
