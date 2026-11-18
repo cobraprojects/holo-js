@@ -225,6 +225,27 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     else await expect(query()).rejects.toThrow(SecurityError)
   })
 
+  it('rejects an alias that names a grouped column of a table without a definition', async () => {
+    useAppTimezone('UTC')
+    const events = await createEvents(driver)
+    const { schema } = await openDatabase(driver)
+    const labels = `bucket_labels_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(labels)
+    })
+    await schema.createTable(labels, (table) => {
+      table.id()
+      table.string('day')
+    })
+
+    await expect(DB.table(events.tableName)
+      .join(labels, `${labels}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'day', timeZone: 'UTC' })
+      .groupBy('day', `${labels}.day`)
+      .having('day', '2026-11-03')
+      .get()).rejects.toThrow(SecurityError)
+  })
+
   it('rejects an unknown unit and a time zone abbreviation', async () => {
     const events = await createEvents(driver)
 

@@ -1005,6 +1005,7 @@ export class SQLQueryCompiler {
     })
     return new Map([...buckets].map(([alias, bucket]) => {
       if (columns.has(fold(alias))) throw new SecurityError(`Date bucket alias "${alias}" is the name of a column of the query, so the database could read the column instead. Choose another alias.`)
+      if (plan.groupBy.some(column => column !== alias && fold(column.slice(column.lastIndexOf('.') + 1)) === fold(alias))) throw new SecurityError(`Date bucket alias "${alias}" is the name of a grouped column, so the database could read the column instead. Choose another alias.`)
       if (outputs.filter(output => output === fold(alias)).length > 1) throw new SecurityError(`Date bucket alias "${alias}" is already the name of another selected column.`)
       return [alias, this.compileDateBucket(bucket, dateBucketStorage(plan, bucket, this.connectionName))]
     }))
