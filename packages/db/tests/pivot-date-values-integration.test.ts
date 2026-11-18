@@ -196,6 +196,15 @@ describe.each(integrationDrivers(['sqlite']))('pivot date attributes stored as S
     expect(await DB.table(ownerTags).unsafeSelect('"due_on" AS "stored"', []).first()).toEqual({ stored: '2026-05-06 11:00:00' })
   })
 
+  it('syncs away more rows stored for one instant than a function call can take', async () => {
+    const { db, names, owner, ownerSlots } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 150000) INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, '2026-01-01 10:00:00', 'old' FROM n`))
+
+    const result = await owner.sync('slots', [])
+    expect(result.detached).toHaveLength(150000)
+    expect(await DB.table(ownerSlots).count()).toBe(0)
+  }, 60000)
+
   it('updates more rows stored for one instant than one statement can bind', async () => {
     const { db, names, owner, ownerSlots } = await openPivots(driver)
     await db.unsafeExecute(unsafeSql(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 33000) INSERT INTO "${names.ownerSlots}" ("owner_id", "starts_at", "note") SELECT 1, '2026-01-01T10:00:00.000' || printf('%05d', i) || 'Z', 'old' FROM n`))

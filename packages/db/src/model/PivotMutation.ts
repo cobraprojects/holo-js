@@ -120,7 +120,7 @@ export class PivotMutation {
           const keys = this.storedKeys(missing)
           if (keys.length === 0) continue
           actions.push({ kind: 'delete', keys })
-          result.detached.push(...missing.map(row => this.readKey(row[this.context.relatedColumn])))
+          for (const row of missing) result.detached.push(this.readKey(row[this.context.relatedColumn]))
         }
       }
       await this.execute(connection, actions)
@@ -146,7 +146,7 @@ export class PivotMutation {
       if (action.kind === 'delete') {
         const keys = [...action.keys]
         while (offset < timestamped.length && timestamped[offset]!.kind === 'delete' && keys.length < this.idBatchSize()) {
-          keys.push(...(timestamped[offset] as DeleteAction).keys)
+          for (const key of (timestamped[offset] as DeleteAction).keys) keys.push(key)
           offset++
         }
         await this.delete(connection, keys)
