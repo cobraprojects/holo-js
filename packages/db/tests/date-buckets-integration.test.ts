@@ -853,6 +853,39 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     await expect(DB.table(events.tableName).selectDate('day', 'occurred_at', { as: alias }).addSelect(`tenant_id as ${alias}x`).get()).rejects.toThrow(SecurityError)
   })
 
+  it('reads the date bucket for the cursor when a joined column of the same name is selected under another alias', async () => {
+    useAppTimezone('UTC')
+    const { events, facts } = await createFactsTable(driver)
+    const page = (cursor: string | null) => DB.table(events.tableName)
+      .join(facts, `${facts}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', `${events.tableName}.occurred_at`, { as: 'bucket', timeZone: 'UTC' })
+      .addSelect('bucket as label', `${events.tableName}.id`)
+      .orderBy('bucket')
+      .cursorPaginate(1, cursor)
+
+    const first = await page(null)
+    const second = await page(first.nextCursor)
+
+    expect([...first.data, ...second.data]).toEqual([
+      { bucket: '2026-11-03', label: 'first', id: 1 },
+      { bucket: '2026-11-03', label: 'second', id: 2 },
+    ])
+  })
+
+  it('rejects a joined wildcard column that PostgreSQL would cut to the date bucket alias', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const alias = `b${'u'.repeat(62)}`
+    const ghost = defineGeneratedTable('bucket_ghost', { id: column.id(), [`${alias}z`]: column.integer() })
+    registerGeneratedTables({ events, ghost })
+
+    await expect(DB.table(events.tableName)
+      .join('bucket_ghost', 'bucket_ghost.id', '=', `${events.tableName}.id`)
+      .selectDate('day', 'occurred_at', { as: alias })
+      .addSelect('bucket_ghost.*')
+      .get()).rejects.toThrow(SecurityError)
+  })
+
   it('compiles the next statement cleanly after a rejected date bucket selection', async () => {
     useAppTimezone('UTC')
     const { events, facts } = await createFactsTable(driver)
@@ -1048,6 +1081,24 @@ describe.runIf(mysqlIntegration)('date buckets in mysql mutation subqueries', ()
 
     await expect(DB.table(events).whereInSub('billed_on', subquery).update({ tenant_id: 9 })).rejects.toThrow(SecurityError)
   })
+
+  it('writes through a builder whose discarded projection has a date bucket', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('mysql', {
+      wrapAdapter: adapter => new Proxy(adapter, {
+        get(target, property) {
+          if (property !== 'query') return Reflect.get(target, property, target)
+          return (sql: string, bindings: readonly unknown[], options: unknown) => sql.startsWith('SELECT CONVERT_TZ')
+            ? Promise.resolve({ rows: [{ converted: null }], rowCount: 1 })
+            : target.query(sql, bindings, options as never)
+        },
+      }),
+    })
+
+    await DB.table(events).selectDate('day', 'occurred_at', { as: 'day', timeZone: 'Asia/Tokyo' }).where('id', 1).update({ tenant_id: 9 })
+
+    await expect(DB.table(events).where('id', 1).value('tenant_id')).resolves.toBe(9)
+  })
 })
 
 describe.runIf(mysqlIntegration)('date buckets in mysql having clauses', () => {
@@ -1170,6 +1221,30 @@ describe.runIf(postgresIntegration)('date buckets on postgres columns that diffe
     const day = await DB.table(cased).selectDate('day', 'At', { as: 'bucket', timeZone: 'Asia/Tokyo' }).value('bucket')
 
     expect(day).toBe('2026-11-04')
+  })
+})
+
+describe.runIf(postgresIntegration)('date buckets on postgres qualifiers that differ only in case', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('needs metadata from the table bound to the exact qualifier', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('postgres')
+    const name = `bucket_unknown_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const connection = DB.connection()
+    onTestFinished(async () => {
+      await createSchemaService(connection).dropTable(name)
+    })
+    await connection.executeCompiled({ sql: `CREATE TABLE "${name}" (id integer PRIMARY KEY, billed_on timestamptz)`, source: 'test' })
+
+    const shadow = events.tableName.toUpperCase()
+
+    await expect(DB.table(events.tableName)
+      .join(`${name} as ${shadow}`, `${shadow}.id`, '=', `${events.tableName}.id`)
+      .selectDate('day', `${shadow}.billed_on`, { as: 'day', timeZone: 'Asia/Tokyo' })
+      .get()).rejects.toThrow(ConfigurationError)
   })
 })
 

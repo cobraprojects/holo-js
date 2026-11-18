@@ -106,9 +106,10 @@ function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectio
   const separator = column.lastIndexOf('.')
   const name = column.slice(separator + 1)
   const qualifier = separator === -1 ? undefined : column.slice(0, separator)
-  const tables = visibleTables(plan, connectionName)
+  const visible = visibleTables(plan, connectionName)
+  const exactlyBound = qualifier === undefined ? visible : visible.filter(table => isVisibleAs(qualifier, table, sameIdentifierExactly))
+  const tables = exactlyBound.length > 0 ? exactlyBound : visible.filter(table => qualifier !== undefined && isVisibleAs(qualifier, table))
   const find = (matches: IdentifierMatch) => tables
-    .filter(table => qualifier === undefined || isVisibleAs(qualifier, table, matches))
     .map(table => matchingColumnDefinition(table.definition, name, matches))
     .find(definition => definition !== undefined)
   return find(sameIdentifierExactly) ?? find(sameIdentifierFolded)
@@ -129,7 +130,7 @@ export function selectionMayOutputName(
     .filter(table => wildcardTable === undefined || isVisibleAs(wildcardTable, table))
     .some((table) => {
       const columns = table.columns()
-      return columns === undefined ? unknown.wildcard : columns.some(column => sameIdentifierFolded(column, name))
+      return columns === undefined ? unknown.wildcard : columns.some(column => effectiveOutputName(column) === effectiveOutputName(name))
     })
 }
 

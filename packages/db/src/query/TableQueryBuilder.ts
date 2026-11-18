@@ -367,9 +367,10 @@ export class TableQueryBuilder<
 
   private async prepareMutation(): Promise<void> {
     await this.bindGeneratedTable()
-    if (planHasDateBuckets(this.plan)) {
-      this.getCompiler().compile(this.plan)
-      await assertDateBucketTimeZonesConvertible(this.connection, this.plan)
+    const executed = Object.freeze({ ...createSelectQueryPlan(this.plan.source), predicates: this.plan.predicates })
+    if (planHasDateBuckets(executed)) {
+      this.getCompiler().compile(executed)
+      await assertDateBucketTimeZonesConvertible(this.connection, executed)
     }
     if (!currentRootTransaction(this.connection)?.schemaChanged && (getDatabaseQueryCacheBridge() || hasDatabaseDependencyInvalidationListeners() || hasDatabaseDependencyInvalidationPublisher())) {
       await resolveTableIdentity(this.connection, this.ownSource.tableName)
@@ -3493,6 +3494,7 @@ export class TableQueryBuilder<
   }
 
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
+    if (dateBucketSelections(this.plan).has(column)) return row[column]
     const sourceColumn = this.resolveSourceColumnName(column)
     const selections = this.plan.selections
     const ownColumns = Object.keys(this.source.table?.columns ?? {})
