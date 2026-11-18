@@ -137,6 +137,17 @@ describe.each(integrationDrivers(['postgres']))('pivot keys a microsecond apart 
     expect(await DB.table(ownerSlots).pluck('note')).toEqual(['first'])
   })
 
+  it('matches a key given with more fractional digits than PostgreSQL stores', async () => {
+    const { owner, ownerSlots } = await openPivots(driver)
+    const key = '2026-01-01 10:00:00.0000021' as never
+
+    await owner.attach('slots', key)
+    await owner.attach('slots', key)
+    expect(await DB.table(ownerSlots).count()).toBe(1)
+    expect(await owner.detach('slots', key)).toBe(1)
+    expect(await DB.table(ownerSlots).count()).toBe(0)
+  })
+
   it('detaches a row whose key holds more precision than a Date', async () => {
     const { db, names, owner, ownerSlots } = await openPivots(driver)
     await db.unsafeExecute(unsafeSql(`INSERT INTO ${quote(driver, names.ownerSlots)} (${quote(driver, 'owner_id')}, ${quote(driver, 'starts_at')}, ${quote(driver, 'note')}) VALUES (1, '2026-01-01 10:00:00.000002', 'micro'), (1, '2026-01-02 10:00:00', 'kept')`))
@@ -252,6 +263,8 @@ describe.each(drivers)('pivot date attributes written again on %s', (driver) => 
     await owner.attach('tags', [1, 2], { due_on: new Date('2026-05-06T00:00:00Z') })
 
     expect(await owner.updateExistingPivot('tags', 1, { due_on: new Date('2026-05-06T00:00:00Z') })).toBe(0)
+    expect(await owner.updateExistingPivot('tags', 1, { due_on: new Date('2026-05-06T15:30:00Z') })).toBe(driver === 'sqlite' ? 1 : 0)
+    expect(await owner.updateExistingPivot('tags', 1, { due_on: new Date('2026-05-06T00:00:00Z') })).toBe(driver === 'sqlite' ? 1 : 0)
     expect(await owner.updateExistingPivot('tags', 1, { due_on: new Date('2026-05-07T00:00:00Z') })).toBe(1)
     expect(await owner.sync('tags', { 1: { due_on: new Date('2026-05-07T00:00:00Z') } })).toEqual({ attached: [], detached: [2], updated: [] })
     expect(await DB.table(ownerTags).pluck('tag_id')).toEqual([1])

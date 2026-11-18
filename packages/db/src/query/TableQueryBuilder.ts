@@ -3696,6 +3696,7 @@ export function whereStoredValuesDiffer<
 >(
   query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
   values: Readonly<Record<string, unknown>>,
+  calendarDateColumns: readonly string[] = [],
 ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
   const appendTrusted = trustedRawWhereAppenders.get(query)
   const connection = query.getConnection()
@@ -3712,7 +3713,7 @@ export function whereStoredValuesDiffer<
   const differs = (column: string) => {
     const quoted = dialect.quoteIdentifier(column)
     if (dialect.name === 'postgres') return `${quoted} IS DISTINCT FROM ?`
-    if (dialect.name === 'mysql') return `NOT (${quoted} <=> ?)`
+    if (dialect.name === 'mysql') return calendarDateColumns.includes(column) ? `NOT (${quoted} <=> DATE(?))` : `NOT (${quoted} <=> ?)`
     return `${quoted} IS NOT ?`
   }
   return appendTrusted(`(${columns.map(differs).join(' OR ')})`, columns.map(column => values[column])) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>

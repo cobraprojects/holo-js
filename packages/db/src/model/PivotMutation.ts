@@ -35,6 +35,7 @@ const bindingBudget = 900
 const storedKeyTextAlias = 'holo_stored_key_text'
 const FRACTION_DIGITS = /\d{2}:\d{2}:\d{2}\.(\d+)/
 const CALENDAR_DATE = /^\d{4,}-\d{2}-\d{2}$/
+const MAX_FRACTION_DIGITS = 6
 
 function bindableId(id: unknown): unknown {
   return ArrayBuffer.isView(id) && !(id instanceof Uint8Array) ? new Uint8Array(id.buffer, id.byteOffset, id.byteLength) : id
@@ -234,7 +235,25 @@ export class PivotMutation {
   private incomingKeyIdentity(value: unknown): unknown {
     if (this.dateKeyColumn()?.kind === 'date') return this.calendarDayIdentity(this.writeKey(value))
     const written = this.writeKey(value)
-    return this.readsStoredKeyText() ? this.instantIdentity(written, written) : this.keyIdentity(this.readKey(written))
+    if (!this.readsStoredKeyText()) return this.keyIdentity(this.readKey(written))
+    const stored = this.storedPrecision(written)
+    return this.instantIdentity(stored, stored)
+  }
+
+  private storedPrecision(written: unknown): unknown {
+    const match = typeof written === 'string' ? FRACTION_DIGITS.exec(written) : null
+    const fraction = match?.[1] ?? ''
+    if (fraction.length <= MAX_FRACTION_DIGITS) return written
+    const kept = fraction.slice(0, MAX_FRACTION_DIGITS)
+    const next = Number(fraction[MAX_FRACTION_DIGITS])
+    const rest = fraction.slice(MAX_FRACTION_DIGITS + 1)
+    const roundsUp = next > 5 || (next === 5 && (/[1-9]/.test(rest) || Number(kept.at(-1)) % 2 === 1))
+    const micro = Number(kept) + (roundsUp ? 1 : 0)
+    const text = written as string
+    const at = text.indexOf(`.${fraction}`)
+    if (micro < 10 ** MAX_FRACTION_DIGITS) return `${text.slice(0, at)}.${String(micro).padStart(MAX_FRACTION_DIGITS, '0')}${text.slice(at + fraction.length + 1)}`
+    const whole = this.readKey(`${text.slice(0, at)}${text.slice(at + fraction.length + 1)}`)
+    return whole instanceof Date ? new Date(whole.getTime() + 1000) : written
   }
 
   private calendarDayIdentity(value: unknown): unknown {
@@ -307,6 +326,11 @@ export class PivotMutation {
     return columnDefinition ? storesDate(columnDefinition) : value instanceof Date
   }
 
+  private calendarDateColumns(columns: readonly string[]): string[] {
+    const definition = this.tableDefinition()
+    return columns.filter(column => (definition ? ownEntry(definition.columns, column) : undefined)?.kind === 'date')
+  }
+
   private tableName(): string {
     return typeof this.context.table === 'string' ? this.context.table : this.context.table.tableName
   }
@@ -324,7 +348,7 @@ export class PivotMutation {
     let changed = false
     for (let offset = 0; offset < keys.length; offset += batchSize) {
       const rows = this.whereKeys(this.query(connection), keys.slice(offset, offset + batchSize))
-      const result = await (update.when === 'always' ? rows : whereStoredValuesDiffer(rows, compared)).update(values)
+      const result = await (update.when === 'always' ? rows : whereStoredValuesDiffer(rows, compared, this.calendarDateColumns(Object.keys(compared)))).update(values)
       changed = changed || update.when === 'always' || (result.affectedRows ?? 0) > 0
     }
     return changed
