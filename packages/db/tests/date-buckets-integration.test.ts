@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { CapabilityError, ConfigurationError, DB, SecurityError, clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB } from '../src'
+import { CapabilityError, ConfigurationError, DB, SecurityError, clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB } from '../src'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { integrationDrivers, mysqlIntegration, openDatabase, postgresIntegration, postgresTestConnection } from './support/database'
 
@@ -199,32 +199,95 @@ describe.each(drivers)('date buckets on %s', (driver) => {
     expect(rows).toEqual([{ tenant_id: '2026-11-04' }])
   })
 
-  it('orders and cursor-paginates a union by a date bucket', async () => {
+  it('orders a union of grouped queries by a date bucket', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
-    const daysBetween = (from: Date, to: Date) => DB.table(events)
-      .where('tenant_id', 1)
-      .whereBetween('occurred_at', [from, to])
+    const daysOf = (tenantId: number) => DB.table(events)
+      .where('tenant_id', tenantId)
+      .whereNotNull('occurred_at')
       .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
       .addSelectCount('total')
       .groupBy('bucket')
-    const combined = () => daysBetween(new Date('2026-11-04T00:00:00Z'), new Date('2027-01-01T00:00:00Z'))
-      .unionAll(daysBetween(new Date('2026-11-01T00:00:00Z'), new Date('2026-11-03T23:59:59Z')))
-      .orderByDesc('bucket')
+    const combined = () => daysOf(1).unionAll(daysOf(2)).orderByDesc('bucket')
 
-    const rows = await combined().get()
-    const first = await combined().cursorPaginate(2)
-    const second = await combined().cursorPaginate(2, first.nextCursor)
+    const rows = [...await combined().get()].sort((left, right) => (right.bucket ?? '').localeCompare(left.bucket ?? '') || left.total - right.total)
 
     expect(rows).toEqual([
       { bucket: '2026-12-31', total: 1 },
       { bucket: '2026-11-05', total: 1 },
+      { bucket: '2026-11-04', total: 1 },
       { bucket: '2026-11-04', total: 2 },
       { bucket: '2026-11-03', total: 2 },
     ])
-    expect(first.data).toEqual(rows.slice(0, 2))
-    expect(second.data).toEqual(rows.slice(2))
+    await expect(combined().cursorPaginate(2)).rejects.toThrow(SecurityError)
+  })
+
+  it('cursor-paginates a union of rows by a date bucket and the primary key', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const rowsOf = (tenantId: number) => DB.table(events)
+      .where('tenant_id', tenantId)
+      .whereNotNull('occurred_at')
+      .select('id')
+      .addSelectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+    const combined = () => rowsOf(1).unionAll(rowsOf(2)).orderByDesc('bucket')
+
+    const first = await combined().cursorPaginate(4)
+    const second = await combined().cursorPaginate(4, first.nextCursor)
+
+    expect([...first.data, ...second.data]).toEqual([
+      { id: 6, bucket: '2026-12-31' },
+      { id: 5, bucket: '2026-11-05' },
+      { id: 3, bucket: '2026-11-04' },
+      { id: 4, bucket: '2026-11-04' },
+      { id: 7, bucket: '2026-11-04' },
+      { id: 1, bucket: '2026-11-03' },
+      { id: 2, bucket: '2026-11-03' },
+    ])
     expect(second.nextCursor).toBeNull()
+  })
+
+  it('rejects cursor pagination by a date bucket that a raw selection could overwrite', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    await expect(DB.table(events)
+      .selectDate('day', 'occurred_at', { as: 'bucket', timeZone: 'UTC' })
+      .orderByDesc('bucket')
+      .addUnsafeSelect('0 AS bucket', [])
+      .cursorPaginate(2)).rejects.toThrow(SecurityError)
+  })
+
+  it('keeps the table columns when a date bucket is the first added selection', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+
+    const row = await DB.table(events).where('id', 1).addSelectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).first()
+
+    expect(row).toMatchObject({ id: 1, tenant_id: 1, day: '2026-11-03' })
+  })
+
+  it('reads a qualified bucket column from the table visible under that name', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable(driver)
+    const schema = createSchemaService(DB.connection())
+    const ledger = `bucket_ledger_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(ledger)
+    })
+    await schema.createTable(ledger, (table) => {
+      table.id()
+      table.date('occurred_at')
+    })
+    registerGeneratedTables({ events, ledgerTable: defineGeneratedTable(ledger, { id: column.id(), occurred_at: column.date() }) })
+    await DB.table(ledger).insert({ id: 2, occurred_at: '2026-11-03' })
+
+    const day = await DB.table(`${ledger} as entries`)
+      .join(`${events.tableName} as ${ledger}`, `${ledger}.id`, '=', 'entries.id')
+      .selectDate('day', `${ledger}.occurred_at`, { as: 'day', timeZone: 'Asia/Tokyo' })
+      .value('day')
+
+    expect(day).toBe('2026-11-04')
   })
 
   it('rejects a selection that reuses a date bucket alias', async () => {
@@ -267,12 +330,13 @@ describe.each(drivers)('date buckets on %s', (driver) => {
 
     await expect(hourIn('CET')).resolves.toBe('2026-07-15 14:00')
     await expect(hourIn('US/Eastern')).resolves.toBe('2026-07-15 08:00')
+    await expect(hourIn('PST8PDT')).resolves.toBe('2026-07-15 05:00')
   })
 
   it('needs a date, datetime or timestamp column it can identify', async () => {
     useAppTimezone('UTC')
     const events = await createEventsTable(driver)
-    const { schema } = await openDatabase(driver)
+    const schema = createSchemaService(DB.connection())
     const undeclared = `bucket_undeclared_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     onTestFinished(async () => {
       await schema.dropTable(undeclared)
@@ -373,5 +437,21 @@ describe.runIf(postgresIntegration)('date buckets on postgres with a session tim
     const rows = await DB.table(events).where('tenant_id', 1).whereNotNull('occurred_at').selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' }).orderBy('id').pluck('day')
 
     expect(rows).toEqual(['2026-11-03', '2026-11-03', '2026-11-04', '2026-11-04', '2026-11-05', '2026-12-31'])
+  })
+})
+
+describe.runIf(postgresIntegration)('date buckets on postgres before the common era', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('gives a null bucket instead of merging BC dates into AD days', async () => {
+    useAppTimezone('UTC')
+    const events = await createEventsTable('postgres')
+    await DB.connection().executeCompiled({ sql: `INSERT INTO "${events.tableName}" (tenant_id, billed_on) VALUES (7, '0001-01-01 BC'), (7, '0001-01-01')`, source: 'test' })
+
+    const days = await DB.table(events).where('tenant_id', 7).selectDate('day', 'billed_on', { as: 'day' }).orderBy('billed_on').pluck('day')
+
+    expect(days).toEqual([null, '0001-01-01'])
   })
 })

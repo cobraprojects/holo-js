@@ -31,8 +31,8 @@ export interface DateBucketOptions<TAlias extends string> {
   readonly timeZone?: string
 }
 
-export type DateBucketSelectionResult<TAlias extends string, TUnit extends DateBucketUnit, TValue> = {
-  [TName in TAlias]: DateBucket<TUnit> | (null extends TValue ? null : never)
+export type DateBucketSelectionResult<TAlias extends string, TUnit extends DateBucketUnit> = {
+  [TName in TAlias]: DateBucket<TUnit> | null
 }
 
 export type NullableColumns<TColumns extends Record<string, unknown>> = {

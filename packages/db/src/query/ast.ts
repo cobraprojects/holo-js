@@ -75,6 +75,10 @@ export type QuerySelection
     | QuerySubquerySelection
     | QueryDateBucketSelection
 
+export function unionBranchPlans(plan: SelectQueryPlan): readonly SelectQueryPlan[] {
+  return [plan, ...plan.unions.flatMap(union => unionBranchPlans(union.query))]
+}
+
 export function dateBucketSelections(plan: SelectQueryPlan): ReadonlyMap<string, QueryDateBucketSelection> {
   return new Map(plan.selections.flatMap(selection => selection.kind === 'date-bucket' ? [[selection.alias, selection] as const] : []))
 }

@@ -205,17 +205,17 @@ const perDay = await DB.table(events)
 | `'day'` | `'2026-11-05'` |
 | `'hour'` | `'2026-11-05 14:00'` |
 
-Values are zero-padded strings, so they sort in date order. A `null` date gives a `null` bucket.
+Values are zero-padded strings, so they sort in date order. A `null` date gives a `null` bucket, as does a date before year 1.
 
 `timeZone` is an IANA time zone name such as `'UTC'` or `'Europe/Paris'`, and defaults to `app.timezone`. Holo reads a name the way JavaScript does, so a link such as `'US/Eastern'` or `'CET'` means the zone it links to (`'America/New_York'`, `'Europe/Brussels'`) on every database. Holo converts each timestamp to that zone before it takes the calendar part, so an event at `2026-11-04 23:30 UTC` falls on `2026-11-05` in `'Asia/Tokyo'`. `date()` columns hold a calendar day, not an instant, so they keep their day in every zone.
 
 The column must be a `date()`, `datetime()`, or `timestamp()` column of a table Holo knows: a table definition, or a table name listed in the generated schema. Otherwise `selectDate()` throws, because a day and an instant need different conversions. The alias can't be reused by another selected column.
 
 ::: warning MySQL time zones
-MySQL converts named time zones with its time zone tables. If they're empty, a bucket in a zone other than `app.timezone` throws a `CapabilityError`. Load them with [`mysql_tzinfo_to_sql`](https://dev.mysql.com/doc/refman/8.0/en/mysql-tzinfo-to-sql.html). MySQL converts only instants from `1970-01-01 00:00:01` to `3001-01-18 23:59:59` UTC, so a timestamp outside that range gets a `null` bucket in a zone other than `app.timezone`.
+MySQL converts named time zones with its time zone tables. If they're empty, a bucket in a zone other than `app.timezone` throws a `CapabilityError`. Load them with [`mysql_tzinfo_to_sql`](https://dev.mysql.com/doc/refman/8.0/en/mysql-tzinfo-to-sql.html). MySQL converts only instants from `1970-01-01 00:00:01` to `3001-01-18 23:59:59` UTC, so a timestamp outside that range gets a `null` bucket in a zone other than `app.timezone`. That's why buckets are typed as possibly `null` even for a `NOT NULL` column.
 :::
 
-With a table definition, only date columns are accepted, the alias can't reuse a column name, and the result is typed as `DateBucket<'day'>`, a `string` that remembers its unit. In a helper that's generic over the table, constrain the column with `DateColumnName` so callers can only pass date columns:
+With a table definition, only date columns are accepted, the alias can't reuse a column name, and the result is typed as `DateBucket<'day'> | null`, where `DateBucket` is a `string` that remembers its unit. In a helper that's generic over the table, constrain the column with `DateColumnName` so callers can only pass date columns:
 
 ```ts
 import { DB, type DateColumnName, type InferSelect, type TableDefinition } from '@holo-js/db'
@@ -240,7 +240,7 @@ const months = await DB.table(orders)
 
 ### addSelectDate()
 
-Add a date bucket to the existing selection.
+Add a date bucket to the existing selection. With no selection yet, the table's columns stay selected, as with `table.*`.
 
 ```ts
 const rows = await DB.table(events)

@@ -1,5 +1,5 @@
 import { CompilerError } from '../core/errors'
-import type { QuerySelection, SelectQueryPlan } from './ast'
+import { unionBranchPlans, type QuerySelection, type SelectQueryPlan } from './ast'
 import { knownJoinedColumns, knownTableColumns, qualifiesTable, selectionOutputName } from './modelRowProjection'
 
 type UnionOutput = { readonly names: readonly string[] | undefined, readonly column?: string, readonly positioned: boolean }
@@ -73,10 +73,6 @@ function positionedBranchColumn(branch: SelectQueryPlan, column: string, positio
   return output.column
 }
 
-function unionBranches(plan: SelectQueryPlan): readonly SelectQueryPlan[] {
-  return [plan, ...plan.unions.flatMap(union => unionBranches(union.query))]
-}
-
 export function unionCursorColumns(plan: SelectQueryPlan, columns: readonly string[], connectionName: string): (branch: SelectQueryPlan) => readonly string[] {
   const positions = columns.map(column => outputPosition(plan, column, connectionName))
   const branchColumns = (branch: SelectQueryPlan) => columns.map((column, index) => {
@@ -84,6 +80,6 @@ export function unionCursorColumns(plan: SelectQueryPlan, columns: readonly stri
     if (typeof position === 'undefined') assertKnownPosition(branchOutputs(branch, connectionName), column)
     return typeof position === 'undefined' ? namedBranchColumn(branch, column) : positionedBranchColumn(branch, column, position, connectionName)
   })
-  for (const branch of unionBranches(plan)) branchColumns(branch)
+  for (const branch of unionBranchPlans(plan)) branchColumns(branch)
   return branchColumns
 }

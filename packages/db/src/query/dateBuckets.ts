@@ -1,7 +1,7 @@
 import { CapabilityError, ConfigurationError, SecurityError } from '../core/errors'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { qualifiesTable } from './modelRowProjection'
+import { splitTablePath } from '../schema/identifiers'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryDateBucketSelection, QueryDateBucketUnit, QueryPredicateNode, SelectQueryPlan } from './ast'
@@ -9,7 +9,7 @@ import type { QueryDateBucketSelection, QueryDateBucketUnit, QueryPredicateNode,
 export type DateBucketStorage = 'calendar' | 'instant'
 
 const DATE_BUCKET_UNITS: ReadonlySet<string> = new Set<QueryDateBucketUnit>(['year', 'month', 'day', 'hour'])
-const TIME_ZONE_NAME = /^[A-Za-z]+(?:[/_+-][A-Za-z0-9]+)*$/
+const TIME_ZONE_NAME = /^[A-Za-z][A-Za-z0-9]*(?:[/_+-][A-Za-z0-9]+)*$/
 
 function resolvedTimeZone(timeZone: string): string | undefined {
   if (!TIME_ZONE_NAME.test(timeZone)) return undefined
@@ -45,18 +45,28 @@ function generatedDefinition(tableName: string | undefined, connectionName: stri
   return tableName === undefined || connectionName === undefined ? undefined : getConnectionGeneratedTableDefinition(tableName, connectionName)
 }
 
+type VisibleTable = { readonly tableName: string | undefined, readonly alias: string | undefined, readonly definition: TableDefinition | undefined }
+
+function isVisibleAs(qualifier: string, { tableName, alias }: VisibleTable): boolean {
+  if (alias !== undefined) return qualifier === alias
+  return tableName !== undefined && (qualifier === tableName || qualifier === splitTablePath(tableName).table)
+}
+
+function visibleTables(plan: SelectQueryPlan, connectionName: string | undefined): readonly VisibleTable[] {
+  return [
+    { tableName: plan.source.tableName, alias: plan.source.alias, definition: plan.source.table ?? generatedDefinition(plan.source.tableName, connectionName) },
+    ...plan.joins.map(join => ({ tableName: join.table, alias: join.alias, definition: join.definition ?? generatedDefinition(join.table, connectionName) })),
+  ]
+}
+
 function bucketColumnDefinition(plan: SelectQueryPlan, column: string, connectionName: string | undefined): AnyColumnDefinition | undefined {
   const separator = column.lastIndexOf('.')
   const name = column.slice(separator + 1)
   const qualifier = separator === -1 ? undefined : column.slice(0, separator)
-  const sourceTable = plan.source.table ?? generatedDefinition(plan.source.tableName, connectionName)
-  const joinTables = plan.joins
-    .filter(join => qualifier === undefined || qualifiesTable(qualifier, join.table, join.alias))
-    .map(join => join.definition ?? generatedDefinition(join.table, connectionName))
-  const tables = qualifier === undefined || qualifiesTable(qualifier, plan.source.tableName, plan.source.alias)
-    ? [sourceTable, ...(qualifier === undefined ? joinTables : [])]
-    : joinTables
-  return tables.map(table => table?.columns[name]).find(definition => definition !== undefined)
+  return visibleTables(plan, connectionName)
+    .filter(table => qualifier === undefined || isVisibleAs(qualifier, table))
+    .map(table => table.definition?.columns[name])
+    .find(definition => definition !== undefined)
 }
 
 export function dateBucketStorage(plan: SelectQueryPlan, bucket: QueryDateBucketSelection, connectionName: string | undefined): DateBucketStorage {

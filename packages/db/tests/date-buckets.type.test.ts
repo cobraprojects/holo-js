@@ -24,7 +24,7 @@ async function dailyTotals<TTable extends TableDefinition, TColumn extends DateC
   return rows.map(row => ({ day: row.day, total: row.total }))
 }
 
-it('types date buckets as unit-branded strings that keep the column nullability', async () => {
+it('types date buckets as nullable unit-branded strings', async () => {
   if (false) {
     const rows = await DB.table(events)
       .selectDate('day', 'occurred_at', { as: 'day', timeZone: 'UTC' })
@@ -34,15 +34,23 @@ it('types date buckets as unit-branded strings that keep the column nullability'
       .orderByDesc('day')
       .orderBy('month')
       .get()
-    expectTypeOf(rows[0]!.day).toEqualTypeOf<DateBucket<'day'>>()
+    expectTypeOf(rows[0]!.day).toEqualTypeOf<DateBucket<'day'> | null>()
     expectTypeOf(rows[0]!.month).toEqualTypeOf<DateBucket<'month'> | null>()
     expectTypeOf(rows[0]!.total).toEqualTypeOf<number>()
     expectTypeOf<keyof typeof rows[0]>().toEqualTypeOf<'day' | 'month' | 'total'>()
-    const label: string = rows[0]!.day
+    const label: string = rows[0]!.day ?? ''
     void label
 
     const page = await DB.table(events).selectDate('hour', 'occurred_at', { as: 'hour' }).addSelectCount('total').groupBy('hour').orderByDesc('hour').cursorPaginate(30)
-    expectTypeOf(page).toEqualTypeOf<CursorPaginatedResult<{ hour: DateBucket<'hour'> } & { total: number }>>()
+    expectTypeOf(page).toEqualTypeOf<CursorPaginatedResult<{ hour: DateBucket<'hour'> | null } & { total: number }>>()
+  }
+})
+
+it('keeps the table columns when a date bucket is the first added selection', async () => {
+  if (false) {
+    const rows = await DB.table(events).addSelectDate('day', 'occurred_at', { as: 'day' }).get()
+    expectTypeOf(rows[0]!.channel).toEqualTypeOf<string>()
+    expectTypeOf(rows[0]!.day).toEqualTypeOf<DateBucket<'day'> | null>()
   }
 })
 
@@ -70,7 +78,7 @@ it('resolves aliased selections of generic query helpers at the call site', asyn
     expectTypeOf(rows[0]!.total).toEqualTypeOf<number>()
 
     const days = await dailyTotals(events, 'occurred_at')
-    expectTypeOf(days[0]!).toEqualTypeOf<{ day: DateBucket<'day'>, total: number }>()
+    expectTypeOf(days[0]!).toEqualTypeOf<{ day: DateBucket<'day'> | null, total: number }>()
     // @ts-expect-error a generic helper constrained with DateColumnName rejects non-date columns
     await dailyTotals(events, 'channel')
   }
