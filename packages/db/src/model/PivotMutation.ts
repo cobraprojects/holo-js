@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { SecurityError } from '../core/errors'
+import { HydrationError, SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder, selectMatchingValues, selectStoredText, whereStoredValuesDiffer, whereStoredValuesIn } from '../query/TableQueryBuilder'
 import { normalizeDateColumnPredicateValue, normalizeQueryPredicateValue, normalizeQueryWriteValue } from '../query/queryValueNormalizer'
@@ -257,7 +257,9 @@ export class PivotMutation {
     if (column && !readsAsInteger(column)) return id
     if (!/^-?\d+$/.test(id)) return id
     const integer = Number(id)
-    return Number.isSafeInteger(integer) ? integer : id
+    if (Number.isSafeInteger(integer)) return integer
+    if (column) throw new HydrationError(`Integer value "${id}" cannot be represented as a safe integer.`)
+    return id
   }
 
   private storedKeys(rows: readonly Attributes[]): unknown[] {
@@ -427,6 +429,9 @@ export class PivotMutation {
   }
 
   private othersDiffer(rows: readonly Attributes[], others: readonly (readonly [string, unknown])[]): boolean {
+    if (others.some(([, value]) => typeof value === 'object' && value !== null && !(value instanceof Date))) {
+      return rows.some(row => others.some(([column, value]) => row[column] !== value))
+    }
     const key = JSON.stringify(others.map(([column, value]) => [column, typeof value, value instanceof Date ? value.getTime() : String(value)]))
     const cached = this.othersDifferCache.get(rows)?.get(key)
     if (cached !== undefined) return cached
@@ -466,7 +471,7 @@ export class PivotMutation {
     const compared = update.when === 'datesDiffer'
       ? Object.fromEntries(update.columns.map(column => [column, normalizeQueryWriteValue(this.writtenTableDefinition(), this.context.dialect, column, values[column])]))
       : {}
-    const sqlTypes = update.when === 'datesDiffer' && this.context.dialect === 'postgres' ? await this.context.loadColumnSqlTypes?.() : undefined
+    const sqlTypes = update.when === 'datesDiffer' && this.context.dialect !== 'sqlite' ? await this.context.loadColumnSqlTypes?.() : undefined
     const batchSize = Math.max(1, this.idBatchSize() - Object.keys(values).length - Object.keys(compared).length)
     let changed = false
     for (let offset = 0; offset < keys.length; offset += batchSize) {

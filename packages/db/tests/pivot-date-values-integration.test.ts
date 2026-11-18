@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { DB, belongsToMany, clearGeneratedTables, column, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB, unsafeSql } from '../src'
+import { DB, HydrationError, belongsToMany, clearGeneratedTables, column, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB, unsafeSql } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'])
@@ -30,6 +30,7 @@ async function openPivots(driver: Driver, logger?: NonNullable<Parameters<typeof
     table.string('note').nullable()
     table.timestamp('expires_at').nullable()
     table.date('due_on').nullable()
+    table.json('meta').nullable()
   })
   await schema.createTable(names.days, (table) => { table.date('day').primaryKey() })
   await schema.createTable(names.ownerDays, (table) => {
@@ -51,7 +52,7 @@ async function openPivots(driver: Driver, logger?: NonNullable<Parameters<typeof
   const slots = defineGeneratedTable(names.slots, { starts_at: column.datetime().primaryKey() })
   const ownerSlots = defineGeneratedTable(names.ownerSlots, { owner_id: column.integer(), starts_at: column.datetime(), note: column.string().nullable() })
   const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey() })
-  const ownerTags = defineGeneratedTable(names.ownerTags, { owner_id: column.integer(), tag_id: column.integer(), note: column.string().nullable(), expires_at: column.timestamp().nullable(), due_on: column.date().nullable() })
+  const ownerTags = defineGeneratedTable(names.ownerTags, { owner_id: column.integer(), tag_id: column.integer(), note: column.string().nullable(), expires_at: column.timestamp().nullable(), due_on: column.date().nullable(), meta: column.json().nullable() })
   const ownerBadges = defineGeneratedTable(names.ownerBadges, { owner_id: column.integer(), tag_id: column.integer(), expires_at: column.timestamp().nullable(), created_at: column.timestamp().nullable(), updated_at: column.timestamp().nullable() })
   const days = defineGeneratedTable(names.days, { day: column.date().primaryKey() })
   const ownerDays = defineGeneratedTable(names.ownerDays, { owner_id: column.integer(), day: column.date(), note: column.string().nullable() })
@@ -64,7 +65,7 @@ async function openPivots(driver: Driver, logger?: NonNullable<Parameters<typeof
     timestamps: false,
     relations: {
       slots: belongsToMany(() => Slot, ownerSlots, 'owner_id', 'starts_at', 'id', 'starts_at').withPivot('note'),
-      tags: belongsToMany(() => Tag, ownerTags, 'owner_id', 'tag_id').withPivot('note', 'expires_at', 'due_on'),
+      tags: belongsToMany(() => Tag, ownerTags, 'owner_id', 'tag_id').withPivot('note', 'expires_at', 'due_on', 'meta'),
       badges: belongsToMany(() => Tag, ownerBadges, 'owner_id', 'tag_id').withPivot('expires_at').withTimestamps(),
       days: belongsToMany(() => Day, ownerDays, 'owner_id', 'day', 'id', 'day').withPivot('note'),
     },
@@ -496,7 +497,7 @@ describe.each(drivers)('pivot ids given as object keys on %s', (driver) => {
     expect(await DB.table(ownerTags).count()).toBe(0)
   })
 
-  it.runIf(driver === 'sqlite')('keeps an object-form big integer key exact', async () => {
+  it.runIf(driver === 'sqlite')('rejects an object-form big integer key beyond the safe range before writing it', async () => {
     const { schema } = await openDatabase(driver, { security: { allowUnsafeRawSql: true } })
     onTestFinished(() => resetDB())
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
@@ -521,8 +522,8 @@ describe.each(drivers)('pivot ids given as object keys on %s', (driver) => {
     await DB.table(owners).insert({ id: 1 })
     const owner = await Owner.findOrFail(1)
 
-    await owner.attach('items', { '9007199254740993': { note: 'new' } } as never)
-    expect(await DB.table(ownerItems.tableName).unsafeSelect('CAST("item_id" AS TEXT) AS "stored"', []).first()).toEqual({ stored: '9007199254740993' })
+    await expect(owner.attach('items', { '9007199254740993': { note: 'new' } } as never)).rejects.toThrow(HydrationError)
+    expect(await DB.table(ownerItems.tableName).count()).toBe(0)
   })
 
   it('keeps a leading-zero string key as text, as Laravel does', async () => {
@@ -553,6 +554,32 @@ describe.each(drivers)('pivot ids given as object keys on %s', (driver) => {
 
     expect(await owner.sync('codes', { '001': { note: 'new' } } as never)).toEqual({ attached: [], detached: [], updated: ['001'] })
     expect(await DB.table(ownerCodes).select('code', 'note').get()).toEqual([{ code: '001', note: 'new' }])
+  })
+})
+
+describe.each(drivers)('pivot attributes that need care to compare on %s', (driver) => {
+  it('updates JSON attributes that cannot be turned into text', async () => {
+    const { owner } = await openPivots(driver)
+    await owner.attach('tags', 1, { meta: { kind: 'old' } })
+
+    expect(await owner.updateExistingPivot('tags', 1, { meta: { toString: 'new' } })).toBe(1)
+    expect(await owner.updateExistingPivot('tags', 1, { meta: Object.assign(Object.create(null), { kind: 'bare' }) })).toBe(1)
+  })
+
+  it.runIf(driver === 'mysql')('compares a datetime at the precision its MySQL column keeps', async () => {
+    const { db, names } = await openPivots(driver)
+    await db.unsafeExecute(unsafeSql(`ALTER TABLE ${quote(driver, names.ownerTags)} MODIFY ${quote(driver, 'expires_at')} DATETIME(3) NULL`))
+    clearGeneratedTables()
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
+    const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey() })
+    registerGeneratedTables({ owners, tags })
+    const Tag = defineModel(tags, { timestamps: false })
+    const Untyped = defineModel(owners, { timestamps: false, relations: { tags: belongsToMany(() => Tag, names.ownerTags, 'owner_id', 'tag_id').withPivot('expires_at') } })
+    const owner = await Untyped.findOrFail(1)
+    await owner.attach('tags', 1, { expires_at: '2026-01-01 10:00:00.0004' })
+
+    expect(await owner.updateExistingPivot('tags', 1, { expires_at: '2026-01-01 10:00:00.0004' })).toBe(0)
+    expect(await owner.updateExistingPivot('tags', 1, { expires_at: '2026-01-01 10:00:01' })).toBe(1)
   })
 })
 
