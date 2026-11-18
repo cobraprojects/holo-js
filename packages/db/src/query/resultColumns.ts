@@ -1,4 +1,4 @@
-import { coerceBoolean, parseInteger, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
+import { coerceBoolean, parseInteger, parseStoredDate, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDate, readsAsSQLiteDecimal } from '../schema/normalization'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { splitTablePath } from '../schema/identifiers'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -25,8 +25,16 @@ function readIntegerResult(value: unknown): unknown {
   return holdsInteger(value) ? parseInteger(value) : value
 }
 
-function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | undefined): ColumnReader | undefined {
+function readSQLiteDate(value: unknown): unknown {
+  return parseStoredDate('sqlite', value)
+}
+
+export type ResultReads = 'values' | 'dates' | 'valuesAndDates'
+
+function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | undefined, reads: ResultReads): ColumnReader | undefined {
   if (!column) return undefined
+  if (readsAsSQLiteDate(dialect, column)) return reads === 'values' ? undefined : readSQLiteDate
+  if (reads === 'dates') return undefined
   if (readsAsInteger(column)) return readIntegerResult
   if (readsAsCoercedBoolean(dialect, column)) return coerceBoolean
   return readsAsSQLiteDecimal(dialect, column) ? value => readSQLiteDecimal(value, column.decimalPlaces) : undefined
@@ -161,6 +169,7 @@ function hasAlignedWildcards(plan: SelectQueryPlan, branches: readonly SelectQue
 function createUnionReaderCheck(
   dialect: SchemaDialectName,
   plan: SelectQueryPlan,
+  reads: ResultReads,
 ): (key: string, reader: ColumnReader) => boolean {
   if (plan.unions.length === 0) return () => true
   const branchPlans = unionBranches(plan)
@@ -178,16 +187,16 @@ function createUnionReaderCheck(
       if (definition && column && readsAsSQLiteDecimal(dialect, definition) && readsAsSQLiteDecimal(dialect, column)) {
         return (definition.decimalPlaces ?? 2) === (column.decimalPlaces ?? 2)
       }
-      return columnReader(dialect, column) === reader
+      return columnReader(dialect, column, reads) === reader
     })
   }
 }
 
-export function resolveConvertedResultColumns(dialect: SchemaDialectName, plan: SelectQueryPlan): ConvertedResultColumns {
+export function resolveConvertedResultColumns(dialect: SchemaDialectName, plan: SelectQueryPlan, reads: ResultReads): ConvertedResultColumns {
   const columns = new Map<string, ColumnReader>()
-  const unionReads = createUnionReaderCheck(dialect, plan)
+  const unionReads = createUnionReaderCheck(dialect, plan, reads)
   for (const [key, definition] of resultColumnDefinitions(plan)) {
-    const reader = columnReader(dialect, definition)
+    const reader = columnReader(dialect, definition, reads)
     if (reader && unionReads(key, reader)) columns.set(key, reader)
   }
   return columns
