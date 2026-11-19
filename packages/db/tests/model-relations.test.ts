@@ -86,7 +86,8 @@ it('serializes model attributes without reading or changing its eager-loaded rel
   const Author = defineModelFromTable(authors, {
     fillable: ['name', 'secret'],
     hidden: ['secret'],
-    visible: ['id', 'name', 'posts'],
+    visible: ['id', 'name', 'posts', 'earliest'],
+    serializeDate: value => value.toISOString(),
     relations: { posts: hasMany(() => Post, { foreignKey: 'authorId' }) },
   })
   const author = await Author.create({ name: 'Ava', secret: 'private' })
@@ -114,6 +115,10 @@ it('serializes model attributes without reading or changing its eager-loaded rel
   expect(relatedDateSerializations).toBe(1)
   expect(JSON.stringify(loaded)).toBe(JSON.stringify(full))
   expect(relatedDateSerializations).toBe(2)
+
+  const aggregated = await Author.withMin('posts as earliest', 'publishedAt').findOrFail(author.id)
+  expect(aggregated.attributesToJSON().earliest).toBe(publishedAt.toISOString())
+  expectTypeOf(aggregated.attributesToJSON().earliest).toEqualTypeOf<string | null | undefined>()
 })
 
 describe('relation helper keys', () => {

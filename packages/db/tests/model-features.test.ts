@@ -5,6 +5,7 @@ import {
   binaryCast, belongsTo, column, configureDB, createConnectionManager,
   createDatabase, createDialect, encryptedCast, enumCast, resetDB,
 } from '../src'
+import type { ModelDateSerializer } from '../src/model/types'
 import { defineModelFromTable, defineTable } from './support/internal'
 import { createTestTable } from './support/schema'
 
@@ -94,6 +95,18 @@ describe('native model attributes and persistence', () => {
     const customAttributes = (await Custom.findOrFail(event.id)).attributesToJSON()
     expect(customAttributes).toEqual({ id: event.id, startsAt: '2025-06-07', sentAt: '2025-06-07' })
     expectTypeOf(customAttributes.startsAt).toEqualTypeOf<string | undefined>()
+
+    const serializer: ModelDateSerializer = value => value.toISOString()
+    const Broad = defineModelFromTable(events, { serializeDate: serializer })
+    const broadAttributes = (await Broad.findOrFail(event.id)).attributesToJSON()
+    expect(broadAttributes.startsAt).toBe(startsAt.toISOString())
+    expectTypeOf(broadAttributes.startsAt).toEqualTypeOf<unknown>()
+
+    const optional: { serializeDate?: (value: Date) => string } = {}
+    const Optional = defineModelFromTable(events, optional)
+    const optionalAttributes = (await Optional.findOrFail(event.id)).attributesToJSON()
+    expect(optionalAttributes.startsAt).toEqual(startsAt)
+    expectTypeOf(optionalAttributes.startsAt).toEqualTypeOf<Date | string | undefined>()
   })
 
   it('persists castable definitions and set-only casts with nullable scalar attributes', async () => {

@@ -499,9 +499,9 @@ class EntityBase<
     return {} as unknown as RelationMethodsOf<TRelations[K]>
   }
 
-  attributesToJSON(): ModelSerializedAttributes<TTable> {
+  attributesToJSON(): ModelSerializedAttributes<TTable, this> {
     const repo = this.getRepositoryRuntime()
-    return (repo.serializeAttributes?.(this) ?? this.toAttributes()) as ModelSerializedAttributes<TTable>
+    return (repo.serializeAttributes?.(this) ?? this.toAttributes()) as ModelSerializedAttributes<TTable, this>
   }
 
   toJSON(): ModelRecord<TTable> {

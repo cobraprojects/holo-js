@@ -5,7 +5,7 @@ import NamedRelationAllocation from './fixtures/named-relations/models/NamedRela
 import NamedRelationReward from './fixtures/named-relations/models/NamedRelationReward'
 import NamedRelationTenant from './fixtures/named-relations/models/NamedRelationTenant'
 
-it('types a nested eager load through relations declared by model name', () => {
+it('types a nested eager load through relations declared by model name', async () => {
   if (false) {
     const query = NamedRelationAllocation.query().with('reward.tenant', 'reward.parent')
     type Allocation = NonNullable<Awaited<ReturnType<typeof query.first>>>
@@ -13,8 +13,13 @@ it('types a nested eager load through relations declared by model name', () => {
 
     expectTypeOf<NonNullable<Reward['tenant']>['display_name']>().toEqualTypeOf<string>()
     expectTypeOf<NonNullable<Reward['parent']>['points']>().toEqualTypeOf<number>()
+    expectTypeOf<ReturnType<Reward['attributesToJSON']>['label']>().toEqualTypeOf<string | undefined>()
     // @ts-expect-error tenants have no points column
     expectTypeOf<NonNullable<Reward['tenant']>['points']>()
+
+    const tenant = await NamedRelationTenant.firstOrFail()
+    const created = await tenant.rewards().create({ points: 100 })
+    expectTypeOf(created.attributesToJSON().label).toEqualTypeOf<string | undefined>()
   }
 })
 

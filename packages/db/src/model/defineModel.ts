@@ -46,8 +46,7 @@ import type {
   ModelDefinition,
   ModelInsertPayload,
   ModelRecord,
-  ModelAccessorMap,
-  ModelDateSerializer,
+  ModelSerializationOptions,
   ModelScopesDefinition,
   ModelTableWithSerialization,
   ModelUpdatePayload,
@@ -72,21 +71,17 @@ type CastedModelOptions<
   THidden extends readonly string[],
   TCasts extends ModelCastMap,
   TDateOptions extends ModelDateOptions,
-  TAccessors extends ModelAccessorMap,
-  TSerializeDate extends ModelDateSerializer,
 > = DefineModelOptions<TTable, TScopes, TRelations> & TDateOptions & {
   readonly hidden?: THidden
   readonly casts?: TCasts
-  readonly accessors?: TAccessors
-  readonly serializeDate?: TSerializeDate
 }
+type SerializationOptions<TOptions> = Pick<TOptions, keyof TOptions & keyof ModelSerializationOptions>
 type ModelTable<
   TTable extends TableDefinition,
   TCasts extends ModelCastMap,
   TDateOptions extends ModelDateOptions,
-  TAccessors extends ModelAccessorMap = EmptyModelCastMap,
-  TSerializeDate extends ModelDateSerializer = ModelDateSerializer,
-> = ModelTableWithSerialization<TTable, TCasts, ModelDateColumns<TDateOptions>, TAccessors, TSerializeDate>
+  TOptions extends object = EmptyModelCastMap,
+> = ModelTableWithSerialization<TTable, TCasts, ModelDateColumns<TDateOptions>, SerializationOptions<TOptions>>
 type SharedModelDefinitionFields<
   TTable extends TableDefinition,
   TScopes extends ModelScopesDefinition,
@@ -158,12 +153,11 @@ export function defineModel<
   const THidden extends readonly string[] = readonly string[],
   const TCasts extends ModelCastMap = EmptyModelCastMap,
   const TDateOptions extends ModelDateOptions = EmptyModelDateOptions,
-  TAccessors extends ModelAccessorMap = EmptyModelCastMap,
-  TSerializeDate extends ModelDateSerializer = ModelDateSerializer,
+  TOptions extends object = EmptyModelCastMap,
 >(
   table: TTable,
-  options?: CastedModelOptions<ModelTable<TTable, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions, TAccessors, TSerializeDate>,
-): StaticModelApi<ModelTable<TTable, TCasts, TDateOptions, TAccessors, TSerializeDate>, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelTable<TTable, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions> & SerializationOptions<TOptions>,
+): StaticModelApi<ModelTable<TTable, TCasts, TDateOptions, TOptions>, TScopes, TRelations, THidden>
 export function defineModel<
   TName extends string,
   TColumns extends ColumnShapeInput,
@@ -172,13 +166,12 @@ export function defineModel<
   const THidden extends readonly string[] = readonly string[],
   const TCasts extends ModelCastMap = EmptyModelCastMap,
   const TDateOptions extends ModelDateOptions = EmptyModelDateOptions,
-  TAccessors extends ModelAccessorMap = EmptyModelCastMap,
-  TSerializeDate extends ModelDateSerializer = ModelDateSerializer,
+  TOptions extends object = EmptyModelCastMap,
 >(
   tableName: TName,
   builder: (table: TableDefinitionBuilder<TName, EmptyColumnShape>) => ModelTableBuilderResult<TName, TColumns>,
-  options?: CastedModelOptions<ModelTable<BoundTableDefinition<TName, TColumns>, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions, TAccessors, TSerializeDate>,
-): StaticModelApi<ModelTable<BoundTableDefinition<TName, TColumns>, TCasts, TDateOptions, TAccessors, TSerializeDate>, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelTable<BoundTableDefinition<TName, TColumns>, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions> & SerializationOptions<TOptions>,
+): StaticModelApi<ModelTable<BoundTableDefinition<TName, TColumns>, TCasts, TDateOptions, TOptions>, TScopes, TRelations, THidden>
 export function defineModel<
   TName extends string,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
@@ -186,12 +179,11 @@ export function defineModel<
   const THidden extends readonly string[] = readonly string[],
   const TCasts extends ModelCastMap = EmptyModelCastMap,
   const TDateOptions extends ModelDateOptions = EmptyModelDateOptions,
-  TAccessors extends ModelAccessorMap = EmptyModelCastMap,
-  TSerializeDate extends ModelDateSerializer = ModelDateSerializer,
+  TOptions extends object = EmptyModelCastMap,
 >(
   tableName: TName,
-  options?: CastedModelOptions<ModelTable<GeneratedSchemaTable<TName>, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions, TAccessors, TSerializeDate>,
-): StaticModelApi<ModelTable<GeneratedSchemaTable<TName>, TCasts, TDateOptions, TAccessors, TSerializeDate>, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelTable<GeneratedSchemaTable<TName>, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions> & SerializationOptions<TOptions>,
+): StaticModelApi<ModelTable<GeneratedSchemaTable<TName>, TCasts, TDateOptions, TOptions>, TScopes, TRelations, THidden>
 export function defineModel(
   tableOrName: string | TableDefinition,
   builderOrOptions?:
@@ -223,12 +215,11 @@ export function defineModelFromTable<
   const THidden extends readonly string[] = readonly string[],
   const TCasts extends ModelCastMap = EmptyModelCastMap,
   const TDateOptions extends ModelDateOptions = EmptyModelDateOptions,
-  TAccessors extends ModelAccessorMap = EmptyModelCastMap,
-  TSerializeDate extends ModelDateSerializer = ModelDateSerializer,
+  TOptions extends object = EmptyModelCastMap,
 >(
   table: TTable,
-  options?: CastedModelOptions<ModelTable<TTable, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions, TAccessors, TSerializeDate>,
-): StaticModelApi<ModelTable<TTable, TCasts, TDateOptions, TAccessors, TSerializeDate>, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelTable<TTable, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions> & SerializationOptions<TOptions>,
+): StaticModelApi<ModelTable<TTable, TCasts, TDateOptions, TOptions>, TScopes, TRelations, THidden>
 export function defineModelFromTable(
   table: TableDefinition,
   options?: DefineModelOptions<TableDefinition>,

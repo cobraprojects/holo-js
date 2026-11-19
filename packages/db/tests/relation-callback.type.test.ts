@@ -52,6 +52,7 @@ it('infers aggregate attributes alongside eager-loaded relations', async () => {
     expectTypeOf(user.posts[0]?.title).toEqualTypeOf<string | undefined>()
     expectTypeOf(user.toAttributes().posts_count).toEqualTypeOf<number | undefined>()
     expectTypeOf<ReturnType<typeof user.toAttributes>['posts_count']>().toEqualTypeOf<number | undefined>()
+    expectTypeOf(user.attributesToJSON().posts_count).toEqualTypeOf<number | undefined>()
   }
 })
 
@@ -120,6 +121,7 @@ it('tracks the final value written to an aggregate alias', async () => {
 
     const aliased = await User.withAggregate('posts as name', '*', 'exists').firstOrFail()
     expectTypeOf(aliased.toAttributes().name).toEqualTypeOf<string | boolean>()
+    expectTypeOf(aliased.attributesToJSON().name).toEqualTypeOf<string | boolean | undefined>()
     expectTypeOf(aliased.toAttributes().id).toEqualTypeOf<number>()
   }
 })
