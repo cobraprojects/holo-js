@@ -124,6 +124,15 @@ export type ModelDefinitionTable<TReference extends ModelDefinitionLike>
       ? TTable
       : TableDefinition
 
+type WithRegisteredModelSerialization<TTable, TDefinition>
+  = TDefinition extends { readonly definition: { readonly table: infer TRegistered extends TableDefinition & { readonly '~modelSerialization'?: object } } }
+    ? Omit<TTable, 'columns' | '~modelSerialization'> & Pick<TRegistered, 'columns' | '~modelSerialization'>
+    : TTable
+
+type ModelEntityTable<TReference extends ModelDefinitionLike>
+  = [NamedModelReferenceName<TReference>] extends [never] ? ModelDefinitionTable<TReference>
+    : WithRegisteredModelSerialization<ModelDefinitionTable<TReference>, ResolveModelDefinition<TReference>>
+
 type PivotTableDefinition<TPivotTable extends string | TableDefinition>
   = TPivotTable extends string ? GeneratedSchemaTable<TPivotTable> : TPivotTable
 
@@ -379,6 +388,9 @@ export type RelationDefinition
     | HasOneThroughRelationDefinition
     | HasManyThroughRelationDefinition
 
+type RelatedWriteEntity<TReference extends ModelDefinitionLike>
+  = Entity<ModelEntityTable<TReference>>
+
 /**
  * Methods available on BelongsTo relations when called as a method (e.g., post.category())
  */
@@ -423,29 +435,29 @@ export interface BelongsToManyRelationMethods<TRelated, TPivot = Record<string, 
  */
 export type RelationMethodsOf<TRelation extends RelationDefinition>
   = TRelation extends BelongsToRelationDefinition<infer TRelated>
-    ? BelongsToRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+    ? BelongsToRelationMethods<RelatedWriteEntity<TRelated>>
     : TRelation extends HasOneRelationDefinition<infer TRelated>
-      ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
+      ? HasOneRelationMethods<RelatedWriteEntity<TRelated>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
       : TRelation extends HasOneOfManyRelationDefinition<infer TRelated>
-        ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
+        ? HasOneRelationMethods<RelatedWriteEntity<TRelated>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
         : TRelation extends HasManyRelationDefinition<infer TRelated>
-          ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
+          ? HasManyRelationMethods<RelatedWriteEntity<TRelated>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
           : TRelation extends HasOneThroughRelationDefinition<infer TRelated>
-            ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
+            ? HasOneRelationMethods<RelatedWriteEntity<TRelated>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
             : TRelation extends HasManyThroughRelationDefinition<infer TRelated>
-              ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
+              ? HasManyRelationMethods<RelatedWriteEntity<TRelated>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
               : TRelation extends BelongsToManyRelationDefinition<infer TRelated>
-                ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, PivotAttributes<TRelation>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<TRelation>>
+                ? BelongsToManyRelationMethods<RelatedWriteEntity<TRelated>, PivotAttributes<TRelation>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<TRelation>>
                 : TRelation extends MorphOneRelationDefinition<infer TRelated>
-                  ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
+                  ? HasOneRelationMethods<RelatedWriteEntity<TRelated>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                   : TRelation extends MorphOneOfManyRelationDefinition<infer TRelated>
-                    ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
+                    ? HasOneRelationMethods<RelatedWriteEntity<TRelated>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                     : TRelation extends MorphManyRelationDefinition<infer TRelated>
-                      ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
+                      ? HasManyRelationMethods<RelatedWriteEntity<TRelated>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                       : TRelation extends MorphToManyRelationDefinition<infer TRelated>
-                      ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, PivotAttributes<TRelation>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<TRelation>>
+                      ? BelongsToManyRelationMethods<RelatedWriteEntity<TRelated>, PivotAttributes<TRelation>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<TRelation>>
                       : TRelation extends MorphedByManyRelationDefinition<infer TRelated>
-                        ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, PivotAttributes<TRelation>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<TRelation>>
+                        ? BelongsToManyRelationMethods<RelatedWriteEntity<TRelated>, PivotAttributes<TRelation>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<TRelation>>
                         : never
 
 export interface RelationMap {
@@ -486,40 +498,40 @@ export type RelatedTableOfRelation<TRelation extends RelationDefinition>
 export type RelatedColumnNameOfRelation<TRelation extends RelationDefinition>
   = ModelAttributeKey<RelatedTableOfRelation<TRelation>>
 
-type AggregateWhitespace
+type Whitespace
   = ' ' | '\t' | '\n' | '\v' | '\f' | '\r' | ' ' | ' ' | ' ' | ' ' | ' ' | ' '
     | ' ' | ' ' | ' ' | ' ' | ' ' | ' ' | ' ' | ' ' | ' ' | ' '
     | ' ' | '　' | '﻿'
 
-type TrimAggregateStart<TValue extends string>
-  = TValue extends `${AggregateWhitespace}${infer TRest}` ? TrimAggregateStart<TRest> : TValue
+type TrimStart<TValue extends string>
+  = TValue extends `${Whitespace}${infer TRest}` ? TrimStart<TRest> : TValue
 
-type TrimAggregateEnd<TValue extends string>
-  = TValue extends `${infer TRest}${AggregateWhitespace}` ? TrimAggregateEnd<TRest> : TValue
+type TrimEnd<TValue extends string>
+  = TValue extends `${infer TRest}${Whitespace}` ? TrimEnd<TRest> : TValue
 
 type FirstAggregateWord<TValue extends string, TWord extends string = ''>
   = TValue extends `${infer TChar}${infer TRest}`
-    ? TChar extends AggregateWhitespace
+    ? TChar extends Whitespace
       ? [TWord, TRest]
       : FirstAggregateWord<TRest, `${TWord}${TChar}`>
     : [TWord, '']
 
 type FirstAggregateAlias<TValue extends string, TAlias extends string = ''>
-  = TValue extends `${AggregateWhitespace}${'as' | 'AS' | 'As' | 'aS'}${AggregateWhitespace}${string}` ? TrimAggregateEnd<TAlias>
+  = TValue extends `${Whitespace}${'as' | 'AS' | 'As' | 'aS'}${Whitespace}${string}` ? TrimEnd<TAlias>
     : TValue extends `${infer TChar}${infer TRest}` ? FirstAggregateAlias<TRest, `${TAlias}${TChar}`>
       : `${TAlias}${TValue}`
 
 export type AggregateKeyParts<TKey extends string>
-  = TrimAggregateStart<TKey> extends infer TTrimmed extends string
+  = TrimStart<TKey> extends infer TTrimmed extends string
     ? FirstAggregateWord<TTrimmed> extends [infer TRelation extends string, infer TRest extends string]
-      ? FirstAggregateWord<TrimAggregateStart<TRest>> extends [infer TKeyword extends string, infer TTail extends string]
+      ? FirstAggregateWord<TrimStart<TRest>> extends [infer TKeyword extends string, infer TTail extends string]
         ? Lowercase<TKeyword> extends 'as'
-          ? TrimAggregateEnd<FirstAggregateAlias<TrimAggregateStart<TTail>>> extends infer TAlias extends string
+          ? TrimEnd<FirstAggregateAlias<TrimStart<TTail>>> extends infer TAlias extends string
             ? TAlias extends ''
-              ? { readonly relation: TrimAggregateEnd<TTrimmed> }
+              ? { readonly relation: TrimEnd<TTrimmed> }
               : { readonly relation: TRelation, readonly alias: TAlias }
             : never
-          : { readonly relation: TrimAggregateEnd<TTrimmed> }
+          : { readonly relation: TrimEnd<TTrimmed> }
         : never
       : never
     : never
@@ -725,14 +737,19 @@ type LoadedPivotOfRelation<TRelation>
     ? string extends TAccessor ? Record<never, never> : { readonly [K in TAccessor]: PivotRecordOfRelation<TRelation> }
     : Record<never, never>
 
+type RelatedEntityTable<TRelation extends RelationDefinition>
+  = TRelation extends { readonly related: () => infer TReference extends ModelDefinitionLike }
+    ? ModelEntityTable<TReference>
+    : TableDefinition
+
 type ResolveRelationEntity<TRelation extends RelationDefinition>
   = TRelation extends { readonly pivotAccessor: string }
-    ? Entity<RelatedTableOfRelation<TRelation>, RelatedRelationsOfRelation<TRelation>> & LoadedPivotOfRelation<TRelation>
-    : Entity<RelatedTableOfRelation<TRelation>, RelatedRelationsOfRelation<TRelation>>
+    ? Entity<RelatedEntityTable<TRelation>, RelatedRelationsOfRelation<TRelation>> & LoadedPivotOfRelation<TRelation>
+    : Entity<RelatedEntityTable<TRelation>, RelatedRelationsOfRelation<TRelation>>
 
 type ResolveNestedRelationEntity<TRelation extends RelationDefinition, TLoaded>
   = EntityWithLoaded<
-    RelatedTableOfRelation<TRelation>,
+    RelatedEntityTable<TRelation>,
     RelatedRelationsOfRelation<TRelation>,
     TLoaded & LoadedPivotOfRelation<TRelation>
   >
@@ -980,7 +997,77 @@ type ModelDateCasts<TTable extends TableDefinition, TDateColumns extends string,
 }
 
 export type ModelCastedTable<TTable extends TableDefinition, TCasts extends ModelCastMap, TDateColumns extends string = never>
-  = CastedTable<TTable, KnownCasts<TCasts> & ModelDateCasts<TTable, TDateColumns, TCasts>>
+  = ModelTableWithSerialization<TTable, TCasts, TDateColumns>
+
+type FormattedDateCast = `${'date' | 'datetime' | 'timestamp'}:${string}`
+
+type FormattedDateCasts<TCasts> = {
+  [K in keyof TCasts as Extract<TCasts[K], FormattedDateCast> extends never ? never : K]: TCasts[K]
+}
+
+export type ModelSerializationOptions = Pick<DefineModelOptions, 'accessors' | 'serializeDate'>
+
+type SerializationAccessors<TOptions extends ModelSerializationOptions>
+  = TOptions extends { readonly accessors: infer TAccessors }
+    ? string extends keyof TAccessors ? Partial<TAccessors> : TAccessors
+    : TOptions extends { readonly accessors?: infer TAccessors } ? Partial<TAccessors> : object
+
+type DateSerializerOutput<TSerializer>
+  = TSerializer extends ModelDateSerializer ? ReturnType<TSerializer> : Date
+
+type SerializedDate<TCast, TDefault>
+  = TCast extends `${'date' | 'datetime' | 'timestamp'}:${infer TFormat}`
+    ? string extends TFormat ? string | number | TDefault
+      : SerializedDateFormat<TrimStart<TrimEnd<TFormat>>, TDefault>
+    : TDefault
+
+type SerializedDateFormat<TFormat, TDefault> = TFormat extends '' ? TDefault : TFormat extends 'unix' ? number : string
+
+type SerializedAttributeValue<TValue, TCast, TDate>
+  = TValue extends Date ? SerializedDate<TCast, TDate> : TValue
+
+type AccessorValue<TAccessor, TDefault>
+  = TAccessor extends ModelAccessor ? ReturnType<TAccessor> : TDefault
+
+type SerializedAttributeRecord<TRecord, TCasts, TAccessors, TDate> = {
+  [K in keyof TRecord | (string extends keyof TAccessors ? never : keyof TAccessors)]?: SerializedAttributeValue<
+    K extends keyof TAccessors
+      ? AccessorValue<TAccessors[K], K extends keyof TRecord ? TRecord[K] : undefined>
+      : K extends keyof TRecord ? TRecord[K] : never,
+    K extends keyof TCasts ? TCasts[K] : undefined,
+    TDate
+  >
+}
+
+export type ModelTableWithSerialization<
+  TTable extends TableDefinition,
+  TCasts extends ModelCastMap,
+  TDateColumns extends string,
+  TSerialization extends ModelSerializationOptions = EmptyModelCastMap,
+> = WithSerializedAttributes<
+  CastedTable<TTable, KnownCasts<TCasts> & ModelDateCasts<TTable, TDateColumns, TCasts>>,
+  FormattedDateCasts<KnownCasts<TCasts>>,
+  TSerialization
+>
+
+type WithSerializedAttributes<TTable extends TableDefinition, TCasts, TOptions extends ModelSerializationOptions>
+  = [keyof TCasts | Extract<keyof TOptions, keyof ModelSerializationOptions>] extends [never]
+    ? TTable
+    : TTable & {
+      readonly '~modelSerialization'?: {
+        readonly casts: TCasts
+        readonly accessors: SerializationAccessors<TOptions>
+        readonly date: 'serializeDate' extends keyof TOptions ? DateSerializerOutput<TOptions['serializeDate']> : Date
+      }
+    }
+
+type SerializeModelRecord<TTable extends TableDefinition, TRecord>
+  = TTable extends { readonly '~modelSerialization'?: { casts: infer TCasts, accessors: infer TAccessors, date: infer TDate } }
+    ? SerializedAttributeRecord<TRecord, TCasts, TAccessors, TDate>
+    : Partial<TRecord>
+
+export type ModelSerializedAttributes<TTable extends TableDefinition, TModel>
+  = SerializeModelRecord<TTable, ModelAttributeSnapshot<TTable, TModel>>
 
 export interface ModelDateOptions {
   readonly timestamps?: boolean

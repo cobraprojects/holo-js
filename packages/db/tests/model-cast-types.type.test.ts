@@ -18,7 +18,7 @@ const builtInCasts = {
   meta_json: 'json',
   born_on: 'date',
   seen_at: 'datetime',
-  stamp: 'timestamp',
+  stamp: 'timestamp:unix',
   embedding: 'vector:3',
   label: { get: (value: unknown) => String(value), set: (value: unknown) => String(value) },
   appended_total: 'number',
@@ -44,6 +44,10 @@ it('types each built-in cast over a Generated schema read from SQLite, PostgreSQ
     expectTypeOf<Record['plain_bool']>().toEqualTypeOf<boolean>()
     expectTypeOf<Record['nickname']>().toEqualTypeOf<string>()
     expectTypeOf<Record>().not.toHaveProperty('appended_total')
+    type Serialized = ReturnType<Record['attributesToJSON']>
+    expectTypeOf<Serialized['flag_int']>().toEqualTypeOf<boolean | undefined>()
+    expectTypeOf<Serialized['stamp']>().toEqualTypeOf<number | undefined>()
+    expectTypeOf<Serialized['seen_at']>().toEqualTypeOf<Date | null | undefined>()
   }
 })
 

@@ -3,6 +3,7 @@ import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/
 export const namedRelationTenants = defineGeneratedTable("named_relation_tenants", {
   "id": column.id(),
   "display_name": column.string(),
+  "created_at": column.string(),
 })
 
 export const namedRelationRewards = defineGeneratedTable("named_relation_rewards", {

@@ -1,6 +1,8 @@
 import { belongsTo, defineModel, hasMany, scopeRelation, type ModelQueryBuilder, type GeneratedSchemaTable } from '@holo-js/db'
 
 export default defineModel('named_relation_rewards', {
+  accessors: { label: () => 'Reward' },
+  appended: ['label'],
   scopes: {
     generous(query: ModelQueryBuilder<GeneratedSchemaTable<'named_relation_rewards'>>) {
       return query.where('points', '>', 1000)

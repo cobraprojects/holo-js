@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
+import { beforeEach, describe, expect, expectTypeOf, it, onTestFinished } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
   DB,
@@ -59,6 +59,67 @@ type RepositoryRelationHarness = {
 function asDynamicEntity(value: unknown): DynamicEntity {
   return value as DynamicEntity
 }
+
+it('serializes model attributes without reading or changing its eager-loaded relations', async () => {
+  let queries = 0
+  let relatedDateSerializations = 0
+  const adapter = createSQLiteAdapter({ filename: ':memory:' })
+  onTestFinished(() => adapter.disconnect())
+  resetDB()
+  const db = createDatabase({
+    adapter,
+    dialect: createDatabaseDialect('sqlite'),
+    logger: { onQuerySuccess: () => { queries += 1 } },
+  })
+  configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+  const authors = defineTable('serialization_authors', { id: column.id(), name: column.string(), secret: column.string() })
+  const posts = defineTable('serialization_posts', { id: column.id(), authorId: column.integer(), publishedAt: column.timestamp() })
+  await createTestTable(db, authors)
+  await createTestTable(db, posts)
+  const Post = defineModelFromTable(posts, {
+    fillable: ['authorId', 'publishedAt'],
+    serializeDate: value => {
+      relatedDateSerializations += 1
+      return value.toISOString()
+    },
+  })
+  const Author = defineModelFromTable(authors, {
+    fillable: ['name', 'secret'],
+    hidden: ['secret'],
+    visible: ['id', 'name', 'posts', 'earliest'],
+    serializeDate: value => value.toISOString(),
+    relations: { posts: hasMany(() => Post, { foreignKey: 'authorId' }) },
+  })
+  const author = await Author.create({ name: 'Ava', secret: 'private' })
+  const publishedAt = new Date('2025-01-02T03:04:05Z')
+  const post = await Post.create({ authorId: author.id, publishedAt })
+  const loaded = await Author.with('posts').findOrFail(author.id)
+  loaded.set('name', 'Ada')
+  const snapshot = loaded.toAttributes()
+  const related = loaded.posts
+  const queriesBeforeSerialization = queries
+
+  const serialized = loaded.attributesToJSON()
+  expect(serialized).toEqual({ id: author.id, name: 'Ada' })
+  expectTypeOf(serialized).toEqualTypeOf<{ id?: number, name?: string, secret?: string }>()
+  expect(relatedDateSerializations).toBe(0)
+  expect(queries).toBe(queriesBeforeSerialization)
+  expect(loaded.toAttributes()).toEqual(snapshot)
+  expect(loaded.getDirty()).toEqual({ name: 'Ada' })
+  expect(loaded.posts).toBe(related)
+
+  const full = {
+    id: author.id, name: 'Ada', posts: [{ id: post.id, authorId: author.id, publishedAt: publishedAt.toISOString() }],
+  }
+  expect(loaded.toJSON()).toEqual(full)
+  expect(relatedDateSerializations).toBe(1)
+  expect(JSON.stringify(loaded)).toBe(JSON.stringify(full))
+  expect(relatedDateSerializations).toBe(2)
+
+  const aggregated = await Author.withMin('posts as earliest', 'publishedAt').findOrFail(author.id)
+  expect(aggregated.attributesToJSON().earliest).toBe(publishedAt.toISOString())
+  expectTypeOf(aggregated.attributesToJSON().earliest).toEqualTypeOf<string | null | undefined>()
+})
 
 describe('relation helper keys', () => {
   it('uses default keys for object-style relation helpers', () => {

@@ -2,7 +2,7 @@ import { HydrationError } from '../core/errors'
 import { assertAttributeNameAllowed, exposeUntypedEntityAttributes, initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
 import type { RelationAggregateAttributes } from './relationAggregateTypes'
-import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelAttributeSnapshot, ModelInsertPayload, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, ModelWithAggregateAttributes, ModelWritableAttributeKey, PivotAttributesOfRelation, PivotRelatedIdsOfRelation, RelatedColumnNameOfRelation, RelationAggregateKind, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
+import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelAttributeSnapshot, ModelInsertPayload, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelSerializedAttributes, ModelUpdatePayload, ModelWithAggregateAttributes, ModelWritableAttributeKey, PivotAttributesOfRelation, PivotRelatedIdsOfRelation, RelatedColumnNameOfRelation, RelationAggregateKind, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
 
 function isEntity(value: unknown): value is Entity<TableDefinition, RelationMap> {
   return value instanceof EntityBase
@@ -16,6 +16,7 @@ type EntityRepositoryRuntime<TTable extends TableDefinition, TRelations extends 
   assertMassAssignable?(values: Record<string, unknown>): Record<string, unknown>
   resolveAttribute?(key: string, entity: EntityBase<TTable, TRelations>, value: unknown): unknown
   serializeEntity?(entity: EntityBase<TTable, TRelations>): ModelRecord<TTable>
+  serializeAttributes?(entity: EntityBase<TTable, TRelations>): Record<string, unknown>
   saveEntity?(entity: EntityBase<TTable, TRelations>): Promise<EntityBase<TTable, TRelations>>
   saveEntityQuietly?(entity: EntityBase<TTable, TRelations>): Promise<EntityBase<TTable, TRelations>>
   deleteEntity?(entity: EntityBase<TTable, TRelations>): Promise<void>
@@ -496,6 +497,11 @@ class EntityBase<
     }
 
     return {} as unknown as RelationMethodsOf<TRelations[K]>
+  }
+
+  attributesToJSON(): ModelSerializedAttributes<TTable, this> {
+    const repo = this.getRepositoryRuntime()
+    return (repo.serializeAttributes?.(this) ?? this.toAttributes()) as ModelSerializedAttributes<TTable, this>
   }
 
   toJSON(): ModelRecord<TTable> {

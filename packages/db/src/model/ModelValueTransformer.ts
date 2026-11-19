@@ -29,7 +29,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return !Object.prototype.hasOwnProperty.call(this.definition.accessors, key)
   }
 
-  serializeEntity(entity: Entity<TTable>): Record<string, unknown> {
+  serializeEntity(entity: Entity<TTable>, includeRelations = true): Record<string, unknown> {
     const serializationEntity = entity as Entity<TTable> & {
       getSerializationConfig?: () => {
         hidden: ReadonlySet<string>
@@ -73,6 +73,10 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
         key,
         this.resolveAttribute(key, entity, entity.toAttributes()[key as keyof ReturnType<typeof entity.toAttributes>]),
       )
+    }
+
+    if (!includeRelations) {
+      return output
     }
 
     for (const [relationName, relationValue] of Object.entries(entity.getLoadedRelations())) {
