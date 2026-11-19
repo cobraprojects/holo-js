@@ -12,6 +12,7 @@ const base = '/dashboard'
 const cwd = process.cwd()
 const framework = basename(cwd).replace(/^blog-/, '')
 const nuxtRuntimeBase = framework === 'nuxt' && process.env.HOLO_EXAMPLE_NUXT_RUNTIME_BASE === '1'
+const nextWebpackBuild = framework === 'next' && process.env.HOLO_EXAMPLE_NEXT_BUNDLER === 'webpack'
 const configPatches = {
   next: ['next.config.ts', 'withHolo({', `withHolo({\n  basePath: '${base}',`],
   nuxt: ['nuxt.config.ts', "modules: ['@holo-js/adapter-nuxt'],", `modules: ['@holo-js/adapter-nuxt'],\n  app: { baseURL: '${base}/' },`],
@@ -47,9 +48,19 @@ function childEnv(overrides = {}) {
   return env
 }
 
+function collect(child) {
+  for (const stream of [child.stdout, child.stderr]) {
+    stream.on('data', (chunk) => {
+      output += chunk.toString()
+      process.stdout.write(chunk)
+    })
+  }
+}
+
 function run(args) {
   return new Promise((resolve, reject) => {
-    const child = spawn('bun', args, { cwd, env: childEnv(), stdio: 'inherit' })
+    const child = spawn('bun', args, { cwd, env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] })
+    collect(child)
     child.once('error', reject)
     child.once('close', code => code === 0 ? resolve() : reject(new Error(`bun ${args.join(' ')} exited with ${code}`)))
   })
@@ -57,12 +68,7 @@ function run(args) {
 
 function start(args, env = {}) {
   const child = spawn('bun', args, { cwd, detached: true, env: childEnv(env), stdio: ['ignore', 'pipe', 'pipe'] })
-  for (const stream of [child.stdout, child.stderr]) {
-    stream.on('data', (chunk) => {
-      output += chunk.toString()
-      process.stdout.write(chunk)
-    })
-  }
+  collect(child)
   children.push(child)
 }
 
@@ -93,9 +99,9 @@ async function patchBasePath() {
 
 function startApp() {
   if (nuxtRuntimeBase) return start(['run', 'start'], { PORT: port, HOST: host, NITRO_HOST: host, NUXT_APP_BASE_URL: `${base}/` })
+  if (nextWebpackBuild) return start(['run', 'start'], { PORT: port, HOST: host })
   if (framework === 'sveltekit') return start(['run', 'dev', '--host', '127.0.0.1', '--port', port])
-  const bundlerArgs = process.env.HOLO_EXAMPLE_NEXT_BUNDLER === 'webpack' ? ['--webpack'] : []
-  start(['run', 'dev', ...bundlerArgs], { PORT: port, HOST: host, NITRO_HOST: host })
+  start(['run', 'dev'], { PORT: port, HOST: host, NITRO_HOST: host })
 }
 
 async function signIn(context) {
@@ -191,11 +197,12 @@ try {
   await run(['run', 'setup'])
   await run(['x', 'holo', 'migrate:fresh', '--seed'])
   if (nuxtRuntimeBase) await run(['run', 'build'])
+  if (nextWebpackBuild) await run(['run', 'build', '--webpack'])
   start(['x', 'holo', 'broadcast:work'])
   startApp()
   await waitUntil(async () => (await fetch(`${origin}${base}/`)).ok, `The ${framework} app must serve its home page under ${base}.`, 180000)
   await waitUntil(async () => (await fetch(`http://127.0.0.1:${broadcastPort}/health`)).ok, 'The broadcast worker must start.')
-  if (process.env.HOLO_EXAMPLE_NEXT_BUNDLER === 'webpack') assert.match(output, /Next\.js [\d.]+ \(webpack\)/, 'The Next dev server must run on webpack.')
+  if (nextWebpackBuild) assert.match(output, /Next\.js [\d.]+ \(webpack\)/, 'The Next production build must run on webpack.')
   await assertClientsUseTheBasePath()
 } finally {
   await closeExampleAppBrowser()
