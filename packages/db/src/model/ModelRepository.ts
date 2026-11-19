@@ -3581,6 +3581,10 @@ export class ModelRepository<
     return this.valueTransformer.serializeEntity(entity)
   }
 
+  serializeAttributes(entity: Entity<TTable>): Record<string, unknown> {
+    return this.valueTransformer.serializeEntity(entity, false)
+  }
+
   serializeAttributeValue(key: string, value: unknown): unknown {
     return this.valueTransformer.serializeAttributeValue(key, value)
   }

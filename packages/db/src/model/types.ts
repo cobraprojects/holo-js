@@ -486,40 +486,40 @@ export type RelatedTableOfRelation<TRelation extends RelationDefinition>
 export type RelatedColumnNameOfRelation<TRelation extends RelationDefinition>
   = ModelAttributeKey<RelatedTableOfRelation<TRelation>>
 
-type AggregateWhitespace
+type Whitespace
   = ' ' | '\t' | '\n' | '\v' | '\f' | '\r' | ' ' | ' ' | ' ' | ' ' | ' ' | ' '
     | ' ' | ' ' | ' ' | ' ' | ' ' | ' ' | ' ' | ' ' | ' ' | ' '
     | ' ' | '　' | '﻿'
 
-type TrimAggregateStart<TValue extends string>
-  = TValue extends `${AggregateWhitespace}${infer TRest}` ? TrimAggregateStart<TRest> : TValue
+type TrimStart<TValue extends string>
+  = TValue extends `${Whitespace}${infer TRest}` ? TrimStart<TRest> : TValue
 
-type TrimAggregateEnd<TValue extends string>
-  = TValue extends `${infer TRest}${AggregateWhitespace}` ? TrimAggregateEnd<TRest> : TValue
+type TrimEnd<TValue extends string>
+  = TValue extends `${infer TRest}${Whitespace}` ? TrimEnd<TRest> : TValue
 
 type FirstAggregateWord<TValue extends string, TWord extends string = ''>
   = TValue extends `${infer TChar}${infer TRest}`
-    ? TChar extends AggregateWhitespace
+    ? TChar extends Whitespace
       ? [TWord, TRest]
       : FirstAggregateWord<TRest, `${TWord}${TChar}`>
     : [TWord, '']
 
 type FirstAggregateAlias<TValue extends string, TAlias extends string = ''>
-  = TValue extends `${AggregateWhitespace}${'as' | 'AS' | 'As' | 'aS'}${AggregateWhitespace}${string}` ? TrimAggregateEnd<TAlias>
+  = TValue extends `${Whitespace}${'as' | 'AS' | 'As' | 'aS'}${Whitespace}${string}` ? TrimEnd<TAlias>
     : TValue extends `${infer TChar}${infer TRest}` ? FirstAggregateAlias<TRest, `${TAlias}${TChar}`>
       : `${TAlias}${TValue}`
 
 export type AggregateKeyParts<TKey extends string>
-  = TrimAggregateStart<TKey> extends infer TTrimmed extends string
+  = TrimStart<TKey> extends infer TTrimmed extends string
     ? FirstAggregateWord<TTrimmed> extends [infer TRelation extends string, infer TRest extends string]
-      ? FirstAggregateWord<TrimAggregateStart<TRest>> extends [infer TKeyword extends string, infer TTail extends string]
+      ? FirstAggregateWord<TrimStart<TRest>> extends [infer TKeyword extends string, infer TTail extends string]
         ? Lowercase<TKeyword> extends 'as'
-          ? TrimAggregateEnd<FirstAggregateAlias<TrimAggregateStart<TTail>>> extends infer TAlias extends string
+          ? TrimEnd<FirstAggregateAlias<TrimStart<TTail>>> extends infer TAlias extends string
             ? TAlias extends ''
-              ? { readonly relation: TrimAggregateEnd<TTrimmed> }
+              ? { readonly relation: TrimEnd<TTrimmed> }
               : { readonly relation: TRelation, readonly alias: TAlias }
             : never
-          : { readonly relation: TrimAggregateEnd<TTrimmed> }
+          : { readonly relation: TrimEnd<TTrimmed> }
         : never
       : never
     : never
@@ -980,7 +980,66 @@ type ModelDateCasts<TTable extends TableDefinition, TDateColumns extends string,
 }
 
 export type ModelCastedTable<TTable extends TableDefinition, TCasts extends ModelCastMap, TDateColumns extends string = never>
-  = CastedTable<TTable, KnownCasts<TCasts> & ModelDateCasts<TTable, TDateColumns, TCasts>>
+  = ModelTableWithSerialization<TTable, TCasts, TDateColumns>
+
+type FormattedDateCast = `${'date' | 'datetime' | 'timestamp'}:${string}`
+
+type FormattedDateCasts<TCasts> = {
+  [K in keyof TCasts as Extract<TCasts[K], FormattedDateCast> extends never ? never : K]: TCasts[K]
+}
+
+export type ModelAccessorMap = Readonly<Record<string, ModelAccessor>>
+
+type AccessorValues<TAccessors extends ModelAccessorMap>
+  = string extends keyof TAccessors ? object : { [K in keyof TAccessors]: ReturnType<TAccessors[K]> }
+
+type SerializedDate<TCast, TDefault>
+  = TCast extends `${'date' | 'datetime' | 'timestamp'}:${infer TFormat}`
+    ? string extends TFormat ? string | number | TDefault
+      : SerializedDateFormat<TrimStart<TrimEnd<TFormat>>, TDefault>
+    : TDefault
+
+type SerializedDateFormat<TFormat, TDefault> = TFormat extends '' ? TDefault : TFormat extends 'unix' ? number : string
+
+type SerializedAttributeValue<TValue, TCast, TDate>
+  = TValue extends Date ? SerializedDate<TCast, TDate> : TValue
+
+type SerializedAttributeRecord<TRecord, TCasts, TAccessors, TDate> = {
+  [K in keyof TRecord | keyof TAccessors]: SerializedAttributeValue<
+    K extends keyof TAccessors ? TAccessors[K] : K extends keyof TRecord ? TRecord[K] : never,
+    K extends keyof TCasts ? TCasts[K] : undefined,
+    TDate
+  >
+}
+
+export type ModelTableWithSerialization<
+  TTable extends TableDefinition,
+  TCasts extends ModelCastMap,
+  TDateColumns extends string,
+  TAccessors extends ModelAccessorMap = EmptyModelCastMap,
+  TSerializeDate extends ModelDateSerializer = ModelDateSerializer,
+> = WithSerializedAttributes<
+  CastedTable<TTable, KnownCasts<TCasts> & ModelDateCasts<TTable, TDateColumns, TCasts>>,
+  FormattedDateCasts<KnownCasts<TCasts>>,
+  AccessorValues<TAccessors>,
+  TSerializeDate
+>
+
+type WithSerializedAttributes<TTable extends TableDefinition, TCasts, TAccessors, TSerializeDate extends ModelDateSerializer>
+  = [keyof TCasts | keyof TAccessors | (ModelDateSerializer extends TSerializeDate ? never : 'serializeDate')] extends [never]
+    ? TTable
+    : TTable & {
+      readonly '~modelSerializedAttributes'?: SerializedAttributeRecord<
+        ModelRecord<TTable>,
+        TCasts,
+        TAccessors,
+        ModelDateSerializer extends TSerializeDate ? Date : ReturnType<TSerializeDate>
+      >
+    }
+
+export type ModelSerializedAttributes<TTable extends TableDefinition> = Partial<
+  TTable extends { readonly '~modelSerializedAttributes'?: infer TAttributes } ? TAttributes : ModelRecord<TTable>
+>
 
 export interface ModelDateOptions {
   readonly timestamps?: boolean

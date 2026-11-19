@@ -1,5 +1,5 @@
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
+import { beforeEach, describe, expect, expectTypeOf, it, onTestFinished } from 'vitest'
 import {
   DB, HasSnowflakes, HasUlids, HasUniqueIds, HasUuids,
   binaryCast, belongsTo, column, configureDB, createConnectionManager,
@@ -50,10 +50,12 @@ describe('native model attributes and persistence', () => {
     restored.set('score', 20)
     await restored.save()
     expect((await User.findOrFail(user.get('id'))).get('score')).toBe(20)
-    expect(restored.setVisible(['name']).withoutAppends().toJSON()).toEqual({ name: 'MOHAMED' })
-    expect(restored.makeVisible('secret').toJSON()).toEqual({ name: 'MOHAMED', secret: 'secret:TOKEN' })
-    expect(restored.makeHidden('secret').append('label').toJSON()).toEqual({ name: 'MOHAMED' })
-    expect(restored.makeVisible('label').toJSON()).toEqual({ name: 'MOHAMED', label: 'User:Mohamed' })
+    expect(restored.setVisible(['name']).withoutAppends().attributesToJSON()).toEqual({ name: 'MOHAMED' })
+    expect(restored.makeVisible('secret').attributesToJSON()).toEqual({ name: 'MOHAMED', secret: 'secret:TOKEN' })
+    expect(restored.makeHidden('secret').append('label').attributesToJSON()).toEqual({ name: 'MOHAMED' })
+    expect(restored.makeVisible('label').attributesToJSON()).toEqual({ name: 'MOHAMED', label: 'User:Mohamed' })
+    expectTypeOf(restored.attributesToJSON()).toHaveProperty('label').toEqualTypeOf<string | undefined>()
+    expectTypeOf(restored.attributesToJSON()).toHaveProperty('settings').toEqualTypeOf<{ enabled: boolean } | undefined>()
   })
 
   it('applies query-time date casts without changing the model definition', async () => {
@@ -83,9 +85,15 @@ describe('native model attributes and persistence', () => {
     const restored = await Event.findOrFail(event.get('id'))
     expect(restored.get('startsAt')).toEqual(startsAt)
     expect(restored.get('sentAt')).toEqual(sentAt)
-    expect(restored.toJSON()).toMatchObject({ startsAt: '2025-06-07 08:09:10', sentAt: 1749283751 })
+    const attributes = restored.attributesToJSON()
+    expect(attributes).toEqual({ id: event.id, startsAt: '2025-06-07 08:09:10', sentAt: 1749283751 })
+    expect(restored.toJSON()).toEqual(attributes)
+    expectTypeOf(attributes.startsAt).toEqualTypeOf<string | undefined>()
+    expectTypeOf(attributes.sentAt).toEqualTypeOf<number | undefined>()
     const Custom = defineModelFromTable(events, { serializeDate: value => value.toISOString().slice(0, 10) })
-    expect((await Custom.findOrFail(event.get('id'))).toJSON()).toMatchObject({ startsAt: '2025-06-07', sentAt: '2025-06-07' })
+    const customAttributes = (await Custom.findOrFail(event.id)).attributesToJSON()
+    expect(customAttributes).toEqual({ id: event.id, startsAt: '2025-06-07', sentAt: '2025-06-07' })
+    expectTypeOf(customAttributes.startsAt).toEqualTypeOf<string | undefined>()
   })
 
   it('persists castable definitions and set-only casts with nullable scalar attributes', async () => {
