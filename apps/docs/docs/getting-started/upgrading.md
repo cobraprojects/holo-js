@@ -1,6 +1,6 @@
 # Upgrade Guide
 
-## Upgrading from 0.6.1 to 0.7.0
+## Upgrading from 0.6.1 to 0.6.2
 
 ### SvelteKit: one Holo Vite plugin
 
