@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-061-to-062).
+## 0.6.2 - 2026-11-19
+
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-061-to-062). SvelteKit apps rename `holoSvelteKitRealtime()` to `holoSvelteKit()`, which `holo prepare` does for you. No database migration is needed.
 
 ### Added
 

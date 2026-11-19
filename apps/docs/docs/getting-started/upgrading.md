@@ -2,6 +2,8 @@
 
 ## Upgrading from 0.6.1 to 0.6.2
 
+Update every installed `@holo-js/*` package to `0.6.2` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. SvelteKit apps need the plugin change below; Next and Nuxt apps need no code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#062---2026-11-19) lists the release changes, including security fixes for route guards and CSRF under a base path.
+
 ### SvelteKit: one Holo Vite plugin
 
 SvelteKit apps now register a single Holo Vite plugin, `holoSvelteKit()`. It replaces `holoSvelteKitRealtime()`, which is removed. Run `holo prepare` and it updates `vite.config.ts` for you: it renames `holoSvelteKitRealtime` to `holoSvelteKit` in place, keeping its position in the `plugins` array. If your app has no Holo plugin yet, it adds `holoSvelteKit()` after `sveltekit()`. To make the change by hand:
