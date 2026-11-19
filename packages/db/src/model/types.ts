@@ -125,8 +125,8 @@ export type ModelDefinitionTable<TReference extends ModelDefinitionLike>
       : TableDefinition
 
 type WithRegisteredModelSerialization<TTable, TDefinition>
-  = TDefinition extends { readonly definition: { readonly table: { readonly '~modelSerialization'?: infer TSerialization } } }
-    ? Omit<TTable, '~modelSerialization'> & { readonly '~modelSerialization'?: TSerialization }
+  = TDefinition extends { readonly definition: { readonly table: infer TRegistered extends TableDefinition & { readonly '~modelSerialization'?: object } } }
+    ? Omit<TTable, 'columns' | '~modelSerialization'> & Pick<TRegistered, 'columns' | '~modelSerialization'>
     : TTable
 
 type ModelEntityTable<TReference extends ModelDefinitionLike>
