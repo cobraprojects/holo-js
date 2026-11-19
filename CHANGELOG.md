@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-061-to-070).
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-061-to-062).
 
 ### Added
 

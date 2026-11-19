@@ -2,7 +2,6 @@ publicPackages = ["@holo-js/db", "@holo-js/validation"]
 
 entry = [
   "packages/cli/tests/global-setup.ts",
-  "tests/example-app-base-path.mjs",
 ]
 
 [resolve]
