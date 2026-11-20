@@ -49,6 +49,7 @@ import { createFieldStandardValidate, createSchemaStandardValidate, flatToStanda
 
 import { makeCompiledFieldSchema, resolveCompiledSchema } from './contracts-compiler'
 import { clearSensitiveInput, DONT_FLASH_FIELDS, stripSensitiveInput } from './sensitive-input'
+import { setCurrentPasswordVerifier } from './current-password'
 
 export * from './contracts-types'
 
@@ -177,6 +178,16 @@ export class ValidationFieldBuilder<TOutput> implements StandardSchemaV1<unknown
 
   confirmed(message?: string): ValidationFieldBuilder<TOutput> {
     return this.clone(normalizeRule('confirmed', [], message))
+  }
+
+  currentPassword(guard?: string, message?: string): ValidationFieldBuilder<TOutput> {
+    if (this.field.definition.kind !== 'string') {
+      throw new ValidationContractError('currentPassword is only supported for string fields.')
+    }
+    if (guard !== undefined && (typeof guard !== 'string' || !guard.trim())) {
+      throw new ValidationContractError('currentPassword guard must be a non-empty string.')
+    }
+    return this.clone(normalizeRule('currentPassword', guard === undefined ? [] : [guard], message)).sensitive()
   }
 
   before(value: Date | string, message?: string): ValidationFieldBuilder<TOutput> {
@@ -718,6 +729,7 @@ export async function parse<TSchema extends ValidationSchema>(
 
 export const validationInternals = {
   DONT_FLASH_FIELDS,
+  setCurrentPasswordVerifier,
   serializeValidationException,
   appendIssues,
   assignNestedValue,
