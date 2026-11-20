@@ -1,4 +1,4 @@
-import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs'
 import { join } from 'node:path'
 
 const MAX_MANIFEST_BYTES = 1_048_576
@@ -28,7 +28,15 @@ export function holoPanelsStylesheetDefines(): Record<string, string> {
   try {
     const stat = fstatSync(descriptor)
     if (!stat.isFile() || stat.size > MAX_MANIFEST_BYTES) throw invalidManifest()
-    value = JSON.parse(readFileSync(descriptor, 'utf8'))
+    const bytes = Buffer.allocUnsafe(MAX_MANIFEST_BYTES + 1)
+    let length = 0
+    while (length < bytes.length) {
+      const bytesRead = readSync(descriptor, bytes, length, bytes.length - length, null)
+      if (bytesRead === 0) break
+      length += bytesRead
+    }
+    if (length > MAX_MANIFEST_BYTES) throw invalidManifest()
+    value = JSON.parse(bytes.toString('utf8', 0, length))
   } catch (error) {
     throw new Error(invalidManifest().message, { cause: error })
   } finally {

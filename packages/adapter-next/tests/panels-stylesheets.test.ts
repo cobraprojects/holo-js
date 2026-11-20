@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -110,11 +110,20 @@ assert.throws(() => withHolo(), /Invalid Holo Panels stylesheet metadata/)
 `], { cwd: root, timeout: 5_000, stdio: 'pipe' })
   })
 
-  it('rejects invalid JSON, oversized files, and non-file metadata', () => {
-    for (const content of ['{', ' '.repeat(1_048_577)]) {
-      writeFileSync(manifest, content)
-      expect(() => withHolo()).toThrow(/Invalid Holo Panels stylesheet metadata/)
-    }
+  it('accepts metadata at the byte limit and rejects valid JSON exceeding it', () => {
+    const content = JSON.stringify({ version: 1, stylesheets: [stylesheet] }).padEnd(1_048_576)
+    writeFileSync(manifest, content)
+    expect(withHolo({ compiler: { define: {} } }).compiler?.define).toEqual({
+      __HOLO_APP_BASE__: '',
+      'globalThis.__HOLO_PANELS_STYLESHEETS__': JSON.stringify({ editor: stylesheet.src }),
+    })
+    appendFileSync(manifest, ' ')
+    expect(() => withHolo()).toThrow(/Invalid Holo Panels stylesheet metadata/)
+  })
+
+  it('rejects invalid JSON and non-file metadata', () => {
+    writeFileSync(manifest, '{')
+    expect(() => withHolo()).toThrow(/Invalid Holo Panels stylesheet metadata/)
     rmSync(manifest)
     mkdirSync(manifest)
     expect(() => withHolo()).toThrow(/Invalid Holo Panels stylesheet metadata/)
