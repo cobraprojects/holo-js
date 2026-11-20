@@ -1,5 +1,7 @@
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { withHolo } from '../src/config'
 
@@ -96,6 +98,16 @@ describe('Panels prepared stylesheet defines', () => {
   ])('rejects unsafe or unbounded stylesheet fields: %j', (fields) => {
     writeManifest({ version: 1, stylesheets: [{ ...stylesheet, ...fields }] })
     expect(() => withHolo()).toThrow(/Invalid Holo Panels stylesheet metadata/)
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects FIFO metadata without waiting for a writer', () => {
+    execFileSync('mkfifo', [manifest])
+    const entry = pathToFileURL(join(repository, 'packages/adapter-next/src/config.ts')).href
+    execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', `
+import { strict as assert } from 'node:assert'
+import { withHolo } from ${JSON.stringify(entry)}
+assert.throws(() => withHolo(), /Invalid Holo Panels stylesheet metadata/)
+`], { cwd: root, timeout: 5_000, stdio: 'pipe' })
   })
 
   it('rejects invalid JSON, oversized files, and non-file metadata', () => {

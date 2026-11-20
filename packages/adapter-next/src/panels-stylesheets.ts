@@ -1,4 +1,4 @@
-import { closeSync, fstatSync, openSync, readFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const MAX_MANIFEST_BYTES = 1_048_576
@@ -18,7 +18,7 @@ function invalidManifest(): Error {
 export function holoPanelsStylesheetDefines(): Record<string, string> {
   let descriptor: number
   try {
-    descriptor = openSync(join(process.cwd(), '.holo-js/generated/panels/plugins.json'), 'r')
+    descriptor = openSync(join(process.cwd(), '.holo-js/generated/panels/plugins.json'), constants.O_RDONLY | constants.O_NONBLOCK)
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return {}
     throw error
