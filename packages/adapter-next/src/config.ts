@@ -3,6 +3,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { isAbsolute, join, relative, resolve } from 'node:path'
+import { holoPanelsStylesheetDefines } from './panels-stylesheets'
 
 const HOLO_SERVER_EXTERNAL_PACKAGES = [
   '@holo-js/core',
@@ -365,7 +366,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
     turbopack: mergedTurbopack,
     compiler: {
       ...nextConfig.compiler,
-      define: { ...nextConfig.compiler?.define, __HOLO_APP_BASE__: nextConfig.basePath ?? '' },
+      define: { ...nextConfig.compiler?.define, __HOLO_APP_BASE__: nextConfig.basePath ?? '', ...holoPanelsStylesheetDefines() },
     },
     webpack(config, context) {
       const nextWebpackConfig = userWebpack?.(config, context) ?? config
