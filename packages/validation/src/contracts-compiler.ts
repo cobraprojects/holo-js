@@ -6,6 +6,7 @@ import { assertDigitCount, declaredListLimit, isFieldDefinition, isPlainObject, 
 import { confirmationFieldKey, createExecutionNode, createOrderedSchemaFactory, executeCustomRule, createFieldExecutionSchema, createShapeExecutionSchema, usesConfirmationOutput, type ExecutionNode, type FieldExecution, type CompiledSchema } from './contracts-execution'
 import { unionBranchIssue } from './contracts-runtime'
 import { createObjectContainer } from './error-bag'
+import { validateCurrentPassword } from '@holo-js/validation/internal/current-password'
 
 function getRule(definition: FieldDefinition, name: SupportedRuleFamily): FieldRule | undefined {
   return definition.rules.find(rule => rule.name === name)
@@ -21,7 +22,7 @@ type SchemaPlan = {
 }
 
 const rulesRequiringExecution = new Set<SupportedRuleFamily>([
-  'required', 'confirmed', 'custom', 'customAsync', 'before', 'after', 'beforeOrEqual',
+  'required', 'confirmed', 'currentPassword', 'custom', 'customAsync', 'before', 'after', 'beforeOrEqual',
   'afterOrEqual', 'today', 'beforeToday', 'todayOrBefore', 'beforeOrToday', 'afterToday',
   'todayOrAfter', 'afterOrToday',
 ])
@@ -185,6 +186,18 @@ function compileFieldPipeline(definition: FieldDefinition, executionFor?: (datas
         actions.push(asPipeItem(v.check((input: unknown) => allowed.has(input), rule.message ?? 'This field must be one of the allowed values.')))
         break
       }
+      case 'currentPassword':
+        if (!executionFor) throw new Error('Validation rule execution is missing.')
+        actions.push(v.rawCheckAsync(async ({ dataset, addIssue }) => {
+          const execution = executionFor(dataset)
+          if (dataset.typed && !execution.requiredMissing
+            && !await validateCurrentPassword(dataset.value, rule.args[0])) {
+            const message = rule.message ?? 'The password is incorrect.'
+            execution.customIssues.set(rule, message)
+            addIssue({ message })
+          }
+        }))
+        break
       case 'custom':
       case 'customAsync':
         if (!executionFor) throw new Error('Validation rule execution is missing.')

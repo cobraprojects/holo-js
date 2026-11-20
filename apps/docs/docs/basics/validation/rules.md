@@ -35,6 +35,7 @@ Rules are grouped by the field types they apply to. Rules marked "all fields" wo
 - [`uuid()`](#uuid-message)
 - [`regex()`](#regex-pattern-message)
 - [`in()`](#in-values-message)
+- [`currentPassword()`](#currentpassword-guard-message)
 
 **Number fields**
 
@@ -331,6 +332,24 @@ const passwords = schema({
   passwordConfirmation: field.string().transform(value => value.trim()),
 })
 ```
+
+### `currentPassword(guard?, message?)`
+
+Checks a string against the authenticated user's current password. Omit `guard` to use the default auth guard, or pass a configured guard name. An unauthenticated user, an incorrect password, or a user without a local password fails validation.
+
+```ts
+import { field, schema } from '@holo-js/validation'
+
+export const confirmPassword = schema({
+  credential: field.password().required().currentPassword(),
+})
+
+export const confirmAdminPassword = schema({
+  credential: field.password().required().currentPassword('admin'),
+})
+```
+
+This rule runs on the server with Holo auth configured. Browser validation defers the password check to the server while continuing to enforce other rules such as `required()` and `min()`. It uses the selected user's provider and configured password hasher, without logging in or rehashing the password. Fields using it are automatically marked sensitive and omitted from flashed validation input, including fields with custom names. To replace the error message on the default guard, use `.currentPassword(undefined, 'Your password is incorrect.')`.
 
 ## Date rules
 

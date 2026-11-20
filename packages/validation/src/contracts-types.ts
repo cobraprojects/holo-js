@@ -18,6 +18,7 @@ export const SUPPORTED_RULE_FAMILIES = [
   'regex',
   'in',
   'confirmed',
+  'currentPassword',
   'before',
   'after',
   'beforeOrEqual',

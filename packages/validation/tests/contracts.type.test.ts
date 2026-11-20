@@ -12,6 +12,17 @@ import {
 } from '../src'
 
 describe('@holo-js/validation typing', () => {
+  it('preserves concrete string inference through current password validation', () => {
+    const contract = schema({
+      credential: field.password().currentPassword(),
+      adminCredential: field.string().currentPassword('admin').optional(),
+    })
+    expectTypeOf<InferSchemaData<typeof contract.fields>>().toEqualTypeOf<{
+      credential: string
+      adminCredential: string | undefined
+    }>()
+  })
+
   it('infers exact union types for Holo and Standard Schema consumers', async () => {
     const contract = schema({
       status: field.union([field.string(), field.array(field.string())]).required(),

@@ -118,6 +118,7 @@ function applyFieldChecks(
 
   for (const rule of definition.rules) {
     switch (rule.name) {
+      case 'currentPassword':
       case 'custom':
       case 'customAsync': {
         const message = execution.customIssues.get(rule)

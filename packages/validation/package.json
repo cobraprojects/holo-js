@@ -27,6 +27,21 @@
       "types": "./dist/internal/error-bag.d.ts",
       "import": "./dist/internal/error-bag.mjs",
       "default": "./dist/internal/error-bag.mjs"
+    },
+    "./internal/current-password": {
+      "types": "./dist/internal/current-password.d.ts",
+      "browser": {
+        "@holo-js/source": "./src/current-password.browser.ts",
+        "default": "./dist/internal/current-password.browser.mjs"
+      },
+      "import": {
+        "@holo-js/source": "./src/current-password.ts",
+        "default": "./dist/internal/current-password.mjs"
+      },
+      "default": {
+        "@holo-js/source": "./src/current-password.ts",
+        "default": "./dist/internal/current-password.mjs"
+      }
     }
   },
   "main": "./dist/index.mjs",

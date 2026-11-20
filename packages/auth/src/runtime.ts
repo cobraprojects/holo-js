@@ -1,4 +1,5 @@
 import { COOKIE_WRITE_UNAVAILABLE } from '@holo-js/kernel'
+import { validationInternals } from '@holo-js/validation'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { syncHostedIdentity } from './runtime/hostedIdentitySync'
 import { resetVerificationOnEmailChange } from './runtime/emailChange'
@@ -580,33 +581,32 @@ async function restoreRememberedSessionNow(
   return true
 }
 
-async function restoreFromRememberRecaller(bindings: RuntimeBindings, guardName: string, encoded: string): Promise<boolean> {
-  const recaller = decodeRememberRecaller(encoded)
-  if (!recaller || recaller[3] <= Date.now()) return false
+async function resolveRememberedUser(guardName: string, encoded: string | undefined): Promise<RetrievedGuardUser | null> {
+  const recaller = encoded ? decodeRememberRecaller(encoded) : null
+  if (!recaller || recaller[3] <= Date.now()) return null
   const guard = getGuardConfig(guardName)
   const { adapter } = getProviderAdapter(guard.provider)
-  const matchesRecaller = async (): Promise<boolean> => {
-    const user = await adapter.findById(recaller[0])
-    const token = user ? getRememberToken(adapter, user) : null
-    return Boolean(
-      user
-      && token
-      && rememberSecretsMatch(token, recaller[1])
-      && rememberSecretsMatch(hashPasswordForRemember(getPasswordHash(adapter, user)), recaller[2]),
-    )
-  }
   const user = await adapter.findById(recaller[0])
-  if (!user || !await matchesRecaller()) return false
+  const token = user ? getRememberToken(adapter, user) : null
+  if (!user || !token || !rememberSecretsMatch(token, recaller[1])
+    || !rememberSecretsMatch(hashPasswordForRemember(getPasswordHash(adapter, user)), recaller[2])) return null
+  return { user: serializeUser(adapter, user, guard.provider), provider: guard.provider, providerUser: user }
+}
+
+async function restoreFromRememberRecaller(bindings: RuntimeBindings, guardName: string, encoded: string): Promise<boolean> {
+  const resolved = await resolveRememberedUser(guardName, encoded)
+  if (!resolved) return false
   return restoreRememberedSession(
     bindings,
     guardName,
-    guard.provider,
-    serializeUser(adapter, user, guard.provider),
-    async () => recaller[3] > Date.now() && await matchesRecaller(),
+    resolved.provider,
+    resolved.user,
+    async () => Boolean(await resolveRememberedUser(guardName, encoded)),
   )
 }
 
 function hydrateRememberedGuard(bindings: RuntimeBindings, guardName: string, restore: boolean): Promise<void> {
+  if (!restore) return loadRememberCookies(bindings)
   const key = authRequestScope(bindings.context)
   let hydrations = key ? requestRememberHydrations.get(key) : undefined
   const pending = hydrations?.get(guardName)
@@ -616,8 +616,7 @@ function hydrateRememberedGuard(bindings: RuntimeBindings, guardName: string, re
     const recaller = await getRememberRecaller(bindings, guardName)
     if (!recaller) return
     if (
-      restore
-      && !await guardHasSessionPayload(bindings, guardName)
+      !await guardHasSessionPayload(bindings, guardName)
       && !await restoreFromRememberRecaller(bindings, guardName, recaller)
     ) {
       await setRememberRecaller(bindings, guardName)
@@ -1062,17 +1061,23 @@ async function findSerializedUserById(
   providerName: string,
   userId: string | number,
 ): Promise<SerializedAuthUser | null> {
+  return (await findResolvedUserById(providerName, userId))?.user ?? null
+}
+
+async function findResolvedUserById(providerName: string, userId: string | number): Promise<RetrievedGuardUser | null> {
   const { adapter } = getProviderAdapter(providerName)
   const user = await adapter.findById(userId)
-  return user ? serializeUser(adapter, user, providerName) : null
+  return user ? { user: serializeUser(adapter, user, providerName), provider: providerName, providerUser: user } : null
 }
 
 async function authenticateAccessTokenRecord(
   plainTextToken: string,
   provider?: string,
+  recordUsage = true,
 ): Promise<{
   readonly token: PersonalAccessTokenRecord
   readonly user: SerializedAuthUser
+  readonly providerUser: unknown
 } | null> {
   const parsed = parsePlainTextToken(plainTextToken)
   if (!parsed) {
@@ -1091,15 +1096,16 @@ async function authenticateAccessTokenRecord(
     return null
   }
 
-  const updatedRecord = normalizeTokenRecord({
+  const updatedRecord = recordUsage ? normalizeTokenRecord({
     ...tokenRecord,
     lastUsedAt: new Date(),
-  })
-  await tokenStore.update(updatedRecord)
+  }) : tokenRecord
+  if (recordUsage) await tokenStore.update(updatedRecord)
 
   return {
     token: updatedRecord,
     user: serializeUser(adapter, resolvedUser, tokenRecord.provider),
+    providerUser: resolvedUser,
   }
 }
 
@@ -1153,11 +1159,11 @@ async function resolveCurrentAccessTokenForGuard(guardName: string): Promise<Aut
   return createCurrentAccessTokenHandle(guardName, record)
 }
 
-async function filterRevokedSessionPayloads(bindings: RuntimeBindings, record: AuthSessionRecord): Promise<SessionAuthPayloadMap | null> {
+async function filterRevokedSessionPayloads(bindings: RuntimeBindings, record: AuthSessionRecord, readOnly = false): Promise<SessionAuthPayloadMap | null> {
   const payloads = readSessionPayloads(record)
   if (!payloads || !bindings.sessionRevocations) return payloads
   const valid = await validSessionPayloads(bindings.sessionRevocations, bindings.context, payloads)
-  if (Object.keys(valid).length === Object.keys(payloads).length) return valid
+  if (readOnly || Object.keys(valid).length === Object.keys(payloads).length) return valid
   for (const name of Object.keys(payloads)) {
     if (name in valid) continue
     const boundSessionId = bindings.context.getSessionId(name)
@@ -1194,14 +1200,32 @@ async function reissueRememberRecaller(bindings: RuntimeBindings, guardName: str
   if (cookie) await appendResponseCookies(bindings, [cookie])
 }
 
+type ResolvedGuardUser = {
+  readonly user: AuthenticatedAuthUser
+  readonly provider: string
+  readonly providerUser?: unknown
+}
+
+type RetrievedGuardUser = ResolvedGuardUser & {
+  readonly user: SerializedAuthUser
+  readonly providerUser: unknown
+}
+
 async function resolveUserFromGuard(
   guardName: string,
   options: { readonly fresh?: boolean } = {},
 ): Promise<AuthenticatedAuthUser | null> {
+  return (await resolveGuardUser(guardName, options))?.user ?? null
+}
+
+async function resolveGuardUser(
+  guardName: string,
+  options: { readonly fresh?: boolean, readonly readOnly?: boolean } = {},
+): Promise<ResolvedGuardUser | null> {
   const bindings = getRuntimeBindings()
   const guard = getGuardConfig(guardName)
 
-  await hydrateGuardContextFromRequest(guardName)
+  await hydrateGuardContextFromRequest(guardName, { restoreRemembered: !options.readOnly })
 
   if (options.fresh && guard.driver === 'session' && isRequestOnlyGuard(bindings, guardName)) {
     const cachedUser = bindings.context.getCachedUser(guardName)
@@ -1209,51 +1233,59 @@ async function resolveUserFromGuard(
       const { adapter } = getProviderAdapter(guard.provider)
       const freshUser = await adapter.findById(cachedUser.id)
       if (!freshUser) {
-        setRequestOnlyGuard(bindings, guardName, false)
-        bindings.context.setCachedUser(guardName, null)
+        if (!options.readOnly) {
+          setRequestOnlyGuard(bindings, guardName, false)
+          bindings.context.setCachedUser(guardName, null)
+        }
         return null
       }
       const serialized = serializeUser(adapter, freshUser, guard.provider)
-      bindings.context.setCachedUser(guardName, serialized)
-      return serialized
+      if (!options.readOnly) bindings.context.setCachedUser(guardName, serialized)
+      return { user: serialized, provider: guard.provider, providerUser: freshUser }
     }
   }
 
   if (guard.driver === 'token') {
     const token = bindings.context.getAccessToken?.(guardName)
     if (!token) {
-      bindings.context.setCachedUser(guardName, null)
+      if (!options.readOnly) bindings.context.setCachedUser(guardName, null)
       return null
     }
 
-    const authenticated = await authenticateAccessTokenRecord(token, guard.provider)
+    const authenticated = await authenticateAccessTokenRecord(token, guard.provider, !options.readOnly)
     if (!authenticated) {
-      bindings.context.setAccessToken?.(guardName)
-      bindings.context.setCachedUser(guardName, null)
+      if (!options.readOnly) {
+        bindings.context.setAccessToken?.(guardName)
+        bindings.context.setCachedUser(guardName, null)
+      }
       return null
     }
 
-    bindings.context.setCachedUser(guardName, authenticated.user)
-    return authenticated.user
+    if (!options.readOnly) bindings.context.setCachedUser(guardName, authenticated.user)
+    return { user: authenticated.user, provider: guard.provider, providerUser: authenticated.providerUser }
   }
 
   if (!options.fresh && isRequestOnlyGuard(bindings, guardName)) {
     const requestOnlyUser = bindings.context.getCachedUser(guardName)
-    if (requestOnlyUser) return requestOnlyUser
+    if (requestOnlyUser) return { user: requestOnlyUser, provider: guard.provider }
   }
 
   const touched = await queueRequestSession(bindings, async () => {
     const sessionId = bindings.context.getSessionId(guardName)
-    return sessionId ? { sessionId, record: await bindings.session.touch(sessionId) } : undefined
+    return sessionId ? { sessionId, record: await (options.readOnly ? bindings.session.read(sessionId) : bindings.session.touch(sessionId)) } : undefined
   })
   if (!touched) {
+    if (options.readOnly) return resolveRememberedUser(guardName, await getRememberRecaller(bindings, guardName))
     bindings.context.setCachedUser(guardName, null)
     return null
   }
   const { sessionId, record } = touched
-  const payloads = record ? await filterRevokedSessionPayloads(bindings, record) : null
+  const payloads = record ? await filterRevokedSessionPayloads(bindings, record, options.readOnly) : null
   const payload = payloads?.[guardName]
   if (!record || !payload || payload.guard !== guardName) {
+    if (options.readOnly) {
+      return readSessionPayload(record, guardName) ? null : resolveRememberedUser(guardName, await getRememberRecaller(bindings, guardName))
+    }
     bindings.context.setSessionId(guardName)
     bindings.context.setCachedUser(guardName, null)
     await setRememberRecaller(bindings, guardName)
@@ -1261,24 +1293,25 @@ async function resolveUserFromGuard(
   }
 
   if (payload.multiFactorChallengeExpiresAt) {
-    bindings.context.setCachedUser(guardName, null)
+    if (!options.readOnly) bindings.context.setCachedUser(guardName, null)
     return null
   }
 
   if (!options.fresh) {
     const cached = bindings.context.getCachedUser(guardName)
     if (typeof cached !== 'undefined') {
-      return cached
+      return cached ? { user: cached, provider: payload.provider } : null
     }
   }
 
   const { adapter } = getProviderAdapter(payload.provider)
   const freshUser = await adapter.findById(payload.userId)
   if (payload.impersonation && (!freshUser || !await impersonationIdentitiesExist(payload.impersonation))) {
-    return await stopImpersonatingForGuard(guardName)
+    return options.readOnly ? originalImpersonationUser(payload) : restoreImpersonatedGuardUser(guardName)
   }
 
   if (!freshUser) {
+    if (options.readOnly) return null
     const remainingPayloads = {
       /* v8 ignore next -- a resolved payload guarantees readSessionPayloads(record) is non-null here. */
       ...(readSessionPayloads(record) ?? {}),
@@ -1296,8 +1329,26 @@ async function resolveUserFromGuard(
   }
 
   const serialized = serializeUser(adapter, freshUser, payload.provider)
-  bindings.context.setCachedUser(guardName, serialized)
-  return serialized
+  if (!options.readOnly) bindings.context.setCachedUser(guardName, serialized)
+  return { user: serialized, provider: payload.provider, providerUser: freshUser }
+}
+
+
+async function validateCurrentPassword(password: string, guardName = getDefaultGuardName()): Promise<boolean> {
+  return callTimebox(async (timebox) => {
+    const bindings = getRuntimeBindings()
+    const resolved = await resolveGuardUser(guardName, { fresh: true, readOnly: true })
+    const digest = resolved?.providerUser
+      ? getPasswordHash(getProviderAdapter(resolved.provider).adapter, resolved.providerUser)
+      : null
+    const matches = await bindings.passwordHasher.verify(
+      password,
+      digest || await dummyPasswordDigest(bindings.passwordHasher),
+    )
+    if (!digest || !matches) return false
+    timebox.returnEarly()
+    return true
+  }, AUTH_TIMEBOX_MILLISECONDS)
 }
 
 async function impersonationIdentitiesExist(impersonation: SessionImpersonationPayload): Promise<boolean> {
@@ -2153,6 +2204,26 @@ async function impersonationForGuard(guardName: string): Promise<AuthImpersonati
 }
 
 async function stopImpersonatingForGuard(guardName: string): Promise<AuthenticatedAuthUser | null> {
+  return (await restoreImpersonatedGuardUser(guardName))?.user ?? null
+}
+
+async function originalImpersonationUser(payload: SessionAuthPayload): Promise<(RetrievedGuardUser & { readonly payload: SessionAuthPayload }) | null> {
+  const original = payload.impersonation?.original
+  if (!original) return null
+  const resolved = await findResolvedUserById(original.provider, original.userId)
+  if (!resolved) return null
+  const restoredPayload = {
+    ...toSessionPayload(original.guard, original.provider, resolved.user),
+    ...(original.revocation ? { revocation: original.revocation } : {}),
+  }
+  const bindings = getRuntimeBindings()
+  const valid = bindings.sessionRevocations
+    ? (await validSessionPayloads(bindings.sessionRevocations, bindings.context, { [original.guard]: restoredPayload }))[original.guard]
+    : restoredPayload
+  return valid ? { ...resolved, payload: valid } : null
+}
+
+async function restoreImpersonatedGuardUser(guardName: string): Promise<RetrievedGuardUser | null> {
   const bindings = getRuntimeBindings()
   const state = await readGuardSessionState(guardName)
   if (!state || !state.payload.impersonation) {
@@ -2160,19 +2231,9 @@ async function stopImpersonatingForGuard(guardName: string): Promise<Authenticat
   }
 
   const nextPayloads = { ...state.payloads }
-  const storedOriginal = state.payload.impersonation.original
-  const originalUser = storedOriginal
-    ? await findSerializedUserById(storedOriginal.provider, storedOriginal.userId)
-    : null
-  const restoredPayload = storedOriginal && originalUser ? {
-    ...toSessionPayload(storedOriginal.guard, storedOriginal.provider, originalUser),
-    ...(storedOriginal.revocation ? { revocation: storedOriginal.revocation } : {}),
-  } : undefined
-  const validOriginal = restoredPayload && bindings.sessionRevocations
-    ? (await validSessionPayloads(bindings.sessionRevocations, bindings.context, { [guardName]: restoredPayload }))[guardName]
-    : restoredPayload
-  if (validOriginal && originalUser) {
-    nextPayloads[guardName] = validOriginal
+  const original = await originalImpersonationUser(state.payload)
+  if (original) {
+    nextPayloads[guardName] = original.payload
   } else {
     delete nextPayloads[guardName]
   }
@@ -2183,7 +2244,7 @@ async function stopImpersonatingForGuard(guardName: string): Promise<Authenticat
     await writeExistingSession(bindings, state.record, writeSessionPayloads(state.record.data, nextPayloads))
   }
 
-  if (!validOriginal || !originalUser) {
+  if (!original) {
     await setRememberRecaller(bindings, guardName)
     bindings.context.setSessionId(guardName)
     bindings.context.setCachedUser(guardName, null)
@@ -2191,8 +2252,8 @@ async function stopImpersonatingForGuard(guardName: string): Promise<Authenticat
   }
 
   bindings.context.setSessionId(guardName, state.sessionId)
-  bindings.context.setCachedUser(guardName, originalUser)
-  return originalUser
+  bindings.context.setCachedUser(guardName, original.user)
+  return original
 }
 
 async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
@@ -3158,6 +3219,7 @@ export function configureAuthRuntime(bindings?: AuthRuntimeBindings): void {
 function configureRuntime(bindings?: RuntimeConfigurationBindings): void {
   if (!bindings) {
     getAuthRuntimeState().bindings = undefined
+    validationInternals.setCurrentPasswordVerifier(undefined)
     return
   }
 
@@ -3185,6 +3247,7 @@ function configureRuntime(bindings?: RuntimeConfigurationBindings): void {
     passwordHasher: bindings.passwordHasher ?? createDefaultPasswordHasher(),
     authorization: bindings.authorization,
   }
+  validationInternals.setCurrentPasswordVerifier(validateCurrentPassword)
 }
 
 export function getAuthRuntime(): AuthRuntimeFacade {
@@ -3311,6 +3374,7 @@ export function getAuthRuntime(): AuthRuntimeFacade {
 }
 
 export function resetAuthRuntime(): void {
+  validationInternals.setCurrentPasswordVerifier(undefined)
   const state = getAuthRuntimeState()
   state.bindings = undefined
   state.sharedPasswordResetThrottleFailures = undefined
