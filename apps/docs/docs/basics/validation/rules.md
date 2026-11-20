@@ -349,7 +349,7 @@ export const confirmAdminPassword = schema({
 })
 ```
 
-This rule runs on the server with Holo auth configured. It uses the selected user's provider and configured password hasher, without logging in or rehashing the password. Fields using it are automatically marked sensitive and omitted from flashed validation input, including fields with custom names. To replace the error message on the default guard, use `.currentPassword(undefined, 'Your password is incorrect.')`.
+This rule runs on the server with Holo auth configured. Browser validation defers the password check to the server while continuing to enforce other rules such as `required()` and `min()`. It uses the selected user's provider and configured password hasher, without logging in or rehashing the password. Fields using it are automatically marked sensitive and omitted from flashed validation input, including fields with custom names. To replace the error message on the default guard, use `.currentPassword(undefined, 'Your password is incorrect.')`.
 
 ## Date rules
 

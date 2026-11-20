@@ -6,7 +6,7 @@ import { assertDigitCount, declaredListLimit, isFieldDefinition, isPlainObject, 
 import { confirmationFieldKey, createExecutionNode, createOrderedSchemaFactory, executeCustomRule, createFieldExecutionSchema, createShapeExecutionSchema, usesConfirmationOutput, type ExecutionNode, type FieldExecution, type CompiledSchema } from './contracts-execution'
 import { unionBranchIssue } from './contracts-runtime'
 import { createObjectContainer } from './error-bag'
-import { validateCurrentPassword } from './current-password'
+import { validateCurrentPassword } from '@holo-js/validation/internal/current-password'
 
 function getRule(definition: FieldDefinition, name: SupportedRuleFamily): FieldRule | undefined {
   return definition.rules.find(rule => rule.name === name)

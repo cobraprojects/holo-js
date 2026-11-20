@@ -54,6 +54,22 @@ globalThis.submitNativeForm = async (method) => {
   })
   return await form.submit()
 }
+globalThis.submitCurrentPasswordForm = async (validateOn) => {
+  let submissions = 0
+  const form = createFormClient(schema({ credential: field.password().required().min(4).currentPassword('admin') }), {
+    validateOn,
+    initialValues: { credential: '' },
+    submitter: ({ values }) => ({ ok: true, status: 200, data: { values, submissions: ++submissions } }),
+  })
+  await form.fields.credential.onInput('x')
+  await form.fields.credential.onBlur()
+  const invalid = await form.submit()
+  const invalidSubmissions = submissions
+  await form.fields.credential.onInput('candidate-password')
+  await form.fields.credential.onBlur()
+  const submitted = await form.submit()
+  return { invalid: invalid.valid, invalidSubmissions, submitted }
+}
 globalThis.mountSurvey = () => {
   const definition = schema({ tags: field.array(field.string()).required(), pages: field.array({ key: field.string().required(), questions: field.array({ text: field.string().required(), required: field.boolean() }).default([]) }).required() })
   const initialValues = { tags: ['first', 'second'], pages: [{ key: 'first', questions: [{ text: 'First question', required: true }, { text: 'Second question', required: false }] }, { key: 'second', questions: [{ text: 'Third question', required: true }] }] }
@@ -125,6 +141,22 @@ const browser = await chromium.launch({ headless: true })
 
 try {
   await test('forms use native browser cookies and native FormData', { concurrency: 3 }, async suite => {
+    await suite.test('defers currentPassword to the server without skipping other browser rules', async () => {
+      const page = await browser.newPage()
+      try {
+        await page.goto(url)
+        await page.waitForFunction(() => typeof globalThis.submitCurrentPasswordForm === 'function')
+        for (const mode of ['submit', 'blur', 'change']) {
+          const result = await page.evaluate(mode => globalThis.submitCurrentPasswordForm(mode), mode)
+          assert.equal(result.invalid, false)
+          assert.equal(result.invalidSubmissions, 0)
+          assert.equal(result.submitted.ok, true)
+          assert.deepEqual(result.submitted.data, { values: { credential: 'candidate-password' }, submissions: 1 })
+        }
+      } finally {
+        await page.close()
+      }
+    })
     await Promise.all([
       { name: 'attaches the default CSRF cookie on unsafe submissions', cookie: 'XSRF-TOKEN=client-token', method: 'POST', expected: { email: 'ava@example.com', _token: 'client-token' } },
       { name: 'ignores malformed unrelated cookies while reading the native CSRF cookie', cookie: 'tracking=%; XSRF-TOKEN=client-token', method: 'POST', expected: { email: 'ava@example.com', _token: 'client-token' } },
