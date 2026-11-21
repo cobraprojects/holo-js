@@ -770,10 +770,13 @@ export class ModelRepository<
       throw unorderable(`its ${crossConnection.target} model uses connection "${crossConnection.repository.getConnectionName()}" while the query uses "${this.getConnectionName()}".`)
     }
     const related = this.resolveRelatedRepository(relation.related)
-    const [subquery] = this.buildRelationExistenceSubqueries(relation, parentAlias, aggregate.constraint)
-    if (!subquery || !sameTable(subquery.getTableName(), related.definition.table.tableName)) {
+    const [constrained] = this.buildRelationExistenceSubqueries(relation, parentAlias, aggregate.constraint, undefined, 'pivot-rows')
+    if (!constrained || !sameTable(constrained.getTableName(), related.definition.table.tableName)) {
       throw unorderable('the relation cannot be expressed as a single correlated subquery.')
     }
+    const { limit, offset } = constrained.getPlan()
+    if (limit !== undefined || offset !== undefined) throw unorderable('aggregate constraints that limit or offset the related rows cannot be ordered by.')
+    const subquery = constrained.reorder()
     if (aggregate.kind === 'exists') return subquery
     if (aggregate.kind === 'count') return subquery.selectCount('aggregate')
     const source = subquery.getPlan().source
@@ -2021,8 +2024,10 @@ export class ModelRepository<
     parentAlias: string | undefined,
     constraint?: RelationConstraint,
     morphTypes?: readonly string[],
+    pivotMatching: 'related-rows' | 'pivot-rows' = 'related-rows',
   ): readonly TableQueryBuilder<TableDefinition, Record<string, unknown>>[] {
     const parent = (column: string) => this.qualifyParentColumn(column, parentAlias)
+    const matchPivot = pivotMatching === 'pivot-rows' ? this.joinPivotRows.bind(this) : this.whereHasPivot.bind(this)
     const folded = (name: string) => name.slice(name.lastIndexOf('.') + 1).toLowerCase()
     const bindsParent = (tableName: string) => sameTable(tableName, this.definition.table.tableName) || (parentAlias !== undefined && folded(tableName) === folded(parentAlias))
     const aliasFor = (repository: ModelRepository, reserved: number = 0) => bindsParent(repository.definition.table.tableName)
@@ -2127,17 +2132,17 @@ export class ModelRepository<
       case 'belongsToMany': {
         const related = this.resolveRelatedRepository(relation.related)
         const pivot = pivotQuery(this.createBelongsToManyPivotQuery(relation, this.getConnection()))
-        return [this.whereHasPivot(relation, related, existenceQuery(related), pivot, relation.foreignPivotKey, relation.relatedPivotKey, parentAlias)]
+        return [matchPivot(relation, related, existenceQuery(related), pivot, relation.foreignPivotKey, relation.relatedPivotKey, parentAlias)]
       }
       case 'morphToMany': {
         const related = this.resolveRelatedRepository(relation.related)
         const pivot = pivotQuery(this.createMorphToManyPivotQuery(relation, this.getConnection())).where(relation.morphTypeColumn, this.getMorphTypeValue())
-        return [this.whereHasPivot(relation, related, existenceQuery(related), pivot, relation.morphIdColumn, relation.foreignPivotKey, parentAlias)]
+        return [matchPivot(relation, related, existenceQuery(related), pivot, relation.morphIdColumn, relation.foreignPivotKey, parentAlias)]
       }
       case 'morphedByMany': {
         const related = this.resolveRelatedRepository(relation.related)
         const pivot = pivotQuery(this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection()))
-        return [this.whereHasPivot(relation, related, existenceQuery(related), pivot, relation.foreignPivotKey, relation.morphIdColumn, parentAlias)]
+        return [matchPivot(relation, related, existenceQuery(related), pivot, relation.foreignPivotKey, relation.morphIdColumn, parentAlias)]
       }
     }
   }
@@ -2163,15 +2168,51 @@ export class ModelRepository<
     relatedPivotColumn: string,
     parentAlias: string | undefined,
   ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+    const { parentKeyed, relatedKeyCasts } = this.pivotRowsOfParent(relation, related, pivot, parentPivotColumn, relatedPivotColumn, parentAlias)
+    const pivotKeys = selectKeyColumn(parentKeyed, relatedPivotColumn, relatedKeyCasts)
+    const source = relatedQuery.getPlan().source
+    return relatedQuery.whereInSub(`${source.alias ?? source.tableName}.${relation.relatedKey}`, pivotKeys)
+  }
+
+  private joinPivotRows(
+    relation: PivotRelationDefinition,
+    related: ModelRepository,
+    relatedQuery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
+    pivot: TableQueryBuilder<string | TableDefinition>,
+    parentPivotColumn: string,
+    relatedPivotColumn: string,
+    parentAlias: string | undefined,
+  ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+    const { parentKeyed, relatedKeyCasts } = this.pivotRowsOfParent(relation, related, pivot, parentPivotColumn, relatedPivotColumn, parentAlias)
+    const pivotSource = parentKeyed.getPlan().source
+    const pivotBinding = pivotSource.alias ?? parentKeyed.getTableName()
+    const pivotAlias = pivotSource.alias ?? parentKeyed.getTableName().split('.').at(-1)!
+    const relatedSource = relatedQuery.getPlan().source
+    return joinOnKeyColumns(
+      relatedQuery,
+      parentKeyed.select(`${pivotBinding}.${relatedPivotColumn}` as never) as TableQueryBuilder<TableDefinition, Record<string, unknown>>,
+      `${pivotAlias}.${relatedPivotColumn}`,
+      `${relatedSource.alias ?? relatedSource.tableName}.${relation.relatedKey}`,
+      relatedKeyCasts,
+      pivotAlias,
+    )
+  }
+
+  private pivotRowsOfParent(
+    relation: PivotRelationDefinition,
+    related: ModelRepository,
+    pivot: TableQueryBuilder<string | TableDefinition>,
+    parentPivotColumn: string,
+    relatedPivotColumn: string,
+    parentAlias: string | undefined,
+  ): { readonly parentKeyed: TableQueryBuilder<string | TableDefinition>, readonly relatedKeyCasts: ReturnType<typeof pivotKeyCasts> } {
     const connection = this.getConnection()
     const resolved = this.resolvePivotTable(relation.pivotTable, connection)
     const pivotTable = typeof resolved === 'string' ? getLoadedTableDefinition(connection, resolved) ?? resolved : resolved
-    const relatedTable = related.definition.table
-    const parentKeyed = whereKeyColumn(pivot, parentPivotColumn, this.qualifyParentColumn(relation.parentKey, parentAlias), pivotKeyCasts(pivotTable, parentPivotColumn, ownEntry(this.definition.table.columns, relation.parentKey), 'other'))
-    const pivotKeys = selectKeyColumn(parentKeyed, relatedPivotColumn, pivotKeyCasts(pivotTable, relatedPivotColumn, ownEntry(relatedTable.columns, relation.relatedKey), 'pivot'))
-
-    const source = relatedQuery.getPlan().source
-    return relatedQuery.whereInSub(`${source.alias ?? source.tableName}.${relation.relatedKey}`, pivotKeys)
+    return {
+      parentKeyed: whereKeyColumn(pivot, parentPivotColumn, this.qualifyParentColumn(relation.parentKey, parentAlias), pivotKeyCasts(pivotTable, parentPivotColumn, ownEntry(this.definition.table.columns, relation.parentKey), 'other')),
+      relatedKeyCasts: pivotKeyCasts(pivotTable, relatedPivotColumn, ownEntry(related.definition.table.columns, relation.relatedKey), 'pivot'),
+    }
   }
 
   private selfRelationAlias(parentAlias: string | undefined, reserved: number): string {

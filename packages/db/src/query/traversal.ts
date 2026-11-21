@@ -5,7 +5,7 @@ import type { TableDefinition } from '../schema/types'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from './chunkOrdering'
 import { selectionOutputName } from './modelRowProjection'
 import { resultColumnDefinition, withResolvedDefinitions } from './resultColumns'
-import { dateBucketSelections, selectsSubqueryAs, type QueryDirection } from './ast'
+import { dateBucketSelections, selectedColumnSource, selectsSubqueryAs, type QueryDirection } from './ast'
 import type { TableQueryBuilder } from './TableQueryBuilder'
 import type { CursorPaginatedResult } from './types'
 
@@ -70,11 +70,7 @@ export async function* queryBatches<
     for (let index = 0; index < values.length; index += size) yield values.slice(index, index + size)
     return
   }
-  const requestedOrders = plan.orderBy.flatMap(order => {
-    if (order.kind !== 'column') return []
-    const selection = plan.selections.find(selection => selection.kind === 'column' && selection.alias === order.column)
-    return [{ column: selection?.kind === 'column' ? selection.column : order.column, direction: order.direction }]
-  })
+  const requestedOrders = plan.orderBy.flatMap(order => order.kind === 'column' ? [{ column: selectedColumnSource(plan, order.column), direction: order.direction }] : [])
   const orders = idColumn
     ? [
         { column: idColumn, direction: traversal.direction ?? 'asc' },

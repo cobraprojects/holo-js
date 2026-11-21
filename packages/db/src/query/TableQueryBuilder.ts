@@ -76,6 +76,7 @@ import {
   appendSubquerySelection,
   dateBucketSelections,
   selectsSubqueryAs,
+  selectedColumnSource,
   withDateBucketSelection,
   withGroupBy,
   withHaving,
@@ -2390,7 +2391,7 @@ export class TableQueryBuilder<
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
     const previous = decodedCursor?.previous === true
-    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => unionOrders ? this.normalizeUnionCursorValue(unionOutputValueColumn(orderedQuery.plan, unionOrders[index]!.column, this.connection.getConnectionName(), caseSensitiveNames), value) : this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) } : undefined
+    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => unionOrders ? this.normalizeUnionCursorValue(unionOutputValueColumn(orderedQuery.plan, unionOrders[index]!.column, this.connection.getConnectionName(), caseSensitiveNames), value) : this.normalizePredicateValueForColumn(selectedColumnSource(orderedQuery.plan, cursorOrders[index]!.column), value)) } : undefined
     const nullsLow = !this.connection.getDialect().name.includes('postgres')
     const pageOrders = (orders: readonly CursorOrderDefinition[]) => orders.map((order): QueryOrderBy => ({ kind: 'column', column: order.column, direction: previous === (order.direction === 'asc') ? 'desc' : 'asc' }))
     let storedRows: TRow[]
@@ -2409,7 +2410,7 @@ export class TableQueryBuilder<
         const grouped = plan.predicates.some(predicate => predicate.boolean === 'or')
           ? withPredicate(withoutPredicates(plan, () => true), { kind: 'group', predicates: plan.predicates })
           : plan
-        plan = withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map(order => dateBuckets.has(order.column) ? { ...order, dateBucket: true as const } : order), nullsLow))
+        plan = withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map(order => dateBuckets.has(order.column) ? { ...order, dateBucket: true as const } : { ...order, column: selectedColumnSource(plan, order.column) }), nullsLow))
       }
       if (previous) plan = replaceOrderBy(plan, pageOrders(cursorOrders))
       const pageQuery = orderedQuery.clone(plan)

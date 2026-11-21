@@ -186,7 +186,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('a model on a con
     const PageView = defineModel(names.pageViews, { connectionName: 'analytics', name: 'PageView' })
     const Owner = defineModel(defineGeneratedTable(`owners_${names.sites}`, { id: column.id() }), { name: 'Owner', relations: { pageViews: hasMany(() => PageView, 'site_id') } })
 
-    expect(() => Owner.withCount('pageViews').orderByDesc('pageViews_count')).toThrow(
+    await expect(Owner.withCount('pageViews').orderByDesc('pageViews_count').get()).rejects.toThrow(
       'Cannot order by the "pageViews" relation aggregate on model "Owner": its related model uses connection "analytics" while the query uses "default".',
     )
   })

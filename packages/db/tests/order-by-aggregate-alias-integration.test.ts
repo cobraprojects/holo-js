@@ -65,7 +65,7 @@ async function openAuthorsFixture(driver: Driver) {
       tags: belongsToMany(() => Tag, pivot, 'author_id', 'tag_id'),
     },
   })
-  return { Author, Like, posts }
+  return { Author, Like, posts, pivot }
 }
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by selected aliases on %s', (driver) => {
@@ -74,6 +74,17 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
 
     const rows = await DB.table(posts).select('author_id').addSelectSum('revenue', 'score').groupBy('author_id').orderByDesc('revenue').get()
     expect(rows.map(row => [row.author_id, Number(row.revenue)])).toEqual([[2, 33], [1, 10]])
+  })
+
+  it('cursor paginates table rows by a selected column alias', async () => {
+    const { posts } = await openAuthorsFixture(driver)
+    const ordered = () => DB.table(posts).select('id', 'score as points').orderByDesc('points')
+
+    const first = await ordered().cursorPaginate(2)
+    const second = await ordered().cursorPaginate(2, first.nextCursor)
+
+    expect(first.data.map(row => row.points)).toEqual([30, 10])
+    expect(second.data.map(row => row.points)).toEqual([2, 1])
   })
 
   it('orders, limits and paginates models by a relation count', async () => {
@@ -131,7 +142,29 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
   it('rejects ordering by aggregates the query cannot compute', async () => {
     const { Author, Like } = await openAuthorsFixture(driver)
 
-    expect(() => Like.withCount('likeable').orderBy('likeable_count')).toThrow('Cannot order by the "likeable" relation aggregate')
-    expect(() => Author.withCount('latestPost').orderBy('latestPost_count')).toThrow('Cannot order by the "latestPost" relation aggregate')
+    await expect(Like.withCount('likeable').orderBy('likeable_count').get()).rejects.toThrow('Cannot order by the "likeable" relation aggregate')
+    await expect(Author.withCount('latestPost').orderBy('latestPost_count').get()).rejects.toThrow('Cannot order by the "latestPost" relation aggregate')
+    await expect(Author.withSum({ posts: query => query.orderBy('score').limit(1) }, 'score').orderByDesc('posts_sum_score').get()).rejects.toThrow('aggregate constraints that limit or offset the related rows cannot be ordered by.')
+  })
+
+  it('orders by aggregates of ordered relations, counting every pivot row', async () => {
+    const { Author, pivot } = await openAuthorsFixture(driver)
+    await DB.table(pivot).insert([{ id: 4, author_id: 2, tag_id: 1 }, { id: 5, author_id: 2, tag_id: 1 }, { id: 6, author_id: 2, tag_id: 1 }])
+
+    const tagged = await Author.withCount('tags').orderByDesc('tags_count').orderBy('id').get()
+    expect(tagged.map(author => [author.id, author.toAttributes().tags_count])).toEqual([[2, 3], [3, 2], [1, 1]])
+
+    const scored = await Author.whereHas('posts').withMax({ posts: query => query.orderBy('id') }, 'score').orderByDesc('posts_max_score').get()
+    expect(scored.map(author => author.id)).toEqual([2, 1])
+  })
+
+  it('orders by the aggregate the query loads, whenever it is selected or replaced', async () => {
+    const { Author } = await openAuthorsFixture(driver)
+
+    const replaced = await Author.withCount('posts').orderByDesc('posts_count').withCount({ posts: query => query.where('published', false) }).orderBy('id').get()
+    expect(replaced.map(author => [author.id, author.toAttributes().posts_count])).toEqual([[2, 2], [1, 0], [3, 0]])
+
+    const selectedAfter = await Author.withCount('posts').orderByDesc('posts_count').select('id', 'name').get()
+    expect(selectedAfter.map(author => [author.id, author.toAttributes().posts_count])).toEqual([[2, 3], [1, 1], [3, 0]])
   })
 })

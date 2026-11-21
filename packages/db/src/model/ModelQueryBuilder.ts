@@ -165,6 +165,10 @@ class ModelQueryBuilderBase<
   }
 
   getTableQueryBuilder(): TableQueryBuilder<TTable, Record<string, unknown>> {
+    return this.selectOrderedAggregates(this.scopedTableQuery())
+  }
+
+  private scopedTableQuery(): TableQueryBuilder<TTable, Record<string, unknown>> {
     const column = this.repository.getDeletedAtColumn()
     if (this.scopePredicates.length === 0 && (!column || this.softDeleteMode === 'with')) return this.tableQuery
 
@@ -471,7 +475,7 @@ class ModelQueryBuilderBase<
   }
 
   orderBy(column: ModelOrderColumn<TTable, TLoaded>, direction: 'asc' | 'desc' = 'asc'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    return this.clone(this.selectOrderedAggregate(column).orderBy(column as never, direction))
+    return this.clone(this.tableQuery.orderBy(column as never, direction))
   }
 
   latest(column: ModelOrderColumn<TTable, TLoaded> = 'created_at' as ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
@@ -487,16 +491,20 @@ class ModelQueryBuilderBase<
   }
 
   reorder(column?: ModelOrderColumn<TTable, TLoaded>, direction: 'asc' | 'desc' = 'asc'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    const query = column === undefined ? this.tableQuery : this.selectOrderedAggregate(column)
-    return this.clone(query.reorder(column as never, direction))
+    return this.clone(this.tableQuery.reorder(column as never, direction))
   }
 
-  private selectOrderedAggregate(column: string): TableQueryBuilder<TTable, Record<string, unknown>> {
-    const aggregate = this.aggregateLoads.find(load => this.repository.relationAggregateKey(load) === column)
-    const plan = this.tableQuery.getPlan()
-    if (!aggregate || plan.selections.some(selection => selectionOutputName(selection) === column)) return this.tableQuery
-    const selected = plan.selections.length === 0 ? this.tableQuery.select(`${plan.source.alias ?? plan.source.tableName}.*` as never) : this.tableQuery
-    return this.repository.selectRelationAggregate(selected, aggregate)
+  private selectOrderedAggregates(query: TableQueryBuilder<TTable, Record<string, unknown>>): TableQueryBuilder<TTable, Record<string, unknown>> {
+    const plan = query.getPlan()
+    const orderedColumns = new Set(plan.orderBy.flatMap(order => order.kind === 'column' ? [order.column] : []))
+    const selectedNames = new Set(plan.selections.flatMap(selection => selectionOutputName(selection) ?? []))
+    const ordered = this.aggregateLoads.filter((load) => {
+      const key = this.repository.relationAggregateKey(load)
+      return orderedColumns.has(key) && !selectedNames.has(key)
+    })
+    if (ordered.length === 0) return query
+    const selected = plan.selections.length === 0 ? query.select(`${plan.source.alias ?? plan.source.tableName}.*` as never) : query
+    return ordered.reduce((current, load) => this.repository.selectRelationAggregate(current, load), selected)
   }
 
   lock(mode: 'update' | 'share'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {

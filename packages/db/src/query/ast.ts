@@ -76,6 +76,11 @@ export type QuerySelection
     | QuerySubquerySelection
     | QueryDateBucketSelection
 
+export function selectedColumnSource(plan: SelectQueryPlan, name: string): string {
+  const selection = plan.selections.find(candidate => candidate.kind === 'column' && candidate.alias === name)
+  return selection?.kind === 'column' ? selection.column : name
+}
+
 export function selectsSubqueryAs(plan: SelectQueryPlan, alias: string): boolean {
   return plan.selections.some(selection => selection.kind === 'subquery' && selection.alias === alias)
 }
