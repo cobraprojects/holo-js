@@ -75,7 +75,7 @@ import {
   appendDateBucketSelection,
   appendSubquerySelection,
   dateBucketSelections,
-  selectsSubqueryAs,
+  selectsComputedValueAs,
   selectedColumnSource,
   withDateBucketSelection,
   withGroupBy,
@@ -3491,8 +3491,13 @@ export class TableQueryBuilder<
         throw new SecurityError('Cursor pagination requires column orderBy clauses.')
       }
 
-      if (selectsSubqueryAs(this.plan, orderBy.column)) {
-        throw new SecurityError(`Cursor pagination cannot order by the "${orderBy.column}" subquery selection. Use paginate() instead.`)
+      const pagesByOutputColumns = this.plan.unions.length > 0
+      if (!pagesByOutputColumns && selectsComputedValueAs(this.plan, orderBy.column)) {
+        throw new SecurityError(`Cursor pagination cannot order by the "${orderBy.column}" computed selection. Use paginate() instead.`)
+      }
+
+      if (!pagesByOutputColumns && selectedColumnSource(this.plan, orderBy.column) !== orderBy.column && this.source.table && Object.hasOwn(this.source.table.columns, orderBy.column)) {
+        throw new SecurityError(`Cursor pagination cannot order by the "${orderBy.column}" alias because it shadows a "${orderBy.column}" column. Choose another alias.`)
       }
 
       return {

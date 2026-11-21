@@ -247,7 +247,7 @@ await Post.withCount('comments').orderByDesc('comments_count').paginate(15)
 await Author.withSum('books', 'pages').orderBy('books_sum_pages').get()
 ```
 
-Aggregates of `morphTo()` and one-of-many relations, nested aggregates such as `posts.comments`, and relations on another connection are loaded after the query runs, so ordering by them throws a `RelationError`, as do an aggregate constraint that calls `limit()`, `offset()`, `distinct()`, `groupBy()`, `having()` or `union()`, and a union ordered by an aggregate.
+Aggregates of `morphTo()` and one-of-many relations, nested aggregates such as `posts.comments`, and relations on another connection are loaded after the query runs, so ordering by them throws a `RelationError`, as do an aggregate constraint that calls `limit()`, `offset()`, `distinct()`, `join()`, `groupBy()`, `having()` or `union()`, and a union ordered by an aggregate.
 
 ```ts
 await Post.query().latest().skip(20).take(10).get()
@@ -600,7 +600,14 @@ const posts = await Post.withCount('comments').get()
 // posts[0].comments_count
 ```
 
-To count only some related rows, pass a constraint. Key it with `as` to name the attribute.
+Add `as` to name the attribute, with or without a constraint:
+
+```ts
+const posts = await Post.withCount('comments as replies').get()
+// posts[0].replies
+```
+
+To count only some related rows, pass a constraint.
 
 ```ts
 const posts = await Post.withCount({ 'comments as approved_comments': query => query.where('approved', true) }).get()

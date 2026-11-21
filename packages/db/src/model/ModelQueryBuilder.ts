@@ -497,12 +497,13 @@ class ModelQueryBuilderBase<
   private selectOrderedAggregates(query: TableQueryBuilder<TTable, Record<string, unknown>>): TableQueryBuilder<TTable, Record<string, unknown>> {
     const plan = query.getPlan()
     const orderedColumns = new Set(plan.orderBy.flatMap(order => order.kind === 'column' ? [order.column] : []))
-    const selectedNames = new Set(plan.selections.flatMap(selection => selectionOutputName(selection) ?? []))
-    const ordered = this.aggregateLoads.filter((load) => {
-      const key = this.repository.relationAggregateKey(load)
-      return orderedColumns.has(key) && !selectedNames.has(key)
-    })
+    const effectiveLoads = new Map(this.aggregateLoads.map(load => [this.repository.relationAggregateKey(load), load]))
+    const ordered = [...effectiveLoads].filter(([key]) => orderedColumns.has(key)).map(([, load]) => load)
     if (ordered.length === 0) return query
+    const conflict = plan.selections.map(selectionOutputName).find(name => name !== undefined && effectiveLoads.has(name) && orderedColumns.has(name))
+    if (conflict !== undefined) {
+      throw new RelationError(`Cannot order by the "${conflict}" relation aggregate on model "${this.repository.definition.name}": the query also selects a column named "${conflict}".`)
+    }
     const selected = plan.selections.length === 0 ? query.select(`${plan.source.alias ?? plan.source.tableName}.*` as never) : query
     return ordered.reduce((current, load) => this.repository.selectRelationAggregate(current, load), selected)
   }

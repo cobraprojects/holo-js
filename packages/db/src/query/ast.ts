@@ -82,8 +82,8 @@ export function selectedColumnSource(plan: SelectQueryPlan, name: string): strin
   return selection?.kind === 'column' ? selection.column : name
 }
 
-export function selectsSubqueryAs(plan: SelectQueryPlan, alias: string): boolean {
-  return plan.selections.some(selection => selection.kind === 'subquery' && selection.alias === alias)
+export function selectsComputedValueAs(plan: SelectQueryPlan, alias: string): boolean {
+  return plan.selections.some(selection => (selection.kind === 'subquery' || selection.kind === 'aggregate') && selection.alias === alias)
 }
 
 export function dateBucketSelections(plan: SelectQueryPlan): ReadonlyMap<string, QueryDateBucketSelection> {

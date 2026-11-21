@@ -97,8 +97,11 @@ type AggregateConstraints<TRelations extends RelationMap, TKey extends string> =
   readonly [K in TKey]: RelationConstraintFor<TRelations, AggregateRelationName<K>>
 }
 
+type AliasedRelationName<TRelation extends string> = TRelation | `${TRelation} ${'as' | 'AS'} ${string}`
+
 type RowAggregateMethod<TRelations extends RelationMap, TTarget extends RelationAggregateQueryResult, TKind extends RowAggregate, TRelationNames extends readonly string[]> = {
   <const TNames extends TRelationNames>(...relations: TNames): AggregateResult<TTarget, TRelations, TKind, TNames>
+  <const TNames extends readonly [AliasedRelationName<TRelationNames[number]>, ...AliasedRelationName<TRelationNames[number]>[]]>(...relations: TNames): AggregateResult<TTarget, TRelations, TKind, TNames>
   <TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): AggregateResult<TTarget, TRelations, TKind, TConstraints>
   <TKey extends string, TInput extends object>(relations: AggregateConstraints<TRelations, TKey> & TInput & ValidRelation<TRelations, NoInfer<AggregateInputKeys<TInput>>>): AggregateResult<TTarget, TRelations, TKind, TInput>
 }

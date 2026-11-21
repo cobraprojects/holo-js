@@ -780,13 +780,14 @@ export class ModelRepository<
       throw unorderable(`its ${crossConnection.target} model uses connection "${crossConnection.repository.getConnectionName()}" while the query uses "${this.getConnectionName()}".`)
     }
     const related = this.resolveRelatedRepository(relation.related)
+    const constraintPlan = this.applyRelationConstraint(relation, related, aggregate.constraint).getTableQueryBuilder().getPlan()
+    const reshapesRows = constraintPlan.limit !== undefined || constraintPlan.offset !== undefined || constraintPlan.distinct
+      || constraintPlan.joins.length > 0 || constraintPlan.groupBy.length > 0 || constraintPlan.having.length > 0 || constraintPlan.unions.length > 0
+    if (reshapesRows) throw unorderable('aggregate constraints that limit, offset, deduplicate, join, group or union the related rows cannot be ordered by.')
     const [constrained] = this.buildRelationExistenceSubqueries(relation, parentAlias, aggregate.constraint, undefined, 'pivot-rows')
     if (!constrained || !sameTable(constrained.getTableName(), related.definition.table.tableName)) {
       throw unorderable('the relation cannot be expressed as a single correlated subquery.')
     }
-    const plan = constrained.getPlan()
-    const reshapesRows = plan.limit !== undefined || plan.offset !== undefined || plan.distinct || plan.groupBy.length > 0 || plan.having.length > 0 || plan.unions.length > 0
-    if (reshapesRows) throw unorderable('aggregate constraints that limit, offset, deduplicate, group or union the related rows cannot be ordered by.')
     const subquery = constrained.reorder()
     if (aggregate.kind === 'exists' || this.countsAtMostOne(aggregate)) return subquery
     if (aggregate.kind === 'count') return subquery.selectCount('aggregate')
