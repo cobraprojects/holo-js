@@ -75,6 +75,19 @@ describe('Next forms with native React', () => {
     expect(harness.rendered).toBe('{"email":"edited@example.com"}')
   })
 
+  it('validates with the latest schema messages without losing edited values', async () => {
+    let requiredMessage = 'Email is required.'
+    const options = { initialValues: { email: 'ava@example.com' }, validateOn: 'change' as const }
+    const harness = await mountForm(() => schema({ email: field.string().required(requiredMessage) }), options)
+    await act(async () => { await harness.form.setValue('email', '') })
+    expect(harness.form.errors.email).toEqual(['Email is required.'])
+    requiredMessage = 'البريد الإلكتروني مطلوب.'
+    await harness.update(options)
+    expect(harness.rendered).toBe('{"email":""}')
+    await act(async () => { await harness.form.fields.email.set('') })
+    expect(harness.form.errors.email).toEqual(['البريد الإلكتروني مطلوب.'])
+  })
+
   it('submits through the latest app callback without losing edited field values', async () => {
     const harness = await mountForm(() => emailSchema, {
       initialValues: { email: 'ava@example.com' },

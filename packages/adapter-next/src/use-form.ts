@@ -109,6 +109,7 @@ export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
     readonly options: UseFormOptions<TData, TSuccess>
   } | undefined>(undefined)
   const latestOptionsRef = useRef<UseFormOptions<TData, TSuccess> | undefined>(undefined)
+  const latestSchemaRef = useRef(schemaDefinition)
   const submitterBridgeRef = useRef<UseFormOptions<TData, TSuccess>['submitter']>(undefined)
   const [httpError, setHttpError] = useState<Error | undefined>(undefined)
   const [, setVersion] = useState(0)
@@ -117,6 +118,7 @@ export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
     throw httpError
   }
 
+  latestSchemaRef.current = schemaDefinition
   latestOptionsRef.current = options
 
   if (options.submitter && !submitterBridgeRef.current) {
@@ -131,7 +133,7 @@ export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
     : options
 
   if (!formStateRef.current || !areOptionsEqual(formStateRef.current.options, options)) {
-    formStateRef.current = { form: createFormClient(schemaDefinition, resolvedOptions), options }
+    formStateRef.current = { form: createFormClient(() => latestSchemaRef.current, resolvedOptions), options }
   }
 
   const { form } = formStateRef.current

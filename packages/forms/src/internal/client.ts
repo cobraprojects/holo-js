@@ -371,7 +371,7 @@ function collectErrorsForPath(
 
 function buildFieldsTree<TData>(
   state: MutableState<TData, unknown>,
-  schemaDefinition: ValidationSchema,
+  resolveSchema: () => ValidationSchema,
   source: unknown,
   validateOn: ValidateOnMode,
   prefix = '',
@@ -401,7 +401,7 @@ function buildFieldsTree<TData>(
           const sequence = state.beginValidation()
           const submission = await validateClientValues(
             cloneValue(state.values),
-            schemaDefinition,
+            resolveSchema(),
           ) as FormSubmissionResult<TData>
           state.applyValidation(sequence, submission.errors.flatten())
           return
@@ -418,7 +418,7 @@ function buildFieldsTree<TData>(
           const sequence = state.beginValidation()
           const submission = await validateClientValues(
             cloneValue(state.values),
-            schemaDefinition,
+            resolveSchema(),
           ) as FormSubmissionResult<TData>
           state.applyFieldValidation(sequence, path, submission.errors.flatten())
           return
@@ -428,7 +428,7 @@ function buildFieldsTree<TData>(
       },
       async validate() {
         const sequence = state.beginValidation()
-        const submission = await validateClientValues(cloneValue(state.values), schemaDefinition)
+        const submission = await validateClientValues(cloneValue(state.values), resolveSchema())
         state.applyValidation(sequence, submission.errors.flatten())
         return state.flattenedErrors[path] ?? []
       },
@@ -437,7 +437,7 @@ function buildFieldsTree<TData>(
 
   const entries = Object.entries(source as Record<string, unknown>).map(([key, value]) => {
     const next = prefix ? `${prefix}.${key}` : key
-    return [key, buildFieldsTree(state, schemaDefinition, value, validateOn, next)]
+    return [key, buildFieldsTree(state, resolveSchema, value, validateOn, next)]
   })
 
   return Object.freeze(Object.fromEntries(entries)) as FormFieldTree<TData>
@@ -694,10 +694,12 @@ function isSafeMethod(method: string): boolean {
  * @internal Shared headless form runtime for framework adapters.
  */
 export function createFormClient<TSchema extends ValidationSchema, TSuccess = unknown>(
-  schemaDefinition: TSchema,
+  schemaSource: TSchema | (() => TSchema),
   options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
   type TData = InferFormData<TSchema>
+  const resolveSchema = typeof schemaSource === 'function' ? schemaSource : () => schemaSource
+  const initialSchema = resolveSchema()
   const initialState = options.initialState ?? undefined
 
   const initialValues = mergeValues(
@@ -708,11 +710,11 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
   const state = new FormClientState<TData, TSuccess>(initialValues, initialState)
 
   const validateOn = options.validateOn ?? 'submit'
-  const fieldPaths = flattenLeafPaths(schemaDefinition.fields)
+  const fieldPaths = flattenLeafPaths(initialSchema.fields)
   const fields = buildFieldsTree(
     state,
-    schemaDefinition,
-    schemaDefinition.fields,
+    resolveSchema,
+    initialSchema.fields,
     validateOn,
   ) as unknown as InferFormFieldTree<TSchema>
 
@@ -722,14 +724,14 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
 
   async function runValidationForInput(input: TData | FormLikeValidationInput): Promise<FormSubmissionResult<TData>> {
     const sequence = state.beginValidation()
-    const submission = await validateClientValues<TData>(input, schemaDefinition)
+    const submission = await validateClientValues<TData>(input, resolveSchema())
     state.applyValidation(sequence, submission.errors.flatten(), submission.valid ? submission.data : submission.values)
     return submission
   }
 
   function applyServerState(result: ClientSubmitResult<TData, TSuccess>, submissionSequence?: number): ClientSubmitResult<TData, TSuccess> {
     const normalized = normalizeSubmissionLike(
-      schemaDefinition,
+      resolveSchema(),
       state.values,
       result,
     )
@@ -745,11 +747,11 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
     if ('ok' in normalized && normalized.ok === false) {
       const sanitized = {
         ...normalized,
-        values: sanitizeFlashedInput(normalized.values, schemaDefinition),
+        values: sanitizeFlashedInput(normalized.values, resolveSchema()),
       }
 
       if (applies) {
-        const values = clearSensitiveInputValues(mergeValues(state.values, sanitized.values), schemaDefinition)
+        const values = clearSensitiveInputValues(mergeValues(state.values, sanitized.values), resolveSchema())
         state.applyServer(values, sanitized.errors, sanitized)
       }
       return sanitized
@@ -757,7 +759,7 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
 
     const normalizedSubmission = normalized as FormSubmissionResult<TData>
     if (applies) {
-      const values = clearSensitiveInputValues(mergeValues(state.values, normalizedSubmission.values), schemaDefinition)
+      const values = clearSensitiveInputValues(mergeValues(state.values, normalizedSubmission.values), resolveSchema())
       state.applyServer(values, normalizedSubmission.errors.flatten(), normalizedSubmission.valid ? undefined : normalizedSubmission.fail())
     }
 
