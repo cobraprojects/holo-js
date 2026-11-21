@@ -17,6 +17,7 @@ async function openUsagePeriods(driver: Driver) {
     table.integer('responses_used').default(0)
     table.boolean('active').default(true)
     table.string('status').default('draft')
+    table.timestamp('deleted_at').nullable()
   })
   onTestFinished(() => schema.dropTable(name))
   return defineGeneratedTable(name, {
@@ -25,6 +26,7 @@ async function openUsagePeriods(driver: Driver) {
     responses_used: column.integer().default(0),
     active: column.boolean().default(true),
     status: column.string().default('draft'),
+    deleted_at: column.timestamp().nullable(),
   })
 }
 
@@ -34,26 +36,29 @@ describe.each(drivers)('models created on %s', (driver) => {
 
     const created = await UsagePeriod.create({ month: '2026-11', status: 'open' })
 
-    expect(created.toAttributes()).toEqual({ id: 1, month: '2026-11', responses_used: 0, active: true, status: 'open' })
+    expect(created.toAttributes()).toEqual({ id: 1, month: '2026-11', responses_used: 0, active: true, status: 'open', deleted_at: null })
     expect(created.isClean()).toBe(true)
     expectTypeOf(created.get('responses_used')).toEqualTypeOf<number>()
   })
 
-  it('carry stored defaults through firstOrCreate and save even when a global scope excludes the row', async () => {
+  it('carry stored defaults through firstOrCreate, updateOrCreate and save even when scopes exclude the row', async () => {
     const UsagePeriod = defineModel(await openUsagePeriods(driver), {
       timestamps: false,
-      fillable: ['month'],
+      softDeletes: true,
+      fillable: ['month', 'deleted_at'],
       globalScopes: { active: query => query.where('status', 'active') },
     })
 
     const first = await UsagePeriod.firstOrCreate({ month: '2026-11' })
-    const saved = await UsagePeriod.make({ month: '2026-12' }).save()
+    const updated = await UsagePeriod.updateOrCreate({ month: '2026-12' }, { deleted_at: new Date('2026-12-01T00:00:00Z') })
+    const saved = await UsagePeriod.make({ month: '2027-01' }).save()
 
-    expect(first.get('responses_used') + 1).toBe(1)
+    expect(first.get('responses_used')).toBe(0)
+    expect(updated.get('active')).toBe(true)
     expect(saved.get('status')).toBe('draft')
   })
 
-  it('show stored defaults to created listeners without firing retrieved', async () => {
+  it('show stored defaults to created and saved listeners without firing retrieved', async () => {
     const seen: unknown[] = []
     let retrievals = 0
     const UsagePeriod = defineModel(await openUsagePeriods(driver), {
@@ -61,13 +66,14 @@ describe.each(drivers)('models created on %s', (driver) => {
       fillable: ['month'],
       events: {
         created: [entity => { seen.push(entity.get('responses_used')) }],
+        saved: [entity => { seen.push(entity.get('status')) }],
         retrieved: [() => { retrievals += 1 }],
       },
     })
 
     await UsagePeriod.create({ month: '2026-11' })
 
-    expect(seen).toEqual([0])
+    expect(seen).toEqual([0, 'draft'])
     expect(retrievals).toBe(0)
   })
 })

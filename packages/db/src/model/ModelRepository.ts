@@ -1133,13 +1133,18 @@ export class ModelRepository<
   private async readUnwrittenColumns(written: Partial<ModelRecord<TTable>>): Promise<Partial<ModelRecord<TTable>>> {
     const primaryKey = this.definition.primaryKey
     const key = written[primaryKey as keyof typeof written]
-    if (key === null || typeof key === 'undefined') {
+    if (key === null || typeof key === 'undefined' || this.writesEveryKnownColumn(written)) {
       return {}
     }
 
     const row = await this.createTableQuery().where(primaryKey as never, key).first()
     const unwritten = Object.fromEntries(Object.entries(row ?? {}).filter(([column]) => !(column in written)))
     return this.valueTransformer.normalizeFromStorage(unwritten as Partial<ModelRecord<TTable>>, {}, 'database')
+  }
+
+  private writesEveryKnownColumn(written: Partial<ModelRecord<TTable>>): boolean {
+    const columns = Object.keys(this.definition.table.columns)
+    return columns.length > 0 && columns.every(column => column in written)
   }
 
   async restore(id: unknown): Promise<Entity<TTable>> {
