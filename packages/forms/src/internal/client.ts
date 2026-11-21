@@ -730,8 +730,9 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
   }
 
   function applyServerState(result: ClientSubmitResult<TData, TSuccess>, submissionSequence?: number): ClientSubmitResult<TData, TSuccess> {
+    const schemaDefinition = resolveSchema()
     const normalized = normalizeSubmissionLike(
-      resolveSchema(),
+      schemaDefinition,
       state.values,
       result,
     )
@@ -747,11 +748,11 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
     if ('ok' in normalized && normalized.ok === false) {
       const sanitized = {
         ...normalized,
-        values: sanitizeFlashedInput(normalized.values, resolveSchema()),
+        values: sanitizeFlashedInput(normalized.values, schemaDefinition),
       }
 
       if (applies) {
-        const values = clearSensitiveInputValues(mergeValues(state.values, sanitized.values), resolveSchema())
+        const values = clearSensitiveInputValues(mergeValues(state.values, sanitized.values), schemaDefinition)
         state.applyServer(values, sanitized.errors, sanitized)
       }
       return sanitized
@@ -759,7 +760,7 @@ export function createFormClient<TSchema extends ValidationSchema, TSuccess = un
 
     const normalizedSubmission = normalized as FormSubmissionResult<TData>
     if (applies) {
-      const values = clearSensitiveInputValues(mergeValues(state.values, normalizedSubmission.values), resolveSchema())
+      const values = clearSensitiveInputValues(mergeValues(state.values, normalizedSubmission.values), schemaDefinition)
       state.applyServer(values, normalizedSubmission.errors.flatten(), normalizedSubmission.valid ? undefined : normalizedSubmission.fail())
     }
 
