@@ -157,6 +157,8 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
     await expect(Author.withCount({ posts: query => query.select('author_id').distinct() }).orderByDesc('posts_count').get()).rejects.toThrow(reshaped)
     await expect(Author.withCount({ posts: query => query.join(names.authors as never, `${names.authors}.id` as never, '=', `${names.posts}.author_id` as never) }).orderByDesc('posts_count').get()).rejects.toThrow(reshaped)
     await expect(Author.select('id', 'name as posts_count').withCount('posts').orderByDesc('posts_count').get()).rejects.toThrow('the query also selects a column named "posts_count"')
+    await expect(Author.withCount('posts as name').orderByDesc('name').get()).rejects.toThrow('the query also selects a column named "name"')
+    await expect(Author.select(`${names.authors}.*` as never).withCount('posts as name').orderByDesc('name').get()).rejects.toThrow('the query also selects a column named "name"')
   })
 
   it('orders by aggregates of ordered relations, counting every pivot row', async () => {

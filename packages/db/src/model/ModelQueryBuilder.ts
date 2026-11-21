@@ -16,6 +16,7 @@ import { queryBatches, visitRows } from '../query/traversal'
 import { aliasTableSource, projectModelRows, resolveAggregateSource, TableQueryBuilder, whereResolvedColumn } from '../query/TableQueryBuilder'
 import { isAwaitingGeneratedTableIdentity } from '../schema/generated'
 import { knownJoinedColumns, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn } from '../query/modelRowProjection'
+import { readAllColumnsSelectionTable } from '../query/ast'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
 import type { ModelCollection } from './collection'
@@ -500,11 +501,15 @@ class ModelQueryBuilderBase<
     const effectiveLoads = new Map(this.aggregateLoads.map(load => [this.repository.relationAggregateKey(load), load]))
     const ordered = [...effectiveLoads].filter(([key]) => orderedColumns.has(key)).map(([, load]) => load)
     if (ordered.length === 0) return query
-    const conflict = plan.selections.map(selectionOutputName).find(name => name !== undefined && effectiveLoads.has(name) && orderedColumns.has(name))
+    const source = plan.source.alias ?? plan.source.tableName
+    const selectsOwnColumns = plan.selections.length === 0
+      || plan.selections.some(selection => selection.kind === 'column' && !selection.alias && readAllColumnsSelectionTable(selection.column) === source)
+    const outputNames = [...plan.selections.map(selectionOutputName), ...(selectsOwnColumns ? Object.keys(plan.source.table?.columns ?? {}) : [])]
+    const conflict = outputNames.find(name => name !== undefined && effectiveLoads.has(name) && orderedColumns.has(name))
     if (conflict !== undefined) {
       throw new RelationError(`Cannot order by the "${conflict}" relation aggregate on model "${this.repository.definition.name}": the query also selects a column named "${conflict}".`)
     }
-    const selected = plan.selections.length === 0 ? query.select(`${plan.source.alias ?? plan.source.tableName}.*` as never) : query
+    const selected = plan.selections.length === 0 ? query.select(`${source}.*` as never) : query
     return ordered.reduce((current, load) => this.repository.selectRelationAggregate(current, load), selected)
   }
 
