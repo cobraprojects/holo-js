@@ -79,14 +79,14 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('a model on a con
     expect((await PageView.withTrashed().findOrFail(view.get('id'))).get('deleted_at')).not.toBeNull()
   })
 
-  it('leaves timestamps alone when the model turns them off', async () => {
+  it('leaves timestamps to the database when the model turns them off', async () => {
     const { names } = await openAnalyticsConnection()
     const PageView = defineModel(names.pageViews, { connectionName: 'analytics', fillable: ['path'], timestamps: false })
 
     const view = await PageView.create({ path: '/a' })
+    const stored = await PageView.findOrFail(view.get('id'))
 
-    expect(view.get('created_at')).toBeUndefined()
-    expect(view.get('updated_at')).toBeUndefined()
+    expect(view.toJSON()).toEqual(stored.toJSON())
   })
 
   it('applies declared casts and returns other values as the driver reads them', async () => {
