@@ -58,6 +58,27 @@ describe.each(drivers)('models created on %s', (driver) => {
     expect(saved.get('status')).toBe('draft')
   })
 
+  it('carry the stored default of a column named like an inherited object property', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const name = `holo_named_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.string('label')
+      table.string('toString').default('stored')
+    })
+    onTestFinished(() => schema.dropTable(name))
+    const Named = defineModel(defineGeneratedTable(name, {
+      id: column.id(),
+      label: column.string(),
+      toString: column.string().default('stored'),
+    }), { timestamps: false, fillable: ['label'] })
+
+    const created = await Named.make().set('label', 'new').save()
+
+    expect(created.get('toString')).toBe('stored')
+  })
+
   it('show stored defaults to created and saved listeners without firing retrieved', async () => {
     const seen: unknown[] = []
     let retrievals = 0

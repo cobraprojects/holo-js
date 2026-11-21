@@ -45,7 +45,7 @@ post.id
 post.created_at
 ```
 
-Columns you don't set hold the value the database stored, such as a column default, so the model matches its row and its types. Holo reads the row back after the insert to get them:
+After the insert, Holo reads the row back by its primary key and fills the columns you didn't set with the values the database stored, such as column defaults. Values you set stay as you set them. When the insert yields no primary key, Holo skips the read and those columns stay unset:
 
 ```ts
 const period = await UsagePeriod.firstOrCreate({ month: '2026-11' })
@@ -435,7 +435,7 @@ A query's `upsert()` applies these rules too, to every column of its rows and to
 
 ### create()
 
-Inserts one row and returns the saved model. Model events fire, and generated IDs, timestamps and the values the database stored for columns you didn't set are filled in.
+Inserts one row and returns the saved model. Model events fire, and generated IDs, timestamps and, when the primary key is known, the values the database stored for columns you didn't set are filled in.
 
 ```ts
 const post = await Post.create({ title: 'Hello', body: '...', user_id: 1 })

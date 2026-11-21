@@ -915,6 +915,21 @@ describe('model save writes', () => {
       expect(child.isDirty()).toBe(false)
     })
 
+    it('drops the columns a created model read back when a failed COMMIT restores it', async () => {
+      const db = await openDatabaseWithDeferredForeignKey()
+      await db.executeCompiled({ sql: `CREATE TABLE labelled (id INTEGER PRIMARY KEY, parentId INTEGER REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED, label TEXT NOT NULL DEFAULT 'fresh')`, source: 'schema' })
+      const Labelled = defineModelFromTable(defineTable('labelled', {
+        id: column.id(),
+        parentId: column.integer(),
+        label: column.string().default('fresh'),
+      }), { timestamps: false, fillable: ['parentId'] })
+
+      const labelled = Labelled.make({ parentId: 42 })
+      await expect(labelled.save()).rejects.toThrow('FOREIGN KEY')
+
+      expect(labelled.toAttributes()).toEqual({ parentId: 42 })
+    })
+
     it('restores a model saved in a caller transaction when that transaction fails to commit', async () => {
       const db = await openDatabaseWithDeferredForeignKey()
       const seen: string[] = []
