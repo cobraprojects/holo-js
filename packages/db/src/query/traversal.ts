@@ -5,7 +5,7 @@ import type { TableDefinition } from '../schema/types'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from './chunkOrdering'
 import { selectionOutputName } from './modelRowProjection'
 import { resultColumnDefinition, withResolvedDefinitions } from './resultColumns'
-import { dateBucketSelections, type QueryDirection } from './ast'
+import { dateBucketSelections, selectsSubqueryAs, type QueryDirection } from './ast'
 import type { TableQueryBuilder } from './TableQueryBuilder'
 import type { CursorPaginatedResult } from './types'
 
@@ -55,6 +55,7 @@ export async function* queryBatches<
   const bounded = hasPrimaryKey && !requiresRowNullOrder && !plan.distinct && plan.joins.length === 0 && plan.groupBy.length === 0 && plan.unions.length === 0
     && !plan.selections.some(selection => selection.kind === 'aggregate' || selection.kind === 'raw')
     && (traversal.fallbackOrder === 'database' || plan.orderBy.every(order => order.kind === 'column'))
+    && !plan.orderBy.some(order => order.kind === 'column' && selectsSubqueryAs(plan, order.column))
   if (!bounded) {
     const fetchedRows = await query.get<TRow>()
     const sortRows = traversal.column !== undefined && traversal.fallbackOrder !== 'database'

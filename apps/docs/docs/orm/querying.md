@@ -240,6 +240,15 @@ await Post.inRandomOrder().first()
 
 `latest()` and `oldest()` sort by `created_at` unless you pass a column. `reorder()` clears earlier ordering.
 
+After `withCount()`, `withExists()`, `withSum()`, `withAvg()`, `withMin()`, `withMax()` or `withAggregate()`, you can sort by the aggregate's attribute. The database does the sorting, so `limit()`, `first()`, `paginate()` and `chunk()` return the right rows. `cursorPaginate()` can't use an aggregate as its cursor and throws, so use `paginate()` instead.
+
+```ts
+await Post.withCount('comments').orderByDesc('comments_count').paginate(15)
+await Author.withSum('books', 'pages').orderBy('books_sum_pages').get()
+```
+
+Aggregates of `morphTo()` and one-of-many relations, nested aggregates such as `posts.comments`, and relations on another connection are loaded after the query runs, so ordering by them throws a `RelationError`.
+
 ```ts
 await Post.query().latest().skip(20).take(10).get()
 await Post.query().latest().forPage(3, 10).get()
@@ -589,6 +598,13 @@ Adds a `{relation}_count` attribute to each model, without loading the related r
 ```ts
 const posts = await Post.withCount('comments').get()
 // posts[0].comments_count
+```
+
+To count only some related rows, pass a constraint. Key it with `as` to name the attribute.
+
+```ts
+const posts = await Post.withCount({ 'comments as approved_comments': query => query.where('approved', true) }).get()
+// posts[0].approved_comments
 ```
 
 ### withExists()

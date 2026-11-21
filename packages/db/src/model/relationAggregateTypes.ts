@@ -100,6 +100,7 @@ type AggregateConstraints<TRelations extends RelationMap, TKey extends string> =
 type RowAggregateMethod<TRelations extends RelationMap, TTarget extends RelationAggregateQueryResult, TKind extends RowAggregate, TRelationNames extends readonly string[]> = {
   <const TNames extends TRelationNames>(...relations: TNames): AggregateResult<TTarget, TRelations, TKind, TNames>
   <TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): AggregateResult<TTarget, TRelations, TKind, TConstraints>
+  <TKey extends string, TInput extends object>(relations: AggregateConstraints<TRelations, TKey> & TInput & ValidRelation<TRelations, NoInfer<AggregateInputKeys<TInput>>>): AggregateResult<TTarget, TRelations, TKind, TInput>
 }
 
 type ColumnAggregateMethod<TRelations extends RelationMap, TTarget extends RelationAggregateQueryResult, TKind extends ColumnAggregate> = {

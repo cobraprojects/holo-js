@@ -56,6 +56,7 @@ export interface QuerySubquerySelection {
   readonly kind: 'subquery'
   readonly query: SelectQueryPlan
   readonly alias: string
+  readonly exists?: true
 }
 
 export type QueryDateBucketUnit = 'year' | 'month' | 'day' | 'hour'
@@ -74,6 +75,10 @@ export type QuerySelection
     | QueryRawSelection
     | QuerySubquerySelection
     | QueryDateBucketSelection
+
+export function selectsSubqueryAs(plan: SelectQueryPlan, alias: string): boolean {
+  return plan.selections.some(selection => selection.kind === 'subquery' && selection.alias === alias)
+}
 
 export function dateBucketSelections(plan: SelectQueryPlan): ReadonlyMap<string, QueryDateBucketSelection> {
   return new Map(plan.selections.flatMap(selection => selection.kind === 'date-bucket' ? [[selection.alias, selection] as const] : []))
@@ -501,6 +506,7 @@ export function appendSubquerySelection(
   plan: SelectQueryPlan,
   query: SelectQueryPlan,
   alias: string,
+  exists = false,
 ): SelectQueryPlan {
   return Object.freeze({
     ...plan,
@@ -510,6 +516,7 @@ export function appendSubquerySelection(
         kind: 'subquery' as const,
         query,
         alias,
+        ...(exists ? { exists: true as const } : {}),
       }),
     ]),
   })

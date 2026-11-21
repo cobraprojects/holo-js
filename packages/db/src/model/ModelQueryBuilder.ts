@@ -44,6 +44,7 @@ import type {
   ModelWritableJsonColumnPath,
   ModelAggregateColumn,
   ModelColumnName,
+  ModelOrderColumn,
   ModelColumnReference,
   ModelJsonColumnPath,
   ModelInsertPayload,
@@ -465,28 +466,37 @@ class ModelQueryBuilderBase<
     return this.resolveBuilder(defaultCallback?.(this.asScopedBuilder(), value))
   }
 
-  orderByDesc(column: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    return this.clone(this.tableQuery.orderByDesc(column as never))
+  orderByDesc(column: ModelOrderColumn<TTable, TLoaded>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+    return this.orderBy(column, 'desc')
   }
 
-  orderBy(column: ModelColumnName<TTable>, direction: 'asc' | 'desc' = 'asc'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    return this.clone(this.tableQuery.orderBy(column as never, direction))
+  orderBy(column: ModelOrderColumn<TTable, TLoaded>, direction: 'asc' | 'desc' = 'asc'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+    return this.clone(this.selectOrderedAggregate(column).orderBy(column as never, direction))
   }
 
-  latest(column: ModelColumnName<TTable> = 'created_at' as ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    return this.clone(this.tableQuery.latest(column as never))
+  latest(column: ModelOrderColumn<TTable, TLoaded> = 'created_at' as ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+    return this.orderBy(column, 'desc')
   }
 
-  oldest(column: ModelColumnName<TTable> = 'created_at' as ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    return this.clone(this.tableQuery.oldest(column as never))
+  oldest(column: ModelOrderColumn<TTable, TLoaded> = 'created_at' as ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+    return this.orderBy(column, 'asc')
   }
 
   inRandomOrder(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
     return this.clone(this.tableQuery.inRandomOrder())
   }
 
-  reorder(column?: ModelColumnName<TTable>, direction: 'asc' | 'desc' = 'asc'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    return this.clone(this.tableQuery.reorder(column as never, direction))
+  reorder(column?: ModelOrderColumn<TTable, TLoaded>, direction: 'asc' | 'desc' = 'asc'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+    const query = column === undefined ? this.tableQuery : this.selectOrderedAggregate(column)
+    return this.clone(query.reorder(column as never, direction))
+  }
+
+  private selectOrderedAggregate(column: string): TableQueryBuilder<TTable, Record<string, unknown>> {
+    const aggregate = this.aggregateLoads.find(load => this.repository.relationAggregateKey(load) === column)
+    const plan = this.tableQuery.getPlan()
+    if (!aggregate || plan.selections.some(selection => selectionOutputName(selection) === column)) return this.tableQuery
+    const selected = plan.selections.length === 0 ? this.tableQuery.select(`${plan.source.alias ?? plan.source.tableName}.*` as never) : this.tableQuery
+    return this.repository.selectRelationAggregate(selected, aggregate)
   }
 
   lock(mode: 'update' | 'share'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {

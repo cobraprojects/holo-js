@@ -75,6 +75,7 @@ import {
   appendDateBucketSelection,
   appendSubquerySelection,
   dateBucketSelections,
+  selectsSubqueryAs,
   withDateBucketSelection,
   withGroupBy,
   withHaving,
@@ -147,7 +148,7 @@ import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalizatio
 import { assertQueryTablePath, validateQueryPlan } from './validator'
 import { requalifyAliasedSource } from './requalifyAliasedSource'
 
-import type { AvailableTableColumns, ColumnSelection, DateBucketAlias, SelectedDateBuckets, UnreplacedDateBuckets, DateBucketAliasName, DateBucketOptions, DateBucketSelectionResult, DateBucketUnit, DateColumnName, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
+import type { AvailableTableColumns, ColumnSelection, DateBucketAlias, SelectedAlias, SelectedDateBuckets, UnreplacedDateBuckets, DateBucketAliasName, DateBucketOptions, DateBucketSelectionResult, DateBucketUnit, DateColumnName, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
 
 type SelectRow<TTableOrName extends string | TableDefinition>
   = TTableOrName extends TableDefinition ? InferSelect<TTableOrName> : Record<string, unknown>
@@ -177,6 +178,7 @@ export const hasQueryCache = Symbol('hasQueryCache')
 export const whereResolvedColumn = Symbol('whereResolvedColumn')
 export const resolveAggregateSource = Symbol('resolveAggregateSource')
 export const projectModelRows = Symbol('projectModelRows')
+export const addSelectExists = Symbol('addSelectExists')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -562,6 +564,13 @@ export class TableQueryBuilder<
     alias: string,
   ): TableQueryBuilder<TTableOrName, SelectedDateBuckets<TSelectedRow> & Record<string, unknown>, TAvailableColumns> {
     return this.clone(appendSubquerySelection(this.plan, query.getPlan(), alias))
+  }
+
+  [addSelectExists](
+    query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
+    alias: string,
+  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, TAvailableColumns> {
+    return this.clone(appendSubquerySelection(this.plan, query.getPlan(), alias, true))
   }
 
   distinct(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
@@ -1927,12 +1936,12 @@ export class TableQueryBuilder<
     )))
   }
 
-  orderByDesc(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  orderByDesc(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | SelectedAlias<TSelectedRow>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'desc')
   }
 
   orderBy(
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns> | SelectedAlias<TSelectedRow>,
     direction: QueryDirection = 'asc',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withOrderBy(this.plan, {
@@ -1959,16 +1968,16 @@ export class TableQueryBuilder<
     })]))
   }
 
-  latest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  latest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | SelectedAlias<TSelectedRow> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'desc')
   }
 
-  oldest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  oldest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | SelectedAlias<TSelectedRow> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'asc')
   }
 
   reorder(
-    column?: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow>,
+    column?: DeclaredColumnName<TTableOrName, TAvailableColumns> | SelectedAlias<TSelectedRow>,
     direction: QueryDirection = 'asc',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const reordered = replaceOrderBy(this.plan, [])
@@ -3475,6 +3484,10 @@ export class TableQueryBuilder<
     return this.plan.orderBy.map((orderBy) => {
       if (orderBy.kind !== 'column') {
         throw new SecurityError('Cursor pagination requires column orderBy clauses.')
+      }
+
+      if (selectsSubqueryAs(this.plan, orderBy.column)) {
+        throw new SecurityError(`Cursor pagination cannot order by the "${orderBy.column}" subquery selection. Use paginate() instead.`)
       }
 
       return {

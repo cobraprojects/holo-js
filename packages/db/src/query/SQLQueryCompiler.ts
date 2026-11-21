@@ -254,7 +254,7 @@ export class SQLQueryCompiler {
           }
 
           if (selection.kind === 'subquery') {
-            return `(${this.compileSelectSql(selection.query, bindings)}) AS ${this.quoteIdentifier(selection.alias)}`
+            return `${selection.exists ? 'EXISTS ' : ''}(${this.compileSelectSql(selection.query, bindings)}) AS ${this.quoteIdentifier(selection.alias)}`
           }
 
           if (selection.kind === 'aggregate') {

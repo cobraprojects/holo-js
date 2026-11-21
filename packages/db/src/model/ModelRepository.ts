@@ -2,7 +2,7 @@ import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DB } from '../facade/DB'
 import { ConfigurationError, DatabaseError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
 import { assertQueryTablePath } from '../query/validator'
-import { TableQueryBuilder, aliasTableSource, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, addSelectExists, aliasTableSource, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
 import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { selectionOutputName } from '../query/modelRowProjection'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadColumnSqlTypes, loadTableDefinition } from '../schema/columnListing'
@@ -744,6 +744,46 @@ export class ModelRepository<
         const computation = values.get(parentKey)
         entity.setComputed(key, computation?.value ?? null)
       }
+    }
+  }
+
+  relationAggregateKey(aggregate: AggregateLoad): string {
+    return this.relationAggregateCalculator.getAttributeKey(aggregate)
+  }
+
+  selectRelationAggregate<TQuery extends TableQueryBuilder<TTable, Record<string, unknown>>>(query: TQuery, aggregate: AggregateLoad): TableQueryBuilder<TTable, Record<string, unknown>> {
+    const parentAlias = query.getPlan().source.alias
+    const alias = this.relationAggregateKey(aggregate)
+    const subquery = this.createRelationAggregateSubquery(aggregate, parentAlias)
+    return aggregate.kind === 'exists' ? query[addSelectExists](subquery, alias) : query.addSelectSub(subquery, alias)
+  }
+
+  private createRelationAggregateSubquery(aggregate: AggregateLoad, parentAlias: string | undefined): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+    const unorderable = (reason: string) => new RelationError(`Cannot order by the "${aggregate.relation}" relation aggregate on model "${this.definition.name}": ${reason}`)
+    if (aggregate.relation.includes('.')) throw unorderable('nested relation aggregates are not supported.')
+    const relation = this.getRelationDefinition(aggregate.relation)
+    if (relation.kind === 'morphTo' || relation.kind === 'hasOneOfMany' || relation.kind === 'morphOneOfMany') {
+      throw unorderable(`${relation.kind} relation aggregates are loaded after the query runs.`)
+    }
+    this.assertRelationExistenceSupported(aggregate.relation, relation)
+    const related = this.resolveRelatedRepository(relation.related)
+    const [subquery] = this.buildRelationExistenceSubqueries(relation, parentAlias, aggregate.constraint)
+    if (!subquery || !sameTable(subquery.getTableName(), related.definition.table.tableName)) {
+      throw unorderable('the relation cannot be expressed as a single correlated subquery.')
+    }
+    if (aggregate.kind === 'exists') return subquery
+    if (aggregate.kind === 'count') return subquery.selectCount('aggregate')
+    const source = subquery.getPlan().source
+    const column = `${source.alias ?? source.tableName}.${aggregate.column}` as never
+    switch (aggregate.kind) {
+      case 'sum':
+        return subquery.selectSum('aggregate', column)
+      case 'avg':
+        return subquery.selectAvg('aggregate', column)
+      case 'min':
+        return subquery.selectMin('aggregate', column)
+      case 'max':
+        return subquery.selectMax('aggregate', column)
     }
   }
 
