@@ -784,8 +784,9 @@ export class ModelRepository<
     if (!constrained || !sameTable(constrained.getTableName(), related.definition.table.tableName)) {
       throw unorderable('the relation cannot be expressed as a single correlated subquery.')
     }
-    const { limit, offset } = constrained.getPlan()
-    if (limit !== undefined || offset !== undefined) throw unorderable('aggregate constraints that limit or offset the related rows cannot be ordered by.')
+    const plan = constrained.getPlan()
+    const reshapesRows = plan.limit !== undefined || plan.offset !== undefined || plan.distinct || plan.groupBy.length > 0 || plan.having.length > 0 || plan.unions.length > 0
+    if (reshapesRows) throw unorderable('aggregate constraints that limit, offset, deduplicate, group or union the related rows cannot be ordered by.')
     const subquery = constrained.reorder()
     if (aggregate.kind === 'exists' || this.countsAtMostOne(aggregate)) return subquery
     if (aggregate.kind === 'count') return subquery.selectCount('aggregate')

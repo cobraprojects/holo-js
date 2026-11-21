@@ -152,7 +152,9 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
 
     await expect(Like.withCount('likeable').orderBy('likeable_count').get()).rejects.toThrow('Cannot order by the "likeable" relation aggregate')
     await expect(Author.withCount('latestPost').orderBy('latestPost_count').get()).rejects.toThrow('Cannot order by the "latestPost" relation aggregate')
-    await expect(Author.withSum({ posts: query => query.orderBy('score').limit(1) }, 'score').orderByDesc('posts_sum_score').get()).rejects.toThrow('aggregate constraints that limit or offset the related rows cannot be ordered by.')
+    const reshaped = 'aggregate constraints that limit, offset, deduplicate, group or union the related rows cannot be ordered by.'
+    await expect(Author.withSum({ posts: query => query.orderBy('score').limit(1) }, 'score').orderByDesc('posts_sum_score').get()).rejects.toThrow(reshaped)
+    await expect(Author.withCount({ posts: query => query.select('author_id').distinct() }).orderByDesc('posts_count').get()).rejects.toThrow(reshaped)
   })
 
   it('orders by aggregates of ordered relations, counting every pivot row', async () => {
