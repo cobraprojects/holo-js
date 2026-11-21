@@ -105,7 +105,6 @@ export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
   type TData = InferFormData<TSchema>
 
   const formRef = useRef<UseFormResult<TData, TSuccess, InferFormFieldTree<TSchema>> | undefined>(undefined)
-  const previousSchemaRef = useRef<TSchema | undefined>(undefined)
   const previousOptionsRef = useRef<UseFormOptions<TData, TSuccess> | undefined>(undefined)
   const latestOptionsRef = useRef<UseFormOptions<TData, TSuccess> | undefined>(undefined)
   const submitterBridgeRef = useRef<UseFormOptions<TData, TSuccess>['submitter']>(undefined)
@@ -129,22 +128,12 @@ export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
       }
     : options
 
-  if (
-    !formRef.current
-    || previousSchemaRef.current !== schemaDefinition
-  ) {
+  if (!formRef.current || !previousOptionsRef.current || !areOptionsEqual(previousOptionsRef.current, options)) {
     formRef.current = createFormClient(schemaDefinition, resolvedOptions)
-    previousSchemaRef.current = schemaDefinition
     previousOptionsRef.current = options
-  } else {
-    const previousOptions = previousOptionsRef.current as UseFormOptions<TData, TSuccess>
-    if (!areOptionsEqual(previousOptions, options)) {
-      formRef.current = createFormClient(schemaDefinition, resolvedOptions)
-      previousOptionsRef.current = options
-    }
   }
 
-  const form = formRef.current!
+  const form = formRef.current
 
   useEffect(() => form.subscribe(() => setVersion(version => version + 1)), [form])
 

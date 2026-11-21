@@ -69,6 +69,19 @@ describe('Next forms with native React', () => {
     expect(harness.rendered).toBe('{"email":"nora@example.com"}')
   })
 
+  it('preserves edited values when the app builds its schema during render', async () => {
+    let current: ReturnType<typeof useForm<typeof emailSchema, string>> | undefined
+    function Form() {
+      current = useForm(schema({ email: field.string().required().email() }), { initialValues: { email: 'ava@example.com' } })
+      return createElement('output', null, JSON.stringify(current.values))
+    }
+    let renderer!: ReactTestRenderer
+    await act(async () => { renderer = create(createElement(Form)) })
+    onTestFinished(async () => { await act(async () => renderer.unmount()) })
+    await act(async () => { await current?.setValue('email', 'edited@example.com') })
+    expect(renderer.root.findByType('output').children.join('')).toBe('{"email":"edited@example.com"}')
+  })
+
   it('submits through the latest app callback without losing edited field values', async () => {
     const harness = await mountForm(emailSchema, {
       initialValues: { email: 'ava@example.com' },
