@@ -77,3 +77,23 @@ describe.each(drivers)('models created on %s', (driver) => {
     expect(retrievals).toBe(0)
   })
 })
+
+describe.each(integrationDrivers(['mysql']))('models created on %s with a key the database generates without AUTO_INCREMENT', (driver) => {
+  it('stay keyless instead of taking another row as theirs', async () => {
+    const { db, schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const name = `holo_tokens_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await db.executeCompiled({ sql: `CREATE TABLE \`${name}\` (\`code\` VARCHAR(36) NOT NULL DEFAULT (UUID()) PRIMARY KEY, \`label\` VARCHAR(20) NOT NULL, \`note\` VARCHAR(20) NOT NULL DEFAULT 'fresh')`, source: 'schema' })
+    onTestFinished(() => schema.dropTable(name))
+    await db.executeCompiled({ sql: `INSERT INTO \`${name}\` (\`label\`, \`note\`) VALUES ('existing', 'taken')`, source: 'schema' })
+    const Token = defineModel(defineGeneratedTable(name, {
+      code: column.string().primaryKey().default(''),
+      label: column.string(),
+      note: column.string().default('fresh'),
+    }), { timestamps: false, fillable: ['label'] })
+
+    const created = await Token.create({ label: 'new' })
+
+    expect(created.toAttributes()).toEqual({ label: 'new' })
+  })
+})

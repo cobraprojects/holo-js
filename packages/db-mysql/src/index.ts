@@ -367,7 +367,7 @@ export class MySQLAdapter<TConfig extends PoolOptions = PoolOptions> implements 
     const execution = result as ResultSetHeader
     return {
       affectedRows: typeof execution.affectedRows === 'number' ? execution.affectedRows : 0,
-      lastInsertId: execution.insertId,
+      ...(execution.insertId === 0 ? {} : { lastInsertId: execution.insertId }),
     }
   }
 
