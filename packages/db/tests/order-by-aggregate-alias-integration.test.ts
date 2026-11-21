@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { DB, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, latestOfMany, morphTo, resetDB } from '../src'
+import { DB, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, latestOfMany, morphOne, morphTo, resetDB } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 type Driver = 'sqlite' | 'postgres' | 'mysql'
@@ -57,9 +57,17 @@ async function openAuthorsFixture(driver: Driver) {
   const Post = defineModel(posts, { timestamps: false })
   const Tag = defineModel(tags, { timestamps: false })
   const Like = defineModel(likes, { timestamps: false, relations: { likeable: morphTo('likeable') } })
+  const authorType = `OaAuthor${tag}`
+  await DB.table(likes).insert([
+    { id: 1, likeable_type: authorType, likeable_id: 1 },
+    { id: 2, likeable_type: authorType, likeable_id: 2 },
+    { id: 3, likeable_type: authorType, likeable_id: 2 },
+  ])
   const Author = defineModel(authors, {
+    morphClass: authorType,
     timestamps: false,
     relations: {
+      like: morphOne(() => Like, 'likeable'),
       posts: hasMany(() => Post, 'author_id'),
       latestPost: latestOfMany(() => Post, 'author_id'),
       tags: belongsToMany(() => Tag, pivot, 'author_id', 'tag_id'),
@@ -156,6 +164,23 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
 
     const scored = await Author.whereHas('posts').withMax({ posts: query => query.orderBy('id') }, 'score').orderByDesc('posts_max_score').get()
     expect(scored.map(author => author.id)).toEqual([2, 1])
+  })
+
+  it('orders by the values the aggregates load for empty sums and single related rows', async () => {
+    const { Author } = await openAuthorsFixture(driver)
+
+    const summed = await Author.withSum('posts', 'score').orderByDesc('posts_sum_score').orderBy('id').get()
+    expect(summed.map(author => [author.id, author.toAttributes().posts_sum_score])).toEqual([[2, 33], [1, 10], [3, 0]])
+
+    const liked = await Author.withCount('like').orderByDesc('like_count').orderBy('id').get()
+    expect(liked.map(author => [author.id, author.toAttributes().like_count])).toEqual([[1, 1], [2, 1], [3, 0]])
+  })
+
+  it('rejects ordering a union by a relation aggregate', async () => {
+    const { Author } = await openAuthorsFixture(driver)
+
+    await expect(Author.where('id', 1).unionAll(Author.where('id', 2)).withCount('posts').orderByDesc('posts_count').get())
+      .rejects.toThrow('Cannot order a union of')
   })
 
   it('orders by the aggregate the query loads, whenever it is selected or replaced', async () => {

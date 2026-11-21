@@ -44,6 +44,7 @@ export interface QueryAggregateSelection {
   readonly aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'
   readonly column: string | '*'
   readonly alias: string
+  readonly emptyAsZero?: true
 }
 
 export interface QueryRawSelection {

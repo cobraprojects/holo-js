@@ -2,7 +2,7 @@ import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DB } from '../facade/DB'
 import { ConfigurationError, DatabaseError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
 import { assertQueryTablePath } from '../query/validator'
-import { TableQueryBuilder, addSelectExists, aliasTableSource, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, addSelectExists, aliasTableSource, selectSumOrZero, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
 import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { selectionOutputName } from '../query/modelRowProjection'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadColumnSqlTypes, loadTableDefinition } from '../schema/columnListing'
@@ -752,10 +752,20 @@ export class ModelRepository<
   }
 
   selectRelationAggregate<TQuery extends TableQueryBuilder<TTable, Record<string, unknown>>>(query: TQuery, aggregate: AggregateLoad): TableQueryBuilder<TTable, Record<string, unknown>> {
+    if (query.getPlan().unions.length > 0) {
+      throw new RelationError(`Cannot order a union of "${this.definition.name}" queries by the "${aggregate.relation}" relation aggregate. Select it in each query instead.`)
+    }
     const parentAlias = query.getPlan().source.alias
     const alias = this.relationAggregateKey(aggregate)
     const subquery = this.createRelationAggregateSubquery(aggregate, parentAlias)
-    return aggregate.kind === 'exists' ? query[addSelectExists](subquery, alias) : query.addSelectSub(subquery, alias)
+    return this.countsAtMostOne(aggregate) ? addSelectExists(query, subquery, alias) : query.addSelectSub(subquery, alias)
+  }
+
+  private countsAtMostOne(aggregate: AggregateLoad): boolean {
+    if (aggregate.kind === 'exists') return true
+    if (aggregate.kind !== 'count') return false
+    const { kind } = this.getRelationDefinition(aggregate.relation)
+    return kind === 'belongsTo' || kind === 'morphOne'
   }
 
   private createRelationAggregateSubquery(aggregate: AggregateLoad, parentAlias: string | undefined): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
@@ -777,13 +787,13 @@ export class ModelRepository<
     const { limit, offset } = constrained.getPlan()
     if (limit !== undefined || offset !== undefined) throw unorderable('aggregate constraints that limit or offset the related rows cannot be ordered by.')
     const subquery = constrained.reorder()
-    if (aggregate.kind === 'exists') return subquery
+    if (aggregate.kind === 'exists' || this.countsAtMostOne(aggregate)) return subquery
     if (aggregate.kind === 'count') return subquery.selectCount('aggregate')
     const source = subquery.getPlan().source
     const column = `${source.alias ?? source.tableName}.${aggregate.column}` as never
     switch (aggregate.kind) {
       case 'sum':
-        return subquery.selectSum('aggregate', column)
+        return selectSumOrZero(subquery, column, 'aggregate')
       case 'avg':
         return subquery.selectAvg('aggregate', column)
       case 'min':

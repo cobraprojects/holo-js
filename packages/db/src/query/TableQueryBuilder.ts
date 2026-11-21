@@ -179,7 +179,6 @@ export const hasQueryCache = Symbol('hasQueryCache')
 export const whereResolvedColumn = Symbol('whereResolvedColumn')
 export const resolveAggregateSource = Symbol('resolveAggregateSource')
 export const projectModelRows = Symbol('projectModelRows')
-export const addSelectExists = Symbol('addSelectExists')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -190,6 +189,8 @@ let keyedInsert: KeyedInsert
 type AnyTableQuery = TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>
 let keyColumnComparison: (query: AnyTableQuery, column: string, compareTo: string, casts: QueryKeyCasts) => AnyTableQuery
 let keyColumnSelection: (query: AnyTableQuery, column: string, casts: QueryKeyCasts) => AnyTableQuery
+let existsSelection: (query: AnyTableQuery, subquery: AnyTableQuery, alias: string) => AnyTableQuery
+let zeroedSumSelection: (query: AnyTableQuery, column: string, alias: string) => AnyTableQuery
 let keyColumnJoin: (query: AnyTableQuery, table: TableReference | TableQueryBuilder<TableDefinition, Record<string, unknown>>, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string) => AnyTableQuery
 let sourceAliasing: (query: AnyTableQuery, alias: string) => AnyTableQuery
 let sourceRequalifying: (query: AnyTableQuery, previousAlias?: string) => AnyTableQuery
@@ -210,6 +211,14 @@ export function whereKeyColumn<TQuery extends TableQueryBuilder<TableReference, 
 
 export function selectKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, casts: QueryKeyCasts): TQuery {
   return keyColumnSelection(query as unknown as AnyTableQuery, column, casts) as unknown as TQuery
+}
+
+export function addSelectExists<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>, alias: string): TQuery {
+  return existsSelection(query as unknown as AnyTableQuery, subquery as unknown as AnyTableQuery, alias) as unknown as TQuery
+}
+
+export function selectSumOrZero<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, alias: string): TQuery {
+  return zeroedSumSelection(query as unknown as AnyTableQuery, column, alias) as unknown as TQuery
 }
 
 export function joinOnKeyColumns<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, table: TableReference | TableQueryBuilder<TableDefinition, Record<string, unknown>>, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string): TQuery {
@@ -565,13 +574,6 @@ export class TableQueryBuilder<
     alias: string,
   ): TableQueryBuilder<TTableOrName, SelectedDateBuckets<TSelectedRow> & Record<string, unknown>, TAvailableColumns> {
     return this.clone(appendSubquerySelection(this.plan, query.getPlan(), alias))
-  }
-
-  [addSelectExists](
-    query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
-    alias: string,
-  ): TableQueryBuilder<TTableOrName, Record<string, unknown>, TAvailableColumns> {
-    return this.clone(appendSubquerySelection(this.plan, query.getPlan(), alias, true))
   }
 
   distinct(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
@@ -2753,6 +2755,8 @@ export class TableQueryBuilder<
     }
     sourceRequalifying = (query, previousAlias) => query.clone(requalifyAliasedSource(query.plan, connectionNameFolding(query), previousAlias))
     keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)
+    existsSelection = (query, subquery, alias) => query.clone(appendSubquerySelection(query.plan, subquery.getPlan(), alias, true))
+    zeroedSumSelection = (query, column, alias) => query.clone(withAggregateSelection(query.plan, { ...query.createAggregateSelection('sum', alias, column), emptyAsZero: true }))
     keyColumnSelection = (query, column, casts) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(casts.left ? { keyCast: casts.left } : {}), ...(casts.unknownKind ? { unknownKeyKind: casts.unknownKind } : {}) })]) })
     keyColumnJoin = (query, table, leftColumn, rightColumn, casts, alias) => query.clone(withJoin(query.plan, {
       type: 'inner',

@@ -261,7 +261,8 @@ export class SQLQueryCompiler {
             const aggregateColumn = selection.column === '*'
               ? '*'
               : this.compileColumnReference(selection.column)
-            return `${selection.aggregate.toUpperCase()}(${aggregateColumn}) AS ${this.quoteIdentifier(selection.alias)}`
+            const aggregated = `${selection.aggregate.toUpperCase()}(${aggregateColumn})`
+            return `${selection.emptyAsZero ? `COALESCE(${aggregated}, 0)` : aggregated} AS ${this.quoteIdentifier(selection.alias)}`
           }
 
           if (selection.kind === 'raw') {
