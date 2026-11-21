@@ -25,11 +25,11 @@ class FormErrorBoundary extends Component<{ children?: ReactNode }, { error: Err
   }
 }
 
-async function mountForm<TSchema extends ValidationSchema>(definition: TSchema, options: UseFormOptions<InferFormData<TSchema>, string>) {
+async function mountForm<TSchema extends ValidationSchema>(createDefinition: () => TSchema, options: UseFormOptions<InferFormData<TSchema>, string>) {
   let current: ReturnType<typeof useForm<TSchema, string>> | undefined
   let renderer!: ReactTestRenderer
   function Form(props: { options: typeof options }) {
-    current = useForm(definition, props.options)
+    current = useForm(createDefinition(), props.options)
     return createElement('output', null, JSON.stringify(current.values))
   }
   await act(async () => { renderer = create(createElement(FormErrorBoundary, null, createElement(Form, { options }))) })
@@ -51,7 +51,7 @@ const emailSchema = schema({ email: field.string().required().email() })
 
 describe('Next forms with native React', () => {
   it('renders field changes and validates them through the real form subscription', async () => {
-    const harness = await mountForm(emailSchema, { initialValues: { email: 'ava@example.com' } })
+    const harness = await mountForm(() => emailSchema, { initialValues: { email: 'ava@example.com' } })
     await act(async () => { await harness.form.setValue('email', 'nora@example.com') })
     expect(harness.rendered).toBe('{"email":"nora@example.com"}')
     expect((await harness.form.validate()).valid).toBe(true)
@@ -61,7 +61,7 @@ describe('Next forms with native React', () => {
   })
 
   it('preserves edited values across equivalent option rerenders and resets them when initial values change', async () => {
-    const harness = await mountForm(emailSchema, { initialValues: { email: 'ava@example.com' } })
+    const harness = await mountForm(() => emailSchema, { initialValues: { email: 'ava@example.com' } })
     await act(async () => { await harness.form.setValue('email', 'edited@example.com') })
     await harness.update({ initialValues: { email: 'ava@example.com' } })
     expect(harness.rendered).toBe('{"email":"edited@example.com"}')
@@ -70,20 +70,13 @@ describe('Next forms with native React', () => {
   })
 
   it('preserves edited values when the app builds its schema during render', async () => {
-    let current: ReturnType<typeof useForm<typeof emailSchema, string>> | undefined
-    function Form() {
-      current = useForm(schema({ email: field.string().required().email() }), { initialValues: { email: 'ava@example.com' } })
-      return createElement('output', null, JSON.stringify(current.values))
-    }
-    let renderer!: ReactTestRenderer
-    await act(async () => { renderer = create(createElement(Form)) })
-    onTestFinished(async () => { await act(async () => renderer.unmount()) })
-    await act(async () => { await current?.setValue('email', 'edited@example.com') })
-    expect(renderer.root.findByType('output').children.join('')).toBe('{"email":"edited@example.com"}')
+    const harness = await mountForm(() => schema({ email: field.string().required().email() }), { initialValues: { email: 'ava@example.com' } })
+    await act(async () => { await harness.form.setValue('email', 'edited@example.com') })
+    expect(harness.rendered).toBe('{"email":"edited@example.com"}')
   })
 
   it('submits through the latest app callback without losing edited field values', async () => {
-    const harness = await mountForm(emailSchema, {
+    const harness = await mountForm(() => emailSchema, {
       initialValues: { email: 'ava@example.com' },
       submitter: () => ({ ok: true, status: 200, data: 'first' }),
     })
@@ -97,7 +90,7 @@ describe('Next forms with native React', () => {
   })
 
   it('preserves native Next redirects from submitted app callbacks', async () => {
-    const harness = await mountForm(emailSchema, {
+    const harness = await mountForm(() => emailSchema, {
       initialValues: { email: 'ava@example.com' },
       submitter: () => redirect('/admin'),
     })
@@ -107,7 +100,7 @@ describe('Next forms with native React', () => {
   })
 
   it('renders submitted HTTP failures through a real React error boundary', async () => {
-    const harness = await mountForm(emailSchema, {
+    const harness = await mountForm(() => emailSchema, {
       initialValues: { email: 'ava@example.com' },
       submitter: () => { throw Object.assign(new Error('Denied'), { statusCode: 403 }) },
     })
@@ -120,7 +113,7 @@ describe('Next forms with native React', () => {
     const uploadSchema = schema({ avatar: field.file().optional() })
     const first = new File(['first'], 'avatar.png', { type: 'image/png' })
     const second = new File(['second'], 'avatar.png', { type: 'image/png' })
-    const harness = await mountForm(uploadSchema, { initialValues: { avatar: first } })
+    const harness = await mountForm(() => uploadSchema, { initialValues: { avatar: first } })
     await harness.update({ initialValues: { avatar: second } })
     expect(await harness.form.values.avatar?.text()).toBe('second')
   })

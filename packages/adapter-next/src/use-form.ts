@@ -104,8 +104,10 @@ export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
   type TData = InferFormData<TSchema>
 
-  const formRef = useRef<UseFormResult<TData, TSuccess, InferFormFieldTree<TSchema>> | undefined>(undefined)
-  const previousOptionsRef = useRef<UseFormOptions<TData, TSuccess> | undefined>(undefined)
+  const formStateRef = useRef<{
+    readonly form: UseFormResult<TData, TSuccess, InferFormFieldTree<TSchema>>
+    readonly options: UseFormOptions<TData, TSuccess>
+  } | undefined>(undefined)
   const latestOptionsRef = useRef<UseFormOptions<TData, TSuccess> | undefined>(undefined)
   const submitterBridgeRef = useRef<UseFormOptions<TData, TSuccess>['submitter']>(undefined)
   const [httpError, setHttpError] = useState<Error | undefined>(undefined)
@@ -128,12 +130,11 @@ export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
       }
     : options
 
-  if (!formRef.current || !previousOptionsRef.current || !areOptionsEqual(previousOptionsRef.current, options)) {
-    formRef.current = createFormClient(schemaDefinition, resolvedOptions)
-    previousOptionsRef.current = options
+  if (!formStateRef.current || !areOptionsEqual(formStateRef.current.options, options)) {
+    formStateRef.current = { form: createFormClient(schemaDefinition, resolvedOptions), options }
   }
 
-  const form = formRef.current
+  const { form } = formStateRef.current
 
   useEffect(() => form.subscribe(() => setVersion(version => version + 1)), [form])
 
