@@ -240,7 +240,7 @@ await Post.inRandomOrder().first()
 
 `latest()` and `oldest()` sort by `created_at` unless you pass a column. `reorder()` clears earlier ordering.
 
-After `withCount()`, `withExists()`, `withSum()`, `withAvg()`, `withMin()`, `withMax()` or `withAggregate()`, you can sort by the aggregate's attribute. The database does the sorting, so `limit()`, `first()`, `paginate()` and `chunk()` return the right rows. `cursorPaginate()` can't use an aggregate as its cursor and throws, so use `paginate()` instead.
+After `withCount()`, `withExists()`, `withSum()`, `withAvg()`, `withMin()`, `withMax()` or `withAggregate()`, you can sort by the aggregate's attribute. The database does the sorting, so `limit()`, `first()`, `paginate()` and `chunk()` return the right rows. `cursorPaginate()` can't use an aggregate as its cursor and throws, so use `paginate()` instead. As in Laravel, call `select()` before ordering by an aggregate, because a later `select()` replaces the aggregate's column.
 
 ```ts
 await Post.withCount('comments').orderByDesc('comments_count').paginate(15)

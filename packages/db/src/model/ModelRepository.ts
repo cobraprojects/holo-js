@@ -765,7 +765,10 @@ export class ModelRepository<
     if (relation.kind === 'morphTo' || relation.kind === 'hasOneOfMany' || relation.kind === 'morphOneOfMany') {
       throw unorderable(`${relation.kind} relation aggregates are loaded after the query runs.`)
     }
-    this.assertRelationExistenceSupported(aggregate.relation, relation)
+    const crossConnection = this.findCrossConnectionRepository(relation)
+    if (crossConnection) {
+      throw unorderable(`its ${crossConnection.target} model uses connection "${crossConnection.repository.getConnectionName()}" while the query uses "${this.getConnectionName()}".`)
+    }
     const related = this.resolveRelatedRepository(relation.related)
     const [subquery] = this.buildRelationExistenceSubqueries(relation, parentAlias, aggregate.constraint)
     if (!subquery || !sameTable(subquery.getTableName(), related.definition.table.tableName)) {
@@ -2207,44 +2210,37 @@ export class ModelRepository<
     relation: RelationDefinition,
     morphTypes?: readonly string[],
   ): void {
-    const parentConnectionName = this.getConnectionName()
-    const ensureSameConnection = (repository: ModelRepository, target: 'related' | 'through' = 'related') => {
-      const targetConnectionName = repository.getConnectionName()
-      if (targetConnectionName === parentConnectionName) {
-        return
-      }
-
-      throw new RelationError(
-        `Cross-connection relation existence queries are not supported for relation "${relationName}" on model "${this.definition.name}". `
-        + `The parent query uses connection "${parentConnectionName}" but the ${target} model uses "${targetConnectionName}". `
-        + 'Use eager loading, relation aggregates, or explicit multi-step queries instead.',
-      )
-    }
-
-    switch (relation.kind) {
-      case 'belongsTo':
-      case 'hasMany':
-      case 'hasOne':
-      case 'hasOneOfMany':
-      case 'morphOne':
-      case 'morphMany':
-      case 'morphOneOfMany':
-      case 'belongsToMany':
-      case 'morphToMany':
-      case 'morphedByMany':
-        ensureSameConnection(this.resolveRelatedRepository(relation.related))
-        return
-      case 'hasOneThrough':
-      case 'hasManyThrough':
-        ensureSameConnection(this.resolveThroughRepository(relation.through), 'through')
-        ensureSameConnection(this.resolveRelatedRepository(relation.related))
-        return
-      case 'morphTo':
-        for (const reference of this.resolveMorphExistenceReferences(morphTypes)) {
-          ensureSameConnection(ModelRepository.from(reference))
-        }
-    }
+    const crossConnection = this.findCrossConnectionRepository(relation, morphTypes)
+    if (!crossConnection) return
+    throw new RelationError(
+      `Cross-connection relation existence queries are not supported for relation "${relationName}" on model "${this.definition.name}". `
+      + `The parent query uses connection "${this.getConnectionName()}" but the ${crossConnection.target} model uses "${crossConnection.repository.getConnectionName()}". `
+      + 'Use eager loading, relation aggregates, or explicit multi-step queries instead.',
+    )
   }
+
+  private findCrossConnectionRepository(
+    relation: RelationDefinition,
+    morphTypes?: readonly string[],
+  ): { readonly repository: ModelRepository, readonly target: 'related' | 'through' } | undefined {
+    const parentConnectionName = this.getConnectionName()
+    const candidates = (): readonly { readonly repository: ModelRepository, readonly target: 'related' | 'through' }[] => {
+      switch (relation.kind) {
+        case 'hasOneThrough':
+        case 'hasManyThrough':
+          return [
+            { repository: this.resolveThroughRepository(relation.through), target: 'through' },
+            { repository: this.resolveRelatedRepository(relation.related), target: 'related' },
+          ]
+        case 'morphTo':
+          return this.resolveMorphExistenceReferences(morphTypes).map(reference => ({ repository: ModelRepository.from(reference), target: 'related' }))
+        default:
+          return [{ repository: this.resolveRelatedRepository(relation.related), target: 'related' }]
+      }
+    }
+    return candidates().find(candidate => candidate.repository.getConnectionName() !== parentConnectionName)
+  }
+
 
   private applyExistsBoolean(
     query: TableQueryBuilder<TTable, Record<string, unknown>>,
