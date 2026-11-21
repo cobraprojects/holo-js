@@ -1773,7 +1773,7 @@ describe('model core slice', () => {
       guarded: ['*'] })
 
     const created = await User.create({ name: 'Sara', email: 's@example.com' })
-    expect(created.toJSON()).toEqual({ id: 1, name: 'Sara', email: 's@example.com' })
+    expect(created.toJSON()).toEqual({ id: 1, name: 'Sara', email: 's@example.com', status: null })
     await expect(User.query().orderBy('id').getJson()).resolves.toEqual([
       { id: 1, name: 'Sara', email: 's@example.com', status: null },
     ])
@@ -2179,8 +2179,8 @@ describe('model core slice', () => {
     expect(custom.get('refreshedOn')).toBeInstanceOf(Date)
 
     const plain = await Note.create({ name: 'Plain' })
-    expect(plain.get('created_at')).toBeUndefined()
-    expect(plain.get('updated_at')).toBeUndefined()
+    expect(plain.get('created_at')).toBeNull()
+    expect(plain.get('updated_at')).toBeNull()
 
   })
 

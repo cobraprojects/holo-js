@@ -45,6 +45,14 @@ post.id
 post.created_at
 ```
 
+Columns you don't set hold the value the database stored, such as a column default, so the model matches its row and its types. Holo reads the row back after the insert to get them:
+
+```ts
+const period = await UsagePeriod.firstOrCreate({ month: '2026-11' })
+period.responses_used
+// 0, from the column's default
+```
+
 Insert several at once with `createMany()`. It returns a [collection](/orm/collections):
 
 ```ts
@@ -427,7 +435,7 @@ A query's `upsert()` applies these rules too, to every column of its rows and to
 
 ### create()
 
-Inserts one row and returns the saved model. Model events fire, and generated IDs and timestamps are filled in.
+Inserts one row and returns the saved model. Model events fire, and generated IDs, timestamps and the values the database stored for columns you didn't set are filled in.
 
 ```ts
 const post = await Post.create({ title: 'Hello', body: '...', user_id: 1 })

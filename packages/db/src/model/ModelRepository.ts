@@ -1112,12 +1112,34 @@ export class ModelRepository<
       } as Partial<ModelRecord<TTable>>
       marks.sqlCompleted()
       this.applyStoredValues(entity, attributes, {}, marks)
+      await this.fillUnwrittenColumns(entity, attributes)
       await this.dispatchEvent('created', entity)
       await this.dispatchEvent('saved', entity)
       await this.touchOwners(entity)
       entity.finishSave()
       return entity
     })
+  }
+
+  private async fillUnwrittenColumns(entity: Entity<TTable>, written: Partial<ModelRecord<TTable>>): Promise<void> {
+    try {
+      entity.forceFill(await this.readUnwrittenColumns(written))
+    } catch (error) {
+      entity.finishSave()
+      throw error
+    }
+  }
+
+  private async readUnwrittenColumns(written: Partial<ModelRecord<TTable>>): Promise<Partial<ModelRecord<TTable>>> {
+    const primaryKey = this.definition.primaryKey
+    const key = written[primaryKey as keyof typeof written]
+    if (key === null || typeof key === 'undefined') {
+      return {}
+    }
+
+    const row = await this.createTableQuery().where(primaryKey as never, key).first()
+    const unwritten = Object.fromEntries(Object.entries(row ?? {}).filter(([column]) => !(column in written)))
+    return this.valueTransformer.normalizeFromStorage(unwritten as Partial<ModelRecord<TTable>>, {}, 'database')
   }
 
   async restore(id: unknown): Promise<Entity<TTable>> {
