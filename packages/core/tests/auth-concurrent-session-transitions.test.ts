@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { afterEach, describe, expect, it } from 'vitest'
-import auth, { configureAuthRuntime, createAsyncAuthContext, resetAuthRuntime, type AuthMultiFactorStore, type AuthProviderAdapter } from '../../auth/src'
+import auth, { configureAuthRuntime, createAsyncAuthContext, resetAuthRuntime, type AuthMultiFactorStore, type AuthProviderAdapter, type AuthSessionRevocationStore } from '../../auth/src'
 import { configureSessionRuntime, getSessionRuntime, parseCookieHeader, resetSessionRuntime, type SessionStore } from '@holo-js/session'
 import { sessionStoreFactories } from './support/session-stores'
 
@@ -31,6 +31,15 @@ const noMultiFactorCredentials: AuthMultiFactorStore = {
   async advanceCounter() { return null },
   async consumeRecoveryCode() { return null },
   async replaceRecoveryCodes() { return false },
+}
+
+const revokedUserIds = new Set<number>()
+
+const sessionRevocations: AuthSessionRevocationStore = {
+  async readMany(identities) {
+    return identities.map(identity => ({ ...identity, generation: revokedUserIds.has(Number(identity.userId)) ? 1 : 0 }))
+  },
+  async revokeOthers() { return true },
 }
 
 type WriteGate = {
@@ -80,7 +89,9 @@ function receive(setCookie: string): void {
   else browserCookies.set(name, value)
 }
 
-function configure(store: SessionStore): ReturnType<typeof createAsyncAuthContext> {
+const context = createAsyncAuthContext()
+
+function configure(store: SessionStore): void {
   configureSessionRuntime({
     appKey: 'concurrent-session-app-key',
     config: {
@@ -93,7 +104,6 @@ function configure(store: SessionStore): ReturnType<typeof createAsyncAuthContex
     },
     stores: { file: store },
   })
-  const context = createAsyncAuthContext()
   configureAuthRuntime({
     config: {
       defaults: { guard: 'web' },
@@ -108,6 +118,7 @@ function configure(store: SessionStore): ReturnType<typeof createAsyncAuthContex
     providers: { users: provider },
     multiFactor: noMultiFactorCredentials,
     multiFactorEncryptionKey: 'concurrent-session-multi-factor-key',
+    sessionRevocations,
     context: {
       ...context,
       getRequestCookie: name => requestCookies.getStore()?.get(name),
@@ -115,7 +126,6 @@ function configure(store: SessionStore): ReturnType<typeof createAsyncAuthContex
     },
     session: getSessionRuntime(),
   })
-  return context
 }
 
 async function browserSessionData(store: SessionStore): Promise<Readonly<Record<string, unknown>>> {
@@ -125,7 +135,7 @@ async function browserSessionData(store: SessionStore): Promise<Readonly<Record<
 
 async function signedInBrowser(create: () => Promise<SessionStore>) {
   const store = await create()
-  const context = configure(store)
+  configure(store)
   const request = <TValue>(callback: () => Promise<TValue>): Promise<TValue> => requestCookies.run(new Map(browserCookies), () => context.run(callback))
   await request(() => auth.guard('admin').loginUsingId(1))
   await request(() => auth.guard('support').loginUsingId(3))
@@ -142,6 +152,7 @@ async function signedInBrowser(create: () => Promise<SessionStore>) {
 
 afterEach(() => {
   browserCookies.clear()
+  revokedUserIds.clear()
   resetAuthRuntime()
   resetSessionRuntime()
 })
@@ -227,6 +238,24 @@ describe.each(sessionStoreFactories)('concurrent authenticated session transitio
     expect(users.get(3)?.remember_token).not.toBe('original-token')
   })
 
+  it('keeps an identity restored while another request removes the revoked payload it replaced', async () => {
+    const { store, request } = await signedInBrowser(create)
+    await request(() => auth.guard('web').loginUsingId(3))
+    await request(() => auth.guard('web').impersonateById(2, { actorGuard: 'admin' }))
+    const gate = holdFirstWrites(store, 1)
+    configure(gate.store)
+
+    revokedUserIds.add(2)
+    const revokedRead = request(() => auth.guard('web').user())
+    await gate.reached
+    revokedUserIds.delete(2)
+    await request(() => auth.guard('web').stopImpersonating())
+    gate.release()
+    await revokedRead
+
+    await expect(request(() => auth.guard('web').user())).resolves.toMatchObject({ id: 3 })
+  })
+
   it('rejects a multi-factor enrollment whose session ends before it is stored', async () => {
     const { store, request } = await signedInBrowser(create)
     const gate = holdFirstWrites(store, 1)
@@ -265,6 +294,25 @@ describe('a session store without atomic data updates', () => {
     await expect(request(() => auth.guard('support').logout())).rejects.toThrow('Session store "file" does not support atomic data writes.')
 
     await expect(browserSessionData(store)).resolves.toEqual(before)
+    expect(users.get(3)?.remember_token).toBe('remember-token')
+  })
+})
+
+describe('a session that ends while a Redis logout update runs', () => {
+  it('leaves the remember token unchanged', async () => {
+    const redis = sessionStoreFactories.find(factory => factory.name === 'redis')!
+    const { store, request } = await signedInBrowser(redis.create)
+    users.set(3, { ...users.get(3)!, remember_token: 'remember-token' })
+    configure({
+      ...store,
+      updateData: (sessionId, key, update) => store.updateData!(sessionId, key, (current) => {
+        void store.delete(sessionId)
+        return update(current)
+      }),
+    })
+
+    await request(() => auth.guard('support').logout())
+
     expect(users.get(3)?.remember_token).toBe('remember-token')
   })
 })

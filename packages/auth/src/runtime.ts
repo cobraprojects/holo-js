@@ -139,6 +139,7 @@ import {
   stripImpersonation,
   toSessionPayload,
   withoutGuards,
+  withoutPayloads,
   writeSessionPayloads,
   type SerializedAuthUser,
   type SessionAuthPayload,
@@ -1183,8 +1184,8 @@ async function filterRevokedSessionPayloads(bindings: RuntimeBindings, record: A
     bindings.context.setCachedUser(name, null)
     await setRememberRecaller(bindings, name)
   }
-  const revokedGuards = Object.keys(payloads).filter(name => !(name in valid))
-  await updateSessionPayloads(bindings, record, current => withoutGuards(current, revokedGuards))
+  const revoked = Object.values(payloads).filter(payload => !(payload.guard in valid))
+  await updateSessionPayloads(bindings, record, current => withoutPayloads(current, revoked))
   return valid
 }
 
@@ -1322,7 +1323,7 @@ async function resolveGuardUser(
 
   if (!freshUser) {
     if (options.readOnly) return null
-    await updateSessionPayloads(bindings, record, current => withoutGuards(current, [guardName]))
+    await updateSessionPayloads(bindings, record, current => withoutPayloads(current, [payload]))
     bindings.context.setSessionId(guardName)
     bindings.context.setCachedUser(guardName, null)
     await setRememberRecaller(bindings, guardName)
@@ -1803,11 +1804,11 @@ async function updateSessionPayloads(
   bindings: RuntimeBindings,
   session: { readonly id: string, readonly store?: string },
   change: (payloads: SessionAuthPayloadMap) => SessionAuthPayloadMap,
-): Promise<SessionAuthPayloadMap> {
+): Promise<SessionAuthPayloadMap | null> {
   const options = { store: session.store }
   const result = await atomicSessionDataUpdate(bindings)(session.id, 'auth', current => encodeSessionPayloads(change(decodeSessionPayloads(current) ?? {})), options)
-  const remaining = result.found ? decodeSessionPayloads(result.value) ?? {} : {}
-  if (Object.keys(remaining).length === 0) await bindings.session.invalidate(session.id, options)
+  const remaining = result.found ? decodeSessionPayloads(result.value) ?? {} : null
+  if (!remaining || Object.keys(remaining).length === 0) await bindings.session.invalidate(session.id, options)
   return remaining
 }
 
@@ -2234,7 +2235,7 @@ async function restoreImpersonatedGuardUser(guardName: string): Promise<Retrieve
     return original ? Object.freeze({ ...current, [guardName]: original.payload }) : withoutGuards(current, [guardName])
   })
 
-  if (!original || remaining[guardName]?.authenticatedAt !== original.payload.authenticatedAt) {
+  if (!original || remaining?.[guardName]?.authenticatedAt !== original.payload.authenticatedAt) {
     await setRememberRecaller(bindings, guardName)
     bindings.context.setSessionId(guardName)
     bindings.context.setCachedUser(guardName, null)
@@ -2284,9 +2285,9 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
       payload = current[guardName]
       return withoutGuards(current, [guardName])
     })
-    clearSessionCookies = Object.keys(remaining).length === 0
+    clearSessionCookies = !remaining || Object.keys(remaining).length === 0
     const rememberedIdentity = payload?.impersonation?.actor ?? payload
-    if (rememberedIdentity && !payload?.multiFactorChallengeExpiresAt) {
+    if (remaining && rememberedIdentity && !payload?.multiFactorChallengeExpiresAt) {
       await cycleRememberToken(rememberedIdentity.provider, rememberedIdentity.userId)
     }
   }

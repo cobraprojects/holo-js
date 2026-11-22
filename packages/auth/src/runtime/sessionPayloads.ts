@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import type { AuthSessionRecord, AuthenticatedAuthUser } from '../contracts'
 
 export type SerializedAuthUser = AuthenticatedAuthUser & {
@@ -130,6 +131,10 @@ export function encodeSessionPayloads(payloads: SessionAuthPayloadMap): SessionA
 
 export function withoutGuards(payloads: SessionAuthPayloadMap, guardNames: readonly string[]): SessionAuthPayloadMap {
   return Object.freeze(Object.fromEntries(Object.entries(payloads).filter(([guardName]) => !guardNames.includes(guardName))))
+}
+
+export function withoutPayloads(payloads: SessionAuthPayloadMap, removed: readonly SessionAuthPayload[]): SessionAuthPayloadMap {
+  return Object.freeze(Object.fromEntries(Object.entries(payloads).filter(([, payload]) => !removed.some(candidate => isDeepStrictEqual(candidate, payload)))))
 }
 
 export function stripImpersonation(payload: SessionAuthPayload): SessionIdentityPayload {
