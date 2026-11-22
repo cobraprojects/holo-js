@@ -180,12 +180,11 @@ async function importGeneratedSchema(
   }
 }
 
-async function importUnlessAwaitingGeneratedSchema(
-  modules: ProjectModuleBatch,
-  filePath: string,
-): Promise<{ readonly moduleValue: unknown } | undefined> {
+async function unlessAwaitingGeneratedSchema<TValue>(
+  load: () => Promise<TValue>,
+): Promise<{ readonly value: TValue } | undefined> {
   try {
-    return { moduleValue: await modules.import(filePath) }
+    return { value: await load() }
   } catch (error) {
     if (isUnresolvedModelSchemaError(error)) {
       return undefined
@@ -374,14 +373,14 @@ async function discoverProjectRegistry(
     : undefined
   for (const filePath of jobFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const loaded = await importUnlessAwaitingGeneratedSchema(modules, filePath)
+    const loaded = await unlessAwaitingGeneratedSchema(() => modules.import(filePath))
     if (!loaded) {
       continue
     }
 
     const sourceHash = await hashSourceFile(filePath)
     const exportedJob = resolveNamedExportEntry(
-      loaded.moduleValue,
+      loaded.value,
       (value): value is unknown => queueDiscovery!.isQueueJobDefinition(value),
     )
     if (!exportedJob) {
@@ -411,7 +410,7 @@ async function discoverProjectRegistry(
   let hasEventsAwaitingGeneratedSchema = false
   for (const filePath of eventFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const loaded = await importUnlessAwaitingGeneratedSchema(modules, filePath)
+    const loaded = await unlessAwaitingGeneratedSchema(() => modules.import(filePath))
     if (!loaded) {
       hasEventsAwaitingGeneratedSchema = true
       continue
@@ -419,7 +418,7 @@ async function discoverProjectRegistry(
 
     const sourceHash = await hashSourceFile(filePath)
     const exportedEvent = resolveNamedExportEntry(
-      loaded.moduleValue,
+      loaded.value,
       (value): value is object => hasEventDefinitionMarker(value),
     )
     if (!exportedEvent || !eventsDiscovery!.isEventDefinition(exportedEvent.value)) {
@@ -443,14 +442,14 @@ async function discoverProjectRegistry(
   const listeners: GeneratedListenerRegistryEntry[] = []
   for (const filePath of listenerFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const loaded = await importUnlessAwaitingGeneratedSchema(modules, filePath)
+    const loaded = await unlessAwaitingGeneratedSchema(() => modules.import(filePath))
     if (!loaded) {
       continue
     }
 
     const sourceHash = await hashSourceFile(filePath)
     const exportedListener = resolveNamedExportEntry(
-      loaded.moduleValue,
+      loaded.value,
       (value): value is object => hasListenerDefinitionMarker(value),
     )
     if (!exportedListener || !eventsDiscovery!.isListenerDefinition(exportedListener.value)) {
@@ -506,15 +505,15 @@ async function discoverProjectRegistry(
   const broadcast: GeneratedBroadcastRegistryEntry[] = []
   for (const filePath of broadcastFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const loaded = await importUnlessAwaitingGeneratedSchema(modules, filePath)
+    const loaded = await unlessAwaitingGeneratedSchema(async () => resolveBroadcastExportEntry(
+      await modules.import(filePath),
+      broadcastDiscovery!,
+    ))
     if (!loaded) {
       continue
     }
 
-    const exportedBroadcast = resolveBroadcastExportEntry(
-      loaded.moduleValue,
-      broadcastDiscovery!,
-    )
+    const exportedBroadcast = loaded.value
     if (!exportedBroadcast) {
       throw new Error(`Discovered broadcast "${relativePath}" does not export a Holo broadcast definition.`)
     }
@@ -536,13 +535,13 @@ async function discoverProjectRegistry(
   const channels: GeneratedChannelRegistryEntry[] = []
   for (const filePath of channelFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const loaded = await importUnlessAwaitingGeneratedSchema(modules, filePath)
+    const loaded = await unlessAwaitingGeneratedSchema(() => modules.import(filePath))
     if (!loaded) {
       continue
     }
 
     const exportedChannel = resolveNamedExportEntry(
-      loaded.moduleValue,
+      loaded.value,
       (value): value is object => broadcastDiscovery!.isChannelDefinition(value),
     )
     if (!exportedChannel) {
@@ -584,13 +583,13 @@ async function discoverProjectRegistry(
     const existingAbilityNames = captureAuthorizationDefinitionNames(authorizationStateBeforeImport.abilitiesByName)
 
     try {
-      const loaded = await importUnlessAwaitingGeneratedSchema(modules, filePath)
+      const loaded = await unlessAwaitingGeneratedSchema(() => modules.import(filePath))
       if (!loaded) {
         continue
       }
 
       const exportedPolicy = resolveNamedExportEntry(
-        loaded.moduleValue,
+        loaded.value,
         (value): value is object => authorizationDiscovery!.isAuthorizationPolicyDefinition(value),
       )
       if (!exportedPolicy) {
@@ -644,13 +643,13 @@ async function discoverProjectRegistry(
     const existingAbilityNames = captureAuthorizationDefinitionNames(authorizationStateBeforeImport.abilitiesByName)
 
     try {
-      const loaded = await importUnlessAwaitingGeneratedSchema(modules, filePath)
+      const loaded = await unlessAwaitingGeneratedSchema(() => modules.import(filePath))
       if (!loaded) {
         continue
       }
 
       const exportedAbility = resolveNamedExportEntry(
-        loaded.moduleValue,
+        loaded.value,
         (value): value is object => authorizationDiscovery!.isAuthorizationAbilityDefinition(value),
       )
       if (!exportedAbility) {
