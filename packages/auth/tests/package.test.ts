@@ -5770,11 +5770,6 @@ describe('@holo-js/auth package runtime', () => {
     await expect(auth.guard('web').stopImpersonating()).resolves.toBeNull()
     expect(((await runtime.sessionStore.read(impersonated.sessionId)) !== null)).toBe(false)
 
-    const adminSession = await auth.guard('admin').loginUsing(admin)
-    runtime.context.setSessionId('web', adminSession.sessionId)
-    await auth.guard('web').logout()
-    expect(((await runtime.sessionStore.read(adminSession.sessionId)) !== null)).toBe(false)
-
     await auth.guard('admin').loginUsing(admin)
     await getAuthRuntime().impersonateById(target.id, {
       actorGuard: 'admin',

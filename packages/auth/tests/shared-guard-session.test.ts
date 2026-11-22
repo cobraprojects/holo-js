@@ -80,7 +80,7 @@ beforeEach(async () => {
   users.set(1, { id: 1, email: 'admin@app.test', password: null, remember_token: null })
   users.set(2, { id: 2, email: 'customer@app.test', password: null, remember_token: null })
   users.set(3, { id: 3, email: 'other@app.test', password: null, remember_token: null })
-  directory = await mkdtemp(join(tmpdir(), 'auth-impersonation-'))
+  directory = await mkdtemp(join(tmpdir(), 'auth-shared-guard-session-'))
   configureSessionRuntime({
     appKey: 'impersonation-app-key',
     config: normalizeSessionConfig({ driver: 'file', stores: { file: { driver: 'file', path: directory } }, idleTimeout: 120, absoluteLifetime: 120, rememberMeLifetime: 43200 }),
@@ -165,5 +165,24 @@ describe('impersonation as the first auth call in a request', () => {
       user: { id: 2 },
       actor: { id: 1 },
     })
+  })
+})
+
+describe('logging out a guard that is not signed in', () => {
+  it('keeps the guard signed in earlier in the same request', async () => {
+    const browser = new Browser()
+    await browser.request(async () => {
+      await auth.guard('admin').loginUsingId(1)
+      await auth.guard('web').logout()
+    })
+
+    await expect(browser.request(() => auth.guard('admin').user())).resolves.toMatchObject({ id: 1 })
+  })
+
+  it('keeps the guard signed in on the shared session cookie', async () => {
+    const browser = await signedInAdmin()
+    await browser.request(() => auth.guard('web').logout())
+
+    await expect(browser.request(() => auth.guard('admin').user())).resolves.toMatchObject({ id: 1 })
   })
 })

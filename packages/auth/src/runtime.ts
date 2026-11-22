@@ -2305,17 +2305,12 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
     if (rememberedIdentity && !payload?.multiFactorChallengeExpiresAt) {
       await cycleRememberToken(rememberedIdentity.provider, rememberedIdentity.userId)
     }
-    if (!(guardName in payloads)) {
+    delete payloads[guardName]
+    if (Object.keys(payloads).length === 0) {
       await bindings.session.invalidate(sessionId)
       clearSessionCookies = true
-    } else {
-      delete payloads[guardName]
-      if (Object.keys(payloads).length === 0) {
-        await bindings.session.invalidate(sessionId)
-        clearSessionCookies = true
-      } else {
-        await writeExistingSession(bindings, record!, writeSessionPayloads(record!.data, payloads))
-      }
+    } else if (payload) {
+      await writeExistingSession(bindings, record!, writeSessionPayloads(record!.data, payloads))
     }
   }
 
