@@ -2279,8 +2279,11 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
   const sessionId = requestOnlyUser ? undefined : bindings.context.getSessionId(guardName)
   setRequestOnlyGuard(bindings, guardName, false)
   if (sessionId) {
-    const payload = readSessionPayload(await bindings.session.read(sessionId), guardName)
-    const remaining = await updateSessionPayloads(bindings, { id: sessionId }, current => withoutGuards(current, [guardName]))
+    let payload: SessionAuthPayload | undefined
+    const remaining = await updateSessionPayloads(bindings, { id: sessionId }, (current) => {
+      payload = current[guardName]
+      return withoutGuards(current, [guardName])
+    })
     clearSessionCookies = Object.keys(remaining).length === 0
     const rememberedIdentity = payload?.impersonation?.actor ?? payload
     if (rememberedIdentity && !payload?.multiFactorChallengeExpiresAt) {

@@ -208,6 +208,25 @@ describe.each(sessionStoreFactories)('concurrent authenticated session transitio
     await expect(request(() => auth.guard('admin').user())).resolves.toMatchObject({ id: 1 })
   })
 
+  it('cycles the remember token of the user a logout removes when impersonation stops first', async () => {
+    const { store, request } = await signedInBrowser(create)
+    await request(() => auth.guard('web').loginUsingId(3))
+    await request(() => auth.guard('web').impersonateById(2, { actorGuard: 'admin' }))
+    users.set(1, { ...users.get(1)!, remember_token: 'actor-token' })
+    users.set(3, { ...users.get(3)!, remember_token: 'original-token' })
+    const gate = holdFirstWrites(store, 1)
+    configure(gate.store)
+
+    const logout = request(() => auth.guard('web').logout())
+    await gate.reached
+    await request(() => auth.guard('web').stopImpersonating())
+    gate.release()
+    await logout
+
+    expect(users.get(1)?.remember_token).toBe('actor-token')
+    expect(users.get(3)?.remember_token).not.toBe('original-token')
+  })
+
   it('rejects a multi-factor enrollment whose session ends before it is stored', async () => {
     const { store, request } = await signedInBrowser(create)
     const gate = holdFirstWrites(store, 1)
