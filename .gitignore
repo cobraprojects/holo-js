@@ -64,6 +64,7 @@ coverage
 .eslintcache-main
 /docs/*
 !/docs/adr/
+!/docs/agents/
 /apps/Nuxt_test_app
 /apps/Next_test_app
 /apps/svelte_test_app
