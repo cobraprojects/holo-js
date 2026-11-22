@@ -3,7 +3,6 @@ import { DB } from '../facade/DB'
 import { ConfigurationError, DatabaseError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
 import { assertQueryTablePath } from '../query/validator'
 import { TableQueryBuilder, addSelectExists, aliasTableSource, selectAggregate, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
-import { compareChunkValuesAscending, compareChunkValuesDescending } from '../query/chunkOrdering'
 import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { selectionOutputName } from '../query/modelRowProjection'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadColumnSqlTypes, loadTableDefinition } from '../schema/columnListing'
@@ -771,26 +770,33 @@ export class ModelRepository<
     const related = this.resolveRelatedRepository(relation.related)
     const peersAlias = `__holo_one_of_many${parentAlias === undefined ? '' : `_${parentAlias}`}`
     const parentColumn = relation.kind === 'morphOneOfMany' ? relation.morphIdColumn : relation.foreignKey
-    const ungroupedPeers = this.applyRelationConstraint(relation, related, constraint, peersAlias).getTableQueryBuilder()
-    const peerPredicates = ungroupedPeers.getPlan().predicates
-    const constrainedPeers = peerPredicates.some(predicate => predicate.boolean === 'or')
-      ? ungroupedPeers.withPredicates([{ kind: 'group', boolean: 'and', predicates: peerPredicates }])
-      : ungroupedPeers
-    const typedPeers = relation.kind === 'morphOneOfMany'
-      ? constrainedPeers.where(`${peersAlias}.${relation.morphTypeColumn}` as never, this.getMorphTypeValue())
-      : constrainedPeers
-    const peers = this.whereParentKey(typedPeers, related.definition.table, parentColumn, relation.localKey, parentAlias, `${peersAlias}.${parentColumn}`)
+    const peers = this.whereParentKey(this.createOneOfManyPeers(relation, related, peersAlias, constraint), related.definition.table, parentColumn, relation.localKey, parentAlias, `${peersAlias}.${parentColumn}`)
     const primaryKey = related.definition.primaryKey
     const direction = relation.aggregate === 'max' ? 'desc' : 'asc'
     const chosenKey = peers
       .whereNotNull(`${peersAlias}.${relation.aggregateColumn}` as never)
-      .reorder()
       .orderBy(`${peersAlias}.${relation.aggregateColumn}` as never, direction)
       .orderBy(`${peersAlias}.${primaryKey}` as never, direction)
       .limit(1)
       .select(`${peersAlias}.${primaryKey}` as never)
     const candidateSource = candidates.getPlan().source
     return candidates.whereSub(`${candidateSource.alias ?? candidateSource.tableName}.${primaryKey}` as never, '=', chosenKey as TableQueryBuilder<TableDefinition, Record<string, unknown>>)
+  }
+
+  private createOneOfManyPeers(
+    relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' | 'morphOneOfMany' }>,
+    related: ModelRepository,
+    alias: string,
+    constraint?: RelationConstraint,
+  ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+    const constrained = requalifyTableSource(this.applyRelationConstraint(relation, related, constraint, alias).getTableQueryBuilder().reorder().limit().offset())
+    const predicates = constrained.getPlan().predicates
+    const grouped = predicates.some(predicate => predicate.boolean === 'or')
+      ? constrained.withPredicates([{ kind: 'group', boolean: 'and', predicates }])
+      : constrained
+    return relation.kind === 'morphOneOfMany'
+      ? grouped.where(`${alias}.${relation.morphTypeColumn}` as never, this.getMorphTypeValue())
+      : grouped
   }
 
   private countsAtMostOne(aggregate: AggregateLoad): boolean {
@@ -3024,16 +3030,10 @@ export class ModelRepository<
 
     for (const [key, bucket] of groupRelation(latestEntities, parentColumn, options).entries()) {
       this.assertOneStoredOneOfManyKey(related, parentColumn, bucket)
-      grouped.set(key, [this.chooseOneOfManyTie(relation, related, bucket)])
+      grouped.set(key, [bucket[0]!])
     }
 
     return grouped
-  }
-
-  private chooseOneOfManyTie(relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' | 'morphOneOfMany' }>, related: ModelRepository, bucket: readonly Entity[]): Entity {
-    const primaryKey = related.definition.primaryKey as never
-    const compare = relation.aggregate === 'max' ? compareChunkValuesDescending : compareChunkValuesAscending
-    return [...bucket].sort((left, right) => compare(left.get(primaryKey), right.get(primaryKey)))[0]!
   }
 
   private assertOneStoredOneOfManyKey(related: ModelRepository, parentColumn: string, bucket: readonly Entity[]): void {
@@ -3071,9 +3071,21 @@ export class ModelRepository<
     const scopedOuter = relation.kind === 'morphOneOfMany'
       ? outer.where(`${relatedTable}.${relation.morphTypeColumn}`, this.getMorphTypeValue())
       : outer
+    const tieAlias = '__holo_one_of_many_tie'
+    const primaryKey = related.definition.primaryKey
+    const tiedPeers = whereKeyColumn(
+      whereKeyColumn(this.createOneOfManyPeers(relation, related, tieAlias, constraint), `${tieAlias}.${parentColumn}`, `${relatedTable}.${parentColumn}`, {}),
+      `${tieAlias}.${relation.aggregateColumn}`,
+      `${relatedTable}.${relation.aggregateColumn}`,
+      {},
+    )
+    const tieKey = relation.aggregate === 'max'
+      ? tiedPeers.selectMax('tie_key', `${tieAlias}.${primaryKey}` as never)
+      : tiedPeers.selectMin('tie_key', `${tieAlias}.${primaryKey}` as never)
     const joined = scopedOuter
       .joinSub(latestQuery.groupBy(parentColumn), latestAlias, `${relatedTable}.${parentColumn}`, '=', `${latestAlias}.${latestKey}`)
       .whereColumn(`${latestAlias}.${latestValue}`, '=', `${relatedTable}.${relation.aggregateColumn}`)
+      .whereSub(`${relatedTable}.${primaryKey}`, '=', tieKey as TableQueryBuilder<TableDefinition, Record<string, unknown>>)
 
     return projected
       ? joined
