@@ -103,14 +103,17 @@ it.each(['webpack', 'turbopack'])('accepts the CSRF token of a server action tha
     }
     await run(process.execPath, [nextBin, 'build', `--${compiler}`], { cwd: root, env: nextEnv, timeout: 120_000, maxBuffer: 8 * 1_048_576 })
     const next = await startNext(root)
-    const browser = await chromium.launch({ headless: true })
     try {
-      const page = await browser.newPage()
-      await page.goto(next.baseUrl)
-      await page.getByRole('button', { name: 'Retire' }).click()
-      await expect.poll(() => page.locator('output').textContent()).toBe('retired acme')
+      const browser = await chromium.launch({ headless: true })
+      try {
+        const page = await browser.newPage()
+        await page.goto(next.baseUrl)
+        await page.getByRole('button', { name: 'Retire' }).click()
+        await expect.poll(() => page.locator('output').textContent()).toBe('retired acme')
+      } finally {
+        await browser.close()
+      }
     } finally {
-      await browser.close()
       await next.stop()
     }
   } finally {

@@ -23,15 +23,16 @@ await DB.table('posts').select('score as points').orderBy('points').cursorPagina
 
 ### Next.js: Server Actions without a form data parameter
 
-A Server Action that didn't declare a `formData` parameter used to fail the CSRF check with `419`, because Next.js didn't send it the form data that carries the token. Holo now makes Next send every argument the caller passes, so no code change is needed. If you declared an unused `formData` parameter only to get past that error, you can remove it:
+A Server Action that didn't declare a `formData` parameter used to fail the CSRF check with `419`, because Next.js didn't send it the form data that carries the token. Holo now makes Next send every argument the caller passes, so no code change is needed. If you declared a `formData` parameter only to get past that error, and the action never reads it, you can remove it:
 
 ```ts [app/actions.ts]
-export async function archivePost(postId: string, formData: FormData) { // [!code --]
-  await validate(formData, actionForm) // [!code --]
+export async function archivePost(postId: string, _formData: FormData) { // [!code --]
 export async function archivePost(postId: string) { // [!code ++]
   // ...
 }
 ```
+
+Keep the parameter, and the code that uses it, in actions that read or validate form fields.
 
 ## Upgrading from 0.6.1 to 0.6.2
 

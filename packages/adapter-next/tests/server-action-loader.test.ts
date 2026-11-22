@@ -7,16 +7,20 @@ import type { NextModuleInputSourceMap } from '@holo-js/adapter-shared/build'
 import routeLoader from '../src/route-loader'
 import serverActionLoader from '../src/server-action-loader'
 
-vi.mock('@holo-js/adapter-next/runtime', () => ({
-  adapterNextRuntimeInternals: {
-    serverAction: <TArgs extends readonly unknown[], TResult>(action: (...args: TArgs) => Promise<TResult>) => (
-      Object.assign(async (...args: TArgs) => ({ wrapped: await action(...args) }), { original: action })
-    ),
+vi.mock('@holo-js/adapter-next/runtime', () => {
+  const wrapped = new WeakSet<object>()
+  return { adapterNextRuntimeInternals: {
+    serverAction: <TArgs extends readonly unknown[], TResult>(action: (...args: TArgs) => Promise<TResult>) => {
+      if (wrapped.has(action)) return action
+      const invoke = async (...args: TArgs) => ({ wrapped: await action(...args) })
+      wrapped.add(invoke)
+      return invoke
+    },
     routeHandler: <TArgs extends readonly unknown[], TResult>(handler: (...args: TArgs) => Promise<TResult>) => (
       async (...args: TArgs) => ({ route: await handler(...args) })
     ),
-  },
-}))
+  } }
+})
 
 type LoaderOutput = { readonly code: string, readonly map?: unknown }
 
@@ -178,6 +182,22 @@ describe('Next server action loader', () => {
     expect(await (module.current as () => Promise<unknown>)()).toBe('replacement')
   })
 
+  it('wraps an action the module reassigns before an export reads it', async () => {
+    const module = await importCompiled('reassigned-actions.ts', [
+      '\'use server\'',
+      'export let action = async () => \'original\'',
+      'action = async () => \'replacement\'',
+      'let fallback = async () => \'original\'',
+      'fallback = async () => \'replacement\'',
+      'export default fallback',
+    ].join('\n'))
+
+    expect(await Promise.all([module.action, module.default].map(action => (action as () => Promise<unknown>)()))).toEqual([
+      { wrapped: 'replacement' },
+      { wrapped: 'replacement' },
+    ])
+  })
+
   it('keeps the columns after an export list that mixes actions and types', () => {
     const source = ['\'use server\'', 'type T = string', 'async function a() { return 1 }', 'export {a, type T}; export async function b() {}'].join('\n')
 
@@ -272,7 +292,7 @@ describe('Next server action loader', () => {
     const output = runLoader(serverActionLoader, resourcePath, source)
     const lines = output.code.split('\n')
 
-    expect(lines.slice(0, source.split('\n').length).map(line => withoutWrapperCall(line).replace('function __holoDefault (', 'function ('))).toEqual(source.split('\n').map(withExportKeywordsBlanked))
+    expect(lines.slice(0, source.split('\n').length).map(line => withoutWrapperCall(line).replace('let  ', 'const').replace('function __holoDefault (', 'function ('))).toEqual(source.split('\n').map(withExportKeywordsBlanked))
     for (const needle of ['aiMessage(kind', 'switch (kind)', 'return shared()', 'throw new Error', 'async () => \'removed\'', 'return aiMessage(']) {
       expectMapped(output, source, needle, resourcePath)
     }

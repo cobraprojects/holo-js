@@ -155,6 +155,12 @@ describe('Next server actions', () => {
     expect(await runRequest('action', invokedId, () => nested(0))).toMatchObject({ caught: { status: 422 } })
   })
 
+  it('wraps an action that is already wrapped only once', () => {
+    const action = adapterNextRuntimeInternals.serverAction(submitInvalidLogin)
+
+    expect(adapterNextRuntimeInternals.serverAction(action)).toBe(action)
+  })
+
   it('rethrows errors that are not validation or rate-limit failures', async () => {
     const redirect = Object.assign(new Error('NEXT_REDIRECT'), { digest: 'NEXT_REDIRECT;replace;/admin;307;' })
     const action = registerServerAction(async () => {

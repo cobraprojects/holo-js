@@ -191,18 +191,15 @@ function isFunctionLiteral(expression: ts.Expression | undefined): expression is
   return ts.isArrowFunction(value) || ts.isFunctionExpression(value)
 }
 
-function wrapFunctionInitializers(file: ts.SourceFile, output: MagicString, locals: ReadonlySet<string>, wrapperCall: string): ReadonlySet<string> {
-  const wrapped = new Set<string>()
+function wrapFunctionInitializers(file: ts.SourceFile, output: MagicString, locals: ReadonlySet<string>, wrapperCall: string): void {
   for (const statement of file.statements) {
     if (!ts.isVariableStatement(statement)) continue
     for (const declaration of statement.declarationList.declarations) {
       if (!ts.isIdentifier(declaration.name) || !locals.has(declaration.name.text) || !isFunctionLiteral(declaration.initializer)) continue
       output.prependRight(declaration.initializer.getStart(), `${wrapperCall}(`)
       output.appendLeft(declaration.initializer.end, ')')
-      wrapped.add(declaration.name.text)
     }
   }
-  return wrapped
 }
 
 function exportThroughCopies(file: ts.SourceFile, output: MagicString, context: CopyContext): readonly string[] {
@@ -283,8 +280,8 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
   }
   if (locals.size === 0 && localized.size === 0) return undefined
   const declaredFunctions = new Set(file.statements.filter(isDeclaredValue).map(statement => statement.name?.text ?? defaultName).filter(name => locals.has(name)))
-  const wrappedInPlace = wrapper === 'serverAction' ? wrapFunctionInitializers(file, output, locals, `${runtimeName}.${wrapper}`) : new Set<string>()
-  const pending = new Set([...locals].filter(local => !localized.has(local) && !wrappedInPlace.has(local)))
+  if (wrapper === 'serverAction') wrapFunctionInitializers(file, output, locals, `${runtimeName}.${wrapper}`)
+  const pending = new Set([...locals].filter(local => !localized.has(local)))
   const copiesDefault = (local: string) => wrapper === 'serverAction' && declaredFunctions.has(local)
   for (const statement of file.statements) {
     const identifier = exportedIdentifier(statement)
@@ -295,7 +292,7 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
       output.appendLeft(keywordEnd(statement), ` ${defaultName}`)
     }
     if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const
-      && statement.declarationList.declarations.some(declaration => boundNames(declaration.name).some(name => locals.has(name) && !wrappedInPlace.has(name)))) {
+      && statement.declarationList.declarations.some(declaration => boundNames(declaration.name).some(name => locals.has(name)))) {
       const keyword = statement.declarationList.getStart()
       output.overwrite(keyword, keyword + 'const'.length, 'let  ')
     }

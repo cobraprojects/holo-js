@@ -403,7 +403,10 @@ async function forgetValidationErrors(): Promise<void> {
   if (cookies.get(VALIDATION_FLASH_COOKIE)) cookies.delete(VALIDATION_FLASH_COOKIE)
 }
 
+const wrappedServerActions = new WeakSet<object>()
+
 function serverAction<TArgs extends readonly unknown[], TResult>(action: (...args: TArgs) => Promise<TResult>): (...args: TArgs) => Promise<TResult | ExpectedFailure> {
+  if (wrappedServerActions.has(action)) return action
   const invoke = async (...args: TArgs): Promise<TResult | ExpectedFailure> => {
     const request = runningServerAction.getStore() ? undefined : invokedServerActionRequest(invoke)
     if (!request) return await action(...args)
@@ -420,6 +423,7 @@ function serverAction<TArgs extends readonly unknown[], TResult>(action: (...arg
       return serializeExpectedFailure(error)
     }
   }
+  wrappedServerActions.add(invoke)
   return invoke
 }
 
