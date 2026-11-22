@@ -88,7 +88,7 @@ beforeEach(async () => {
   })
   configureAuthRuntime({
     config: {
-      defaults: { guard: 'web' },
+      defaults: { guard: 'support' },
       guards: {
         web: { driver: 'session', provider: 'users' },
         admin: { driver: 'session', provider: 'users' },
@@ -156,11 +156,11 @@ describe('impersonation as the first auth call in a request', () => {
     const browser = new Browser()
     await browser.request(() => auth.guard('admin').loginUsingId(1, { remember: true }))
     browser.expireSession()
-    await browser.request(() => auth.guard('support').loginUsingId(3))
+    await browser.request(() => auth.loginUsingId(3))
 
     await browser.request(() => auth.guard('web').impersonateById(2, { actorGuard: 'admin' }))
 
-    await expect(browser.request(() => auth.guard('support').user())).resolves.toMatchObject({ id: 3 })
+    await expect(browser.request(() => auth.user())).resolves.toMatchObject({ id: 3 })
     await expect(browser.request(() => auth.guard('web').impersonation())).resolves.toMatchObject({
       user: { id: 2 },
       actor: { id: 1 },
