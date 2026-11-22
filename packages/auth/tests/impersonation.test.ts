@@ -57,6 +57,10 @@ class Browser {
     }
   }
 
+  expireSession(): void {
+    this.cookies.delete('holo_session')
+  }
+
   private receive(setCookie: string): void {
     const [pair] = setCookie.split(';', 1)
     const [name, value] = Object.entries(parseCookieHeader(pair!))[0]!
@@ -79,13 +83,17 @@ beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'auth-impersonation-'))
   configureSessionRuntime({
     appKey: 'impersonation-app-key',
-    config: normalizeSessionConfig({ driver: 'file', stores: { file: { driver: 'file', path: directory } }, idleTimeout: 120, absoluteLifetime: 120 }),
+    config: normalizeSessionConfig({ driver: 'file', stores: { file: { driver: 'file', path: directory } }, idleTimeout: 120, absoluteLifetime: 120, rememberMeLifetime: 43200 }),
     stores: { file: createFileSessionStore(directory) },
   })
   configureAuthRuntime({
     config: {
       defaults: { guard: 'web' },
-      guards: { web: { driver: 'session', provider: 'users' }, admin: { driver: 'session', provider: 'users' } },
+      guards: {
+        web: { driver: 'session', provider: 'users' },
+        admin: { driver: 'session', provider: 'users' },
+        support: { driver: 'session', provider: 'users' },
+      },
       providers: { users: { model: 'User' } },
     },
     providers: { users: provider },
@@ -142,5 +150,20 @@ describe('impersonation as the first auth call in a request', () => {
 
     await expect(browser.request(() => auth.guard('web').impersonateById(3, { actorGuard: 'admin' })))
       .rejects.toMatchObject({ code: 'impersonation_already_active' })
+  })
+
+  it('keeps the other guards signed in when the actor is restored from remember me', async () => {
+    const browser = new Browser()
+    await browser.request(() => auth.guard('admin').loginUsingId(1, { remember: true }))
+    browser.expireSession()
+    await browser.request(() => auth.guard('support').loginUsingId(3))
+
+    await browser.request(() => auth.guard('web').impersonateById(2, { actorGuard: 'admin' }))
+
+    await expect(browser.request(() => auth.guard('support').user())).resolves.toMatchObject({ id: 3 })
+    await expect(browser.request(() => auth.guard('web').impersonation())).resolves.toMatchObject({
+      user: { id: 2 },
+      actor: { id: 1 },
+    })
   })
 })

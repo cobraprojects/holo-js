@@ -628,6 +628,13 @@ function hydrateRememberedGuard(bindings: RuntimeBindings, guardName: string, re
   return hydration
 }
 
+function boundSharedSessionId(bindings: RuntimeBindings, guardName: string): string | undefined {
+  return sessionGuardNames(bindings)
+    .filter(name => name !== guardName)
+    .map(name => bindings.context.getSessionId(name))
+    .find((value): value is string => typeof value === 'string' && value.length > 0)
+}
+
 async function hydrateGuardContextFromRequest(
   guardName: string,
   options: { readonly restoreRemembered?: boolean } = {},
@@ -647,7 +654,8 @@ async function hydrateGuardContextFromRequest(
   }
 
   if (!bindings.context.getSessionId(guardName)) {
-    const sessionId = await resolveHoloCookie(bindings, bindings.session.sessionCookie(''))
+    const sessionId = boundSharedSessionId(bindings, guardName)
+      ?? await resolveHoloCookie(bindings, bindings.session.sessionCookie(''))
     if (sessionId) {
       bindings.context.setSessionId(guardName, sessionId)
     }
@@ -2495,12 +2503,7 @@ async function establishSessionForUser(
   if (!options.preserveRemember || options.remember) {
     await checkRememberWriteScope(bindings, options.guard, options.remember)
   }
-  const currentGuardSessionId = bindings.context.getSessionId(options.guard)
-  const sharedSessionId = currentGuardSessionId
-    ?? sessionGuardNames(bindings)
-      .filter(name => name !== options.guard)
-      .map(name => bindings.context.getSessionId(name))
-      .find((value): value is string => typeof value === 'string' && value.length > 0)
+  const sharedSessionId = bindings.context.getSessionId(options.guard) ?? boundSharedSessionId(bindings, options.guard)
   const existingSession = sharedSessionId
     ? await bindings.session.read(sharedSessionId)
     : null
