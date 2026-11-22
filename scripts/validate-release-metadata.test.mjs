@@ -373,6 +373,22 @@ test('release metadata requires a plan job that checks npm for unpublished versi
   assert.deepEqual(await collectReleaseMetadataFailures(root), [planFailure])
 })
 
+test('release metadata rejects a plan job that skips while a version is unpublished', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('if [ -z "$unpublished" ]', 'if [ -n "$unpublished" ]'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [planFailure])
+})
+
+test('release metadata rejects a plan job that reports a publish due when every version is on npm', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('echo "due=false" >> "$GITHUB_OUTPUT"', 'echo "due=true" >> "$GITHUB_OUTPUT"'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [planFailure])
+})
+
 test('release metadata runs the publish job only when the plan reports a publish is due', async () => {
   const root = await createTempRepo(completeRepo({
     '.github/workflows/release.yml': validReleaseWorkflow.replace(

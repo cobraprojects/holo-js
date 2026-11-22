@@ -146,7 +146,7 @@ async function collectReleaseWorkflowFailures(root) {
     }
   }
   const planJob = jobs.find(job => job.body.includes('scripts/list-unpublished-packages.mjs'))
-  const planReportsDue = planJob && planJob !== publishJob && /::notice[\s\S]*?due=false/.test(planJob.body) && planJob.body.includes('due=true')
+  const planReportsDue = planJob && planJob !== publishJob && /unpublished="\$\(node scripts\/list-unpublished-packages\.mjs\)"\s+if \[ -z "\$unpublished" \]; then\s+echo "::notice [^\n]*\s+echo "due=false" >> "\$GITHUB_OUTPUT"\s+exit 0\s+fi\s+(?:echo "\$unpublished"\s+)?echo "due=true" >> "\$GITHUB_OUTPUT"/.test(planJob.body)
   if (!planReportsDue) {
     failures.push(`${releaseWorkflowPath} must check npm with \`node scripts/list-unpublished-packages.mjs\` in its own job that reports due=true when a version is missing, and skips with a notice and due=false only when every version is already published.`)
   } else if (!publishJob || !runsOnlyWhenDue(publishJob, planJob) || (gateJob && !runsOnlyWhenDue(gateJob, planJob))) {
