@@ -278,6 +278,11 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
 
     const locked = await Author.with({ latestPost: query => query.lockForUpdate() }).findOrFail(2)
     expect(locked.toJSON()).toMatchObject({ latestPost: { id: 4 } })
+
+    const lockedCounts = await Author.withCount({ posts: query => query.lockForUpdate() }).orderByDesc('posts_count').get()
+    expect(lockedCounts.map(author => author.id)).toEqual([2, 1, 3])
+    const lockedLatest = await Author.withCount({ latestPost: query => query.lockForUpdate() }).orderBy('latestPost_count').orderBy('id').get()
+    expect(lockedLatest.map(author => author.id)).toEqual([3, 1, 2])
   })
 
   it('orders by an aggregate of a one-of-many relation back to the same table', async () => {

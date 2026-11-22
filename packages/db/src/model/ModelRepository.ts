@@ -149,6 +149,11 @@ type PivotKeyColumns = {
   readonly introspected: boolean
 }
 
+function withoutRowLock(query: TableQueryBuilder<TableDefinition, Record<string, unknown>>): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+  const plan = query.getPlan()
+  return plan.lockMode === undefined ? query : new TableQueryBuilder(plan.source.table ?? query.getTableName(), query.getConnection(), withLockMode(plan, undefined)) as TableQueryBuilder<TableDefinition, Record<string, unknown>>
+}
+
 export class ModelRepository<
   TTable extends TableDefinition = TableDefinition,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
@@ -789,9 +794,7 @@ export class ModelRepository<
     alias: string,
     constraint?: RelationConstraint,
   ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
-    const scoped = this.applyRelationConstraint(relation, related, constraint, alias).getTableQueryBuilder().reorder().limit().offset()
-    const unlocked = new TableQueryBuilder(related.definition.table, scoped.getConnection(), withLockMode(scoped.getPlan(), undefined))
-    const constrained = requalifyTableSource(unlocked)
+    const constrained = requalifyTableSource(withoutRowLock(this.applyRelationConstraint(relation, related, constraint, alias).getTableQueryBuilder().reorder().limit().offset()))
     const predicates = constrained.getPlan().predicates
     const grouped = predicates.some(predicate => predicate.boolean === 'or')
       ? constrained.withPredicates([{ kind: 'group', boolean: 'and', predicates }])
@@ -826,9 +829,10 @@ export class ModelRepository<
     if (!constrained || !sameTable(constrained.getTableName(), related.definition.table.tableName)) {
       throw unorderable('the relation cannot be expressed as a single correlated subquery.')
     }
+    const unlocked = withoutRowLock(constrained.reorder())
     const subquery = relation.kind === 'hasOneOfMany' || relation.kind === 'morphOneOfMany'
-      ? this.keepOneOfManyRows(relation, constrained.reorder(), parentAlias, aggregate.constraint)
-      : constrained.reorder()
+      ? this.keepOneOfManyRows(relation, unlocked, parentAlias, aggregate.constraint)
+      : unlocked
     if (aggregate.kind === 'exists' || this.countsAtMostOne(aggregate)) return subquery
     if (aggregate.kind === 'count') return subquery.selectCount('aggregate')
     const source = subquery.getPlan().source
