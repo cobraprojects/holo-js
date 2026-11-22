@@ -6243,6 +6243,170 @@ export default defineMigration({
     expect(generated).not.toContain('defineGeneratedTable("users"')
   }, 30000)
 
+  it('migrates and rebuilds an empty Generated schema when jobs, events, listeners, policies, and broadcasts read model columns', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+    await linkWorkspaceEvents(projectRoot)
+    await linkWorkspaceAuthorization(projectRoot)
+    await linkWorkspaceBroadcast(projectRoot)
+    await ensureGeneratedSchemaPlaceholder(projectRoot, defaultProjectConfig())
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: { driver: 'sqlite', url: './data.sqlite' },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('users', (table) => {
+      table.id()
+      table.string('name')
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('users')
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/models/User.ts', renderModelTemplate({ tableName: 'users' }))
+    await writeProjectFile(projectRoot, 'server/support/user-columns.ts', `
+import User from '../models/User'
+
+export const userColumns = Object.keys(User.definition.table.columns)
+`)
+    await writeProjectFile(projectRoot, 'server/jobs/export-users.ts', `
+import { defineJob } from '@holo-js/queue'
+import { userColumns } from '../support/user-columns'
+
+export default defineJob({
+  async handle() {
+    return userColumns
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/events/user-registered.ts', `
+import { defineEvent } from '@holo-js/events'
+import { userColumns } from '../support/user-columns'
+
+export const registeredUserColumns = userColumns
+
+export default defineEvent({
+  name: 'user.registered',
+})
+`)
+    await writeProjectFile(projectRoot, 'server/listeners/greet-user.ts', `
+import { defineListener } from '@holo-js/events'
+
+export default defineListener({
+  listensTo: ['user.registered'],
+  async handle() {},
+})
+`)
+    await writeProjectFile(projectRoot, 'server/policies/users.ts', `
+import { definePolicy } from '@holo-js/authorization'
+import User from '../models/User'
+import { userColumns } from '../support/user-columns'
+
+export default definePolicy('users', User, {
+  class: {
+    viewAny() {
+      return userColumns.length > 0
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/broadcast/user-exported.ts', `
+import { defineBroadcast, privateChannel } from '@holo-js/broadcast'
+import User from '../models/User'
+
+export default (userId: string) => defineBroadcast({
+  name: 'users.exported',
+  channels: [privateChannel('users.{userId}', { userId })],
+  payload: { columns: Object.keys(User.definition.table.columns) },
+})
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    expect(migrated.stdout).toContain('2026_01_01_000001_create_users')
+    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8'))
+      .resolves.toContain('export const users = defineGeneratedTable("users", {')
+    const registry = await loadGeneratedProjectRegistry(projectRoot)
+    expect(registry?.jobs.map(entry => entry.sourcePath)).toEqual(['server/jobs/export-users.ts'])
+    expect(registry?.events.map(entry => entry.sourcePath)).toEqual(['server/events/user-registered.ts'])
+    expect(registry?.authorizationPolicies.map(entry => entry.sourcePath)).toEqual(['server/policies/users.ts'])
+    expect(registry?.listeners.map(entry => entry.sourcePath)).toEqual(['server/listeners/greet-user.ts'])
+    expect(registry?.broadcast.map(entry => entry.sourcePath)).toEqual(['server/broadcast/user-exported.ts'])
+  }, 60000)
+
+  it('still reports a listener for an unknown event once migrate has rebuilt an empty Generated schema', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+    await linkWorkspaceEvents(projectRoot)
+    await ensureGeneratedSchemaPlaceholder(projectRoot, defaultProjectConfig())
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: { driver: 'sqlite', url: './data.sqlite' },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('users', (table) => {
+      table.id()
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('users')
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/models/User.ts', renderModelTemplate({ tableName: 'users' }))
+    await writeProjectFile(projectRoot, 'server/events/user-registered.ts', `
+import { defineEvent } from '@holo-js/events'
+import User from '../models/User'
+
+export const registeredUserColumns = Object.keys(User.definition.table.columns)
+
+export default defineEvent({
+  name: 'user.registered',
+})
+`)
+    await writeProjectFile(projectRoot, 'server/listeners/greet-user.ts', `
+import { defineListener } from '@holo-js/events'
+
+export default defineListener({
+  listensTo: ['user.never-existed'],
+  async handle() {},
+})
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+
+    expect(migrated.status).toBe(1)
+    expect(migrated.stdout).toContain('2026_01_01_000001_create_users')
+    expect(migrated.stderr).toContain('Listener "greet-user" references unknown event "user.never-existed".')
+    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8'))
+      .resolves.toContain('export const users = defineGeneratedTable("users", {')
+  }, 60000)
+
   it('writes the Generated schema and refreshes model and auth types from the migrations that committed when a later migration fails', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -10883,6 +11047,17 @@ export default {
     expect(typeof firstRegistry.generatedAt).toBe('string')
     expect(typeof secondRegistry.generatedAt).toBe('string')
     await expect(readTextFile(join(projectRoot, '.holo-js/generated/config-cache.json'))).resolves.toBeUndefined()
+  })
+
+  it('still fails discovery when a job fails to load for a reason other than the Generated schema', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceQueue(projectRoot)
+    await writeProjectFile(projectRoot, 'server/jobs/broken.mjs', `
+throw new Error('Mail transport is not configured.')
+`)
+
+    await expect(prepareProjectDiscovery(projectRoot)).rejects.toThrow('Mail transport is not configured.')
   })
 
   it('skips model files whose generated schema has not been materialized yet', async () => {
