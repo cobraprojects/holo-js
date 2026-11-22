@@ -628,6 +628,13 @@ function hydrateRememberedGuard(bindings: RuntimeBindings, guardName: string, re
   return hydration
 }
 
+function boundSharedSessionId(bindings: RuntimeBindings, guardName: string): string | undefined {
+  return sessionGuardNames(bindings)
+    .filter(name => name !== guardName)
+    .map(name => bindings.context.getSessionId(name))
+    .find((value): value is string => typeof value === 'string' && value.length > 0)
+}
+
 async function hydrateGuardContextFromRequest(
   guardName: string,
   options: { readonly restoreRemembered?: boolean } = {},
@@ -647,7 +654,8 @@ async function hydrateGuardContextFromRequest(
   }
 
   if (!bindings.context.getSessionId(guardName)) {
-    const sessionId = await resolveHoloCookie(bindings, bindings.session.sessionCookie(''))
+    const sessionId = boundSharedSessionId(bindings, guardName)
+      ?? await resolveHoloCookie(bindings, bindings.session.sessionCookie(''))
     if (sessionId) {
       bindings.context.setSessionId(guardName, sessionId)
     }
@@ -1181,7 +1189,6 @@ async function logoutOtherDevicesForGuard(guardName: string): Promise<void> {
   const bindings = getRuntimeBindings()
   if (!bindings.sessionRevocations) throwAuthError('runtime_unconfigured', 'Other-device logout requires a durable session revocation store.')
   await checkRememberWriteScope(bindings, guardName)
-  await hydrateGuardContextFromRequest(guardName)
   const state = await readGuardSessionState(guardName, true)
   const metadata = state?.payload.revocation
   if (!state || !metadata || state.payload.multiFactorChallengeExpiresAt) throwAuthError('auth_user_missing', 'Other-device logout requires valid browser authentication.')
@@ -1771,6 +1778,7 @@ async function readGuardSessionState(
   readonly payload: SessionAuthPayload
 } | null> {
   const bindings = getRuntimeBindings()
+  await hydrateGuardContextFromRequest(guardName)
   const sessionId = bindings.context.getSessionId(guardName)
   if (!sessionId) {
     return null
@@ -1905,7 +1913,6 @@ async function completeMultiFactorChallenge(
   code: string,
 ): Promise<AuthEstablishedSession> {
   await assertResponseCookiesWritable(getRuntimeBindings())
-  await hydrateGuardContextFromRequest(guardName)
   const state = await readGuardSessionState(guardName)
   const expiresAt = state?.payload.multiFactorChallengeExpiresAt
   if (!state || !expiresAt) throwAuthError('multi_factor_challenge_missing', 'No multi-factor challenge is pending.')
@@ -2298,17 +2305,12 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
     if (rememberedIdentity && !payload?.multiFactorChallengeExpiresAt) {
       await cycleRememberToken(rememberedIdentity.provider, rememberedIdentity.userId)
     }
-    if (!(guardName in payloads)) {
+    delete payloads[guardName]
+    if (Object.keys(payloads).length === 0) {
       await bindings.session.invalidate(sessionId)
       clearSessionCookies = true
-    } else {
-      delete payloads[guardName]
-      if (Object.keys(payloads).length === 0) {
-        await bindings.session.invalidate(sessionId)
-        clearSessionCookies = true
-      } else {
-        await writeExistingSession(bindings, record!, writeSessionPayloads(record!.data, payloads))
-      }
+    } else if (payload) {
+      await writeExistingSession(bindings, record!, writeSessionPayloads(record!.data, payloads))
     }
   }
 
@@ -2496,12 +2498,7 @@ async function establishSessionForUser(
   if (!options.preserveRemember || options.remember) {
     await checkRememberWriteScope(bindings, options.guard, options.remember)
   }
-  const currentGuardSessionId = bindings.context.getSessionId(options.guard)
-  const sharedSessionId = currentGuardSessionId
-    ?? sessionGuardNames(bindings)
-      .filter(name => name !== options.guard)
-      .map(name => bindings.context.getSessionId(name))
-      .find((value): value is string => typeof value === 'string' && value.length > 0)
+  const sharedSessionId = bindings.context.getSessionId(options.guard) ?? boundSharedSessionId(bindings, options.guard)
   const existingSession = sharedSessionId
     ? await bindings.session.read(sharedSessionId)
     : null
@@ -2863,7 +2860,6 @@ async function findSessionGuardOwnedBy(
 ): Promise<string | undefined> {
   for (const guardName of sessionGuardNames(bindings)) {
     if (getGuardConfig(guardName).provider !== providerName) continue
-    await hydrateGuardContextFromRequest(guardName)
     const state = await readGuardSessionState(guardName)
     if (
       state?.payload.revocation
