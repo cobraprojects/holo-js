@@ -586,7 +586,6 @@ export interface AuthSessionRuntime {
     readonly data?: Readonly<Record<string, unknown>>
     readonly id?: string
   }): Promise<AuthSessionRecord>
-  write?(record: AuthSessionRecord): Promise<AuthSessionRecord>
   read(
     sessionId: string,
     options?: { readonly store?: string },
@@ -603,6 +602,12 @@ export interface AuthSessionRuntime {
     sessionId: string,
     options?: { readonly store?: string },
   ): Promise<void>
+  updateData?(
+    sessionId: string,
+    key: string,
+    update: (current: unknown) => unknown,
+    options?: { readonly store?: string },
+  ): Promise<{ readonly found: false } | { readonly found: true, readonly value: unknown }>
   flash?(sessionId: string, key: string, value: unknown, options?: { readonly store?: string }): Promise<void>
   take?<TValue = unknown>(sessionId: string, key: string, options?: { readonly store?: string }): Promise<TValue | undefined>
   cookie?(

@@ -395,7 +395,7 @@ it('clears revoked request identity before failed session persistence while reta
     await auth.logoutOtherDevices()
   })
   const failure = new Error('Session persistence unavailable')
-  authRuntimeInternals.configureRuntime({ ...bindings, context: request, session: { ...bindings.session, async write() { throw failure } } })
+  authRuntimeInternals.configureRuntime({ ...bindings, context: request, session: { ...bindings.session, async updateData() { throw failure } } })
   await expect(auth.user()).rejects.toBe(failure)
   expect(request.getCachedUser('web')).toBeNull()
   expect(request.getSessionId('web')).toBeUndefined()

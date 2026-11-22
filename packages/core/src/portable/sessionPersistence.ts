@@ -23,6 +23,10 @@ export interface CoreSessionStoreSetDataResult {
   readonly value?: unknown
 }
 
+export type CoreSessionStoreUpdateDataResult =
+  | { readonly found: false }
+  | { readonly found: true, readonly value: unknown }
+
 export interface CoreDatabaseSessionAdapter {
   touch(sessionId: string, options: { readonly now: Date; readonly idleTimeout: number; readonly absoluteLifetime: number }): Promise<CoreSessionRecord | null>
   read(sessionId: string): Promise<CoreSessionRecord | null>
@@ -32,6 +36,7 @@ export interface CoreDatabaseSessionAdapter {
   flash(sessionId: string, key: string, value: unknown): Promise<void>
   take(sessionId: string, key: string): Promise<CoreSessionStoreTakeResult>
   setDataIfAbsent(sessionId: string, key: string, value: unknown): Promise<CoreSessionStoreSetDataResult>
+  updateData(sessionId: string, key: string, update: (current: unknown) => unknown): Promise<CoreSessionStoreUpdateDataResult>
   sweepExpired(now: Date): Promise<number>
 }
 
@@ -240,6 +245,25 @@ export function createCoreDatabaseSessionAdapter(tableName: string, connectionNa
         }
 
         const publicData = Object.freeze({ ...stored.publicData, [key]: value })
+        await new TableQueryBuilder(tableName, transaction)
+          .where('id', sessionId)
+          .update({ data: serializeStoredSessionData({ publicData, flashEntries: stored.flashEntries }) })
+        return { found: true, value }
+      })
+    },
+    async updateData(sessionId: string, key: string, update: (current: unknown) => unknown): Promise<CoreSessionStoreUpdateDataResult> {
+      return inSessionWriteTransaction(connectionName, async (transaction) => {
+        const row = await createSessionQuery(transaction, tableName, sessionId, true)
+          .first<Record<string, unknown>>()
+        if (!row || isExpiredSessionRow(row)) {
+          if (row) await new TableQueryBuilder(tableName, transaction).where('id', sessionId).delete()
+          return { found: false }
+        }
+
+        const stored = splitStoredSessionData(row.data)
+        const { [key]: current, ...rest } = stored.publicData
+        const value = update(current)
+        const publicData = Object.freeze(value === undefined ? rest : { ...rest, [key]: value })
         await new TableQueryBuilder(tableName, transaction)
           .where('id', sessionId)
           .update({ data: serializeStoredSessionData({ publicData, flashEntries: stored.flashEntries }) })

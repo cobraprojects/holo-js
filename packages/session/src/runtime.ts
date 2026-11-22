@@ -13,6 +13,7 @@ import type {
   SessionRuntimeFacade,
   SessionStore,
   SessionStoreSetDataResult,
+  SessionStoreUpdateDataResult,
   TouchSessionOptions,
 } from './contracts'
 
@@ -448,6 +449,19 @@ async function setSessionDataIfAbsent(
   return result
 }
 
+async function updateSessionData(
+  sessionId: string,
+  key: string,
+  update: (current: unknown) => unknown,
+  options?: ReadSessionOptions,
+): Promise<SessionStoreUpdateDataResult> {
+  const { name, store } = getStore(options?.store)
+  if (!store.updateData) throw new Error(`[@holo-js/session] Session store "${name}" does not support atomic data writes.`)
+  const result = await store.updateData(sessionId, key, update)
+  if (result.found) await collectExpiredSessions(store)
+  return result
+}
+
 export async function takeSession<TValue = unknown>(sessionId: string, key: string, options?: ReadSessionOptions): Promise<TValue | undefined> {
   const { name, store } = getStore(options?.store)
   if (!store.take) throw new Error(`[@holo-js/session] Session store "${name}" does not support atomic flash operations.`)
@@ -524,6 +538,7 @@ export function getSessionRuntime(): SessionRuntimeFacade {
     flash: flashSession,
     take: takeSession,
     setDataIfAbsent: setSessionDataIfAbsent,
+    updateData: updateSessionData,
     cookie,
     sessionCookie,
     rememberMeCookie,

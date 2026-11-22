@@ -3951,6 +3951,7 @@ describe('@holo-js/auth package runtime', () => {
       read: session.read,
       touch: session.touch,
       invalidate: session.invalidate,
+      updateData: session.updateData,
       sessionCookie: session.sessionCookie,
       rememberMeCookie: session.rememberMeCookie,
       decryptCookie: session.decryptCookie,
@@ -4365,10 +4366,10 @@ describe('@holo-js/auth package runtime', () => {
     await expect(auth.guard('admin').user()).resolves.toBeNull()
   })
 
-  it('supports shared-session logout with session bindings that do not expose write()', async () => {
+  it('rejects shared-session logout when the session bindings cannot update session data atomically', async () => {
     const runtime = await configureRuntime()
     const session = getSessionRuntime()
-    const sessionWithoutWrite = {
+    const sessionWithoutAtomicUpdates = {
       create: session.create,
       read: session.read,
       rotate: session.rotate,
@@ -4379,7 +4380,7 @@ describe('@holo-js/auth package runtime', () => {
       rememberMeCookie: session.rememberMeCookie,
       decryptCookie: session.decryptCookie,
     }
-    reconfigureAuthRuntimeWithSession(runtime, sessionWithoutWrite)
+    reconfigureAuthRuntimeWithSession(runtime, sessionWithoutAtomicUpdates)
 
     const createdUser = await runtime.usersProvider.create({
       name: 'User Ava',
@@ -4398,10 +4399,7 @@ describe('@holo-js/auth package runtime', () => {
     runtime.context.setSessionId('admin', webSession.sessionId)
     await auth.guard('admin').loginUsing(createdAdmin)
 
-    await expect(auth.guard('admin').logout()).resolves.toMatchObject({
-      guard: 'admin',
-      cookies: [],
-    })
+    await expect(auth.guard('admin').logout()).rejects.toMatchObject({ code: 'runtime_unconfigured' })
     await expect(auth.guard('web').user()).resolves.toMatchObject({
       id: createdUser.id,
       email: createdUser.email,

@@ -48,6 +48,10 @@ export interface SessionStoreSetDataResult {
   readonly value?: unknown
 }
 
+export type SessionStoreUpdateDataResult =
+  | { readonly found: false }
+  | { readonly found: true, readonly value: unknown }
+
 export interface CookieSerializeOptions {
   readonly path?: string
   readonly domain?: string
@@ -75,6 +79,7 @@ export interface SessionStore {
   flash?(sessionId: string, key: string, value: unknown): Promise<void>
   take?(sessionId: string, key: string): Promise<SessionStoreTakeResult>
   setDataIfAbsent?(sessionId: string, key: string, value: unknown): Promise<SessionStoreSetDataResult>
+  updateData?(sessionId: string, key: string, update: (current: unknown) => unknown): Promise<SessionStoreUpdateDataResult>
   sweepExpired?(now: Date): Promise<number>
 }
 
@@ -95,6 +100,7 @@ export interface SessionRuntimeFacade {
   flash(sessionId: string, key: string, value: unknown, options?: ReadSessionOptions): Promise<void>
   take<TValue = unknown>(sessionId: string, key: string, options?: ReadSessionOptions): Promise<TValue | undefined>
   setDataIfAbsent(sessionId: string, key: string, value: unknown, options?: ReadSessionOptions): Promise<SessionStoreSetDataResult>
+  updateData(sessionId: string, key: string, update: (current: unknown) => unknown, options?: ReadSessionOptions): Promise<SessionStoreUpdateDataResult>
   cookie(name: string, value: string, options?: CookieSerializeOptions): string
   sessionCookie(value: string, options?: CookieSerializeOptions): string
   rememberMeCookie(value: string, options?: CookieSerializeOptions): string
