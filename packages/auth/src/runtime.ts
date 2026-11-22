@@ -1181,7 +1181,6 @@ async function logoutOtherDevicesForGuard(guardName: string): Promise<void> {
   const bindings = getRuntimeBindings()
   if (!bindings.sessionRevocations) throwAuthError('runtime_unconfigured', 'Other-device logout requires a durable session revocation store.')
   await checkRememberWriteScope(bindings, guardName)
-  await hydrateGuardContextFromRequest(guardName)
   const state = await readGuardSessionState(guardName, true)
   const metadata = state?.payload.revocation
   if (!state || !metadata || state.payload.multiFactorChallengeExpiresAt) throwAuthError('auth_user_missing', 'Other-device logout requires valid browser authentication.')
@@ -1771,6 +1770,7 @@ async function readGuardSessionState(
   readonly payload: SessionAuthPayload
 } | null> {
   const bindings = getRuntimeBindings()
+  await hydrateGuardContextFromRequest(guardName)
   const sessionId = bindings.context.getSessionId(guardName)
   if (!sessionId) {
     return null
@@ -1905,7 +1905,6 @@ async function completeMultiFactorChallenge(
   code: string,
 ): Promise<AuthEstablishedSession> {
   await assertResponseCookiesWritable(getRuntimeBindings())
-  await hydrateGuardContextFromRequest(guardName)
   const state = await readGuardSessionState(guardName)
   const expiresAt = state?.payload.multiFactorChallengeExpiresAt
   if (!state || !expiresAt) throwAuthError('multi_factor_challenge_missing', 'No multi-factor challenge is pending.')
@@ -2863,7 +2862,6 @@ async function findSessionGuardOwnedBy(
 ): Promise<string | undefined> {
   for (const guardName of sessionGuardNames(bindings)) {
     if (getGuardConfig(guardName).provider !== providerName) continue
-    await hydrateGuardContextFromRequest(guardName)
     const state = await readGuardSessionState(guardName)
     if (
       state?.payload.revocation
