@@ -151,6 +151,25 @@ describe('Next server action loader', () => {
     expect(await (module.default as () => Promise<unknown>)()).toEqual({ wrapped: 'submitted' })
   })
 
+  it('exports the action a default export named when it ran, not a later reassignment', async () => {
+    const module = await importCompiled('reassigned-default-actions.ts', [
+      '\'use server\'',
+      'let submit = async () => \'original\'',
+      'export default submit',
+      'submit = async () => \'replacement\'',
+    ].join('\n'))
+
+    expect(await (module.default as () => Promise<unknown>)()).toEqual({ wrapped: 'original' })
+  })
+
+  it('keeps the columns after an export list that mixes actions and types', () => {
+    const source = ['\'use server\'', 'type T = string', 'async function a() { return 1 }', 'export {a, type T}; export async function b() {}'].join('\n')
+
+    const lines = runLoader(serverActionLoader, 'actions.ts', source).code.split('\n')
+
+    expect(lines[3]!.indexOf('async function b')).toBe(source.split('\n')[3]!.indexOf('async function b'))
+  })
+
   it('wraps a default-exported arrow action', async () => {
     const module = await importCompiled('arrow-actions.ts', [
       '\'use server\'',
