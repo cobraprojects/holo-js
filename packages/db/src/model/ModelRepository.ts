@@ -2,7 +2,7 @@ import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DB } from '../facade/DB'
 import { ConfigurationError, DatabaseError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
 import { assertQueryTablePath } from '../query/validator'
-import { TableQueryBuilder, aliasTableSource, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, addSelectExists, aliasTableSource, selectAggregate, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
 import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { selectionOutputName } from '../query/modelRowProjection'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadColumnSqlTypes, loadTableDefinition } from '../schema/columnListing'
@@ -745,6 +745,62 @@ export class ModelRepository<
         entity.setComputed(key, computation?.value ?? null)
       }
     }
+  }
+
+  relationAggregateKey(aggregate: AggregateLoad): string {
+    return this.relationAggregateCalculator.getAttributeKey(aggregate)
+  }
+
+  selectRelationAggregate<TQuery extends TableQueryBuilder<TTable, Record<string, unknown>>>(query: TQuery, aggregate: AggregateLoad): TableQueryBuilder<TTable, Record<string, unknown>> {
+    if (query.getPlan().unions.length > 0) {
+      throw new RelationError(`Cannot order a union of "${this.definition.name}" queries by the "${aggregate.relation}" relation aggregate. Select it in each query instead.`)
+    }
+    const parentAlias = query.getPlan().source.alias
+    const alias = this.relationAggregateKey(aggregate)
+    const subquery = this.createRelationAggregateSubquery(aggregate, parentAlias)
+    return this.countsAtMostOne(aggregate) ? addSelectExists(query, subquery, alias) : query.addSelectSub(subquery, alias)
+  }
+
+  private countsAtMostOne(aggregate: AggregateLoad): boolean {
+    if (aggregate.kind === 'exists') return true
+    if (aggregate.kind !== 'count') return false
+    const { kind } = this.getRelationDefinition(aggregate.relation)
+    return kind === 'belongsTo' || kind === 'morphOne'
+  }
+
+  private createRelationAggregateSubquery(aggregate: AggregateLoad, parentAlias: string | undefined): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+    const unorderable = (reason: string) => new RelationError(`Cannot order by the "${aggregate.relation}" relation aggregate on model "${this.definition.name}": ${reason}`)
+    if (aggregate.relation.includes('.')) throw unorderable('nested relation aggregates are not supported.')
+    const relation = this.getRelationDefinition(aggregate.relation)
+    if (relation.kind === 'morphTo' || relation.kind === 'hasOneOfMany' || relation.kind === 'morphOneOfMany') {
+      throw unorderable(`${relation.kind} relation aggregates are loaded after the query runs.`)
+    }
+    const crossConnection = this.findCrossConnectionRepository(relation)
+    if (crossConnection) {
+      throw unorderable(`its ${crossConnection.target} model uses connection "${crossConnection.repository.getConnectionName()}" while the query uses "${this.getConnectionName()}".`)
+    }
+    const related = this.resolveRelatedRepository(relation.related)
+    const constraintPlan = this.applyRelationConstraint(relation, related, aggregate.constraint).getTableQueryBuilder().getPlan()
+    const reshapesRows = constraintPlan.selections.length > 0 || constraintPlan.limit !== undefined || constraintPlan.offset !== undefined || constraintPlan.distinct
+      || constraintPlan.joins.length > 0 || constraintPlan.groupBy.length > 0 || constraintPlan.having.length > 0 || constraintPlan.unions.length > 0
+    if (reshapesRows) throw unorderable('aggregate constraints that select, limit, offset, deduplicate, join, group or union the related rows cannot be ordered by.')
+    const [constrained] = this.buildRelationExistenceSubqueries(relation, parentAlias, aggregate.constraint, undefined, 'pivot-rows')
+    if (!constrained || !sameTable(constrained.getTableName(), related.definition.table.tableName)) {
+      throw unorderable('the relation cannot be expressed as a single correlated subquery.')
+    }
+    const subquery = constrained.reorder()
+    if (aggregate.kind === 'exists' || this.countsAtMostOne(aggregate)) return subquery
+    if (aggregate.kind === 'count') return subquery.selectCount('aggregate')
+    const source = subquery.getPlan().source
+    const storesBoolean = aggregate.column !== undefined && ownEntry(related.definition.table.columns, aggregate.column)?.kind === 'boolean'
+    return selectAggregate(subquery, {
+      kind: 'aggregate',
+      aggregate: aggregate.kind,
+      column: `${source.alias ?? source.tableName}.${aggregate.column}`,
+      alias: 'aggregate',
+      ...(aggregate.kind === 'sum' ? { emptyAsZero: true as const } : {}),
+      ...(storesBoolean ? { booleanAsNumber: true as const } : {}),
+    })
   }
 
   async create(values: ModelInsertPayload<TTable>): Promise<Entity<TTable>> {
@@ -1978,8 +2034,10 @@ export class ModelRepository<
     parentAlias: string | undefined,
     constraint?: RelationConstraint,
     morphTypes?: readonly string[],
+    pivotMatching: 'related-rows' | 'pivot-rows' = 'related-rows',
   ): readonly TableQueryBuilder<TableDefinition, Record<string, unknown>>[] {
     const parent = (column: string) => this.qualifyParentColumn(column, parentAlias)
+    const matchPivot = pivotMatching === 'pivot-rows' ? this.joinPivotRows.bind(this) : this.whereHasPivot.bind(this)
     const folded = (name: string) => name.slice(name.lastIndexOf('.') + 1).toLowerCase()
     const bindsParent = (tableName: string) => sameTable(tableName, this.definition.table.tableName) || (parentAlias !== undefined && folded(tableName) === folded(parentAlias))
     const aliasFor = (repository: ModelRepository, reserved: number = 0) => bindsParent(repository.definition.table.tableName)
@@ -2084,17 +2142,17 @@ export class ModelRepository<
       case 'belongsToMany': {
         const related = this.resolveRelatedRepository(relation.related)
         const pivot = pivotQuery(this.createBelongsToManyPivotQuery(relation, this.getConnection()))
-        return [this.whereHasPivot(relation, related, existenceQuery(related), pivot, relation.foreignPivotKey, relation.relatedPivotKey, parentAlias)]
+        return [matchPivot(relation, related, existenceQuery(related), pivot, relation.foreignPivotKey, relation.relatedPivotKey, parentAlias)]
       }
       case 'morphToMany': {
         const related = this.resolveRelatedRepository(relation.related)
         const pivot = pivotQuery(this.createMorphToManyPivotQuery(relation, this.getConnection())).where(relation.morphTypeColumn, this.getMorphTypeValue())
-        return [this.whereHasPivot(relation, related, existenceQuery(related), pivot, relation.morphIdColumn, relation.foreignPivotKey, parentAlias)]
+        return [matchPivot(relation, related, existenceQuery(related), pivot, relation.morphIdColumn, relation.foreignPivotKey, parentAlias)]
       }
       case 'morphedByMany': {
         const related = this.resolveRelatedRepository(relation.related)
         const pivot = pivotQuery(this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection()))
-        return [this.whereHasPivot(relation, related, existenceQuery(related), pivot, relation.foreignPivotKey, relation.morphIdColumn, parentAlias)]
+        return [matchPivot(relation, related, existenceQuery(related), pivot, relation.foreignPivotKey, relation.morphIdColumn, parentAlias)]
       }
     }
   }
@@ -2120,15 +2178,51 @@ export class ModelRepository<
     relatedPivotColumn: string,
     parentAlias: string | undefined,
   ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+    const { parentKeyed, relatedKeyCasts } = this.pivotRowsOfParent(relation, related, pivot, parentPivotColumn, relatedPivotColumn, parentAlias)
+    const pivotKeys = selectKeyColumn(parentKeyed, relatedPivotColumn, relatedKeyCasts)
+    const source = relatedQuery.getPlan().source
+    return relatedQuery.whereInSub(`${source.alias ?? source.tableName}.${relation.relatedKey}`, pivotKeys)
+  }
+
+  private joinPivotRows(
+    relation: PivotRelationDefinition,
+    related: ModelRepository,
+    relatedQuery: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
+    pivot: TableQueryBuilder<string | TableDefinition>,
+    parentPivotColumn: string,
+    relatedPivotColumn: string,
+    parentAlias: string | undefined,
+  ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+    const { parentKeyed, relatedKeyCasts } = this.pivotRowsOfParent(relation, related, pivot, parentPivotColumn, relatedPivotColumn, parentAlias)
+    const pivotSource = parentKeyed.getPlan().source
+    const pivotBinding = pivotSource.alias ?? parentKeyed.getTableName()
+    const pivotAlias = pivotSource.alias ?? parentKeyed.getTableName().split('.').at(-1)!
+    const relatedSource = relatedQuery.getPlan().source
+    return joinOnKeyColumns(
+      relatedQuery,
+      parentKeyed.select(`${pivotBinding}.${relatedPivotColumn}` as never) as TableQueryBuilder<TableDefinition, Record<string, unknown>>,
+      `${pivotAlias}.${relatedPivotColumn}`,
+      `${relatedSource.alias ?? relatedSource.tableName}.${relation.relatedKey}`,
+      relatedKeyCasts,
+      pivotAlias,
+    )
+  }
+
+  private pivotRowsOfParent(
+    relation: PivotRelationDefinition,
+    related: ModelRepository,
+    pivot: TableQueryBuilder<string | TableDefinition>,
+    parentPivotColumn: string,
+    relatedPivotColumn: string,
+    parentAlias: string | undefined,
+  ): { readonly parentKeyed: TableQueryBuilder<string | TableDefinition>, readonly relatedKeyCasts: ReturnType<typeof pivotKeyCasts> } {
     const connection = this.getConnection()
     const resolved = this.resolvePivotTable(relation.pivotTable, connection)
     const pivotTable = typeof resolved === 'string' ? getLoadedTableDefinition(connection, resolved) ?? resolved : resolved
-    const relatedTable = related.definition.table
-    const parentKeyed = whereKeyColumn(pivot, parentPivotColumn, this.qualifyParentColumn(relation.parentKey, parentAlias), pivotKeyCasts(pivotTable, parentPivotColumn, ownEntry(this.definition.table.columns, relation.parentKey), 'other'))
-    const pivotKeys = selectKeyColumn(parentKeyed, relatedPivotColumn, pivotKeyCasts(pivotTable, relatedPivotColumn, ownEntry(relatedTable.columns, relation.relatedKey), 'pivot'))
-
-    const source = relatedQuery.getPlan().source
-    return relatedQuery.whereInSub(`${source.alias ?? source.tableName}.${relation.relatedKey}`, pivotKeys)
+    return {
+      parentKeyed: whereKeyColumn(pivot, parentPivotColumn, this.qualifyParentColumn(relation.parentKey, parentAlias), pivotKeyCasts(pivotTable, parentPivotColumn, ownEntry(this.definition.table.columns, relation.parentKey), 'other')),
+      relatedKeyCasts: pivotKeyCasts(pivotTable, relatedPivotColumn, ownEntry(related.definition.table.columns, relation.relatedKey), 'pivot'),
+    }
   }
 
   private selfRelationAlias(parentAlias: string | undefined, reserved: number): string {
@@ -2167,44 +2261,37 @@ export class ModelRepository<
     relation: RelationDefinition,
     morphTypes?: readonly string[],
   ): void {
-    const parentConnectionName = this.getConnectionName()
-    const ensureSameConnection = (repository: ModelRepository, target: 'related' | 'through' = 'related') => {
-      const targetConnectionName = repository.getConnectionName()
-      if (targetConnectionName === parentConnectionName) {
-        return
-      }
-
-      throw new RelationError(
-        `Cross-connection relation existence queries are not supported for relation "${relationName}" on model "${this.definition.name}". `
-        + `The parent query uses connection "${parentConnectionName}" but the ${target} model uses "${targetConnectionName}". `
-        + 'Use eager loading, relation aggregates, or explicit multi-step queries instead.',
-      )
-    }
-
-    switch (relation.kind) {
-      case 'belongsTo':
-      case 'hasMany':
-      case 'hasOne':
-      case 'hasOneOfMany':
-      case 'morphOne':
-      case 'morphMany':
-      case 'morphOneOfMany':
-      case 'belongsToMany':
-      case 'morphToMany':
-      case 'morphedByMany':
-        ensureSameConnection(this.resolveRelatedRepository(relation.related))
-        return
-      case 'hasOneThrough':
-      case 'hasManyThrough':
-        ensureSameConnection(this.resolveThroughRepository(relation.through), 'through')
-        ensureSameConnection(this.resolveRelatedRepository(relation.related))
-        return
-      case 'morphTo':
-        for (const reference of this.resolveMorphExistenceReferences(morphTypes)) {
-          ensureSameConnection(ModelRepository.from(reference))
-        }
-    }
+    const crossConnection = this.findCrossConnectionRepository(relation, morphTypes)
+    if (!crossConnection) return
+    throw new RelationError(
+      `Cross-connection relation existence queries are not supported for relation "${relationName}" on model "${this.definition.name}". `
+      + `The parent query uses connection "${this.getConnectionName()}" but the ${crossConnection.target} model uses "${crossConnection.repository.getConnectionName()}". `
+      + 'Use eager loading, relation aggregates, or explicit multi-step queries instead.',
+    )
   }
+
+  private findCrossConnectionRepository(
+    relation: RelationDefinition,
+    morphTypes?: readonly string[],
+  ): { readonly repository: ModelRepository, readonly target: 'related' | 'through' } | undefined {
+    const parentConnectionName = this.getConnectionName()
+    const candidates = (): readonly { readonly repository: ModelRepository, readonly target: 'related' | 'through' }[] => {
+      switch (relation.kind) {
+        case 'hasOneThrough':
+        case 'hasManyThrough':
+          return [
+            { repository: this.resolveThroughRepository(relation.through), target: 'through' },
+            { repository: this.resolveRelatedRepository(relation.related), target: 'related' },
+          ]
+        case 'morphTo':
+          return this.resolveMorphExistenceReferences(morphTypes).map(reference => ({ repository: ModelRepository.from(reference), target: 'related' }))
+        default:
+          return [{ repository: this.resolveRelatedRepository(relation.related), target: 'related' }]
+      }
+    }
+    return candidates().find(candidate => candidate.repository.getConnectionName() !== parentConnectionName)
+  }
+
 
   private applyExistsBoolean(
     query: TableQueryBuilder<TTable, Record<string, unknown>>,

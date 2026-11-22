@@ -5,7 +5,7 @@ import type { TableDefinition } from '../schema/types'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from './chunkOrdering'
 import { selectionOutputName } from './modelRowProjection'
 import { resultColumnDefinition, withResolvedDefinitions } from './resultColumns'
-import { dateBucketSelections, type QueryDirection } from './ast'
+import { dateBucketSelections, selectedColumnSource, selectsComputedValueAs, type QueryDirection } from './ast'
 import type { TableQueryBuilder } from './TableQueryBuilder'
 import type { CursorPaginatedResult } from './types'
 
@@ -55,6 +55,7 @@ export async function* queryBatches<
   const bounded = hasPrimaryKey && !requiresRowNullOrder && !plan.distinct && plan.joins.length === 0 && plan.groupBy.length === 0 && plan.unions.length === 0
     && !plan.selections.some(selection => selection.kind === 'aggregate' || selection.kind === 'raw')
     && (traversal.fallbackOrder === 'database' || plan.orderBy.every(order => order.kind === 'column'))
+    && !plan.orderBy.some(order => order.kind === 'column' && selectsComputedValueAs(plan, order.column))
   if (!bounded) {
     const fetchedRows = await query.get<TRow>()
     const sortRows = traversal.column !== undefined && traversal.fallbackOrder !== 'database'
@@ -69,11 +70,7 @@ export async function* queryBatches<
     for (let index = 0; index < values.length; index += size) yield values.slice(index, index + size)
     return
   }
-  const requestedOrders = plan.orderBy.flatMap(order => {
-    if (order.kind !== 'column') return []
-    const selection = plan.selections.find(selection => selection.kind === 'column' && selection.alias === order.column)
-    return [{ column: selection?.kind === 'column' ? selection.column : order.column, direction: order.direction }]
-  })
+  const requestedOrders = plan.orderBy.flatMap(order => order.kind === 'column' ? [{ column: selectedColumnSource(plan, order.column), direction: order.direction }] : [])
   const orders = idColumn
     ? [
         { column: idColumn, direction: traversal.direction ?? 'asc' },

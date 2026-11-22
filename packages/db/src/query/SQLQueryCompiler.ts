@@ -254,14 +254,15 @@ export class SQLQueryCompiler {
           }
 
           if (selection.kind === 'subquery') {
-            return `(${this.compileSelectSql(selection.query, bindings)}) AS ${this.quoteIdentifier(selection.alias)}`
+            return `${selection.exists ? 'EXISTS ' : ''}(${this.compileSelectSql(selection.query, bindings)}) AS ${this.quoteIdentifier(selection.alias)}`
           }
 
           if (selection.kind === 'aggregate') {
             const aggregateColumn = selection.column === '*'
               ? '*'
-              : this.compileColumnReference(selection.column)
-            return `${selection.aggregate.toUpperCase()}(${aggregateColumn}) AS ${this.quoteIdentifier(selection.alias)}`
+              : this.compileAggregateInput(selection.column, selection.booleanAsNumber === true)
+            const aggregated = `${selection.aggregate.toUpperCase()}(${aggregateColumn})`
+            return `${selection.emptyAsZero ? `COALESCE(${aggregated}, 0)` : aggregated} AS ${this.quoteIdentifier(selection.alias)}`
           }
 
           if (selection.kind === 'raw') {
@@ -970,6 +971,11 @@ export class SQLQueryCompiler {
     const distance = this.compileVectorDistanceExpression(predicate.column, predicate.vector, bindings)
     bindings.push(1 - predicate.minSimilarity)
     return `${distance} <= ${this.createPlaceholder(bindings.length)}`
+  }
+
+  private compileAggregateInput(column: string, booleanAsNumber: boolean): string {
+    const reference = this.compileColumnReference(column)
+    return booleanAsNumber ? `CASE WHEN ${reference} THEN 1 WHEN NOT ${reference} THEN 0 END` : reference
   }
 
   protected compileOrderBy(orderBy: SelectQueryPlan['orderBy'][number], bindings: unknown[]): string {

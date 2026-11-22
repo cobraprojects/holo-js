@@ -26,6 +26,10 @@ export type SelectedDateBuckets<TRow extends Record<string, unknown>> = { [TColu
 
 type LiteralKeys<TKey extends PropertyKey> = TKey extends string ? string extends TKey ? never : TKey : TKey
 
+export type SelectedAlias<TRow extends Record<string, unknown>> = keyof {
+  [TColumn in keyof TRow as TColumn extends string ? string extends TColumn ? never : TColumn : never]: true
+} & string
+
 export type UnreplacedDateBuckets<TRow extends Record<string, unknown>, TSelected extends PropertyKey> = {
   [TColumn in Exclude<DateBucketAlias<TRow>, LiteralKeys<TSelected>>]: TRow[TColumn]
 }

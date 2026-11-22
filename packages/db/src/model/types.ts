@@ -545,6 +545,8 @@ type AggregateState<TAttributes> = {
 type AggregateAttributes<TLoaded>
   = TLoaded extends AggregateState<infer TAttributes> ? TAttributes : unknown
 
+export type ModelOrderColumn<TTable extends TableDefinition, TLoaded> = ModelColumnName<TTable> | (keyof AggregateAttributes<TLoaded> & string)
+
 type MergeAggregateAttributes<TPrevious, TNext>
   = TPrevious extends unknown
     ? TNext extends object ? {

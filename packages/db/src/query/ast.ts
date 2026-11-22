@@ -44,6 +44,8 @@ export interface QueryAggregateSelection {
   readonly aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'
   readonly column: string | '*'
   readonly alias: string
+  readonly emptyAsZero?: true
+  readonly booleanAsNumber?: true
 }
 
 export interface QueryRawSelection {
@@ -56,6 +58,7 @@ export interface QuerySubquerySelection {
   readonly kind: 'subquery'
   readonly query: SelectQueryPlan
   readonly alias: string
+  readonly exists?: true
 }
 
 export type QueryDateBucketUnit = 'year' | 'month' | 'day' | 'hour'
@@ -74,6 +77,15 @@ export type QuerySelection
     | QueryRawSelection
     | QuerySubquerySelection
     | QueryDateBucketSelection
+
+export function selectedColumnSource(plan: SelectQueryPlan, name: string): string {
+  const selection = plan.selections.find(candidate => candidate.kind === 'column' && candidate.alias === name)
+  return selection?.kind === 'column' ? selection.column : name
+}
+
+export function selectsComputedValueAs(plan: SelectQueryPlan, alias: string): boolean {
+  return plan.selections.some(selection => (selection.kind === 'subquery' || selection.kind === 'aggregate') && selection.alias === alias)
+}
 
 export function dateBucketSelections(plan: SelectQueryPlan): ReadonlyMap<string, QueryDateBucketSelection> {
   return new Map(plan.selections.flatMap(selection => selection.kind === 'date-bucket' ? [[selection.alias, selection] as const] : []))
@@ -501,6 +513,7 @@ export function appendSubquerySelection(
   plan: SelectQueryPlan,
   query: SelectQueryPlan,
   alias: string,
+  exists = false,
 ): SelectQueryPlan {
   return Object.freeze({
     ...plan,
@@ -510,6 +523,7 @@ export function appendSubquerySelection(
         kind: 'subquery' as const,
         query,
         alias,
+        ...(exists ? { exists: true as const } : {}),
       }),
     ]),
   })

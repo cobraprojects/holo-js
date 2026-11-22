@@ -75,6 +75,8 @@ import {
   appendDateBucketSelection,
   appendSubquerySelection,
   dateBucketSelections,
+  selectsComputedValueAs,
+  selectedColumnSource,
   withDateBucketSelection,
   withGroupBy,
   withHaving,
@@ -147,7 +149,7 @@ import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalizatio
 import { assertQueryTablePath, validateQueryPlan } from './validator'
 import { requalifyAliasedSource } from './requalifyAliasedSource'
 
-import type { AvailableTableColumns, ColumnSelection, DateBucketAlias, SelectedDateBuckets, UnreplacedDateBuckets, DateBucketAliasName, DateBucketOptions, DateBucketSelectionResult, DateBucketUnit, DateColumnName, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
+import type { AvailableTableColumns, ColumnSelection, DateBucketAlias, SelectedAlias, SelectedDateBuckets, UnreplacedDateBuckets, DateBucketAliasName, DateBucketOptions, DateBucketSelectionResult, DateBucketUnit, DateColumnName, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
 
 type SelectRow<TTableOrName extends string | TableDefinition>
   = TTableOrName extends TableDefinition ? InferSelect<TTableOrName> : Record<string, unknown>
@@ -187,6 +189,8 @@ let keyedInsert: KeyedInsert
 type AnyTableQuery = TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>
 let keyColumnComparison: (query: AnyTableQuery, column: string, compareTo: string, casts: QueryKeyCasts) => AnyTableQuery
 let keyColumnSelection: (query: AnyTableQuery, column: string, casts: QueryKeyCasts) => AnyTableQuery
+let existsSelection: (query: AnyTableQuery, subquery: AnyTableQuery, alias: string) => AnyTableQuery
+let aggregateSelection: (query: AnyTableQuery, selection: QueryAggregateSelection) => AnyTableQuery
 let keyColumnJoin: (query: AnyTableQuery, table: TableReference | TableQueryBuilder<TableDefinition, Record<string, unknown>>, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string) => AnyTableQuery
 let sourceAliasing: (query: AnyTableQuery, alias: string) => AnyTableQuery
 let sourceRequalifying: (query: AnyTableQuery, previousAlias?: string) => AnyTableQuery
@@ -207,6 +211,14 @@ export function whereKeyColumn<TQuery extends TableQueryBuilder<TableReference, 
 
 export function selectKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, casts: QueryKeyCasts): TQuery {
   return keyColumnSelection(query as unknown as AnyTableQuery, column, casts) as unknown as TQuery
+}
+
+export function addSelectExists<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>, alias: string): TQuery {
+  return existsSelection(query as unknown as AnyTableQuery, subquery as unknown as AnyTableQuery, alias) as unknown as TQuery
+}
+
+export function selectAggregate<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, selection: QueryAggregateSelection): TQuery {
+  return aggregateSelection(query as unknown as AnyTableQuery, selection) as unknown as TQuery
 }
 
 export function joinOnKeyColumns<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, table: TableReference | TableQueryBuilder<TableDefinition, Record<string, unknown>>, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string): TQuery {
@@ -1927,12 +1939,12 @@ export class TableQueryBuilder<
     )))
   }
 
-  orderByDesc(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  orderByDesc(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | SelectedAlias<TSelectedRow>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'desc')
   }
 
   orderBy(
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow>,
+    column: DeclaredColumnName<TTableOrName, TAvailableColumns> | SelectedAlias<TSelectedRow>,
     direction: QueryDirection = 'asc',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.clone(withOrderBy(this.plan, {
@@ -1959,16 +1971,16 @@ export class TableQueryBuilder<
     })]))
   }
 
-  latest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  latest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | SelectedAlias<TSelectedRow> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'desc')
   }
 
-  oldest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  oldest(column: DeclaredColumnName<TTableOrName, TAvailableColumns> | SelectedAlias<TSelectedRow> = 'created_at' as DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.orderBy(column, 'asc')
   }
 
   reorder(
-    column?: DeclaredColumnName<TTableOrName, TAvailableColumns> | DateBucketAlias<TSelectedRow>,
+    column?: DeclaredColumnName<TTableOrName, TAvailableColumns> | SelectedAlias<TSelectedRow>,
     direction: QueryDirection = 'asc',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const reordered = replaceOrderBy(this.plan, [])
@@ -2381,7 +2393,7 @@ export class TableQueryBuilder<
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     const decodedCursor = this.decodePageCursor(cursor, cursorOrders.length, plan, invalidCursor)
     const previous = decodedCursor?.previous === true
-    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => unionOrders ? this.normalizeUnionCursorValue(unionOutputValueColumn(orderedQuery.plan, unionOrders[index]!.column, this.connection.getConnectionName(), caseSensitiveNames), value) : this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) } : undefined
+    const normalizedCursor = decodedCursor ? { ...decodedCursor, values: decodedCursor.values.map((value, index) => unionOrders ? this.normalizeUnionCursorValue(unionOutputValueColumn(orderedQuery.plan, unionOrders[index]!.column, this.connection.getConnectionName(), caseSensitiveNames), value) : this.normalizePredicateValueForColumn(selectedColumnSource(orderedQuery.plan, cursorOrders[index]!.column), value)) } : undefined
     const nullsLow = !this.connection.getDialect().name.includes('postgres')
     const pageOrders = (orders: readonly CursorOrderDefinition[]) => orders.map((order): QueryOrderBy => ({ kind: 'column', column: order.column, direction: previous === (order.direction === 'asc') ? 'desc' : 'asc' }))
     let storedRows: TRow[]
@@ -2400,7 +2412,7 @@ export class TableQueryBuilder<
         const grouped = plan.predicates.some(predicate => predicate.boolean === 'or')
           ? withPredicate(withoutPredicates(plan, () => true), { kind: 'group', predicates: plan.predicates })
           : plan
-        plan = withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map(order => dateBuckets.has(order.column) ? { ...order, dateBucket: true as const } : order), nullsLow))
+        plan = withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map(order => dateBuckets.has(order.column) ? { ...order, dateBucket: true as const } : { ...order, column: selectedColumnSource(plan, order.column) }), nullsLow))
       }
       if (previous) plan = replaceOrderBy(plan, pageOrders(cursorOrders))
       const pageQuery = orderedQuery.clone(plan)
@@ -2743,6 +2755,8 @@ export class TableQueryBuilder<
     }
     sourceRequalifying = (query, previousAlias) => query.clone(requalifyAliasedSource(query.plan, connectionNameFolding(query), previousAlias))
     keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)
+    existsSelection = (query, subquery, alias) => query.clone(appendSubquerySelection(query.plan, subquery.getPlan(), alias, true))
+    aggregateSelection = (query, selection) => query.clone(withAggregateSelection(query.plan, selection))
     keyColumnSelection = (query, column, casts) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(casts.left ? { keyCast: casts.left } : {}), ...(casts.unknownKind ? { unknownKeyKind: casts.unknownKind } : {}) })]) })
     keyColumnJoin = (query, table, leftColumn, rightColumn, casts, alias) => query.clone(withJoin(query.plan, {
       type: 'inner',
@@ -3475,6 +3489,15 @@ export class TableQueryBuilder<
     return this.plan.orderBy.map((orderBy) => {
       if (orderBy.kind !== 'column') {
         throw new SecurityError('Cursor pagination requires column orderBy clauses.')
+      }
+
+      const pagesByOutputColumns = this.plan.unions.length > 0
+      if (!pagesByOutputColumns && selectsComputedValueAs(this.plan, orderBy.column)) {
+        throw new SecurityError(`Cursor pagination cannot order by the "${orderBy.column}" computed selection. Use paginate() instead.`)
+      }
+
+      if (!pagesByOutputColumns && selectedColumnSource(this.plan, orderBy.column) !== orderBy.column && this.source.table && Object.hasOwn(this.source.table.columns, orderBy.column)) {
+        throw new SecurityError(`Cursor pagination cannot order by the "${orderBy.column}" alias because it shadows a "${orderBy.column}" column. Choose another alias.`)
       }
 
       return {

@@ -1215,6 +1215,17 @@ const users = await DB.table('users')
   .get()
 ```
 
+You can also sort by an alias the query selects, such as an aggregate or a `column as alias` selection. `orderByDesc()`, `latest()`, `oldest()` and `reorder()` accept the same aliases.
+
+```ts
+const topAuthors = await DB.table('posts')
+  .select('author_id')
+  .addSelectSum('revenue', 'total')
+  .groupBy('author_id')
+  .orderByDesc('revenue')
+  .get()
+```
+
 ### orderByDesc()
 
 Sort by a column in descending order. It is a shortcut for `orderBy(column, 'desc')`.
