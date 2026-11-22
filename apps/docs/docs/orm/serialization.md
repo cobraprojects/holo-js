@@ -192,7 +192,7 @@ A [date cast with a format](/orm/casts#date-formats-in-json-output) such as `'da
 
 Each method is described in the [method reference](#method-reference) below. Collection versions of the visibility and append methods are on the [collections page](/orm/collections#available-methods).
 
-**Convert to plain data:** [toJSON()](#tojson), [toAttributes()](#toattributes), [serializeModels()](#serializemodels)
+**Convert to plain data:** [toJSON()](#tojson), [attributesToJSON()](#attributestojson), [toAttributes()](#toattributes), [serializeModels()](#serializemodels)
 
 **Hide and show:** [makeHidden()](#makehidden), [makeVisible()](#makevisible), [setHidden()](#sethidden), [setVisible()](#setvisible)
 
@@ -206,6 +206,17 @@ Returns the model as a plain object, with hidden attributes removed, visible-onl
 
 ```ts
 return user.toJSON()
+```
+
+### attributesToJSON()
+
+Returns the model's attributes as `toJSON()` serializes them, with casts, date formatting, hidden, visible and appended rules applied, but without loaded relations.
+
+```ts
+const post = await Post.with('author').findOrFail(1)
+
+post.attributesToJSON()
+// { id: 1, title: 'Hello', ... }
 ```
 
 ### toAttributes()
