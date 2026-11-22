@@ -2,21 +2,31 @@
 
 ## Unreleased
 
-See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-062-to-063). No database migration is needed.
+## 0.6.3 - 2026-11-22
+
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-062-to-063). No database migration is needed. Created models now read their row back after the insert, and `cursorPaginate()` rejects some alias orderings it used to page through wrongly.
 
 ### Added
 
 - Database: query builders order by the aliases they select, such as `addSelectSum('revenue', 'total').orderByDesc('revenue')`, and `orderBy()`, `orderByDesc()`, `latest()`, `oldest()` and `reorder()` accept those aliases as typed names. Model queries order by loaded relation aggregates, such as `withCount('comments').orderByDesc('comments_count')`, including one-of-many relations such as `latestOfMany()`. The database sorts, so `limit()`, `first()`, `paginate()` and `chunk()` return the right rows. See [ordering and limiting](apps/docs/docs/orm/querying.md#ordering-and-limiting).
 - Database: `withCount()` and `withExists()` accept aliased names, such as `withCount('comments as replies')` and `withCount({ 'comments as approved': query => query.where('approved', true) })`.
+- Database: `model.attributesToJSON()` serializes a model's attributes with its casts, date format, accessors, appends and visibility rules, and leaves out loaded relations. The result is typed. See [attributesToJSON()](apps/docs/docs/orm/serialization.md#attributestojson).
+- Validation: `currentPassword(guard?, message?)` checks a string field against the signed-in user's password on the default guard or a named one, such as `field.password().required().currentPassword()`. It marks the field sensitive, and browser validation leaves the check to the server. See [currentPassword()](apps/docs/docs/basics/validation/rules.md#currentpassword-guard-message).
 
 ### Changed
 
+- Database: a model inserted with `create()`, `firstOrCreate()`, `updateOrCreate()` or `save()` reads its row back by primary key and fills the columns you didn't set with the values the database stored, such as column defaults. Before, those columns were `undefined` until `refresh()`, although their types said otherwise. Each insert runs one extra `SELECT` and needs read access to the table; it is skipped when the insert wrote every column or yielded no primary key. See [Create records](apps/docs/docs/orm/writes.md#create-records).
 - Database: outside a union, `cursorPaginate()` throws a `SecurityError` when it orders by an aggregate or subquery selection, or by a column alias with the same name as a table column, instead of failing or skipping rows on a later page.
 
 ### Fixed
 
 - Database: `cursorPaginate()` ordered by a `column as alias` selection follows its cursor past the first page.
 - Next.js: a Server Action that doesn't declare a `formData` parameter passes the CSRF check. Next sent such an action only the arguments it declared, so the form data carrying `_token` never arrived and the request failed with `419`.
+- Database: on MySQL, an insert into a table without an `AUTO_INCREMENT` column no longer reports `0` as the inserted key, so a created model doesn't get the key `0`.
+- Auth: `impersonation()`, `stopImpersonating()` and `impersonateById()` read the request's session when they are the first auth call in a request, such as in a Next.js layout. Before, `impersonation()` returned `null`, `stopImpersonating()` did nothing, and `impersonateById()` neither saved the user already signed in on the target guard nor rejected a second impersonation.
+- Auth: logging out a guard that isn't signed in keeps the other guards in the shared session signed in. Before, it ended the whole session.
+- CLI: `holo migrate` runs when a job, event, listener, broadcast definition, channel, policy or ability imports a table the Generated schema doesn't have yet. Discovery leaves that module out until the migration regenerates the schema, as it already did for models and seeders. Before, discovery aborted, so the schema could never be regenerated.
+- Next.js: `useForm()` keeps typed values when its schema is created during render, such as with localized messages. Before, every render reset the fields, so input was lost on each keystroke. Forms also validate with the latest schema, so messages update after a locale change.
 - Database: when several related rows tie on a one-of-many relation's column, such as two posts with the same top score under `ofMany('score', 'max')`, the relation returns the row with the highest primary key (the lowest for `'min'`), as Laravel does. Before, it returned whichever tied row the database read first.
 
 ## 0.6.2 - 2026-11-19

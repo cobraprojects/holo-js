@@ -2,7 +2,7 @@
 
 ## Upgrading from 0.6.2 to 0.6.3
 
-Update every installed `@holo-js/*` package to `0.6.3` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. Most apps need no code changes; check the cursor pagination change below.
+Update every installed `@holo-js/*` package to `0.6.3` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. Most apps need no code changes; check the cursor pagination change below. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#063---2026-11-22) lists the release changes.
 
 ### Ordering by selected aliases and relation aggregates
 
@@ -20,6 +20,18 @@ await DB.table('posts').select('score as points').orderBy('points').cursorPagina
 ```
 
 `cursorPaginate()` ordered by a `column as alias` selection now follows its cursor past the first page, comparing the source column as Laravel does.
+
+### Created models hold the values the database stored
+
+After `create()`, `firstOrCreate()`, `updateOrCreate()` or `save()` inserts a row, Holo reads it back by primary key and fills the columns you didn't set, such as column defaults. Code that called `refresh()` after creating a model only to read those values can drop the call:
+
+```ts
+const period = await UsagePeriod.firstOrCreate({ month: '2026-11' })
+await period.refresh() // [!code --]
+period.responses_used
+```
+
+Each insert runs one extra `SELECT`, skipped when the insert wrote every column, and the database user needs read access to the table. See [Create records](/orm/writes#create-records).
 
 ### Next.js: Server Actions without a form data parameter
 
