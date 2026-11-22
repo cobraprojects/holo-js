@@ -21,9 +21,9 @@ await DB.table('posts').select('score as points').orderBy('points').cursorPagina
 
 `cursorPaginate()` ordered by a `column as alias` selection now follows its cursor past the first page, comparing the source column as Laravel does.
 
-### Created models hold the values the database stored
+### Created models fill unset columns from the database
 
-After `create()`, `firstOrCreate()`, `updateOrCreate()` or `save()` inserts a row, Holo reads it back by primary key and fills the columns you didn't set, such as column defaults. Code that called `refresh()` after creating a model only to read those values can drop the call:
+After `create()`, `firstOrCreate()`, `updateOrCreate()` or `save()` inserts a row, Holo reads it back by primary key and fills the columns you didn't set with the values the database stored, such as column defaults. Values you set stay as you set them, even if a trigger changed them in the database. Code that called `refresh()` after creating a model only to read those values can drop the call:
 
 ```ts
 const period = await UsagePeriod.firstOrCreate({ month: '2026-11' })
@@ -31,7 +31,7 @@ await period.refresh() // [!code --]
 period.responses_used
 ```
 
-Each insert runs one extra `SELECT`, skipped when the insert wrote every column, and the database user needs read access to the table. See [Create records](/orm/writes#create-records).
+Each insert runs one extra `SELECT`, and the database user needs read access to the table. Holo skips it when the insert wrote every column or yielded no primary key; then unset columns stay unset until `refresh()`. See [Create records](/orm/writes#create-records).
 
 ### Next.js: Server Actions without a form data parameter
 
