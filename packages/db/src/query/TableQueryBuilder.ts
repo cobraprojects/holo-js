@@ -191,6 +191,7 @@ let keyColumnComparison: (query: AnyTableQuery, column: string, compareTo: strin
 let keyColumnSelection: (query: AnyTableQuery, column: string, casts: QueryKeyCasts) => AnyTableQuery
 let existsSelection: (query: AnyTableQuery, subquery: AnyTableQuery, alias: string) => AnyTableQuery
 let aggregateSelection: (query: AnyTableQuery, selection: QueryAggregateSelection) => AnyTableQuery
+let rowLockRemoval: (query: AnyTableQuery) => AnyTableQuery
 let keyColumnJoin: (query: AnyTableQuery, table: TableReference | TableQueryBuilder<TableDefinition, Record<string, unknown>>, leftColumn: string, rightColumn: string, casts: QueryKeyCasts, alias?: string) => AnyTableQuery
 let sourceAliasing: (query: AnyTableQuery, alias: string) => AnyTableQuery
 let sourceRequalifying: (query: AnyTableQuery, previousAlias?: string) => AnyTableQuery
@@ -215,6 +216,10 @@ export function selectKeyColumn<TQuery extends TableQueryBuilder<TableReference,
 
 export function addSelectExists<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, subquery: TableQueryBuilder<TableDefinition, Record<string, unknown>>, alias: string): TQuery {
   return existsSelection(query as unknown as AnyTableQuery, subquery as unknown as AnyTableQuery, alias) as unknown as TQuery
+}
+
+export function withoutRowLock<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery): TQuery {
+  return rowLockRemoval(query as unknown as AnyTableQuery) as unknown as TQuery
 }
 
 export function selectAggregate<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, selection: QueryAggregateSelection): TQuery {
@@ -2757,6 +2762,7 @@ export class TableQueryBuilder<
     keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)
     existsSelection = (query, subquery, alias) => query.clone(appendSubquerySelection(query.plan, subquery.getPlan(), alias, true))
     aggregateSelection = (query, selection) => query.clone(withAggregateSelection(query.plan, selection))
+    rowLockRemoval = query => query.plan.lockMode === undefined ? query : query.clone(withLockMode(query.plan, undefined))
     keyColumnSelection = (query, column, casts) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(casts.left ? { keyCast: casts.left } : {}), ...(casts.unknownKind ? { unknownKeyKind: casts.unknownKind } : {}) })]) })
     keyColumnJoin = (query, table, leftColumn, rightColumn, casts, alias) => query.clone(withJoin(query.plan, {
       type: 'inner',

@@ -2,7 +2,7 @@ import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DB } from '../facade/DB'
 import { ConfigurationError, DatabaseError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
 import { assertQueryTablePath } from '../query/validator'
-import { TableQueryBuilder, addSelectExists, aliasTableSource, selectAggregate, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, addSelectExists, aliasTableSource, selectAggregate, withoutRowLock, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
 import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { selectionOutputName } from '../query/modelRowProjection'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadColumnSqlTypes, loadTableDefinition } from '../schema/columnListing'
@@ -147,11 +147,6 @@ type PivotKeyColumns = {
   readonly parentKey: AnyColumnDefinition | undefined
   readonly relatedKey: AnyColumnDefinition | undefined
   readonly introspected: boolean
-}
-
-function withoutRowLock(query: TableQueryBuilder<TableDefinition, Record<string, unknown>>): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
-  const plan = query.getPlan()
-  return plan.lockMode === undefined ? query : new TableQueryBuilder(plan.source.table ?? query.getTableName(), query.getConnection(), withLockMode(plan, undefined)) as TableQueryBuilder<TableDefinition, Record<string, unknown>>
 }
 
 export class ModelRepository<
@@ -794,7 +789,11 @@ export class ModelRepository<
     alias: string,
     constraint?: RelationConstraint,
   ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
-    const constrained = requalifyTableSource(withoutRowLock(this.applyRelationConstraint(relation, related, constraint, alias).getTableQueryBuilder().reorder().limit().offset()))
+    const scoped = withoutRowLock(this.applyRelationConstraint(relation, related, constraint, alias).getTableQueryBuilder().reorder().limit().offset())
+    const previousAlias = scoped.getPlan().source.alias
+    const constrained = previousAlias === alias
+      ? requalifyTableSource(scoped)
+      : requalifyTableSource(aliasTableSource(scoped, alias), previousAlias)
     const predicates = constrained.getPlan().predicates
     const grouped = predicates.some(predicate => predicate.boolean === 'or')
       ? constrained.withPredicates([{ kind: 'group', boolean: 'and', predicates }])
