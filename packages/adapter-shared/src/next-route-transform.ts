@@ -170,6 +170,7 @@ type ExportedCopy = {
 
 type CopyContext = {
   readonly locals: ReadonlySet<string>
+  readonly declaredFunctions: ReadonlySet<string>
   readonly localized: ReadonlySet<string>
   readonly defaultName: string
   readonly allocate: NameAllocator
@@ -184,8 +185,28 @@ function isOverloadSignature(statement: ts.Statement, locals: ReadonlySet<string
   return ts.isFunctionDeclaration(statement) && !statement.body && Boolean(statement.name && locals.has(statement.name.text))
 }
 
+function isFunctionLiteral(expression: ts.Expression | undefined): expression is ts.Expression {
+  if (!expression) return false
+  const value = unparenthesized(expression)
+  return ts.isArrowFunction(value) || ts.isFunctionExpression(value)
+}
+
+function wrapFunctionInitializers(file: ts.SourceFile, output: MagicString, locals: ReadonlySet<string>, wrapperCall: string): ReadonlySet<string> {
+  const wrapped = new Set<string>()
+  for (const statement of file.statements) {
+    if (!ts.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || !locals.has(declaration.name.text) || !isFunctionLiteral(declaration.initializer)) continue
+      output.prependRight(declaration.initializer.getStart(), `${wrapperCall}(`)
+      output.appendLeft(declaration.initializer.end, ')')
+      wrapped.add(declaration.name.text)
+    }
+  }
+  return wrapped
+}
+
 function exportThroughCopies(file: ts.SourceFile, output: MagicString, context: CopyContext): readonly string[] {
-  const { locals, defaultName, allocate, reassign } = context
+  const { locals, declaredFunctions, defaultName, allocate, reassign } = context
   const source = file.text
   const deferred: { readonly name: string, readonly local: string }[] = [...context.localized].map(local => ({ name: 'default', local }))
   const captured: ExportedCopy[] = []
@@ -201,16 +222,13 @@ function exportThroughCopies(file: ts.SourceFile, output: MagicString, context: 
     if (isOverloadSignature(statement, locals)) {
       for (const modifier of exportModifiers) blank(modifier.getStart(), modifier.end)
     }
-    if (exportModifiers.length > 0 && (isDeclaredValue(statement) || ts.isVariableStatement(statement))) {
-      const names = ts.isVariableStatement(statement)
-        ? statement.declarationList.declarations.flatMap(declaration => boundNames(declaration.name)).map(name => ({ name, local: name }))
-        : [{ name: hasModifier(statement, ts.SyntaxKind.DefaultKeyword) ? 'default' : statement.name!.text, local: statement.name?.text ?? defaultName }]
+    if (exportModifiers.length > 0 && isDeclaredValue(statement)) {
       for (const modifier of exportModifiers) blank(modifier.getStart(), modifier.end)
-      deferred.push(...names)
+      deferred.push({ name: hasModifier(statement, ts.SyntaxKind.DefaultKeyword) ? 'default' : statement.name!.text, local: statement.name?.text ?? defaultName })
     }
     if (ts.isExportDeclaration(statement) && !statement.isTypeOnly && !statement.moduleSpecifier
       && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
-      const actions = statement.exportClause.elements.filter(element => !element.isTypeOnly && locals.has((element.propertyName ?? element.name).text))
+      const actions = statement.exportClause.elements.filter(element => !element.isTypeOnly && declaredFunctions.has((element.propertyName ?? element.name).text))
       if (actions.length === 0) continue
       const remaining = statement.exportClause.elements.filter(element => !actions.includes(element))
       blank(statement.getStart(), statement.end)
@@ -218,7 +236,7 @@ function exportThroughCopies(file: ts.SourceFile, output: MagicString, context: 
       deferred.push(...actions.map(element => ({ name: moduleExportName(element.name), local: (element.propertyName ?? element.name).text })))
     }
     const identifier = exportedIdentifier(statement)
-    if (identifier && locals.has(identifier.text)) {
+    if (identifier && declaredFunctions.has(identifier.text)) {
       const copy = allocate('__holoAction')
       replaceKeepingLines(statement.getStart(), statement.end, `${reassign(identifier.text)} const ${copy} = ${identifier.text};`)
       captured.push({ name: 'default', copy })
@@ -264,17 +282,20 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
     }
   }
   if (locals.size === 0 && localized.size === 0) return undefined
-  const pending = new Set([...locals].filter(local => !localized.has(local)))
+  const declaredFunctions = new Set(file.statements.filter(isDeclaredValue).map(statement => statement.name?.text ?? defaultName).filter(name => locals.has(name)))
+  const wrappedInPlace = wrapper === 'serverAction' ? wrapFunctionInitializers(file, output, locals, `${runtimeName}.${wrapper}`) : new Set<string>()
+  const pending = new Set([...locals].filter(local => !localized.has(local) && !wrappedInPlace.has(local)))
+  const copiesDefault = (local: string) => wrapper === 'serverAction' && declaredFunctions.has(local)
   for (const statement of file.statements) {
     const identifier = exportedIdentifier(statement)
-    if (identifier && pending.delete(identifier.text) && wrapper === 'routeHandler') {
+    if (identifier && pending.delete(identifier.text) && !copiesDefault(identifier.text)) {
       output.prependRight(statement.getStart(), `${reassign(identifier.text)} `)
     }
     if (isDeclaredValue(statement) && !statement.name && locals.has(defaultName)) {
       output.appendLeft(keywordEnd(statement), ` ${defaultName}`)
     }
     if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const
-      && statement.declarationList.declarations.some(declaration => boundNames(declaration.name).some(name => locals.has(name)))) {
+      && statement.declarationList.declarations.some(declaration => boundNames(declaration.name).some(name => locals.has(name) && !wrappedInPlace.has(name)))) {
       const keyword = statement.declarationList.getStart()
       output.overwrite(keyword, keyword + 'const'.length, 'let  ')
     }
@@ -282,7 +303,7 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
   // Imports are hoisted, so appending this one leaves every original line where it was.
   const runtimeModule = RUNTIME_MODULES[wrapper]
   const runtimeImport = `import { ${runtimeModule.internals} as ${runtimeName} } from ${JSON.stringify(runtimeModule.specifier)};`
-  const copies = wrapper === 'serverAction' ? exportThroughCopies(file, output, { locals, localized, defaultName, allocate, reassign }) : []
+  const copies = wrapper === 'serverAction' ? exportThroughCopies(file, output, { locals, declaredFunctions, localized, defaultName, allocate, reassign }) : []
   output.append(`\n${[runtimeImport, ...[...pending].map(reassign), ...copies].join('\n')}\n`)
   return output
 }

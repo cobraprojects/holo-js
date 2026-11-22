@@ -56,7 +56,11 @@ function runLoader(loader: typeof serverActionLoader, resourcePath: string, sour
 }
 
 function withExportKeywordsBlanked(line: string): string {
-  return line.replace(/^export (?:default )?(?=async |const )/, keywords => ' '.repeat(keywords.length))
+  return line.replace(/^export (?:default )?(?=async function)/, keywords => ' '.repeat(keywords.length))
+}
+
+function withoutWrapperCall(line: string): string {
+  return line.replace(/__holoRouteRuntime\.serverAction\((.*)\)$/, '$1')
 }
 
 function position(text: string, needle: string): { readonly line: number, readonly column: number } {
@@ -162,6 +166,18 @@ describe('Next server action loader', () => {
     expect(await (module.default as () => Promise<unknown>)()).toEqual({ wrapped: 'original' })
   })
 
+  it('keeps an exported let action live when the module reassigns it', async () => {
+    const module = await importCompiled('live-actions.ts', [
+      '\'use server\'',
+      'export let current = async () => \'original\'',
+      'export async function replace() { current = async () => \'replacement\' }',
+    ].join('\n'))
+
+    await (module.replace as () => Promise<unknown>)()
+
+    expect(await (module.current as () => Promise<unknown>)()).toBe('replacement')
+  })
+
   it('keeps the columns after an export list that mixes actions and types', () => {
     const source = ['\'use server\'', 'type T = string', 'async function a() { return 1 }', 'export {a, type T}; export async function b() {}'].join('\n')
 
@@ -211,14 +227,14 @@ describe('Next server action loader', () => {
     expect(module.dynamic).toBe('force-dynamic')
   })
 
-  it('appends the runtime import, so a shebang, a terminated directive, and every column stay in place', async () => {
+  it('appends the runtime import, so a shebang, a terminated directive, and the original code stay in place', async () => {
     const actions = ['\'use server\';', 'export const save = async () => { return \'saved\' }'].join('\n')
     const route = ['#!/usr/bin/env node', 'export const GET = async () => \'got\''].join('\n')
 
     for (const [source, loader] of [[actions, serverActionLoader], [route, routeLoader]] as const) {
       const lines = loader.call({ resourcePath: 'module.ts' }, source)!.split('\n')
       const expected = source.split('\n').map(line => loader === serverActionLoader ? withExportKeywordsBlanked(line) : line)
-      expect(lines.slice(0, 2).map(line => line.replace('let  ', 'const'))).toEqual(expected)
+      expect(lines.slice(0, 2).map(line => withoutWrapperCall(line).replace('let  ', 'const'))).toEqual(expected)
       expect(lines[2]).toMatch(/^import \{ adapterNextRuntimeInternals as __holoRouteRuntime \} from /)
     }
     expect(await (((await importCompiled('terminated-actions.ts', actions)).save) as () => Promise<unknown>)()).toEqual({ wrapped: 'saved' })
@@ -234,7 +250,7 @@ describe('Next server action loader', () => {
     }
   })
 
-  it('keeps every line and column of a use server module in place and maps each position back to it', () => {
+  it('keeps every line of a use server module in place and maps each position back to it', () => {
     const resourcePath = join(import.meta.dirname, 'app', 'ai-actions.ts')
     const source = [
       '// AI actions',
@@ -256,8 +272,8 @@ describe('Next server action loader', () => {
     const output = runLoader(serverActionLoader, resourcePath, source)
     const lines = output.code.split('\n')
 
-    expect(lines.slice(0, source.split('\n').length).map(line => line.replace('let  ', 'const').replace('function __holoDefault (', 'function ('))).toEqual(source.split('\n').map(withExportKeywordsBlanked))
-    for (const needle of ['aiMessage(kind', 'switch (kind)', 'return shared()', 'throw new Error', 'remove = async', 'return aiMessage(']) {
+    expect(lines.slice(0, source.split('\n').length).map(line => withoutWrapperCall(line).replace('function __holoDefault (', 'function ('))).toEqual(source.split('\n').map(withExportKeywordsBlanked))
+    for (const needle of ['aiMessage(kind', 'switch (kind)', 'return shared()', 'throw new Error', 'async () => \'removed\'', 'return aiMessage(']) {
       expectMapped(output, source, needle, resourcePath)
     }
     expect(output.map).toMatchObject({ version: 3, file: resourcePath, sources: [resourcePath], sourcesContent: [source] })
