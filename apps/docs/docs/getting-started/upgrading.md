@@ -1,5 +1,26 @@
 # Upgrade Guide
 
+## Upgrading from 0.6.2 to 0.6.3
+
+Update every installed `@holo-js/*` package to `0.6.3` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. Most apps need no code changes; check the cursor pagination change below.
+
+### Ordering by selected aliases and relation aggregates
+
+Queries can now order by an alias they select, such as `addSelectSum('revenue', 'total').orderByDesc('revenue')`, and model queries can order by a loaded relation aggregate, such as `withCount('comments').orderByDesc('comments_count')`. `withCount()` and `withExists()` also accept `'comments as replies'`. See [ordering and limiting](/orm/querying#ordering-and-limiting).
+
+Ordering by an aggregate the database can't compute in the same way the aggregate is loaded throws a `RelationError` that names the reason. That covers `morphTo()` aggregates, nested aggregates, relations on another connection, a union ordered by an aggregate, a selected column with the aggregate's name, and constraints that call `select()`, `limit()`, `offset()`, `distinct()`, `join()`, `groupBy()`, `having()` or `union()`.
+
+### Cursor pagination by aliases
+
+Outside a union, `cursorPaginate()` now throws a `SecurityError` on its first page when the query orders by an aggregate or subquery selection, or by a column alias that has the same name as one of the table's columns, such as `select('score as id').orderBy('id')`. Before, the first page worked and the next page failed or skipped rows. Use `paginate()` for these queries, or pick an alias that doesn't match a column:
+
+```ts
+await DB.table('posts').select('score as id').orderBy('id').cursorPaginate(15) // [!code --]
+await DB.table('posts').select('score as points').orderBy('points').cursorPaginate(15) // [!code ++]
+```
+
+`cursorPaginate()` ordered by a `column as alias` selection now follows its cursor past the first page, comparing the source column as Laravel does.
+
 ## Upgrading from 0.6.1 to 0.6.2
 
 Update every installed `@holo-js/*` package to `0.6.2` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. SvelteKit apps need the plugin change below; Next and Nuxt apps need no code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#062---2026-11-19) lists the release changes, including security fixes for route guards and CSRF under a base path.

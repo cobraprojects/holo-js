@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { DB, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, latestOfMany, morphOne, morphTo, resetDB } from '../src'
+import { DB, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, latestMorphOne, latestOfMany, morphOne, morphTo, ofMany, resetDB } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 type Driver = 'sqlite' | 'postgres' | 'mysql'
@@ -23,6 +23,7 @@ async function openAuthorsFixture(driver: Driver) {
     table.integer('author_id')
     table.integer('score')
     table.boolean('published')
+    table.string('title').nullable()
   })
   await createTable(names.tags, (table) => {
     table.integer('id').primaryKey()
@@ -39,7 +40,7 @@ async function openAuthorsFixture(driver: Driver) {
   })
 
   const authors = defineGeneratedTable(names.authors, { id: column.integer().primaryKey(), name: column.string() })
-  const posts = defineGeneratedTable(names.posts, { id: column.integer().primaryKey(), author_id: column.integer(), score: column.integer(), published: column.boolean() })
+  const posts = defineGeneratedTable(names.posts, { id: column.integer().primaryKey(), author_id: column.integer(), score: column.integer(), published: column.boolean(), title: column.string().nullable() })
   const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey() })
   const pivot = defineGeneratedTable(names.pivot, { id: column.integer().primaryKey(), author_id: column.integer(), tag_id: column.integer() })
   const likes = defineGeneratedTable(names.likes, { id: column.integer().primaryKey(), likeable_type: column.string(), likeable_id: column.integer() })
@@ -70,10 +71,16 @@ async function openAuthorsFixture(driver: Driver) {
       like: morphOne(() => Like, 'likeable'),
       posts: hasMany(() => Post, 'author_id'),
       latestPost: latestOfMany(() => Post, 'author_id'),
+      topPost: ofMany(() => Post, 'author_id', 'score', 'max'),
+      lowestPost: ofMany(() => Post, 'author_id', 'score', 'min'),
+      latestLike: latestMorphOne(() => Like, 'likeable'),
       tags: belongsToMany(() => Tag, pivot, 'author_id', 'tag_id'),
     },
   })
-  return { Author, Like, posts, pivot, names }
+  const StrictPost = defineModel(posts, { name: `StrictPost${tag}`, timestamps: false, preventAccessingMissingAttributes: true })
+  const StrictAuthor = defineModel(authors, { name: `StrictAuthor${tag}`, timestamps: false, relations: { topPost: ofMany(() => StrictPost, 'author_id', 'score', 'max') } })
+  const SiblingPost = defineModel(posts, { timestamps: false, relations: { latestSibling: latestOfMany(() => Post, 'author_id', 'author_id') } })
+  return { Author, Like, SiblingPost, StrictAuthor, posts, pivot, names, schema }
 }
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by selected aliases on %s', (driver) => {
@@ -151,7 +158,6 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
     const { Author, Like, names } = await openAuthorsFixture(driver)
 
     await expect(Like.withCount('likeable').orderBy('likeable_count').get()).rejects.toThrow('Cannot order by the "likeable" relation aggregate')
-    await expect(Author.withCount('latestPost').orderBy('latestPost_count').get()).rejects.toThrow('Cannot order by the "latestPost" relation aggregate')
     const reshaped = 'aggregate constraints that select, limit, offset, deduplicate, join, group or union the related rows cannot be ordered by.'
     await expect(Author.withSum({ posts: query => query.orderBy('score').limit(1) }, 'score').orderByDesc('posts_sum_score').get()).rejects.toThrow(reshaped)
     await expect(Author.withCount({ posts: query => query.select('author_id').distinct() }).orderByDesc('posts_count').get()).rejects.toThrow(reshaped)
@@ -191,6 +197,100 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
 
     const averaged = await Author.whereHas('posts').withAvg('posts', 'published').orderBy('posts_avg_published').get()
     expect(averaged.map(author => author.id)).toEqual([2, 1])
+  })
+
+  it('orders by aggregates of the one row a one-of-many relation selects', async () => {
+    const { Author } = await openAuthorsFixture(driver)
+    const rows = (authors: readonly { id: number, toAttributes(): object }[], key: string) => authors.map(author => [author.id, (author.toAttributes() as Record<string, unknown>)[key]])
+
+    expect(rows(await Author.withCount('latestPost').orderBy('latestPost_count').orderBy('id').get(), 'latestPost_count')).toEqual([[3, 0], [1, 1], [2, 1]])
+    expect(rows(await Author.withExists('latestPost').orderByDesc('latestPost_exists').orderBy('id').get(), 'latestPost_exists')).toEqual([[1, true], [2, true], [3, false]])
+    expect(rows(await Author.withSum('latestPost', 'score').orderByDesc('latestPost_sum_score').get(), 'latestPost_sum_score')).toEqual([[2, 30], [1, 10], [3, 0]])
+    expect(rows(await Author.whereHas('posts').withMax('lowestPost', 'score').orderByDesc('lowestPost_max_score').get(), 'lowestPost_max_score')).toEqual([[1, 10], [2, 1]])
+    expect(rows(await Author.whereHas('posts').withAvg('topPost', 'score').orderBy('topPost_avg_score').get(), 'topPost_avg_score')).toEqual([[1, 10], [2, 30]])
+    expect(rows(await Author.withSum({ latestPost: query => query.where('published', false) }, 'score').orderByDesc('latestPost_sum_score').orderBy('id').get(), 'latestPost_sum_score')).toEqual([[2, 2], [1, 0], [3, 0]])
+    expect(rows(await Author.withCount('latestLike').orderBy('latestLike_count').orderBy('id').get(), 'latestLike_count')).toEqual([[3, 0], [1, 1], [2, 1]])
+  })
+
+  it('orders by the selected one-of-many row, not by every related row', async () => {
+    const { Author, posts, names } = await openAuthorsFixture(driver)
+    await DB.table(posts).insert([{ id: 5, author_id: 1, score: 5, published: false }, { id: 6, author_id: 3, score: 8, published: false }])
+
+    const summed = await Author.withSum('latestPost', 'score').orderByDesc('latestPost_sum_score').get()
+    expect(summed.map(author => [author.id, author.toAttributes().latestPost_sum_score])).toEqual([[2, 30], [3, 8], [1, 5]])
+
+    const counted = await Author.withCount('latestPost').orderByDesc('latestPost_count').orderBy('id').get()
+    expect(counted.map(author => [author.id, author.toAttributes().latestPost_count])).toEqual([[1, 1], [2, 1], [3, 1]])
+
+    const qualified = await Author.withCount({ latestPost: query => query.where(`${names.posts}.published` as never, true) }).orderByDesc('latestPost_count').orderBy('id').get()
+    expect(qualified.map(author => [author.id, author.toAttributes().latestPost_count])).toEqual([[1, 1], [2, 1], [3, 0]])
+
+    const either = await Author.withCount({ latestPost: query => query.where('published', true).orWhere('score', 99) }).orderByDesc('latestPost_count').orderBy('id').get()
+    expect(either.map(author => [author.id, author.toAttributes().latestPost_count])).toEqual([[1, 1], [2, 1], [3, 0]])
+  })
+
+  it('breaks one-of-many ties by the primary key when loading and ordering', async () => {
+    const { Author, posts } = await openAuthorsFixture(driver)
+    await DB.table(posts).insert([{ id: 5, author_id: 1, score: 10, published: false }, { id: 6, author_id: 3, score: 15, published: false }])
+
+    const ranked = await Author.withSum('topPost', 'score').withMax('topPost', 'id').orderByDesc('topPost_sum_score').get()
+    expect(ranked.map(author => [author.id, author.toAttributes().topPost_sum_score, author.toAttributes().topPost_max_id])).toEqual([[2, 30, 4], [3, 15, 6], [1, 10, 5]])
+
+    const loaded = await Author.with('topPost').findOrFail(1)
+    expect(loaded.topPost?.id).toBe(5)
+  })
+
+  it('breaks one-of-many ties by the primary key for text extrema and projected loads', async () => {
+    const { Author, StrictAuthor, posts } = await openAuthorsFixture(driver)
+    await DB.table(posts).where('id', 1).update({ title: 'z' })
+    await DB.table(posts).insert([{ id: 5, author_id: 1, score: 10, published: false, title: 'a' }, { id: 6, author_id: 3, score: 15, published: false, title: 'm' }])
+
+    const titled = await Author.whereIn('id', [1, 3]).withMax('topPost', 'title').orderByDesc('topPost_max_title').get()
+    expect(titled.map(author => [author.id, author.toAttributes().topPost_max_title])).toEqual([[3, 'm'], [1, 'a']])
+
+    const projected = await StrictAuthor.with({ topPost: query => query.select('author_id', 'score') }).findOrFail(1)
+    expect(projected.toJSON()).toMatchObject({ topPost: { author_id: 1, score: 10 } })
+  })
+
+  it('breaks one-of-many ties on UUID keys and ignores row locks in constraints', async () => {
+    const { Author, names, schema } = await openAuthorsFixture(driver)
+    const reviewsName = `${names.posts}_reviews`
+    await schema.createTable(reviewsName, (table) => {
+      table.uuid('id').primaryKey()
+      table.integer('author_id')
+      table.integer('score')
+    })
+    onTestFinished(() => schema.dropTable(reviewsName))
+    const reviews = defineGeneratedTable(reviewsName, { id: column.uuid().primaryKey(), author_id: column.integer(), score: column.integer() })
+    await DB.table(reviews).insert([
+      { id: '00000000-0000-4000-8000-000000000001', author_id: 1, score: 7 },
+      { id: '00000000-0000-4000-8000-000000000002', author_id: 1, score: 7 },
+    ])
+    const Review = defineModel(reviews, { timestamps: false })
+    const Reviewed = defineModel(defineGeneratedTable(names.authors, { id: column.integer().primaryKey(), name: column.string() }), {
+      name: `Reviewed${names.authors}`,
+      timestamps: false,
+      relations: { topReview: ofMany(() => Review, 'author_id', 'score', 'max') },
+    })
+
+    const reviewed = await Reviewed.with('topReview').findOrFail(1)
+    expect(reviewed.toJSON()).toMatchObject({ topReview: { id: '00000000-0000-4000-8000-000000000002' } })
+
+    const locked = await Author.with({ latestPost: query => query.lockForUpdate() }).findOrFail(2)
+    expect(locked.toJSON()).toMatchObject({ latestPost: { id: 4 } })
+
+    const lockedCounts = await Author.withCount({ posts: query => query.lockForUpdate() }).orderByDesc('posts_count').get()
+    expect(lockedCounts.map(author => author.id)).toEqual([2, 1, 3])
+    const lockedLatest = await Author.withCount({ latestPost: query => query.lockForUpdate() }).orderBy('latestPost_count').orderBy('id').get()
+    expect(lockedLatest.map(author => author.id)).toEqual([3, 1, 2])
+  })
+
+  it('orders by an aggregate of a one-of-many relation back to the same table', async () => {
+    const { SiblingPost, posts: postsTable } = await openAuthorsFixture(driver)
+    await DB.table(postsTable).insert([{ id: 5, author_id: 3, score: 20, published: true }])
+
+    const posts = await SiblingPost.withSum('latestSibling', 'score').orderByDesc('latestSibling_sum_score').orderBy('id').get()
+    expect(posts.map(post => [post.id, post.toAttributes().latestSibling_sum_score])).toEqual([[2, 30], [3, 30], [4, 30], [5, 20], [1, 10]])
   })
 
   it('orders by the last aggregate loaded under an alias', async () => {

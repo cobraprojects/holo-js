@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-062-to-063). No database migration is needed.
+
+### Added
+
+- Database: query builders order by the aliases they select, such as `addSelectSum('revenue', 'total').orderByDesc('revenue')`, and `orderBy()`, `orderByDesc()`, `latest()`, `oldest()` and `reorder()` accept those aliases as typed names. Model queries order by loaded relation aggregates, such as `withCount('comments').orderByDesc('comments_count')`, including one-of-many relations such as `latestOfMany()`. The database sorts, so `limit()`, `first()`, `paginate()` and `chunk()` return the right rows. See [ordering and limiting](apps/docs/docs/orm/querying.md#ordering-and-limiting).
+- Database: `withCount()` and `withExists()` accept aliased names, such as `withCount('comments as replies')` and `withCount({ 'comments as approved': query => query.where('approved', true) })`.
+
+### Changed
+
+- Database: outside a union, `cursorPaginate()` throws a `SecurityError` when it orders by an aggregate or subquery selection, or by a column alias with the same name as a table column, instead of failing or skipping rows on a later page.
+
+### Fixed
+
+- Database: `cursorPaginate()` ordered by a `column as alias` selection follows its cursor past the first page.
+- Database: when several related rows tie on a one-of-many relation's column, such as two posts with the same top score under `ofMany('score', 'max')`, the relation returns the row with the highest primary key (the lowest for `'min'`), as Laravel does. Before, it returned whichever tied row the database read first.
+
 ## 0.6.2 - 2026-11-19
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-061-to-062). SvelteKit apps rename `holoSvelteKitRealtime()` to `holoSvelteKit()`, which `holo prepare` does for you. No database migration is needed.

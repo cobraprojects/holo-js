@@ -2,7 +2,7 @@ import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DB } from '../facade/DB'
 import { ConfigurationError, DatabaseError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
 import { assertQueryTablePath } from '../query/validator'
-import { TableQueryBuilder, addSelectExists, aliasTableSource, selectAggregate, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, addSelectExists, aliasTableSource, selectAggregate, withoutRowLock, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
 import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { selectionOutputName } from '../query/modelRowProjection'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadColumnSqlTypes, loadTableDefinition } from '../schema/columnListing'
@@ -761,6 +761,48 @@ export class ModelRepository<
     return this.countsAtMostOne(aggregate) ? addSelectExists(query, subquery, alias) : query.addSelectSub(subquery, alias)
   }
 
+  private keepOneOfManyRows(
+    relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' | 'morphOneOfMany' }>,
+    candidates: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
+    parentAlias: string | undefined,
+    constraint?: RelationConstraint,
+  ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+    const related = this.resolveRelatedRepository(relation.related)
+    const peersAlias = `__holo_one_of_many${parentAlias === undefined ? '' : `_${parentAlias}`}`
+    const parentColumn = relation.kind === 'morphOneOfMany' ? relation.morphIdColumn : relation.foreignKey
+    const peers = this.whereParentKey(this.createOneOfManyPeers(relation, related, peersAlias, constraint), related.definition.table, parentColumn, relation.localKey, parentAlias, `${peersAlias}.${parentColumn}`)
+    const primaryKey = related.definition.primaryKey
+    const direction = relation.aggregate === 'max' ? 'desc' : 'asc'
+    const chosenKey = peers
+      .whereNotNull(`${peersAlias}.${relation.aggregateColumn}` as never)
+      .orderBy(`${peersAlias}.${relation.aggregateColumn}` as never, direction)
+      .orderBy(`${peersAlias}.${primaryKey}` as never, direction)
+      .limit(1)
+      .select(`${peersAlias}.${primaryKey}` as never)
+    const candidateSource = candidates.getPlan().source
+    return candidates.whereSub(`${candidateSource.alias ?? candidateSource.tableName}.${primaryKey}` as never, '=', chosenKey as TableQueryBuilder<TableDefinition, Record<string, unknown>>)
+  }
+
+  private createOneOfManyPeers(
+    relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' | 'morphOneOfMany' }>,
+    related: ModelRepository,
+    alias: string,
+    constraint?: RelationConstraint,
+  ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+    const scoped = withoutRowLock(this.applyRelationConstraint(relation, related, constraint, alias).getTableQueryBuilder().reorder().limit().offset())
+    const previousAlias = scoped.getPlan().source.alias
+    const constrained = previousAlias === alias
+      ? requalifyTableSource(scoped)
+      : requalifyTableSource(aliasTableSource(scoped, alias), previousAlias)
+    const predicates = constrained.getPlan().predicates
+    const grouped = predicates.some(predicate => predicate.boolean === 'or')
+      ? constrained.withPredicates([{ kind: 'group', boolean: 'and', predicates }])
+      : constrained
+    return relation.kind === 'morphOneOfMany'
+      ? grouped.where(`${alias}.${relation.morphTypeColumn}` as never, this.getMorphTypeValue())
+      : grouped
+  }
+
   private countsAtMostOne(aggregate: AggregateLoad): boolean {
     if (aggregate.kind === 'exists') return true
     if (aggregate.kind !== 'count') return false
@@ -772,9 +814,7 @@ export class ModelRepository<
     const unorderable = (reason: string) => new RelationError(`Cannot order by the "${aggregate.relation}" relation aggregate on model "${this.definition.name}": ${reason}`)
     if (aggregate.relation.includes('.')) throw unorderable('nested relation aggregates are not supported.')
     const relation = this.getRelationDefinition(aggregate.relation)
-    if (relation.kind === 'morphTo' || relation.kind === 'hasOneOfMany' || relation.kind === 'morphOneOfMany') {
-      throw unorderable(`${relation.kind} relation aggregates are loaded after the query runs.`)
-    }
+    if (relation.kind === 'morphTo') throw unorderable('morph-to relation aggregates are loaded after the query runs.')
     const crossConnection = this.findCrossConnectionRepository(relation)
     if (crossConnection) {
       throw unorderable(`its ${crossConnection.target} model uses connection "${crossConnection.repository.getConnectionName()}" while the query uses "${this.getConnectionName()}".`)
@@ -788,7 +828,10 @@ export class ModelRepository<
     if (!constrained || !sameTable(constrained.getTableName(), related.definition.table.tableName)) {
       throw unorderable('the relation cannot be expressed as a single correlated subquery.')
     }
-    const subquery = constrained.reorder()
+    const unlocked = withoutRowLock(constrained.reorder())
+    const subquery = relation.kind === 'hasOneOfMany' || relation.kind === 'morphOneOfMany'
+      ? this.keepOneOfManyRows(relation, unlocked, parentAlias, aggregate.constraint)
+      : unlocked
     if (aggregate.kind === 'exists' || this.countsAtMostOne(aggregate)) return subquery
     if (aggregate.kind === 'count') return subquery.selectCount('aggregate')
     const source = subquery.getPlan().source
@@ -3033,9 +3076,22 @@ export class ModelRepository<
     const scopedOuter = relation.kind === 'morphOneOfMany'
       ? outer.where(`${relatedTable}.${relation.morphTypeColumn}`, this.getMorphTypeValue())
       : outer
+    const tieAlias = '__holo_one_of_many_tie'
+    const primaryKey = related.definition.primaryKey
+    const tiedPeers = whereKeyColumn(
+      whereKeyColumn(this.createOneOfManyPeers(relation, related, tieAlias, constraint), `${tieAlias}.${parentColumn}`, `${relatedTable}.${parentColumn}`, {}),
+      `${tieAlias}.${relation.aggregateColumn}`,
+      `${relatedTable}.${relation.aggregateColumn}`,
+      {},
+    )
+    const tieKey = tiedPeers
+      .orderBy(`${tieAlias}.${primaryKey}` as never, relation.aggregate === 'max' ? 'desc' : 'asc')
+      .limit(1)
+      .select(`${tieAlias}.${primaryKey}` as never)
     const joined = scopedOuter
       .joinSub(latestQuery.groupBy(parentColumn), latestAlias, `${relatedTable}.${parentColumn}`, '=', `${latestAlias}.${latestKey}`)
       .whereColumn(`${latestAlias}.${latestValue}`, '=', `${relatedTable}.${relation.aggregateColumn}`)
+      .whereSub(`${relatedTable}.${primaryKey}`, '=', tieKey as TableQueryBuilder<TableDefinition, Record<string, unknown>>)
 
     return projected
       ? joined

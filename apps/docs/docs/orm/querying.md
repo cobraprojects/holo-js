@@ -247,7 +247,7 @@ await Post.withCount('comments').orderByDesc('comments_count').paginate(15)
 await Author.withSum('books', 'pages').orderBy('books_sum_pages').get()
 ```
 
-Aggregates of `morphTo()` and one-of-many relations, nested aggregates such as `posts.comments`, and relations on another connection are loaded after the query runs, so ordering by them throws a `RelationError`, as do an aggregate constraint that calls `select()`, `limit()`, `offset()`, `distinct()`, `join()`, `groupBy()`, `having()` or `union()`, and a union ordered by an aggregate.
+Aggregates of one-of-many relations such as `latestOfMany()` sort by the one related row the relation selects. Aggregates of `morphTo()` relations, nested aggregates such as `posts.comments`, and relations on another connection are loaded after the query runs, so ordering by them throws a `RelationError`, as do an aggregate constraint that calls `select()`, `limit()`, `offset()`, `distinct()`, `join()`, `groupBy()`, `having()` or `union()`, and a union ordered by an aggregate.
 
 ```ts
 await Post.query().latest().skip(20).take(10).get()
