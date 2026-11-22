@@ -80,7 +80,7 @@ async function openAuthorsFixture(driver: Driver) {
   const StrictPost = defineModel(posts, { name: `StrictPost${tag}`, timestamps: false, preventAccessingMissingAttributes: true })
   const StrictAuthor = defineModel(authors, { name: `StrictAuthor${tag}`, timestamps: false, relations: { topPost: ofMany(() => StrictPost, 'author_id', 'score', 'max') } })
   const SiblingPost = defineModel(posts, { timestamps: false, relations: { latestSibling: latestOfMany(() => Post, 'author_id', 'author_id') } })
-  return { Author, Like, SiblingPost, StrictAuthor, posts, pivot, names }
+  return { Author, Like, SiblingPost, StrictAuthor, posts, pivot, names, schema }
 }
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by selected aliases on %s', (driver) => {
@@ -250,6 +250,34 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
 
     const projected = await StrictAuthor.with({ topPost: query => query.select('author_id', 'score') }).findOrFail(1)
     expect(projected.toJSON()).toMatchObject({ topPost: { author_id: 1, score: 10 } })
+  })
+
+  it('breaks one-of-many ties on UUID keys and ignores row locks in constraints', async () => {
+    const { Author, names, schema } = await openAuthorsFixture(driver)
+    const reviewsName = `${names.posts}_reviews`
+    await schema.createTable(reviewsName, (table) => {
+      table.uuid('id').primaryKey()
+      table.integer('author_id')
+      table.integer('score')
+    })
+    onTestFinished(() => schema.dropTable(reviewsName))
+    const reviews = defineGeneratedTable(reviewsName, { id: column.uuid().primaryKey(), author_id: column.integer(), score: column.integer() })
+    await DB.table(reviews).insert([
+      { id: '00000000-0000-4000-8000-000000000001', author_id: 1, score: 7 },
+      { id: '00000000-0000-4000-8000-000000000002', author_id: 1, score: 7 },
+    ])
+    const Review = defineModel(reviews, { timestamps: false })
+    const Reviewed = defineModel(defineGeneratedTable(names.authors, { id: column.integer().primaryKey(), name: column.string() }), {
+      name: `Reviewed${names.authors}`,
+      timestamps: false,
+      relations: { topReview: ofMany(() => Review, 'author_id', 'score', 'max') },
+    })
+
+    const reviewed = await Reviewed.with('topReview').findOrFail(1)
+    expect(reviewed.toJSON()).toMatchObject({ topReview: { id: '00000000-0000-4000-8000-000000000002' } })
+
+    const locked = await Author.with({ latestPost: query => query.lockForUpdate() }).findOrFail(2)
+    expect(locked.toJSON()).toMatchObject({ latestPost: { id: 4 } })
   })
 
   it('orders by an aggregate of a one-of-many relation back to the same table', async () => {

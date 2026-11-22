@@ -789,7 +789,9 @@ export class ModelRepository<
     alias: string,
     constraint?: RelationConstraint,
   ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
-    const constrained = requalifyTableSource(this.applyRelationConstraint(relation, related, constraint, alias).getTableQueryBuilder().reorder().limit().offset())
+    const scoped = this.applyRelationConstraint(relation, related, constraint, alias).getTableQueryBuilder().reorder().limit().offset()
+    const unlocked = new TableQueryBuilder(related.definition.table, scoped.getConnection(), withLockMode(scoped.getPlan(), undefined))
+    const constrained = requalifyTableSource(unlocked)
     const predicates = constrained.getPlan().predicates
     const grouped = predicates.some(predicate => predicate.boolean === 'or')
       ? constrained.withPredicates([{ kind: 'group', boolean: 'and', predicates }])
@@ -3079,9 +3081,10 @@ export class ModelRepository<
       `${relatedTable}.${relation.aggregateColumn}`,
       {},
     )
-    const tieKey = relation.aggregate === 'max'
-      ? tiedPeers.selectMax('tie_key', `${tieAlias}.${primaryKey}` as never)
-      : tiedPeers.selectMin('tie_key', `${tieAlias}.${primaryKey}` as never)
+    const tieKey = tiedPeers
+      .orderBy(`${tieAlias}.${primaryKey}` as never, relation.aggregate === 'max' ? 'desc' : 'asc')
+      .limit(1)
+      .select(`${tieAlias}.${primaryKey}` as never)
     const joined = scopedOuter
       .joinSub(latestQuery.groupBy(parentColumn), latestAlias, `${relatedTable}.${parentColumn}`, '=', `${latestAlias}.${latestKey}`)
       .whereColumn(`${latestAlias}.${latestValue}`, '=', `${relatedTable}.${relation.aggregateColumn}`)
