@@ -769,7 +769,7 @@ export class ModelRepository<
     constraint?: RelationConstraint,
   ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
     const related = this.resolveRelatedRepository(relation.related)
-    const peersAlias = '__holo_one_of_many'
+    const peersAlias = `__holo_one_of_many${parentAlias === undefined ? '' : `_${parentAlias}`}`
     const parentColumn = relation.kind === 'morphOneOfMany' ? relation.morphIdColumn : relation.foreignKey
     const constrainedPeers = this.applyRelationConstraint(relation, related, constraint, peersAlias).getTableQueryBuilder()
     const typedPeers = relation.kind === 'morphOneOfMany'

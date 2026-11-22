@@ -209,6 +209,17 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
     expect(rows(await Author.withCount('latestLike').orderBy('latestLike_count').orderBy('id').get(), 'latestLike_count')).toEqual([[3, 0], [1, 1], [2, 1]])
   })
 
+  it('orders by the selected one-of-many row, not by every related row', async () => {
+    const { Author, posts } = await openAuthorsFixture(driver)
+    await DB.table(posts).insert([{ id: 5, author_id: 1, score: 5, published: false }, { id: 6, author_id: 3, score: 8, published: false }])
+
+    const summed = await Author.withSum('latestPost', 'score').orderByDesc('latestPost_sum_score').get()
+    expect(summed.map(author => [author.id, author.toAttributes().latestPost_sum_score])).toEqual([[2, 30], [3, 8], [1, 5]])
+
+    const counted = await Author.withCount('latestPost').orderByDesc('latestPost_count').orderBy('id').get()
+    expect(counted.map(author => [author.id, author.toAttributes().latestPost_count])).toEqual([[1, 1], [2, 1], [3, 1]])
+  })
+
   it('breaks one-of-many ties by the primary key when loading and ordering', async () => {
     const { Author, posts } = await openAuthorsFixture(driver)
     await DB.table(posts).insert([{ id: 5, author_id: 1, score: 10, published: false }, { id: 6, author_id: 3, score: 15, published: false }])
