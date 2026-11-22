@@ -68,6 +68,16 @@ function releaseWorkflowJobs(workflow) {
   }))
 }
 
+function jobNeeds(job) {
+  const needs = job ? /^ {4}needs:\s*(\[[^\]\n]*\]|[^\n]+?)\s*$/m.exec(job.body)?.[1] : undefined
+  return needs?.replace(/[[\]]/g, '').split(',').map(id => id.trim()) ?? []
+}
+
+function runsOnlyWhenDue(job, planJob) {
+  const condition = /^ {4}if:\s*(.+)$/m.exec(job.body)?.[1] ?? ''
+  return jobNeeds(job).includes(planJob.id) && condition.includes(`needs.${planJob.id}.outputs.due == 'true'`)
+}
+
 async function collectReleaseWorkflowFailures(root) {
   const workflowPath = join(root, releaseWorkflowPath)
   if (!(await exists(workflowPath))) {
@@ -131,17 +141,20 @@ async function collectReleaseWorkflowFailures(root) {
     if (!/^ {6}actions:\s*read\s*$/m.test(gateJob.body)) {
       failures.push(`${releaseWorkflowPath} must grant actions: read to the CI gate job so it can list workflow runs for this commit.`)
     }
-    const needs = publishJob ? /^ {4}needs:\s*(\[[^\]\n]*\]|[^\n]+?)\s*$/m.exec(publishJob.body)?.[1] : undefined
-    const needsIds = needs?.replace(/[[\]]/g, '').split(',').map(id => id.trim()) ?? []
-    if (!needsIds.includes(gateJob.id)) {
+    if (!jobNeeds(publishJob).includes(gateJob.id)) {
       failures.push(`${releaseWorkflowPath} must make the publish job depend on the CI gate job \`${gateJob.id}\` with needs, so nothing publishes unless CI passed for this commit.`)
     }
   }
-  const dueBranch = /::error title=NPM_TOKEN is missing[\s\S]*?::notice/.exec(workflow)?.[0] ?? ''
-  const skipBranch = /::notice[\s\S]*?exit 0/.exec(workflow)?.[0] ?? ''
-  const unpublishedCheck = /list-unpublished-packages\.mjs/.test(workflow)
-  if (!unpublishedCheck || !/-z "\$NODE_AUTH_TOKEN"/.test(workflow) || !/\bexit 1\b/.test(dueBranch) || skipBranch === '') {
-    failures.push(`${releaseWorkflowPath} must fail when NPM_TOKEN is not configured and a package version is not on npm yet, and skip with a notice only when every version is already published.`)
+  const planJob = jobs.find(job => job.body.includes('scripts/list-unpublished-packages.mjs'))
+  const planReportsDue = planJob && planJob !== publishJob && /::notice[\s\S]*?due=false/.test(planJob.body) && planJob.body.includes('due=true')
+  if (!planReportsDue) {
+    failures.push(`${releaseWorkflowPath} must check npm with \`node scripts/list-unpublished-packages.mjs\` in its own job that reports due=true when a version is missing, and skips with a notice and due=false only when every version is already published.`)
+  } else if (!publishJob || !runsOnlyWhenDue(publishJob, planJob) || (gateJob && !runsOnlyWhenDue(gateJob, planJob))) {
+    failures.push(`${releaseWorkflowPath} must run the CI gate and publish jobs only when the plan job \`${planJob.id}\` reports a publish is due, so pushes with nothing to publish never wait for release approval.`)
+  }
+  const missingTokenBranch = /-z "\$NODE_AUTH_TOKEN"[\s\S]*?\bfi\b/.exec(publishJob?.body ?? '')?.[0] ?? ''
+  if (!/::error title=NPM_TOKEN is missing/.test(missingTokenBranch) || !/\bexit 1\b/.test(missingTokenBranch)) {
+    failures.push(`${releaseWorkflowPath} must fail the publish step when NPM_TOKEN is not configured.`)
   }
   if (!/git push origin --tags/.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must push the tags that changeset publish creates with \`git push origin --tags\`.`)
