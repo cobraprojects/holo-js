@@ -771,7 +771,11 @@ export class ModelRepository<
     const related = this.resolveRelatedRepository(relation.related)
     const peersAlias = `__holo_one_of_many${parentAlias === undefined ? '' : `_${parentAlias}`}`
     const parentColumn = relation.kind === 'morphOneOfMany' ? relation.morphIdColumn : relation.foreignKey
-    const constrainedPeers = this.applyRelationConstraint(relation, related, constraint, peersAlias).getTableQueryBuilder()
+    const ungroupedPeers = this.applyRelationConstraint(relation, related, constraint, peersAlias).getTableQueryBuilder()
+    const peerPredicates = ungroupedPeers.getPlan().predicates
+    const constrainedPeers = peerPredicates.some(predicate => predicate.boolean === 'or')
+      ? ungroupedPeers.withPredicates([{ kind: 'group', boolean: 'and', predicates: peerPredicates }])
+      : ungroupedPeers
     const typedPeers = relation.kind === 'morphOneOfMany'
       ? constrainedPeers.where(`${peersAlias}.${relation.morphTypeColumn}` as never, this.getMorphTypeValue())
       : constrainedPeers

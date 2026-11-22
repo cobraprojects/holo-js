@@ -218,6 +218,9 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
 
     const counted = await Author.withCount('latestPost').orderByDesc('latestPost_count').orderBy('id').get()
     expect(counted.map(author => [author.id, author.toAttributes().latestPost_count])).toEqual([[1, 1], [2, 1], [3, 1]])
+
+    const either = await Author.withCount({ latestPost: query => query.where('published', true).orWhere('score', 99) }).orderByDesc('latestPost_count').orderBy('id').get()
+    expect(either.map(author => [author.id, author.toAttributes().latestPost_count])).toEqual([[1, 1], [2, 1], [3, 0]])
   })
 
   it('breaks one-of-many ties by the primary key when loading and ordering', async () => {
