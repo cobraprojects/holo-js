@@ -191,6 +191,37 @@ describe.each(sessionStoreFactories)('concurrent authenticated session transitio
     expect(Object.keys((await browserSessionData(store)).authMultiFactorEnrollments as Record<string, string>).sort()).toEqual(['admin', 'support'])
   })
 
+  it('keeps a guard signed out when it logs out while its impersonation is being stopped', async () => {
+    const { store, request } = await signedInBrowser(create)
+    await request(() => auth.guard('web').loginUsingId(3))
+    await request(() => auth.guard('web').impersonateById(2, { actorGuard: 'admin' }))
+    const gate = holdFirstWrites(store, 1)
+    configure(gate.store)
+
+    const stopping = request(() => auth.guard('web').stopImpersonating())
+    await gate.reached
+    await request(() => auth.guard('web').logout())
+    gate.release()
+
+    await expect(stopping).resolves.toBeNull()
+    await expect(request(() => auth.guard('web').user())).resolves.toBeNull()
+    await expect(request(() => auth.guard('admin').user())).resolves.toMatchObject({ id: 1 })
+  })
+
+  it('rejects a multi-factor enrollment whose session ends before it is stored', async () => {
+    const { store, request } = await signedInBrowser(create)
+    const gate = holdFirstWrites(store, 1)
+    configure(gate.store)
+    const sessionId = getSessionRuntime().decryptCookie('holo_session', browserCookies.get('holo_session')!)!
+
+    const enrollment = request(() => auth.guard('admin').multiFactor.beginEnrollment())
+    await gate.reached
+    await store.delete(sessionId)
+    gate.release()
+
+    await expect(enrollment).rejects.toMatchObject({ code: 'multi_factor_authentication_required' })
+  })
+
   it('invalidates the session when the last guard logs out', async () => {
     const { store, request } = await signedInBrowser(create)
     const sessionId = getSessionRuntime().decryptCookie('holo_session', browserCookies.get('holo_session')!)!
@@ -209,10 +240,12 @@ describe('a session store without atomic data updates', () => {
     const { store, request } = await signedInBrowser(file.create)
     const { updateData: _updateData, ...withoutUpdateData } = store
     configure(withoutUpdateData)
+    users.set(3, { ...users.get(3)!, remember_token: 'remember-token' })
     const before = await browserSessionData(store)
 
     await expect(request(() => auth.guard('support').logout())).rejects.toThrow('Session store "file" does not support atomic data writes.')
 
     await expect(browserSessionData(store)).resolves.toEqual(before)
+    expect(users.get(3)?.remember_token).toBe('remember-token')
   })
 })

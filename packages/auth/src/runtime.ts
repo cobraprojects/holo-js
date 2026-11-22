@@ -1833,11 +1833,12 @@ function enrollmentData(value: unknown): Readonly<Record<string, string>> {
 }
 
 async function writeEnrollment(state: MultiFactorAuthenticatedState, guardName: string, value?: string): Promise<void> {
-  await atomicSessionDataUpdate(getRuntimeBindings())(state.record.id, 'authMultiFactorEnrollments', (current) => {
+  const result = await atomicSessionDataUpdate(getRuntimeBindings())(state.record.id, 'authMultiFactorEnrollments', (current) => {
     const { [guardName]: _previous, ...others } = enrollmentData(current)
     const enrollments = value ? { ...others, [guardName]: value } : others
     return Object.keys(enrollments).length > 0 ? Object.freeze(enrollments) : undefined
   }, { store: state.record.store })
+  if (value && !result.found) throwAuthError('multi_factor_authentication_required', 'Authentication is required for this multi-factor operation.')
 }
 
 async function verifyCredentialTotp(credential: AuthMultiFactorCredentialRecord, code: string): Promise<AuthMultiFactorVerificationState> {
@@ -2227,11 +2228,13 @@ async function restoreImpersonatedGuardUser(guardName: string): Promise<Retrieve
   }
 
   const original = await originalImpersonationUser(state.payload)
-  const remaining = await updateSessionPayloads(bindings, state.record, current => original
-    ? Object.freeze({ ...current, [guardName]: original.payload })
-    : withoutGuards(current, [guardName]))
+  const stopping = state.payload.impersonation.startedAt
+  const remaining = await updateSessionPayloads(bindings, state.record, (current) => {
+    if (current[guardName]?.impersonation?.startedAt !== stopping) return current
+    return original ? Object.freeze({ ...current, [guardName]: original.payload }) : withoutGuards(current, [guardName])
+  })
 
-  if (!original || !remaining[guardName]) {
+  if (!original || remaining[guardName]?.authenticatedAt !== original.payload.authenticatedAt) {
     await setRememberRecaller(bindings, guardName)
     bindings.context.setSessionId(guardName)
     bindings.context.setCachedUser(guardName, null)
@@ -2277,12 +2280,12 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
   setRequestOnlyGuard(bindings, guardName, false)
   if (sessionId) {
     const payload = readSessionPayload(await bindings.session.read(sessionId), guardName)
+    const remaining = await updateSessionPayloads(bindings, { id: sessionId }, current => withoutGuards(current, [guardName]))
+    clearSessionCookies = Object.keys(remaining).length === 0
     const rememberedIdentity = payload?.impersonation?.actor ?? payload
     if (rememberedIdentity && !payload?.multiFactorChallengeExpiresAt) {
       await cycleRememberToken(rememberedIdentity.provider, rememberedIdentity.userId)
     }
-    const remaining = await updateSessionPayloads(bindings, { id: sessionId }, current => withoutGuards(current, [guardName]))
-    clearSessionCookies = Object.keys(remaining).length === 0
   }
 
   const forgetRemember = Boolean(await getRememberRecaller(bindings, guardName))
