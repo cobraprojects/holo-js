@@ -15,9 +15,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  plan:
+    name: Check for unpublished package versions
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      due: ${{ steps.unpublished.outputs.due }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: List package versions missing from npm
+        id: unpublished
+        run: |
+          unpublished="$(node scripts/list-unpublished-packages.mjs)"
+          if [ -z "$unpublished" ]; then
+            echo "::notice title=Release skipped::Every package version is already on npm."
+            echo "due=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$unpublished"
+          echo "due=true" >> "$GITHUB_OUTPUT"
+
   ci:
     name: Wait for CI on this commit
-    if: github.ref == 'refs/heads/main'
+    needs: plan
+    if: github.ref == 'refs/heads/main' && needs.plan.outputs.due == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -34,8 +63,8 @@ jobs:
 
   publish:
     name: Publish packages
-    needs: ci
-    if: github.ref == 'refs/heads/main'
+    needs: [plan, ci]
+    if: github.ref == 'refs/heads/main' && needs.plan.outputs.due == 'true'
     environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -65,14 +94,8 @@ jobs:
           NPM_CONFIG_PROVENANCE: 'true'
         run: |
           if [ -z "$NODE_AUTH_TOKEN" ]; then
-            unpublished="$(node scripts/list-unpublished-packages.mjs)"
-            if [ -n "$unpublished" ]; then
-              echo "::error title=NPM_TOKEN is missing::A publish is due, but NPM_TOKEN is not configured. Package versions missing from npm:"
-              echo "$unpublished"
-              exit 1
-            fi
-            echo "::notice title=Release skipped::NPM_TOKEN is not configured, and every package version is already on npm."
-            exit 0
+            echo "::error title=NPM_TOKEN is missing::A publish is due, but NPM_TOKEN is not configured."
+            exit 1
           fi
           bun run release:skip-build
       - name: Push the release tags, including after a partial publish failure
