@@ -18,6 +18,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
     '@holo-js/validation',
     '@holo-js/forms',
     '@holo-js/auth',
+    '@holo-js/adapter-shared',
     '@holo-js/adapter-next',
   ]))
   const nextFirstVisitRoot = await buildNextFirstVisitApp()

@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { originalPositionFor, TraceMap } from '@jridgewell/trace-mapping'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -6,18 +7,47 @@ import type { NextModuleInputSourceMap } from '@holo-js/adapter-shared/build'
 import routeLoader from '../src/route-loader'
 import serverActionLoader from '../src/server-action-loader'
 
-vi.mock('@holo-js/adapter-next/runtime', () => ({
-  adapterNextRuntimeInternals: {
-    serverAction: <TArgs extends readonly unknown[], TResult>(action: (...args: TArgs) => Promise<TResult>) => (
-      Object.assign(async (...args: TArgs) => ({ wrapped: await action(...args) }), { original: action })
-    ),
+vi.mock('@holo-js/adapter-next/runtime', () => {
+  const wrapped = new WeakSet<object>()
+  return { adapterNextRuntimeInternals: {
+    serverAction: <TArgs extends readonly unknown[], TResult>(action: (...args: TArgs) => Promise<TResult>) => {
+      if (wrapped.has(action)) return action
+      const invoke = async (...args: TArgs) => ({ wrapped: await action(...args) })
+      wrapped.add(invoke)
+      return invoke
+    },
     routeHandler: <TArgs extends readonly unknown[], TResult>(handler: (...args: TArgs) => Promise<TResult>) => (
       async (...args: TArgs) => ({ route: await handler(...args) })
     ),
-  },
-}))
+  } }
+})
 
 type LoaderOutput = { readonly code: string, readonly map?: unknown }
+
+type NextSwc = {
+  loadBindings(): Promise<unknown>
+  transform(source: string, options: Record<string, unknown>): Promise<{ readonly code: string }>
+}
+
+type NextServerReferenceInfo = {
+  extractInfoFromServerReferenceId(id: string): unknown
+  omitUnusedArgs(args: readonly unknown[], info: unknown): unknown[]
+}
+
+const requireNext = createRequire(import.meta.url)
+const nextSwc = requireNext('next/dist/build/swc/index.js') as NextSwc
+const nextServerReferenceInfo = requireNext('next/dist/shared/lib/server-reference-info.js') as NextServerReferenceInfo
+
+async function nextActionIds(source: string, isReactServerLayer: boolean): Promise<readonly string[]> {
+  await nextSwc.loadBindings()
+  const { code } = await nextSwc.transform(source, {
+    filename: '/app/actions.ts',
+    jsc: { parser: { syntax: 'typescript' }, target: 'es2022' },
+    serverActions: { isReactServerLayer, isDevelopment: false, useCacheEnabled: false, hashSalt: '', cacheKinds: [] },
+    serverComponents: { isReactServerLayer, cacheComponentsEnabled: false, useCacheEnabled: false, taintEnabled: false, pageExtensions: [] },
+  })
+  return [...new Set([...code.matchAll(/"([0-9a-f]{42})"/g)].map(match => match[1]!))].sort()
+}
 
 function runLoader(loader: typeof serverActionLoader, resourcePath: string, source: string, inputMap?: NextModuleInputSourceMap): LoaderOutput {
   let output: LoaderOutput | undefined
@@ -27,6 +57,14 @@ function runLoader(loader: typeof serverActionLoader, resourcePath: string, sour
   }, source, inputMap)
   expect(returned).toBeUndefined()
   return output!
+}
+
+function withExportKeywordsBlanked(line: string): string {
+  return line.replace(/^export (?:default )?(?=async function)/, keywords => ' '.repeat(keywords.length))
+}
+
+function withoutWrapperCall(line: string): string {
+  return line.replace(/__holoRouteRuntime\.serverAction\((.*)\)$/, '$1')
 }
 
 function position(text: string, needle: string): { readonly line: number, readonly column: number } {
@@ -87,6 +125,30 @@ describe('Next server action loader', () => {
     expect(await (module.current as () => Promise<unknown>)()).toEqual({ wrapped: [module.save, module.pick] })
   })
 
+  it('lets Next send every argument a caller passes, including form data an action does not declare', async () => {
+    const source = [
+      '\'use server\'',
+      'export async function retire(organizationId: string) { return organizationId }',
+      'export const remove = async () => \'removed\'',
+      'async function rename() { return \'renamed\' }',
+      'export { rename as alias }',
+      'export default async function () { return \'default\' }',
+      'export async function overloaded(value: string): Promise<string>',
+      'export async function overloaded(value?: string) { return value ?? \'none\' }',
+    ].join('\n')
+    const compiled = serverActionLoader.call({ resourcePath: '/app/actions.ts' }, source)!
+    const formData = new FormData()
+
+    const browserIds = await nextActionIds(compiled, false)
+
+    expect(browserIds).toHaveLength(5)
+    expect(browserIds).toEqual(await nextActionIds(compiled, true))
+    for (const id of browserIds) {
+      const sent = nextServerReferenceInfo.omitUnusedArgs(['organization', formData], nextServerReferenceInfo.extractInfoFromServerReferenceId(id))
+      expect(sent).toEqual(['organization', formData])
+    }
+  })
+
   it('wraps an action exported as default by name before the export reads it', async () => {
     const module = await importCompiled('default-actions.ts', [
       '\'use server\'',
@@ -95,6 +157,53 @@ describe('Next server action loader', () => {
     ].join('\n'))
 
     expect(await (module.default as () => Promise<unknown>)()).toEqual({ wrapped: 'submitted' })
+  })
+
+  it('exports the action a default export named when it ran, not a later reassignment', async () => {
+    const module = await importCompiled('reassigned-default-actions.ts', [
+      '\'use server\'',
+      'let submit = async () => \'original\'',
+      'export default submit',
+      'submit = async () => \'replacement\'',
+    ].join('\n'))
+
+    expect(await (module.default as () => Promise<unknown>)()).toEqual({ wrapped: 'original' })
+  })
+
+  it('keeps an exported let action live when the module reassigns it', async () => {
+    const module = await importCompiled('live-actions.ts', [
+      '\'use server\'',
+      'export let current = async () => \'original\'',
+      'export async function replace() { current = async () => \'replacement\' }',
+    ].join('\n'))
+
+    await (module.replace as () => Promise<unknown>)()
+
+    expect(await (module.current as () => Promise<unknown>)()).toBe('replacement')
+  })
+
+  it('wraps an action the module reassigns before an export reads it', async () => {
+    const module = await importCompiled('reassigned-actions.ts', [
+      '\'use server\'',
+      'export let action = async () => \'original\'',
+      'action = async () => \'replacement\'',
+      'let fallback = async () => \'original\'',
+      'fallback = async () => \'replacement\'',
+      'export default fallback',
+    ].join('\n'))
+
+    expect(await Promise.all([module.action, module.default].map(action => (action as () => Promise<unknown>)()))).toEqual([
+      { wrapped: 'replacement' },
+      { wrapped: 'replacement' },
+    ])
+  })
+
+  it('keeps the columns after an export list that mixes actions and types', () => {
+    const source = ['\'use server\'', 'type T = string', 'async function a() { return 1 }', 'export {a, type T}; export async function b() {}'].join('\n')
+
+    const lines = runLoader(serverActionLoader, 'actions.ts', source).code.split('\n')
+
+    expect(lines[3]!.indexOf('async function b')).toBe(source.split('\n')[3]!.indexOf('async function b'))
   })
 
   it('wraps a default-exported arrow action', async () => {
@@ -138,13 +247,14 @@ describe('Next server action loader', () => {
     expect(module.dynamic).toBe('force-dynamic')
   })
 
-  it('appends the runtime import, so a shebang, a terminated directive, and every column stay in place', async () => {
+  it('appends the runtime import, so a shebang, a terminated directive, and the original code stay in place', async () => {
     const actions = ['\'use server\';', 'export const save = async () => { return \'saved\' }'].join('\n')
     const route = ['#!/usr/bin/env node', 'export const GET = async () => \'got\''].join('\n')
 
     for (const [source, loader] of [[actions, serverActionLoader], [route, routeLoader]] as const) {
       const lines = loader.call({ resourcePath: 'module.ts' }, source)!.split('\n')
-      expect(lines.slice(0, 2).map(line => line.replace('let  ', 'const'))).toEqual(source.split('\n'))
+      const expected = source.split('\n').map(line => loader === serverActionLoader ? withExportKeywordsBlanked(line) : line)
+      expect(lines.slice(0, 2).map(line => withoutWrapperCall(line).replace('let  ', 'const'))).toEqual(expected)
       expect(lines[2]).toMatch(/^import \{ adapterNextRuntimeInternals as __holoRouteRuntime \} from /)
     }
     expect(await (((await importCompiled('terminated-actions.ts', actions)).save) as () => Promise<unknown>)()).toEqual({ wrapped: 'saved' })
@@ -160,7 +270,7 @@ describe('Next server action loader', () => {
     }
   })
 
-  it('keeps every line and column of a use server module in place and maps each position back to it', () => {
+  it('keeps every line of a use server module in place and maps each position back to it', () => {
     const resourcePath = join(import.meta.dirname, 'app', 'ai-actions.ts')
     const source = [
       '// AI actions',
@@ -182,8 +292,8 @@ describe('Next server action loader', () => {
     const output = runLoader(serverActionLoader, resourcePath, source)
     const lines = output.code.split('\n')
 
-    expect(lines.slice(0, source.split('\n').length).map(line => line.replace('export let  ', 'export const').replace('function __holoDefault (', 'function ('))).toEqual(source.split('\n'))
-    for (const needle of ['aiMessage(kind', 'switch (kind)', 'return shared()', 'throw new Error', 'remove = async', 'return aiMessage(']) {
+    expect(lines.slice(0, source.split('\n').length).map(line => withoutWrapperCall(line).replace('let  ', 'const').replace('function __holoDefault (', 'function ('))).toEqual(source.split('\n').map(withExportKeywordsBlanked))
+    for (const needle of ['aiMessage(kind', 'switch (kind)', 'return shared()', 'throw new Error', 'async () => \'removed\'', 'return aiMessage(']) {
       expectMapped(output, source, needle, resourcePath)
     }
     expect(output.map).toMatchObject({ version: 3, file: resourcePath, sources: [resourcePath], sourcesContent: [source] })
@@ -219,7 +329,8 @@ describe('Next server action loader', () => {
 
     for (const [source, loader] of [[route, routeLoader], [actions, serverActionLoader]] as const) {
       const lines = source.split('\n')
-      expect(runLoader(loader, 'module.ts', source).code.split('\n')[lines.length - 1]).toBe(lines.at(-1))
+      const expected = loader === serverActionLoader ? withExportKeywordsBlanked(lines.at(-1)!) : lines.at(-1)
+      expect(runLoader(loader, 'module.ts', source).code.split('\n')[lines.length - 1]).toBe(expected)
     }
     const carriageReturns = ['export {', ' GET', '} from \'./helpers\'', 'export async function POST() {}'].join('\r')
     expect(runLoader(routeLoader, 'route.ts', carriageReturns).code.split(/\r\n|[\r\n]/)[3]).toBe('export async function POST() {}')

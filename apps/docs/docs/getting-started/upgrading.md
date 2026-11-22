@@ -21,6 +21,19 @@ await DB.table('posts').select('score as points').orderBy('points').cursorPagina
 
 `cursorPaginate()` ordered by a `column as alias` selection now follows its cursor past the first page, comparing the source column as Laravel does.
 
+### Next.js: Server Actions without a form data parameter
+
+A Server Action that didn't declare a `formData` parameter used to fail the CSRF check with `419`, because Next.js didn't send it the form data that carries the token. Holo now makes Next send every argument the caller passes, so no code change is needed. If you declared a `formData` parameter only to get past that error, and the action never reads it, you can remove it:
+
+```ts [app/actions.ts]
+export async function archivePost(postId: string, _formData: FormData) { // [!code --]
+export async function archivePost(postId: string) { // [!code ++]
+  // ...
+}
+```
+
+Keep the parameter, and the code that uses it, in actions that read or validate form fields.
+
 ## Upgrading from 0.6.1 to 0.6.2
 
 Update every installed `@holo-js/*` package to `0.6.2` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. SvelteKit apps need the plugin change below; Next and Nuxt apps need no code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#062---2026-11-19) lists the release changes, including security fixes for route guards and CSRF under a base path.
