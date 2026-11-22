@@ -3,6 +3,7 @@ import { DB } from '../facade/DB'
 import { ConfigurationError, DatabaseError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
 import { assertQueryTablePath } from '../query/validator'
 import { TableQueryBuilder, addSelectExists, aliasTableSource, selectAggregate, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
+import { compareChunkValuesAscending, compareChunkValuesDescending } from '../query/chunkOrdering'
 import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { selectionOutputName } from '../query/modelRowProjection'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadColumnSqlTypes, loadTableDefinition } from '../schema/columnListing'
@@ -767,15 +768,25 @@ export class ModelRepository<
     parentAlias: string | undefined,
     constraint?: RelationConstraint,
   ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
-    const [peers] = this.buildRelationExistenceSubqueries(relation, parentAlias, constraint)
-    const peerSource = peers!.getPlan().source
+    const related = this.resolveRelatedRepository(relation.related)
     const peersAlias = '__holo_one_of_many'
-    const aliasedPeers = requalifyTableSource(aliasTableSource(peers!.reorder(), peersAlias), peerSource.alias)
-    const chosenValue = relation.aggregate === 'max'
-      ? aliasedPeers.selectMax('chosen', `${peersAlias}.${relation.aggregateColumn}` as never)
-      : aliasedPeers.selectMin('chosen', `${peersAlias}.${relation.aggregateColumn}` as never)
+    const parentColumn = relation.kind === 'morphOneOfMany' ? relation.morphIdColumn : relation.foreignKey
+    const constrainedPeers = this.applyRelationConstraint(relation, related, constraint, peersAlias).getTableQueryBuilder()
+    const typedPeers = relation.kind === 'morphOneOfMany'
+      ? constrainedPeers.where(`${peersAlias}.${relation.morphTypeColumn}` as never, this.getMorphTypeValue())
+      : constrainedPeers
+    const peers = this.whereParentKey(typedPeers, related.definition.table, parentColumn, relation.localKey, parentAlias, `${peersAlias}.${parentColumn}`)
+    const primaryKey = related.definition.primaryKey
+    const direction = relation.aggregate === 'max' ? 'desc' : 'asc'
+    const chosenKey = peers
+      .whereNotNull(`${peersAlias}.${relation.aggregateColumn}` as never)
+      .reorder()
+      .orderBy(`${peersAlias}.${relation.aggregateColumn}` as never, direction)
+      .orderBy(`${peersAlias}.${primaryKey}` as never, direction)
+      .limit(1)
+      .select(`${peersAlias}.${primaryKey}` as never)
     const candidateSource = candidates.getPlan().source
-    return candidates.whereSub(`${candidateSource.alias ?? candidateSource.tableName}.${relation.aggregateColumn}` as never, '=', chosenValue as TableQueryBuilder<TableDefinition, Record<string, unknown>>)
+    return candidates.whereSub(`${candidateSource.alias ?? candidateSource.tableName}.${primaryKey}` as never, '=', chosenKey as TableQueryBuilder<TableDefinition, Record<string, unknown>>)
   }
 
   private countsAtMostOne(aggregate: AggregateLoad): boolean {
@@ -3009,10 +3020,16 @@ export class ModelRepository<
 
     for (const [key, bucket] of groupRelation(latestEntities, parentColumn, options).entries()) {
       this.assertOneStoredOneOfManyKey(related, parentColumn, bucket)
-      grouped.set(key, [bucket[0]!])
+      grouped.set(key, [this.chooseOneOfManyTie(relation, related, bucket)])
     }
 
     return grouped
+  }
+
+  private chooseOneOfManyTie(relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' | 'morphOneOfMany' }>, related: ModelRepository, bucket: readonly Entity[]): Entity {
+    const primaryKey = related.definition.primaryKey as never
+    const compare = relation.aggregate === 'max' ? compareChunkValuesDescending : compareChunkValuesAscending
+    return [...bucket].sort((left, right) => compare(left.get(primaryKey), right.get(primaryKey)))[0]!
   }
 
   private assertOneStoredOneOfManyKey(related: ModelRepository, parentColumn: string, bucket: readonly Entity[]): void {

@@ -16,6 +16,7 @@ See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-fr
 ### Fixed
 
 - Database: `cursorPaginate()` ordered by a `column as alias` selection follows its cursor past the first page.
+- Database: when several related rows tie on a one-of-many relation's column, such as two posts with the same top score under `ofMany('score', 'max')`, the relation returns the row with the highest primary key (the lowest for `'min'`), as Laravel does. Before, it returned whichever tied row the database read first.
 
 ## 0.6.2 - 2026-11-19
 

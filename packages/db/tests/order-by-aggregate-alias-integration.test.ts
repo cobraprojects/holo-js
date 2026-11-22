@@ -209,11 +209,23 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
     expect(rows(await Author.withCount('latestLike').orderBy('latestLike_count').orderBy('id').get(), 'latestLike_count')).toEqual([[3, 0], [1, 1], [2, 1]])
   })
 
+  it('breaks one-of-many ties by the primary key when loading and ordering', async () => {
+    const { Author, posts } = await openAuthorsFixture(driver)
+    await DB.table(posts).insert([{ id: 5, author_id: 1, score: 10, published: false }, { id: 6, author_id: 3, score: 15, published: false }])
+
+    const ranked = await Author.withSum('topPost', 'score').withMax('topPost', 'id').orderByDesc('topPost_sum_score').get()
+    expect(ranked.map(author => [author.id, author.toAttributes().topPost_sum_score, author.toAttributes().topPost_max_id])).toEqual([[2, 30, 4], [3, 15, 6], [1, 10, 5]])
+
+    const loaded = await Author.with('topPost').findOrFail(1)
+    expect(loaded.topPost?.id).toBe(5)
+  })
+
   it('orders by an aggregate of a one-of-many relation back to the same table', async () => {
-    const { SiblingPost } = await openAuthorsFixture(driver)
+    const { SiblingPost, posts: postsTable } = await openAuthorsFixture(driver)
+    await DB.table(postsTable).insert([{ id: 5, author_id: 3, score: 20, published: true }])
 
     const posts = await SiblingPost.withSum('latestSibling', 'score').orderByDesc('latestSibling_sum_score').orderBy('id').get()
-    expect(posts.map(post => [post.id, post.toAttributes().latestSibling_sum_score])).toEqual([[2, 30], [3, 30], [4, 30], [1, 10]])
+    expect(posts.map(post => [post.id, post.toAttributes().latestSibling_sum_score])).toEqual([[2, 30], [3, 30], [4, 30], [5, 20], [1, 10]])
   })
 
   it('orders by the last aggregate loaded under an alias', async () => {
