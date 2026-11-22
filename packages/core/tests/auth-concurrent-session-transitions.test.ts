@@ -6,6 +6,8 @@ import { sessionStoreFactories } from './support/session-stores'
 
 type StoredUser = { id: number, email: string, password: null, remember_token: string | null }
 
+const rememberTokenUpdateFailures: Error[] = []
+
 const users = new Map<number, StoredUser>([1, 2, 3].map(id => [id, { id, email: `user-${id}@app.test`, password: null, remember_token: null }]))
 
 const provider: AuthProviderAdapter<StoredUser> = {
@@ -19,6 +21,8 @@ const provider: AuthProviderAdapter<StoredUser> = {
   getPasswordHash(user) { return user.password },
   getRememberToken(user) { return user.remember_token },
   async updateRememberToken(user, token) {
+    const failure = rememberTokenUpdateFailures.shift()
+    if (failure) throw failure
     users.set(user.id, { ...users.get(user.id)!, remember_token: token })
   },
   serialize(user) { return { id: user.id, email: user.email } },
@@ -314,5 +318,22 @@ describe('a session that ends while a Redis logout update runs', () => {
     await request(() => auth.guard('support').logout())
 
     expect(users.get(3)?.remember_token).toBe('remember-token')
+  })
+})
+
+describe('a logout whose remember token update fails', () => {
+  it('cycles the remember token when the logout is retried', async () => {
+    const [file] = sessionStoreFactories
+    const { request } = await signedInBrowser(file.create)
+    await request(() => auth.guard('support').loginUsingId(3, { remember: true }))
+    const rememberToken = users.get(3)?.remember_token
+    expect(rememberToken).toEqual(expect.any(String))
+    rememberTokenUpdateFailures.push(new Error('users table unavailable'))
+
+    await expect(request(() => auth.guard('support').logout())).rejects.toThrow('users table unavailable')
+    await request(() => auth.guard('support').logout())
+
+    expect(users.get(3)?.remember_token).not.toBe(rememberToken)
+    await expect(request(() => auth.guard('support').user())).resolves.toBeNull()
   })
 })

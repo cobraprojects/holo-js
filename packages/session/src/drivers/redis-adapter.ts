@@ -510,7 +510,7 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
       if (typeof encoded !== 'string') return { found: false }
 
       const record = deserializeSessionRecord(encoded)
-      if (!record) return { found: false }
+      if (!record || record.expiresAt.getTime() <= this.now().getTime()) return { found: false }
       const { data, value } = applyDataUpdate(record.data, key, update)
       const result = await this.client.eval(SET_SESSION_DATA_SCRIPT, 1, redisKey, encoded, serializeSessionRecord({ ...record, data }))
       if (result === 1) return { found: true, value }

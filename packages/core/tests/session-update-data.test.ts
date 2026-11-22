@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
-import type { SessionRecord, SessionStore } from '@holo-js/session'
+import { describe, expect, it, onTestFinished } from 'vitest'
+import { createRedisSessionStore, type SessionRecord, type SessionStore } from '@holo-js/session'
+import { createSessionRedisAdapter } from '../../session/src/drivers/redis-adapter'
+import { startRedisService } from '../../session/tests/support/redis'
 import { sessionStoreFactories } from './support/session-stores'
 
 async function storedSession(store: SessionStore, data: Record<string, unknown>): Promise<SessionRecord> {
@@ -58,6 +60,14 @@ describe.each(sessionStoreFactories)('updateData on the $name session store', ({
     expect(stored?.expiresAt).toEqual(record.expiresAt)
   })
 
+  it('passes undefined for a key the session does not store', async () => {
+    const store = await create()
+    const updateData = requireUpdateData(store)
+    const record = await storedSession(store, {})
+
+    await expect(updateData(record.id, 'constructor', current => current === undefined ? 'absent' : 'inherited')).resolves.toEqual({ found: true, value: 'absent' })
+  })
+
   it('does not recreate a missing session', async () => {
     const store = await create()
     const updateData = requireUpdateData(store)
@@ -65,5 +75,21 @@ describe.each(sessionStoreFactories)('updateData on the $name session store', ({
 
     await expect(updateData(sessionId, 'auth', () => 'signed-in')).resolves.toEqual({ found: false })
     await expect(store.read(sessionId)).resolves.toBeNull()
+  })
+})
+
+describe('updateData on a Redis session whose record expired before its key', () => {
+  it('reports the session as missing without writing', async () => {
+    const redis = await startRedisService()
+    let now = new Date()
+    const adapter = createSessionRedisAdapter({ name: 'redis', driver: 'redis', connection: 'default', host: '127.0.0.1', port: redis.ports[0]!, db: 0, prefix: '' }, { now: () => now })
+    onTestFinished(() => adapter.close())
+    await adapter.connect()
+    const store = createRedisSessionStore(adapter)
+    const record = await storedSession(store, { auth: 'signed-in' })
+    now = new Date(record.expiresAt.getTime() + 1_000)
+
+    await expect(requireUpdateData(store)(record.id, 'auth', () => 'changed')).resolves.toEqual({ found: false })
+    await expect(store.read(record.id)).resolves.toMatchObject({ data: { auth: 'signed-in' } })
   })
 })

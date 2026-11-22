@@ -261,8 +261,8 @@ export function createCoreDatabaseSessionAdapter(tableName: string, connectionNa
         }
 
         const stored = splitStoredSessionData(row.data)
-        const { [key]: current, ...rest } = stored.publicData
-        const value = update(current)
+        const { [key]: _stored, ...rest } = stored.publicData
+        const value = update(Object.hasOwn(stored.publicData, key) ? stored.publicData[key] : undefined)
         const publicData = Object.freeze(value === undefined ? rest : { ...rest, [key]: value })
         await new TableQueryBuilder(tableName, transaction)
           .where('id', sessionId)
