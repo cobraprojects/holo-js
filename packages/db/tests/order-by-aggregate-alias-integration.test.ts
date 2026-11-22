@@ -152,9 +152,10 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
 
     await expect(Like.withCount('likeable').orderBy('likeable_count').get()).rejects.toThrow('Cannot order by the "likeable" relation aggregate')
     await expect(Author.withCount('latestPost').orderBy('latestPost_count').get()).rejects.toThrow('Cannot order by the "latestPost" relation aggregate')
-    const reshaped = 'aggregate constraints that limit, offset, deduplicate, join, group or union the related rows cannot be ordered by.'
+    const reshaped = 'aggregate constraints that select, limit, offset, deduplicate, join, group or union the related rows cannot be ordered by.'
     await expect(Author.withSum({ posts: query => query.orderBy('score').limit(1) }, 'score').orderByDesc('posts_sum_score').get()).rejects.toThrow(reshaped)
     await expect(Author.withCount({ posts: query => query.select('author_id').distinct() }).orderByDesc('posts_count').get()).rejects.toThrow(reshaped)
+    await expect(Author.withSum({ posts: query => query.select('id', 'author_id') }, 'score').orderByDesc('posts_sum_score').get()).rejects.toThrow(reshaped)
     await expect(Author.withCount({ posts: query => query.join(names.authors as never, `${names.authors}.id` as never, '=', `${names.posts}.author_id` as never) }).orderByDesc('posts_count').get()).rejects.toThrow(reshaped)
     await expect(Author.select('id', 'name as posts_count').withCount('posts').orderByDesc('posts_count').get()).rejects.toThrow('the query also selects a column named "posts_count"')
     await expect(Author.withCount('posts as name').orderByDesc('name').get()).rejects.toThrow('the query also selects a column named "name"')
@@ -180,6 +181,16 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
 
     const liked = await Author.withCount('like').orderByDesc('like_count').orderBy('id').get()
     expect(liked.map(author => [author.id, author.toAttributes().like_count])).toEqual([[1, 1], [2, 1], [3, 0]])
+  })
+
+  it('orders by aggregates of boolean columns as the loader counts them', async () => {
+    const { Author } = await openAuthorsFixture(driver)
+
+    const summed = await Author.withSum('posts', 'published').orderByDesc('posts_sum_published').orderBy('id').get()
+    expect(summed.map(author => [author.id, author.toAttributes().posts_sum_published])).toEqual([[1, 1], [2, 1], [3, 0]])
+
+    const averaged = await Author.whereHas('posts').withAvg('posts', 'published').orderBy('posts_avg_published').get()
+    expect(averaged.map(author => author.id)).toEqual([2, 1])
   })
 
   it('orders by the last aggregate loaded under an alias', async () => {

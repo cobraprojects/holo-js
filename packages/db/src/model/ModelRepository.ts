@@ -2,7 +2,7 @@ import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DB } from '../facade/DB'
 import { ConfigurationError, DatabaseError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
 import { assertQueryTablePath } from '../query/validator'
-import { TableQueryBuilder, addSelectExists, aliasTableSource, selectSumOrZero, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, addSelectExists, aliasTableSource, selectAggregate, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn, whereRelationKeys } from '../query/TableQueryBuilder'
 import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { selectionOutputName } from '../query/modelRowProjection'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadColumnSqlTypes, loadTableDefinition } from '../schema/columnListing'
@@ -781,9 +781,9 @@ export class ModelRepository<
     }
     const related = this.resolveRelatedRepository(relation.related)
     const constraintPlan = this.applyRelationConstraint(relation, related, aggregate.constraint).getTableQueryBuilder().getPlan()
-    const reshapesRows = constraintPlan.limit !== undefined || constraintPlan.offset !== undefined || constraintPlan.distinct
+    const reshapesRows = constraintPlan.selections.length > 0 || constraintPlan.limit !== undefined || constraintPlan.offset !== undefined || constraintPlan.distinct
       || constraintPlan.joins.length > 0 || constraintPlan.groupBy.length > 0 || constraintPlan.having.length > 0 || constraintPlan.unions.length > 0
-    if (reshapesRows) throw unorderable('aggregate constraints that limit, offset, deduplicate, join, group or union the related rows cannot be ordered by.')
+    if (reshapesRows) throw unorderable('aggregate constraints that select, limit, offset, deduplicate, join, group or union the related rows cannot be ordered by.')
     const [constrained] = this.buildRelationExistenceSubqueries(relation, parentAlias, aggregate.constraint, undefined, 'pivot-rows')
     if (!constrained || !sameTable(constrained.getTableName(), related.definition.table.tableName)) {
       throw unorderable('the relation cannot be expressed as a single correlated subquery.')
@@ -792,17 +792,15 @@ export class ModelRepository<
     if (aggregate.kind === 'exists' || this.countsAtMostOne(aggregate)) return subquery
     if (aggregate.kind === 'count') return subquery.selectCount('aggregate')
     const source = subquery.getPlan().source
-    const column = `${source.alias ?? source.tableName}.${aggregate.column}` as never
-    switch (aggregate.kind) {
-      case 'sum':
-        return selectSumOrZero(subquery, column, 'aggregate')
-      case 'avg':
-        return subquery.selectAvg('aggregate', column)
-      case 'min':
-        return subquery.selectMin('aggregate', column)
-      case 'max':
-        return subquery.selectMax('aggregate', column)
-    }
+    const storesBoolean = aggregate.column !== undefined && ownEntry(related.definition.table.columns, aggregate.column)?.kind === 'boolean'
+    return selectAggregate(subquery, {
+      kind: 'aggregate',
+      aggregate: aggregate.kind,
+      column: `${source.alias ?? source.tableName}.${aggregate.column}`,
+      alias: 'aggregate',
+      ...(aggregate.kind === 'sum' ? { emptyAsZero: true as const } : {}),
+      ...(storesBoolean ? { booleanAsNumber: true as const } : {}),
+    })
   }
 
   async create(values: ModelInsertPayload<TTable>): Promise<Entity<TTable>> {

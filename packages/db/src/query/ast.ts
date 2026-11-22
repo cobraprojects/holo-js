@@ -45,6 +45,7 @@ export interface QueryAggregateSelection {
   readonly column: string | '*'
   readonly alias: string
   readonly emptyAsZero?: true
+  readonly booleanAsNumber?: true
 }
 
 export interface QueryRawSelection {
