@@ -761,6 +761,23 @@ export class ModelRepository<
     return this.countsAtMostOne(aggregate) ? addSelectExists(query, subquery, alias) : query.addSelectSub(subquery, alias)
   }
 
+  private keepOneOfManyRows(
+    relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' | 'morphOneOfMany' }>,
+    candidates: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
+    parentAlias: string | undefined,
+    constraint?: RelationConstraint,
+  ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+    const [peers] = this.buildRelationExistenceSubqueries(relation, parentAlias, constraint)
+    const peerSource = peers!.getPlan().source
+    const peersAlias = '__holo_one_of_many'
+    const aliasedPeers = requalifyTableSource(aliasTableSource(peers!.reorder(), peersAlias), peerSource.alias)
+    const chosenValue = relation.aggregate === 'max'
+      ? aliasedPeers.selectMax('chosen', `${peersAlias}.${relation.aggregateColumn}` as never)
+      : aliasedPeers.selectMin('chosen', `${peersAlias}.${relation.aggregateColumn}` as never)
+    const candidateSource = candidates.getPlan().source
+    return candidates.whereSub(`${candidateSource.alias ?? candidateSource.tableName}.${relation.aggregateColumn}` as never, '=', chosenValue as TableQueryBuilder<TableDefinition, Record<string, unknown>>)
+  }
+
   private countsAtMostOne(aggregate: AggregateLoad): boolean {
     if (aggregate.kind === 'exists') return true
     if (aggregate.kind !== 'count') return false
@@ -772,9 +789,7 @@ export class ModelRepository<
     const unorderable = (reason: string) => new RelationError(`Cannot order by the "${aggregate.relation}" relation aggregate on model "${this.definition.name}": ${reason}`)
     if (aggregate.relation.includes('.')) throw unorderable('nested relation aggregates are not supported.')
     const relation = this.getRelationDefinition(aggregate.relation)
-    if (relation.kind === 'morphTo' || relation.kind === 'hasOneOfMany' || relation.kind === 'morphOneOfMany') {
-      throw unorderable(`${relation.kind} relation aggregates are loaded after the query runs.`)
-    }
+    if (relation.kind === 'morphTo') throw unorderable('morph-to relation aggregates are loaded after the query runs.')
     const crossConnection = this.findCrossConnectionRepository(relation)
     if (crossConnection) {
       throw unorderable(`its ${crossConnection.target} model uses connection "${crossConnection.repository.getConnectionName()}" while the query uses "${this.getConnectionName()}".`)
@@ -788,7 +803,9 @@ export class ModelRepository<
     if (!constrained || !sameTable(constrained.getTableName(), related.definition.table.tableName)) {
       throw unorderable('the relation cannot be expressed as a single correlated subquery.')
     }
-    const subquery = constrained.reorder()
+    const subquery = relation.kind === 'hasOneOfMany' || relation.kind === 'morphOneOfMany'
+      ? this.keepOneOfManyRows(relation, constrained.reorder(), parentAlias, aggregate.constraint)
+      : constrained.reorder()
     if (aggregate.kind === 'exists' || this.countsAtMostOne(aggregate)) return subquery
     if (aggregate.kind === 'count') return subquery.selectCount('aggregate')
     const source = subquery.getPlan().source

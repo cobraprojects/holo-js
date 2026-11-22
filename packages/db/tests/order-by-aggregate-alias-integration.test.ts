@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { DB, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, latestOfMany, morphOne, morphTo, resetDB } from '../src'
+import { DB, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, latestMorphOne, latestOfMany, morphOne, morphTo, ofMany, resetDB } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 type Driver = 'sqlite' | 'postgres' | 'mysql'
@@ -70,10 +70,14 @@ async function openAuthorsFixture(driver: Driver) {
       like: morphOne(() => Like, 'likeable'),
       posts: hasMany(() => Post, 'author_id'),
       latestPost: latestOfMany(() => Post, 'author_id'),
+      topPost: ofMany(() => Post, 'author_id', 'score', 'max'),
+      lowestPost: ofMany(() => Post, 'author_id', 'score', 'min'),
+      latestLike: latestMorphOne(() => Like, 'likeable'),
       tags: belongsToMany(() => Tag, pivot, 'author_id', 'tag_id'),
     },
   })
-  return { Author, Like, posts, pivot, names }
+  const SiblingPost = defineModel(posts, { timestamps: false, relations: { latestSibling: latestOfMany(() => Post, 'author_id', 'author_id') } })
+  return { Author, Like, SiblingPost, posts, pivot, names }
 }
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by selected aliases on %s', (driver) => {
@@ -151,7 +155,6 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
     const { Author, Like, names } = await openAuthorsFixture(driver)
 
     await expect(Like.withCount('likeable').orderBy('likeable_count').get()).rejects.toThrow('Cannot order by the "likeable" relation aggregate')
-    await expect(Author.withCount('latestPost').orderBy('latestPost_count').get()).rejects.toThrow('Cannot order by the "latestPost" relation aggregate')
     const reshaped = 'aggregate constraints that select, limit, offset, deduplicate, join, group or union the related rows cannot be ordered by.'
     await expect(Author.withSum({ posts: query => query.orderBy('score').limit(1) }, 'score').orderByDesc('posts_sum_score').get()).rejects.toThrow(reshaped)
     await expect(Author.withCount({ posts: query => query.select('author_id').distinct() }).orderByDesc('posts_count').get()).rejects.toThrow(reshaped)
@@ -191,6 +194,26 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('ordering by 
 
     const averaged = await Author.whereHas('posts').withAvg('posts', 'published').orderBy('posts_avg_published').get()
     expect(averaged.map(author => author.id)).toEqual([2, 1])
+  })
+
+  it('orders by aggregates of the one row a one-of-many relation selects', async () => {
+    const { Author } = await openAuthorsFixture(driver)
+    const rows = (authors: readonly { id: number, toAttributes(): object }[], key: string) => authors.map(author => [author.id, (author.toAttributes() as Record<string, unknown>)[key]])
+
+    expect(rows(await Author.withCount('latestPost').orderBy('latestPost_count').orderBy('id').get(), 'latestPost_count')).toEqual([[3, 0], [1, 1], [2, 1]])
+    expect(rows(await Author.withExists('latestPost').orderByDesc('latestPost_exists').orderBy('id').get(), 'latestPost_exists')).toEqual([[1, true], [2, true], [3, false]])
+    expect(rows(await Author.withSum('latestPost', 'score').orderByDesc('latestPost_sum_score').get(), 'latestPost_sum_score')).toEqual([[2, 30], [1, 10], [3, 0]])
+    expect(rows(await Author.whereHas('posts').withMax('lowestPost', 'score').orderByDesc('lowestPost_max_score').get(), 'lowestPost_max_score')).toEqual([[1, 10], [2, 1]])
+    expect(rows(await Author.whereHas('posts').withAvg('topPost', 'score').orderBy('topPost_avg_score').get(), 'topPost_avg_score')).toEqual([[1, 10], [2, 30]])
+    expect(rows(await Author.withSum({ latestPost: query => query.where('published', false) }, 'score').orderByDesc('latestPost_sum_score').orderBy('id').get(), 'latestPost_sum_score')).toEqual([[2, 2], [1, 0], [3, 0]])
+    expect(rows(await Author.withCount('latestLike').orderBy('latestLike_count').orderBy('id').get(), 'latestLike_count')).toEqual([[3, 0], [1, 1], [2, 1]])
+  })
+
+  it('orders by an aggregate of a one-of-many relation back to the same table', async () => {
+    const { SiblingPost } = await openAuthorsFixture(driver)
+
+    const posts = await SiblingPost.withSum('latestSibling', 'score').orderByDesc('latestSibling_sum_score').orderBy('id').get()
+    expect(posts.map(post => [post.id, post.toAttributes().latestSibling_sum_score])).toEqual([[2, 30], [3, 30], [4, 30], [1, 10]])
   })
 
   it('orders by the last aggregate loaded under an alias', async () => {
