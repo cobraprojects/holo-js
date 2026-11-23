@@ -40,7 +40,7 @@ Order {{ orderNumber }} has shipped. [Track it here]({{ trackingUrl }}).
 npx holo make:mail order-shipped
 ```
 
-This creates `server/mail/order-shipped.ts` with an `OrderShippedMail` function and an `OrderShippedMailInput` type, and its Mail template `server/mail/templates/order-shipped.md`. The template name is the kebab-case mail name without a `Mail` suffix. Use a path to group mail into folders:
+This creates `server/mail/order-shipped.ts` with an `OrderShippedMail` function and an `OrderShippedMailInput` type, and its Mail template `server/mail/templates/order-shipped.md`. The template has a heading, a `{{ name }}` greeting, and a [`<mail::button>`](/mail/markdown#mail-components) linking to `{{ url }}`, and the mail passes `name` and `url` as `data`. The template name is the kebab-case mail name without a `Mail` suffix. Use a path to group mail into folders:
 
 ```bash
 npx holo make:mail auth/verify-email
