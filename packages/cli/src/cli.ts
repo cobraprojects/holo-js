@@ -1921,26 +1921,18 @@ export function createInternalCommands(
     },
     {
       name: 'make:mail',
-      description: 'Create a mail definition file.',
-      usage: 'holo make:mail <name> [--markdown]',
+      description: 'Create a mail definition file and its Mail template.',
+      usage: 'holo make:mail <name> [--markdown=<template name>]',
       source: 'internal',
       async prepare(input) {
-        const markdown = resolveBooleanFlag(input.flags, 'markdown') === true
-        const view = resolveBooleanFlag(input.flags, 'view') === true
-
-        if (markdown && view) {
-          throw new Error('Use either "--markdown" or "--view", not both.')
+        if (resolveBooleanFlag(input.flags, 'view')) {
+          throw new Error('View-backed mail scaffolding is not available. "holo make:mail" creates a Mail template; use "--markdown=<template name>" to name it.')
         }
 
-        if (view) {
-          throw new Error(
-            'View-backed mail scaffolding requires a renderView runtime binding, which the first-party app scaffolds do not configure yet. Use "--markdown" instead.',
-          )
-        }
-
+        const markdown = resolveStringFlag(input.flags, 'markdown')
         return {
           args: [await ensureRequiredArg(context, input, 0, 'Mail name')],
-          flags: { type: 'markdown' },
+          flags: typeof markdown === 'undefined' ? {} : { markdown },
         }
       },
       async run(commandContext) {

@@ -52,7 +52,7 @@ function removeUnsafeLinks(state: StateCore): void {
 }
 
 function createMarkdownParser(): MarkdownIt {
-  const parser = new MarkdownItParser('commonmark', { html: false }).enable('table')
+  const parser = new MarkdownItParser('commonmark', { html: true }).enable('table')
   parser.validateLink = () => true
   parser.core.ruler.push('mail_unsafe_links', removeUnsafeLinks)
   return parser
@@ -80,6 +80,10 @@ function renderInlineText(tokens: readonly Token[]): string {
     }
   }
   return parts.join('')
+}
+
+function stripHtmlTags(html: string): string {
+  return html.replace(/<[^>]*>/g, '')
 }
 
 function joinTextBlocks(blocks: readonly TextBlock[]): string {
@@ -138,6 +142,11 @@ export function renderMarkdownText(markdown: string): string {
       case 'code_block':
         blocks.push({ text: token.content.trimEnd(), group })
         return
+      case 'html_block': {
+        const text = markdownParser.utils.unescapeAll(stripHtmlTags(token.content)).trim()
+        if (text) blocks.push({ text, group })
+        return
+      }
       case 'inline': {
         const text = renderInlineText(token.children ?? [])
         if (tableRow) {

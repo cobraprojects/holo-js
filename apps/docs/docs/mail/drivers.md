@@ -54,7 +54,6 @@ Send through a specific mailer with `.using('marketing')` or `mailer: 'marketing
 | `from`, `replyTo` | `{ email, name? }` | Default sender and reply-to for every mailer. |
 | `queue` | `{ queued?, connection?, queue?, afterCommit? }` | Default queue settings for every mailer. |
 | `preview.allowedEnvironments` | `('development' \| 'production' \| 'test')[]` | Environments where [browser previews](/mail/previewing) work. Defaults to `['development']`. |
-| `markdown.wrapper` | `string` | Layout view that wraps every Markdown mail. See [Markdown mail](/mail/markdown#wrap-markdown-in-a-layout). |
 | `mailers` | object | Named mailers. Each entry is described below. |
 
 ## Options for every mailer

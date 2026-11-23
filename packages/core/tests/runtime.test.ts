@@ -35,7 +35,8 @@ import {
   notify,
   resetNotificationsRuntime,
 } from '@holo-js/notifications'
-import { configureMailRuntime, listFakeSentMails, previewMail, renderMailPreview, resetFakeSentMails } from '@holo-js/mail'
+import { configureMailRuntime, listFakeSentMails, previewMail, renderMailPreview, resetFakeSentMails, sendMail, type CompiledMailRegistry } from '@holo-js/mail'
+import { compileMailRegistry } from '../../mail/src/templates'
 import { mailRuntimeInternals } from '../../mail/src/runtime'
 import {
   Event,
@@ -108,6 +109,12 @@ const queuePackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../que
 const sessionPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../session/src/index.ts'))
 const kernelPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../kernel/src/index.ts'))
 const tempDirs: string[] = []
+
+declare module '@holo-js/mail' {
+  interface HoloMailTemplateRegistry {
+    readonly 'orders/shipped': { readonly order: { readonly id: string | number }, readonly name: string | number }
+  }
+}
 
 async function createProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-core-runtime-'))
@@ -474,6 +481,7 @@ async function writeRegistry(
     readonly jobs?: readonly Record<string, unknown>[]
     readonly events?: readonly Record<string, unknown>[]
     readonly listeners?: readonly Record<string, unknown>[]
+    readonly mail?: CompiledMailRegistry
   } = {},
 ): Promise<void> {
   const registryPath = resolveGeneratedProjectRegistryPath(root)
@@ -511,6 +519,7 @@ async function writeRegistry(
     jobs: options.jobs ?? [],
     events: options.events ?? [],
     listeners: options.listeners ?? [],
+    ...(options.mail ? { mail: options.mail } : {}),
   }, null, 2)}\n`, 'utf8')
 }
 
@@ -3331,6 +3340,26 @@ export default defineBroadcastConfig({
         title: 'Welcome',
       },
     })
+  })
+
+  it('serves Mail templates from the generated registry without reading template files', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+    await writeRegistry(root, {
+      models: [],
+      mail: compileMailRegistry({ templates: { 'orders/shipped': '# Order {{ order.id }}\n\nThanks, {{ name }}.' } }),
+    })
+
+    await initializeHolo(root)
+    await sendMail({
+      to: 'ava@example.com',
+      subject: 'Shipped',
+      markdown: 'orders/shipped',
+      data: { order: { id: 42 }, name: 'Ava' },
+    })
+
+    expect(listFakeSentMails().map(sent => sent.mail.html)).toEqual(['<h1>Order 42</h1>\n<p>Thanks, Ava.</p>'])
   })
 
   it('passes the application environment from .env to mail previews without reading process.env', async () => {

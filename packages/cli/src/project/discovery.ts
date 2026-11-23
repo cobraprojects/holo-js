@@ -10,6 +10,7 @@ import { holoRuntimeInternals, renderGeneratedSchemaPlaceholder, type MigrationD
 import { writeTextFile } from './atomic-file'
 import { errorMessage } from '../error-message'
 import { loadGeneratedProjectRegistry, writeGeneratedProjectRegistry } from './registry'
+import { discoverMailRegistry } from './mail-templates'
 import {
   createProjectModuleBatch,
   loadAuthorizationDiscoveryModule,
@@ -689,6 +690,7 @@ async function discoverProjectRegistry(
     sourcePath: entry.sourcePath,
   })))
   authorizationAbilities.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath))
+  const mail = await discoverMailRegistry(projectRoot)
 
   const registry: GeneratedProjectRegistry = {
     version: 1,
@@ -718,6 +720,7 @@ async function discoverProjectRegistry(
     channels,
     authorizationPolicies,
     authorizationAbilities,
+    ...(mail ? { mail } : {}),
   }
 
   await writeGeneratedProjectRegistry(projectRoot, registry, prepareFramework)

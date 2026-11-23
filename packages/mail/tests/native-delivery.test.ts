@@ -8,6 +8,8 @@ import { promisify } from 'node:util'
 import { build } from 'esbuild'
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import { configureMailRuntime, defineMail, MailSendError, normalizeMailConfig, previewMail, renderMailPreview, resetMailRuntime, sendMail } from '../src'
+import { compileMailRegistry } from '../src/templates'
+import './support/mail-templates'
 
 type SmtpServerOptions = {
   readonly rejectRecipient?: boolean
@@ -331,17 +333,23 @@ it('delivers real MIME, recipients, and attachments through the native SMTP clie
   expect(message).not.toMatch(/^Bcc:/m)
 })
 
-it('escapes app-provided mail content and rejects executable markdown links in real previews', async () => {
+it('escapes template values, keeps template HTML, and rejects executable markdown links in real previews', async () => {
   const mail = defineMail({
     to: 'ava@example.com',
     from: 'sender@example.com',
     subject: '<script>alert(1)</script>',
-    markdown: '[safe](https://example.test) [bad](javascript:alert)\n\n<script>alert(1)</script>',
+    markdown: 'fixture',
+    data: { payload: '<script>alert(1)</script>' },
   })
-  configureMailRuntime({ config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }), environment: 'test' })
+  configureMailRuntime({
+    config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }),
+    environment: 'test',
+    compiled: compileMailRegistry({ templates: { fixture: '[safe](https://example.test) [bad](javascript:alert)\n\n<p class="note">{{ payload }}</p>' } }),
+  })
   const preview = await previewMail(mail)
   expect(preview.html).toContain('href="https://example.test"')
   expect(preview.html).not.toContain('href="javascript:')
+  expect(preview.html).toContain('<p class="note">&lt;script&gt;alert(1)&lt;/script&gt;</p>')
   expect(preview.html).not.toContain('<script>')
   const response = await renderMailPreview(mail)
   expect(response.status).toBe(200)
@@ -355,9 +363,13 @@ it('escapes a markdown link href once and keeps the label escaped once in real p
     to: 'ava@example.com',
     from: 'sender@example.com',
     subject: 'Links',
-    markdown: '[Search](https://example.test/?a=1&b=2) [A & B](https://example.test/b) [bad](javascript:alert)',
+    markdown: 'fixture',
   })
-  configureMailRuntime({ config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }), environment: 'test' })
+  configureMailRuntime({
+    config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }),
+    environment: 'test',
+    compiled: compileMailRegistry({ templates: { fixture: '[Search](https://example.test/?a=1&b=2) [A & B](https://example.test/b) [bad](javascript:alert)' } }),
+  })
   const preview = await previewMail(mail)
   expect(preview.html).toContain('<a href="https://example.test/?a=1&amp;b=2">Search</a>')
   expect(preview.html).toContain('<a href="https://example.test/b">A &amp; B</a>')

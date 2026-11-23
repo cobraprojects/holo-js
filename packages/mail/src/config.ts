@@ -18,10 +18,6 @@ export interface HoloMailPreviewConfig {
   readonly allowedEnvironments?: readonly HoloAppEnv[]
 }
 
-export interface HoloMailMarkdownConfig {
-  readonly wrapper?: string
-}
-
 export interface BaseMailDriverConfig {
   readonly driver: string
   readonly from?: HoloMailAddressConfig
@@ -65,7 +61,6 @@ export interface HoloMailConfig {
   readonly replyTo?: HoloMailAddressConfig
   readonly queue?: HoloMailQueueConfig
   readonly preview?: HoloMailPreviewConfig
-  readonly markdown?: HoloMailMarkdownConfig
   readonly mailers?: Readonly<Record<string, HoloMailMailerConfig>>
 }
 
@@ -85,10 +80,6 @@ export interface NormalizedHoloMailQueueConfig {
 
 export interface NormalizedHoloMailPreviewConfig {
   readonly allowedEnvironments: readonly HoloAppEnv[]
-}
-
-export interface NormalizedHoloMailMarkdownConfig {
-  readonly wrapper?: string
 }
 
 export interface NormalizedBaseMailDriverConfig {
@@ -135,7 +126,6 @@ export interface NormalizedHoloMailConfig {
   readonly replyTo?: NormalizedHoloMailAddressConfig
   readonly queue: NormalizedHoloMailQueueConfig
   readonly preview: NormalizedHoloMailPreviewConfig
-  readonly markdown: NormalizedHoloMailMarkdownConfig
   readonly mailers: Readonly<Record<string, NormalizedHoloMailMailerConfig>>
 }
 
@@ -160,9 +150,6 @@ export const holoMailDefaults: Readonly<NormalizedHoloMailConfig> = Object.freez
   queue: DEFAULT_MAIL_QUEUE_CONFIG,
   preview: Object.freeze({
     allowedEnvironments: Object.freeze(['development'] as const),
-  }),
-  markdown: Object.freeze({
-    wrapper: undefined,
   }),
   mailers: Object.freeze({
     preview: Object.freeze({
@@ -437,9 +424,6 @@ export function normalizeMailConfig(
     queue: normalizeMailQueueConfig(config.queue),
     preview: Object.freeze({
       allowedEnvironments: normalizeMailPreviewEnvironments(config.preview?.allowedEnvironments),
-    }),
-    markdown: Object.freeze({
-      wrapper: normalizeOptionalMailString(config.markdown?.wrapper, 'Mail markdown wrapper') ?? holoMailDefaults.markdown.wrapper,
     }),
     mailers: Object.freeze(mergedMailers),
   })

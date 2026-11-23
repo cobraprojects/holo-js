@@ -23,7 +23,7 @@ describe('@holo-js/mail root export typing', () => {
     const definition = defineMail({
       to: 'ava@example.com',
       subject: 'Welcome',
-      markdown: '# Welcome',
+      markdown: 'welcome',
       attachments: [
         attachFromStorage('reports/invoice.pdf', { disk: 'public' }),
       ],

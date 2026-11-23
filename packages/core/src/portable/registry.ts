@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { DEFAULT_HOLO_PROJECT_PATHS } from '@holo-js/kernel'
+import type { CompiledMailRegistry } from '@holo-js/mail'
 
 export interface GeneratedModelRegistryEntry {
   readonly sourcePath: string
@@ -112,6 +113,7 @@ export interface GeneratedProjectRegistry {
   readonly channels: readonly GeneratedChannelRegistryEntry[]
   readonly authorizationPolicies: readonly GeneratedAuthorizationPolicyRegistryEntry[]
   readonly authorizationAbilities: readonly GeneratedAuthorizationAbilityRegistryEntry[]
+  readonly mail?: CompiledMailRegistry
 }
 
 export interface GeneratedBroadcastManifestEvent {

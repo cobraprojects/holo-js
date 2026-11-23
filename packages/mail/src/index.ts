@@ -30,6 +30,7 @@ export {
 export type {
   BuiltInMailDriverRegistry,
   HoloMailDriverRegistry,
+  HoloMailTemplateRegistry,
   MailAddress,
   MailAddressInput,
   MailAttachmentBase,
@@ -70,6 +71,8 @@ export type {
   MailSendResult,
   MailStorageAttachment,
   MailStorageAttachmentHelperOptions,
+  MailTemplateData,
+  MailTemplateName,
   MailViewRenderInput,
   MailViewRenderer,
   PendingMailSend,
@@ -89,6 +92,7 @@ export {
   registerMailDriver,
   resetMailDriverRegistry,
 } from './registry'
+export type { CompiledMailRegistry } from './templates'
 export {
   MailError,
   MailPreviewDisabledError,

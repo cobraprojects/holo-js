@@ -27,6 +27,12 @@
       "types": "./dist/contracts.d.ts",
       "import": "./dist/contracts.mjs",
       "default": "./dist/contracts.mjs"
+    },
+    "./templates": {
+      "@holo-js/source": "./src/templates.ts",
+      "types": "./dist/templates.d.ts",
+      "import": "./dist/templates.mjs",
+      "default": "./dist/templates.mjs"
     }
   },
   "main": "./dist/index.mjs",

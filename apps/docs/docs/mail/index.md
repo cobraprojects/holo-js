@@ -16,17 +16,22 @@ function WelcomeMail(input: WelcomeMailInput) {
   return defineMail({
     to: input.to,
     subject: `Welcome, ${input.name}`,
-    markdown: [
-      '# Welcome',
-      '',
-      `Hello ${input.name},`,
-      '',
-      'Your account is ready.',
-    ].join('\n'),
+    markdown: 'welcome',
+    data: {
+      name: input.name,
+    },
   })
 }
 
 export default WelcomeMail
+```
+
+```md [server/mail/templates/welcome.md]
+# Welcome
+
+Hello {{ name }},
+
+Your account is ready.
 ```
 
 ```ts [server/lib/onboarding.ts]
@@ -116,7 +121,7 @@ Generate a mail file:
 npx holo make:mail welcome
 ```
 
-This creates `server/mail/welcome.ts` with a `WelcomeMail` function like the one above. Call it from any server code, such as a route handler:
+This creates `server/mail/welcome.ts` with a `WelcomeMail` function like the one above, and its Mail template `server/mail/templates/welcome.md`. Call it from any server code, such as a route handler:
 
 ::: code-group
 

@@ -1,4 +1,5 @@
 import type { HoloAppEnv, NormalizedHoloMailConfig } from './config'
+import type { CompiledMailRegistry } from './templates'
 
 export const HOLO_MAIL_DEFINITION_MARKER = Symbol.for('holo-js.mail.definition')
 export const BUILT_IN_MAIL_DRIVERS = ['preview', 'log', 'fake', 'smtp'] as const
@@ -111,7 +112,13 @@ export interface MailContentAttachmentHelperOptions extends MailAttachmentHelper
   readonly name: string
 }
 
-export interface MailDefinitionInput {
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface HoloMailTemplateRegistry {}
+
+export type MailTemplateName = Extract<keyof HoloMailTemplateRegistry, string>
+export type MailTemplateData<TTemplate extends MailTemplateName> = HoloMailTemplateRegistry[TTemplate]
+
+interface MailDefinitionFields {
   readonly mailer?: string
   readonly from?: MailAddressInput
   readonly replyTo?: MailAddressInput
@@ -120,10 +127,6 @@ export interface MailDefinitionInput {
   readonly bcc?: MailRecipientsInput
   readonly subject: string
   readonly text?: string
-  readonly html?: string
-  readonly markdown?: string
-  readonly render?: MailRenderSource
-  readonly markdownWrapper?: string
   readonly attachments?: readonly MailAttachmentInput[]
   readonly headers?: Readonly<Record<string, string>>
   readonly tags?: readonly string[]
@@ -133,7 +136,37 @@ export interface MailDefinitionInput {
   readonly delay?: MailDelayValue
 }
 
+interface MailViewContentInput {
+  readonly html?: string
+  readonly render?: MailRenderSource
+  readonly markdown?: never
+  readonly data?: never
+}
+
+type MailTemplateDataInput<TData>
+  = Record<string, never> extends TData
+    ? { readonly data?: TData }
+    : { readonly data: TData }
+
+type MailTemplateContentInput<TTemplate extends MailTemplateName> = TTemplate extends MailTemplateName
+  ? {
+      readonly markdown: TTemplate
+      readonly html?: never
+      readonly render?: never
+    } & MailTemplateDataInput<MailTemplateData<TTemplate>>
+  : never
+
+export type MailDefinitionInput<TTemplate extends MailTemplateName = MailTemplateName>
+  = MailDefinitionFields & (MailViewContentInput | MailTemplateContentInput<TTemplate>)
+
 export type MailOverrideInput = Readonly<Partial<MailDefinitionInput>>
+
+export interface MailDefinitionSource extends MailDefinitionFields {
+  readonly html?: string
+  readonly render?: MailRenderSource
+  readonly markdown?: string
+  readonly data?: MailJsonObject
+}
 
 export interface MailDefinition {
   readonly mailer?: string
@@ -146,8 +179,8 @@ export interface MailDefinition {
   readonly text?: string
   readonly html?: string
   readonly markdown?: string
+  readonly data?: MailJsonObject
   readonly render?: Readonly<MailRenderSource>
-  readonly markdownWrapper?: string
   readonly attachments: readonly MailAttachmentInput[]
   readonly headers: Readonly<Record<string, string>>
   readonly tags: readonly string[]
@@ -280,6 +313,7 @@ export interface MailViewRenderer {
 
 export interface MailRuntimeBindings {
   readonly config?: NormalizedHoloMailConfig
+  readonly compiled?: CompiledMailRegistry
   readonly environment?: HoloAppEnv
   readonly renderView?: MailViewRenderer
   send?(input: MailSendInput): MailSendResult | Promise<MailSendResult>
