@@ -577,7 +577,7 @@ export function renderGeneratedQueueTypes(
   ].join('\n')
 }
 
-export function renderGeneratedMailTypes(mail: GeneratedProjectRegistry['mail']): string {
+function renderGeneratedMailTypes(mail: GeneratedProjectRegistry['mail']): string {
   const members = Object.entries(mail?.templates ?? {}).map(([name, template]) => {
     return `    readonly ${JSON.stringify(name)}: ${renderMailTemplateDataType(template.data)}`
   })
