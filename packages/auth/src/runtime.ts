@@ -2471,6 +2471,24 @@ async function refreshChangedGuardUser(
   bindings.context.setCachedUser(guardName, await findSerializedUserById(rotated.provider, rotated.userId))
 }
 
+async function completeSessionTransition<TResult>(
+  bindings: RuntimeBindings,
+  session: AuthSessionRecord,
+  guardNames: readonly string[],
+  complete: () => Promise<TResult>,
+): Promise<TResult> {
+  try {
+    return await complete()
+  } catch (error) {
+    try {
+      await invalidateSessionAuthentication(bindings, session.id, guardNames, session.store)
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'Failed to clean up an authenticated session transition.', { cause: cleanupError })
+    }
+    throw error
+  }
+}
+
 async function establishSessionForUser(
   user: SerializedAuthUser,
   options: {
@@ -2517,7 +2535,7 @@ async function establishSessionForUser(
       ))
     : []
 
-  try {
+  return completeSessionTransition(bindings, session, [...sharedGuardNames, options.guard], async () => {
     for (const guardName of sharedGuardNames) {
       bindings.context.setSessionId(guardName, session.id)
       if (guardName !== options.guard) {
@@ -2554,14 +2572,7 @@ async function establishSessionForUser(
           }
         : {}),
     })
-  } catch (error) {
-    try {
-      await invalidateSessionAuthentication(bindings, session.id, [...sharedGuardNames, options.guard], session.store)
-    } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], 'Failed to clean up an authenticated session transition.', { cause: cleanupError })
-    }
-    throw error
-  }
+  })
 
 }
 
@@ -2885,13 +2896,14 @@ async function rotateGuardSession(bindings: RuntimeBindings, guardName: string):
   const rotated = await rotateSessionWithUpdate(bindings, state.record, current => current)
   const readPayloads = readSessionPayloads(state.record) ?? {}
   const rotatedPayloads = readSessionPayloads(rotated) ?? {}
-  for (const name of sessionGuardNames(bindings)) {
-    if (bindings.context.getSessionId(name) === state.sessionId) {
+  const boundGuardNames = sessionGuardNames(bindings).filter(name => bindings.context.getSessionId(name) === state.sessionId)
+  await completeSessionTransition(bindings, rotated, boundGuardNames, async () => {
+    for (const name of boundGuardNames) {
       bindings.context.setSessionId(name, rotated.id)
       await refreshChangedGuardUser(bindings, name, readPayloads[name], rotatedPayloads[name])
     }
-  }
-  await appendResponseCookies(bindings, [bindings.session.sessionCookie(rotated.id)])
+    await appendResponseCookies(bindings, [bindings.session.sessionCookie(rotated.id)])
+  })
 }
 
 async function signOutOtherSessionsAfterPasswordReset(providerName: string, userId: string | number): Promise<void> {

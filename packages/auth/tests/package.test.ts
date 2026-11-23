@@ -3365,6 +3365,31 @@ describe('@holo-js/auth package runtime', () => {
     await expect(check()).resolves.toBe(false)
   }, TIMEBOXED_TEST_TIMEOUT)
 
+  it('signs the resetting browser out of the rotated session when its cookie cannot be delivered', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const providers = { users: runtime.usersProvider, admins: runtime.adminsProvider }
+    const resetBrowser = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+
+    configureAuthRuntime({ ...bindings, providers, context: resetBrowser })
+    const resetSession = unwrapAuthResult(await loginUsing(created!))
+    await requestPasswordReset({ email: 'ava@example.com' })
+    resetBrowser.appendResponseCookie = () => {
+      throw new Error('response already sent')
+    }
+
+    await expect(resetPassword({
+      token: runtime.deliveries[0]!.tokenValue,
+      password: 'new-secret',
+      passwordConfirmation: 'new-secret',
+    })).rejects.toThrow('response already sent')
+
+    expect(resetBrowser.getSessionId('web')).toBeUndefined()
+    await expect(getSessionRuntime().read(resetSession.sessionId)).resolves.toBeNull()
+    await expect(check()).resolves.toBe(false)
+  }, TIMEBOXED_TEST_TIMEOUT)
+
   it('rotates the remember token on password reset even when no remember-me lifetime is configured', async () => {
     const runtime = await configurePasswordResetRuntime()
     const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
