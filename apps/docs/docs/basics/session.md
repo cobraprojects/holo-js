@@ -283,7 +283,7 @@ Flash keys must start with a letter and use only letters, numbers, `.`, `:`, `-`
 
 ## Rotate the session ID
 
-Give a session a new ID after a privilege change, such as signing in, so an old ID that leaked can't be reused. Data and flash values move to the new ID:
+Give a session a new ID after a privilege change, such as signing in, so an old ID that leaked can't be reused. Data and flash values move to the new ID, including values other requests store while the rotation runs:
 
 ```ts
 import { rotateSession, sessionCookie } from '@holo-js/session'
@@ -408,7 +408,7 @@ Records activity and pushes the idle expiry forward, but never past the absolute
 
 `rotateSession(sessionId: string, options?: { newId?: string, data?: object, renewLifetime?: boolean, store?: string }): Promise<SessionRecord>`
 
-Gives the session a new ID and keeps its data and flash values. `renewLifetime` restarts the lifetime. Throws when the session doesn't exist, when the `newId` already holds a session, and when a store can't keep the data. A `newId` must be unique and unused: concurrent rotations that reuse one `newId` are supported only on the file and Redis stores, where exactly one succeeds. Other stores don't support it.
+Gives the session a new ID and keeps its data and flash values. The data moves as the session holds it when the rotation runs, so values other requests store meanwhile, such as the CSRF token, are kept. `renewLifetime` restarts the lifetime. Throws when the session doesn't exist, when the `newId` already holds a session, and when a store can't keep the data. A `newId` must be unique and unused: concurrent rotations that reuse one `newId` are supported only on the file and Redis stores, where exactly one succeeds. Other stores don't support it.
 
 ### invalidateSession()
 

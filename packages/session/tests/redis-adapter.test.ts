@@ -43,12 +43,10 @@ async function expectRotationKeepsFlashData({ adapter, record }: RedisStore): Pr
   const rotated = { ...record, id: randomUUID() }
   await adapter.set(record)
   await adapter.flash(record.id, 'notice', 'preserved')
-  await adapter.rotate(record.id, rotated)
+  await adapter.rotate(record.id, rotated, current => current)
   await expect(adapter.get(record.id)).resolves.toBeNull()
   await expect(adapter.get(rotated.id)).resolves.toEqual(rotated)
   await expect(adapter.take(rotated.id, 'notice')).resolves.toEqual({ found: true, value: 'preserved' })
-  await adapter.rotate(rotated.id, { ...rotated, data: { refreshed: true } })
-  await expect(adapter.get(rotated.id)).resolves.toMatchObject({ data: { refreshed: true } })
 }
 
 describe('session Redis behavior', () => {
@@ -157,7 +155,7 @@ describe('session Redis behavior', () => {
       const takenFromSource: SessionStoreTakeResult[] = []
       let rotating = true
       await Promise.all([
-        adapter.rotate(source.id, destination).finally(() => { rotating = false }),
+        adapter.rotate(source.id, destination, () => destination.data).finally(() => { rotating = false }),
         ...Array.from({ length: 4 }, async () => {
           while (rotating) takenFromSource.push(await adapter.take(source.id, 'once'))
         }),
@@ -181,7 +179,7 @@ describe('session Redis behavior', () => {
       }
     })
     try {
-      await adapter.rotate(source.id, destination)
+      await adapter.rotate(source.id, destination, () => destination.data)
     } finally {
       writing = false
       await Promise.all(writers)
@@ -192,7 +190,7 @@ describe('session Redis behavior', () => {
 
   it('creates no new session when rotating from a missing session', async () => {
     const { adapter, record } = await createStore()
-    await expect(adapter.rotate('missing', record)).rejects.toThrow('was not found')
+    await expect(adapter.rotate('missing', record, current => current)).rejects.toThrow('was not found')
     await expect(adapter.get(record.id)).resolves.toBeNull()
   })
 
@@ -203,8 +201,8 @@ describe('session Redis behavior', () => {
     await adapter.set(destination)
     await adapter.flash(record.id, 'notice', 'source')
     await adapter.flash(destination.id, 'notice', 'destination')
-    await expect(adapter.rotate('missing', destination)).rejects.toThrow('was not found')
-    await expect(adapter.rotate(record.id, destination)).rejects.toThrow('already exists')
+    await expect(adapter.rotate('missing', destination, current => current)).rejects.toThrow('was not found')
+    await expect(adapter.rotate(record.id, destination, current => current)).rejects.toThrow('already exists')
     await expect(adapter.get(record.id)).resolves.toEqual(record)
     await expect(adapter.get(destination.id)).resolves.toEqual(destination)
     await expect(adapter.take(record.id, 'notice')).resolves.toEqual({ found: true, value: 'source' })

@@ -22,11 +22,17 @@ export interface TouchSessionOptions {
   readonly store?: string
 }
 
+export type SessionDataUpdate = (current: SessionRecord['data']) => SessionRecord['data']
+
 export interface RotateSessionOptions {
   readonly store?: string
   readonly newId?: string
   readonly data?: SessionRecord['data']
   readonly renewLifetime?: boolean
+}
+
+export interface SessionRuntimeRotateOptions extends RotateSessionOptions {
+  readonly update?: SessionDataUpdate
 }
 
 export interface SessionRecord {
@@ -75,7 +81,7 @@ export interface SessionStore {
   touch?(sessionId: string, options: SessionStoreTouchOptions): Promise<SessionRecord | null>
   writeIfAbsent?(record: SessionRecord): Promise<boolean>
   delete(sessionId: string): Promise<void>
-  rotate?(previousSessionId: string, record: SessionRecord): Promise<void>
+  rotate?(previousSessionId: string, next: Omit<SessionRecord, 'data'>, update: SessionDataUpdate): Promise<SessionRecord>
   flash?(sessionId: string, key: string, value: unknown): Promise<void>
   take?(sessionId: string, key: string): Promise<SessionStoreTakeResult>
   setDataIfAbsent?(sessionId: string, key: string, value: unknown): Promise<SessionStoreSetDataResult>
@@ -94,7 +100,7 @@ export interface SessionRuntimeFacade {
   create(input?: CreateSessionInput): Promise<SessionRecord>
   write(record: SessionRecord): Promise<SessionRecord>
   read(sessionId: string, options?: ReadSessionOptions): Promise<SessionRecord | null>
-  rotate(sessionId: string, options?: RotateSessionOptions): Promise<SessionRecord>
+  rotate(sessionId: string, options?: SessionRuntimeRotateOptions): Promise<SessionRecord>
   invalidate(sessionId: string, options?: ReadSessionOptions): Promise<void>
   touch(sessionId: string, options?: TouchSessionOptions): Promise<SessionRecord | null>
   flash(sessionId: string, key: string, value: unknown, options?: ReadSessionOptions): Promise<void>

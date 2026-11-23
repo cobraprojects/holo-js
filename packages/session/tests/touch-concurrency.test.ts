@@ -49,7 +49,7 @@ describe.each(['database', 'file', 'redis'] as const)('%s session touch concurre
       if (operation === 'reset') await store.write({ ...original, data: { ...original.data, dashboardFilters: { search: '' } } })
       if (operation === 'remove') await store.write({ ...original, data: { userId: 42 } })
       if (operation === 'delete') await store.delete(original.id)
-      if (operation === 'rotate') await store.rotate?.(original.id, { ...original, id: replacementId, data: { userId: 43 } })
+      if (operation === 'rotate') await store.rotate?.(original.id, { ...original, id: replacementId }, () => ({ userId: 43 }))
     } finally {
       resume.resolve()
     }

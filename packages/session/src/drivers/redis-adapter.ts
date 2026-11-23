@@ -3,7 +3,7 @@ import type {
 } from '../config'
 import { redisUrlInternals } from '@holo-js/kernel'
 import Redis from 'ioredis'
-import type { SessionRecord, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions, SessionStoreUpdateDataResult } from '../contracts'
+import type { SessionDataUpdate, SessionRecord, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions, SessionStoreUpdateDataResult } from '../contracts'
 import { applyDataUpdate } from './data-update'
 import type { SessionRedisDriverAdapter } from './redis'
 
@@ -344,6 +344,13 @@ function readSessionFields(result: unknown): readonly string[] {
   return result as string[]
 }
 
+function rotatedRecord(next: Omit<SessionRecord, 'data'>, fields: readonly string[], update: SessionDataUpdate): SessionRecord {
+  const encoded = fields.find((_value, index) => index % 2 === 1 && fields[index - 1] === 'record')
+  const previous = encoded === undefined ? null : deserializeSessionRecord(encoded)
+  if (!previous) throw new Error('[@holo-js/session] Redis returned an invalid session record.')
+  return Object.freeze({ ...next, data: update(previous.data) })
+}
+
 function deserializeTakeResult(result: unknown): SessionStoreTakeResult {
   if (!Array.isArray(result) || (result[0] !== 0 && result[0] !== 1)) {
     throw new Error('[@holo-js/session] Redis returned an invalid atomic take result.')
@@ -423,28 +430,26 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
     await this.client.del(this.qualifyKey(sessionId))
   }
 
-  async rotate(previousSessionId: string, record: SessionRecord): Promise<void> {
-    if (previousSessionId === record.id) {
-      await this.set(record)
-      return
-    }
+  async rotate(previousSessionId: string, next: Omit<SessionRecord, 'data'>, update: SessionDataUpdate): Promise<SessionRecord> {
     const previousKey = this.qualifyKey(previousSessionId)
-    const nextKey = this.qualifyKey(record.id)
-    const ttlMs = Math.max(1, record.expiresAt.getTime() - this.now().getTime())
-    const encoded = serializeSessionRecord(record)
+    const nextKey = this.qualifyKey(next.id)
+    const ttlMs = Math.max(1, next.expiresAt.getTime() - this.now().getTime())
     for (let attempt = 0; attempt < ROTATE_SESSION_ATTEMPTS; attempt += 1) {
       const fields = await this.readRotationSource(previousSessionId, previousKey)
-      await this.copyRotationTarget(record.id, nextKey, encoded, ttlMs, fields)
+      const rotated = rotatedRecord(next, fields, update)
+      await this.copyRotationTarget(next.id, nextKey, serializeSessionRecord(rotated), ttlMs, fields)
       const removed = await this.client.eval(DELETE_UNCHANGED_SESSION_SCRIPT, 1, previousKey, ...fields)
-      if (removed === 1) return
+      if (removed === 1) return rotated
       await this.client.del(nextKey)
       if (removed === 0) {
         throw new Error(`[@holo-js/session] Session "${previousSessionId}" was not found.`)
       }
     }
     const fields = await this.readRotationSource(previousSessionId, previousKey)
-    await this.copyRotationTarget(record.id, nextKey, encoded, ttlMs, fields)
+    const rotated = rotatedRecord(next, fields, update)
+    await this.copyRotationTarget(next.id, nextKey, serializeSessionRecord(rotated), ttlMs, fields)
     await this.client.del(previousKey)
+    return rotated
   }
 
   private async readRotationSource(previousSessionId: string, previousKey: string): Promise<readonly string[]> {

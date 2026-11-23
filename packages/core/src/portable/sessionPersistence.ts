@@ -32,7 +32,7 @@ export interface CoreDatabaseSessionAdapter {
   read(sessionId: string): Promise<CoreSessionRecord | null>
   write(record: CoreSessionRecord): Promise<void>
   delete(sessionId: string): Promise<void>
-  rotate(previousSessionId: string, record: CoreSessionRecord): Promise<void>
+  rotate(previousSessionId: string, next: Omit<CoreSessionRecord, 'data'>, update: (current: CoreSessionRecord['data']) => CoreSessionRecord['data']): Promise<CoreSessionRecord>
   flash(sessionId: string, key: string, value: unknown): Promise<void>
   take(sessionId: string, key: string): Promise<CoreSessionStoreTakeResult>
   setDataIfAbsent(sessionId: string, key: string, value: unknown): Promise<CoreSessionStoreSetDataResult>
@@ -182,8 +182,12 @@ export function createCoreDatabaseSessionAdapter(tableName: string, connectionNa
         .where('id', sessionId)
         .delete()
     },
-    async rotate(previousSessionId: string, record: CoreSessionRecord): Promise<void> {
-      await inSessionWriteTransaction(connectionName, async (transaction) => {
+    async rotate(
+      previousSessionId: string,
+      next: Omit<CoreSessionRecord, 'data'>,
+      update: (current: CoreSessionRecord['data']) => CoreSessionRecord['data'],
+    ): Promise<CoreSessionRecord> {
+      return inSessionWriteTransaction(connectionName, async (transaction) => {
         const previous = await createSessionQuery(transaction, tableName, previousSessionId, true)
           .first<Record<string, unknown>>()
         if (!previous || isExpiredSessionRow(previous)) {
@@ -192,17 +196,13 @@ export function createCoreDatabaseSessionAdapter(tableName: string, connectionNa
         }
 
         const stored = splitStoredSessionData(previous.data)
-        const normalized = serializeSessionRecordForRow({
-          ...record,
-          data: Object.freeze({ ...record.data }),
-        }, transaction.getDialect().name)
-        const nextData = serializeStoredSessionData({
-          publicData: Object.freeze({ ...record.data }),
-          flashEntries: stored.flashEntries,
-        })
+        const rotated = Object.freeze({ ...next, data: Object.freeze({ ...update(stored.publicData) }) })
+        const normalized = serializeSessionRecordForRow(rotated, transaction.getDialect().name)
+        const nextData = serializeStoredSessionData({ publicData: rotated.data, flashEntries: stored.flashEntries })
         await new TableQueryBuilder(tableName, transaction)
           .where('id', previousSessionId)
           .update({ ...normalized, data: nextData })
+        return rotated
       })
     },
     async flash(sessionId: string, key: string, value: unknown): Promise<void> {

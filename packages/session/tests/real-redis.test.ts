@@ -102,7 +102,7 @@ describeRealRedis('@holo-js/session real Redis usage', () => {
       await expect(store.setDataIfAbsent(previousId, '_token', 'token-a')).resolves.toEqual({ found: true, value: 'token-a' })
       await expect(store.read(previousId)).resolves.toMatchObject({ data: { userId: 42, _token: 'token-a' } })
 
-      await store.rotate?.(previousId, record(replacementId, { userId: 42, login: 'fresh' }))
+      await store.rotate?.(previousId, record(replacementId, {}), () => ({ userId: 42, login: 'fresh' }))
       await expect(store.setDataIfAbsent(previousId, '_token', 'stale-token')).resolves.toEqual({ found: false })
 
       await expect(store.read(previousId)).resolves.toBeNull()

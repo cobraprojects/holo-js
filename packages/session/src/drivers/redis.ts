@@ -1,4 +1,4 @@
-import type { SessionRecord, SessionStore, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions, SessionStoreUpdateDataResult } from '../contracts'
+import type { SessionDataUpdate, SessionRecord, SessionStore, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions, SessionStoreUpdateDataResult } from '../contracts'
 
 export interface SessionRedisDriverAdapter {
   touch?(sessionId: string, options: SessionStoreTouchOptions): Promise<SessionRecord | null>
@@ -6,7 +6,7 @@ export interface SessionRedisDriverAdapter {
   set(record: SessionRecord): Promise<void>
   del(sessionId: string): Promise<void>
   writeIfAbsent?(record: SessionRecord): Promise<boolean>
-  rotate?(previousSessionId: string, record: SessionRecord): Promise<void>
+  rotate?(previousSessionId: string, next: Omit<SessionRecord, 'data'>, update: SessionDataUpdate): Promise<SessionRecord>
   flash?(sessionId: string, key: string, value: unknown): Promise<void>
   take?(sessionId: string, key: string): Promise<SessionStoreTakeResult>
   setDataIfAbsent?(sessionId: string, key: string, value: unknown): Promise<SessionStoreSetDataResult>
