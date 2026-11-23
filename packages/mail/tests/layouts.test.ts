@@ -57,6 +57,7 @@ describe('@holo-js/mail Mail layout', () => {
     expect(mail.html).toMatch(/<a href="https:\/\/acme\.test"[^>]*>\s*Acme &amp; Co\s*<\/a>/)
     expect(mail.html).toMatch(/<td class="content-cell"[^>]*>\s*<h1[^>]*>Welcome<\/h1>\s*<\/td>/)
     expect(mail.html).toContain(`© ${year} Acme &amp; Co. All rights reserved.`)
+    expect(mail.html).toContain('@media only screen and (max-width: 600px)')
     expect(mail.text).toBe(`Acme & Co: https://acme.test\n\nWelcome\n\n© ${year} Acme & Co. All rights reserved.`)
   })
 
@@ -72,6 +73,14 @@ describe('@holo-js/mail Mail layout', () => {
 
     expect(textOnly.html).toContain(`© ${year} Acme &amp; Co. All rights reserved.`)
     expect(textOnly.text).toBe(`Hello there from Acme & Co (${year})\n\nWelcome`)
+  })
+  it('lets an app layout use conditions and include Mail templates', async () => {
+    configureMail({
+      templates: { 'welcome': '# Welcome', 'partials/footer': 'Sent by {{ app.name }}' },
+      layouts: { html: '{!! body !!}@if (subject)<footer>@include (partials/footer)</footer>@endif' },
+    })
+
+    expect((await send()).html).toMatch(/<h1[^>]*>Welcome<\/h1><footer>Sent by Acme &amp; Co<\/footer>$/)
   })
 })
 

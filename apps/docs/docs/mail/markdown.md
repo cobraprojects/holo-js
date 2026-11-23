@@ -39,7 +39,7 @@ Mail templates are `.md` files under `server/mail/templates`. A template's name 
 
 `npx holo make:mail` creates a mail definition together with its template. See [Writing mail](/mail/writing-mail#generate-a-mail-file).
 
-`holo prepare` compiles every template into the generated registry, so your app doesn't read template files when it sends mail. `holo dev` recompiles a template when you save it. After adding or changing a template outside `holo dev`, run `npx holo prepare`. A template with a syntax error, such as an unclosed `{{`, fails `holo prepare` with the template name and line.
+`holo prepare` compiles every template into the generated registry, so your app doesn't read template files when it sends mail. `holo dev` recompiles a template when you save it. After adding or changing a template outside `holo dev`, run `npx holo prepare`. A template with a syntax error, such as an unclosed `{{` or `@if`, an unknown directive, or an include cycle, fails `holo prepare` with the template name and line.
 
 ## Placeholders
 
@@ -63,9 +63,54 @@ HTML you write in the template itself is output as written, so you can add eleme
 
 Placeholders are filled before the Markdown is parsed, so a value can still contain Markdown syntax such as `*`. `{{ }}` only escapes HTML.
 
+## Conditions, loops, and includes
+
+Templates support Blade-style directives. Each takes a dot path or a template name and nothing else.
+
+| Directive | Output |
+| --- | --- |
+| `@if (path)` … `@else` … `@endif` | The first block when the value at `path` is truthy, otherwise the `@else` block. `@else` is optional. |
+| `@foreach (path as name)` … `@endforeach` | The block once for each item of the list at `path`. Inside the block, `name` is the current item. |
+| `@include (name)` | Another Mail template, which sees the same `data`. |
+
+```md [server/mail/templates/orders/shipped.md]
+# Order {{ order.number }} shipped
+
+@if (order.isGift)
+This order is wrapped as a gift.
+@else
+Thanks for your order!
+@endif
+
+| Item | Qty |
+| :--- | ---: |
+@foreach (order.lines as line)
+| {{ line.name }} | {{ line.quantity }} |
+@endforeach
+
+@include (partials/support)
+```
+
+```md [server/mail/templates/partials/support.md]
+Questions? Contact us at {{ support.email }}.
+```
+
+`@if` only tests whether a value is truthy. A missing value, `null`, `false`, `0`, and `''` are false; every other value, including an empty list, is true. There are no operators, comparisons, or function calls, so compute flags such as `isOverdue` before you pass them.
+
+A line that holds only a directive leaves no blank line behind, so `@foreach` can produce the rows of a Markdown table. Directives also work inside a line, as long as the `@` doesn't follow a letter, digit, or `_`. Write `@@` to output a literal `@` before a word, as in `@@holo`. Email addresses such as `help@example.com` need no escaping.
+
+A loop item's name hides a `data` value with the same name inside the loop. An included template always sees the mail's `data`, even inside a loop. An included template can include others, but a template that includes itself, directly or through other templates, fails `holo prepare`.
+
 ## Typed data
 
-`holo prepare` generates a type for each template's `data` from the placeholders it uses. Each value used in `{{ }}` or `{!! !!}` must be a `string` or `number`. An unknown template name, a missing value, or a value of the wrong type is a type error, and your editor autocompletes template names and `data`.
+`holo prepare` generates a type for each template's `data` from the placeholders and directives it uses:
+
+- A value used in `{{ }}` or `{!! !!}` must be a `string` or `number`.
+- A value used only in `@if` is optional and can be any JSON value.
+- A value used in `@foreach` must be a list. The shape of its items comes from how the loop uses them: `line.name` in the example above requires items with a `name`.
+- The values an included template uses are required by every template that includes it.
+
+An unknown template name, a missing value, or a value of the wrong type is a type error, and your editor autocompletes template names and `data`.
 
 ```ts
 defineMail({
@@ -79,7 +124,7 @@ defineMail({
 })
 ```
 
-`data` must be JSON-serializable. A `Date`, a class instance, or a function is a type error; format such values first, as `shippedOn` does above. A template without placeholders needs no `data`.
+`data` must be JSON-serializable. A `Date`, a class instance, or a function is a type error; format such values first, as `shippedOn` does above. A template without placeholders, or with only `@if` values, needs no `data`.
 
 ## Supported syntax
 

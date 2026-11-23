@@ -172,6 +172,7 @@ describe('@holo-js/mail runtime', () => {
 
   describe('Mail templates', () => {
     async function sendTemplate(source: string, data: MailJsonObject = {}): Promise<{ readonly html?: string, readonly text?: string }> {
+      resetFakeSentMails()
       configureFakeMailerWithTemplates({ fixture: source })
       await sendMail(defineMail({ to: 'ava@example.com', subject: 'Template', markdown: 'fixture', data }))
       const sent = listFakeSentMails()
@@ -221,6 +222,89 @@ describe('@holo-js/mail runtime', () => {
         .rejects.toThrow('requires a string or number for "constructor"')
     })
 
+    it('shows the @if branch for truthy values and the @else branch for falsy or missing values', async () => {
+      const template = '@if (order.paid)\nPaid\n@else\nUnpaid\n@endif\n'
+      const truthy: readonly MailJsonObject[] = [{ order: { paid: true } }, { order: { paid: 'yes' } }, { order: { paid: 1 } }, { order: { paid: [] } }]
+      const falsy: readonly MailJsonObject[] = [{}, { order: {} }, { order: { paid: null } }, { order: { paid: false } }, { order: { paid: 0 } }, { order: { paid: '' } }]
+
+      for (const data of truthy) {
+        expect((await sendTemplate(template, data)).html).toBe('<p>Paid</p>')
+      }
+      for (const data of falsy) {
+        expect((await sendTemplate(template, data)).html).toBe('<p>Unpaid</p>')
+      }
+      expect((await sendTemplate('Write to help@example.com @if (vip)today @endif', { vip: true })).html)
+        .toBe('<p>Write to help@example.com today</p>')
+    })
+
+    it('renders one @foreach block per item, including Markdown table rows', async () => {
+      const mail = await sendTemplate([
+        '# Order {{ order.id }}',
+        '',
+        '| Item | Qty |',
+        '| --- | ---: |',
+        '@foreach (order.lines as line)',
+        '| {{ line.name }} | {{ line.quantity }} |',
+        '@endforeach',
+        '',
+        '@foreach (tags as tag)',
+        '- {{ tag }} for {{ order.id }}',
+        '@endforeach',
+      ].join('\n'), {
+        order: { id: 7, lines: [{ name: 'Mug', quantity: 2 }, { name: 'Tea', quantity: 1 }] },
+        tags: ['gift', 'fragile'],
+      })
+
+      expect(mail.html).toBe([
+        '<h1>Order 7</h1>',
+        '<table>',
+        '<thead>',
+        '<tr>',
+        '<th>Item</th>',
+        '<th style="text-align:right">Qty</th>',
+        '</tr>',
+        '</thead>',
+        '<tbody>',
+        '<tr>',
+        '<td>Mug</td>',
+        '<td style="text-align:right">2</td>',
+        '</tr>',
+        '<tr>',
+        '<td>Tea</td>',
+        '<td style="text-align:right">1</td>',
+        '</tr>',
+        '</tbody>',
+        '</table>',
+        '<ul>',
+        '<li>gift for 7</li>',
+        '<li>fragile for 7</li>',
+        '</ul>',
+      ].join('\n'))
+    })
+
+    it('renders nothing for an empty @foreach list and rejects a value that is not a list', async () => {
+      const template = 'Items:\n@foreach (items as item)\n- {{ item }}\n@endforeach\nDone'
+
+      expect((await sendTemplate(template, { items: [] })).html).toBe('<p>Items:\nDone</p>')
+      await expect(sendTemplate(template, { items: 'Mug' }))
+        .rejects.toThrow('Mail template "fixture" requires a list for "items".')
+    })
+
+    it('renders an @include with the parent data', async () => {
+      configureFakeMailerWithTemplates({
+        'fixture': '# Order {{ order.id }}\n\n@foreach (order.lines as line)\n@include (partials/summary)\n@endforeach\nThanks!',
+        'partials/summary': 'Total: **{{ order.total }}**\n',
+      })
+      await sendMail(defineMail({
+        to: 'ava@example.com',
+        subject: 'Include',
+        markdown: 'fixture',
+        data: { order: { id: 7, total: '$12', lines: ['Mug'] } },
+      }))
+
+      expect(listFakeSentMails()[0]?.mail.html).toBe('<h1>Order 7</h1>\n<p>Total: <strong>$12</strong>\nThanks!</p>')
+    })
+
     it('rejects template syntax errors when compiling', () => {
       expect(() => compileMailRegistry({ templates: { broken: 'Hello\n{{ name' } }))
         .toThrow('Mail template "broken" line 2: "{{" is not closed with "}}".')
@@ -228,6 +312,32 @@ describe('@holo-js/mail runtime', () => {
         .toThrow('Mail template "broken" line 1: "user.name()" is not a data path.')
       expect(() => compileMailRegistry({ templates: { broken: '{{ order }} {{ order.id }}' } }))
         .toThrow('Mail template "broken" uses "order.id" both as a value and as an object.')
+    })
+
+    it('rejects malformed, unclosed, and unknown directives when compiling', () => {
+      const failures: readonly (readonly [string, string])[] = [
+        ['Hi\n@if (paid)\nPaid', 'line 2: "@if" is not closed with "@endif".'],
+        ['@foreach (items as item)\n{{ item }}\n@endif', 'line 3: "@endif" has no matching "@if".'],
+        ['@foreach (items as item)\n{{ item }}', 'line 1: "@foreach" is not closed with "@endforeach".'],
+        ['@else\n', 'line 1: "@else" has no matching "@if".'],
+        ['@if (a)\n@else\n@else\n@endif', 'line 3: "@else" has no matching "@if".'],
+        ['Follow us\n@twitter', 'line 2: "@twitter" is not a Mail template directive.'],
+        ['@if paid\n@endif', 'line 1: "@if" needs a data path in parentheses.'],
+        ['@if (paid\n)\n@endif', 'line 1: "@if" needs a data path in parentheses.'],
+        ['@if (order.total > 10)\n@endif', 'line 1: "order.total > 10" is not a data path.'],
+        ['@foreach (items)\n@endforeach', 'line 1: "@foreach" needs "path as name" in parentheses'],
+        ['@include (../secrets)', 'line 1: "../secrets" is not a Mail template name'],
+        ['@include (partials/missing)', 'line 1: "@include (partials/missing)" names a Mail template that does not exist.'],
+        ['@foreach (items as item)\n{{ item.name }}\n@endforeach\n{{ items }}', 'uses "items" both as a list and as a value.'],
+      ]
+
+      for (const [source, message] of failures) {
+        expect(() => compileMailRegistry({ templates: { broken: source } })).toThrow(`Mail template "broken" ${message}`)
+      }
+    })
+
+    it('outputs an escaped @@ directive as literal text', async () => {
+      expect((await sendTemplate('Follow @@holo on social media')).html).toBe('<p>Follow @holo on social media</p>')
     })
   })
 

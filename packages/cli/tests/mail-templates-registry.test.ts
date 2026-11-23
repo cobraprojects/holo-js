@@ -119,6 +119,79 @@ export const typo = defineMailConfig({ markdown: { theme: 'reciept' } })
       .rejects.toThrow('Mail template "layout.html" line 2: "{!!" is not closed with "!!}".')
   })
 
+  it('types @if paths as optional, @foreach paths as lists of the item shape, and merges included templates', async () => {
+    const root = await createProject()
+    await writeTemplate(root, 'orders/receipt', [
+      '# Receipt {{ order.id }}',
+      '@if (order.coupon)',
+      'Coupon applied',
+      '@endif',
+      '@if (customer.vip)',
+      'Thanks for being a VIP',
+      '@endif',
+      '@foreach (order.lines as line)',
+      '- {{ line.name }} x {{ line.quantity }}',
+      '@if (line.gift)',
+      '  (gift)',
+      '@endif',
+      '@endforeach',
+      '@foreach (order.tags as tag)',
+      '- {{ tag }}',
+      '@endforeach',
+      '@foreach (order.notes as note)',
+      'Note',
+      '@endforeach',
+      '@include (partials/footer)',
+    ].join('\n'))
+    await writeTemplate(root, 'partials/footer', 'Questions? Contact {{ support.email }}.')
+    await writeTemplate(root, 'reminder', '@if (name)\nHi\n@endif')
+
+    await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    await writeFile(join(root, 'check-mail.ts'), `
+import { defineMail } from '@holo-js/mail'
+
+export const receipt = defineMail({
+  to: 'ava@example.com',
+  subject: 'Receipt',
+  markdown: 'orders/receipt',
+  data: {
+    order: {
+      id: 42,
+      coupon: { code: 'SAVE' },
+      lines: [{ name: 'Mug', quantity: 2 }, { name: 'Tea', quantity: 1, gift: true }],
+      tags: ['gift'],
+      notes: [{ any: ['json'] }],
+    },
+    support: { email: 'help@example.com' },
+  },
+})
+export const reminder = defineMail({ to: 'ava@example.com', subject: 'Reminder', markdown: 'reminder' })
+`, 'utf8')
+    expect(typeErrors(root, 'check-mail.ts')).toEqual([])
+
+    await writeFile(join(root, 'check-mail-errors.ts'), `
+import { defineMail } from '@holo-js/mail'
+
+const order = { id: 42, lines: [], tags: [], notes: [] }
+export const missingInclude = defineMail({ to: 'a@example.com', subject: 'R', markdown: 'orders/receipt', data: { order } })
+export const notList = defineMail({ to: 'a@example.com', subject: 'R', markdown: 'orders/receipt', data: { order: { ...order, tags: 'gift' }, support: { email: 'e' } } })
+export const badItem = defineMail({ to: 'a@example.com', subject: 'R', markdown: 'orders/receipt', data: { order: { ...order, lines: [{ name: 'Mug' }] }, support: { email: 'e' } } })
+export const date = defineMail({ to: 'a@example.com', subject: 'R', markdown: 'orders/receipt', data: { order: { ...order, coupon: new Date() }, support: { email: 'e' } } })
+`, 'utf8')
+    expect(typeErrors(root, 'check-mail-errors.ts')).toHaveLength(4)
+  })
+
+  it('fails prepare on an include cycle', async () => {
+    const root = await createProject()
+    await writeTemplate(root, 'orders/shipped', '# Shipped\n\n@include (partials/summary)')
+    await writeTemplate(root, 'partials/summary', 'Summary\n@include (partials/lines)')
+    await writeTemplate(root, 'partials/lines', 'Lines\n\n@include (partials/summary)')
+
+    await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig()))
+      .rejects.toThrow('"@include (partials/summary)" creates an include cycle: partials/summary -> partials/lines -> partials/summary.')
+  })
+
   it('fails prepare on a Mail template syntax error', async () => {
     const root = await createProject()
     await writeTemplate(root, 'broken', 'Hello\n{{ name')
