@@ -11,7 +11,7 @@ import { loadGeneratedProjectRegistry } from '../src/project/registry'
 
 declare module '@holo-js/mail' {
   interface HoloMailTemplateRegistry {
-    readonly 'order-shipped': { readonly name: string | number }
+    readonly 'order-shipped': { readonly name: string | number, readonly url: string | number }
   }
 }
 
@@ -85,7 +85,7 @@ describe('holo make:mail', () => {
     await writeFile(join(root, 'check-mail.ts'), [
       'import OrderShippedMail from \'./server/mail/order-shipped-mail\'',
       '',
-      'export const mail = OrderShippedMail({ to: \'ava@example.com\', name: \'Ava\' })',
+      'export const mail = OrderShippedMail({ to: \'ava@example.com\', name: \'Ava\', url: \'https://example.test/welcome\' })',
       '',
     ].join('\n'), 'utf8')
     expect(typeErrors(root, 'check-mail.ts')).toEqual([])
@@ -94,8 +94,11 @@ describe('holo make:mail', () => {
       config: normalizeMailConfig({ default: 'fake', from: { email: 'noreply@example.com' }, mailers: { fake: { driver: 'fake' } } }),
       compiled: (await loadGeneratedProjectRegistry(root))?.mail,
     })
-    await sendMail({ to: 'ava@example.com', subject: 'Welcome', markdown: 'order-shipped', data: { name: 'Ava' } })
-    expect(listFakeSentMails()[0]?.mail.html).toBe('<h1>Welcome</h1>\n<p>Hello Ava,</p>\n<p>Your mail is ready.</p>')
+    await sendMail({ to: 'ava@example.com', subject: 'Welcome', markdown: 'order-shipped', data: { name: 'Ava', url: 'https://example.test/welcome' } })
+    const sent = listFakeSentMails()[0]?.mail
+    expect(sent?.html).toContain('<p>Hello Ava,</p>')
+    expect(sent?.html).toContain('<a href="https://example.test/welcome" class="button button-primary" target="_blank" rel="noopener">Get Started</a>')
+    expect(sent?.text).toBe('Welcome\n\nHello Ava,\n\nYour mail is ready.\n\nGet Started: https://example.test/welcome')
   })
 
   it('names the Mail template with --markdown and rejects unsafe template names', async () => {
