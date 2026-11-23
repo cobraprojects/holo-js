@@ -93,4 +93,12 @@ export const date = defineMail({ to: 'ava@example.com', subject: 'Shipped', mark
     await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig()))
       .rejects.toThrow('Mail template "broken" line 2: "{{" is not closed with "}}".')
   })
+
+  it('fails prepare on an unknown Mail component tag', async () => {
+    const root = await createProject()
+    await writeTemplate(root, 'welcome', '# Welcome\n\n<mail::buton url="https://example.test">Open</mail::buton>')
+
+    await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig()))
+      .rejects.toThrow('Mail template "welcome" line 3: <mail::buton> is not a Mail component.')
+  })
 })

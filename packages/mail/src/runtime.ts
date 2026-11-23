@@ -53,7 +53,7 @@ import {
 } from './preview'
 
 const HOLO_MAIL_DELIVER_JOB = 'holo.mail.deliver'
-const EMPTY_COMPILED_MAIL_REGISTRY: CompiledMailRegistry = Object.freeze({ templates: Object.freeze({}) })
+const EMPTY_COMPILED_MAIL_REGISTRY: CompiledMailRegistry = Object.freeze({ templates: Object.freeze({}), components: Object.freeze({}) })
 const LOCAL_ATTACHMENT_ROOTS = Object.freeze([
   tmpdir(),
   resolve(process.cwd(), 'storage'),
@@ -1411,10 +1411,10 @@ function renderMailTemplateContent(
   data: MailJsonObject,
   text: string | undefined,
 ): { readonly html: string, readonly text: string } {
-  const source = renderMailTemplate(getCompiledMailRegistry(), markdown, data)
+  const registry = getCompiledMailRegistry()
   return Object.freeze({
-    html: renderMarkdown(source),
-    text: text ?? renderMarkdownText(source),
+    html: renderMarkdown(renderMailTemplate(registry, markdown, data, 'html')),
+    text: text ?? renderMarkdownText(renderMailTemplate(registry, markdown, data, 'text')),
   })
 }
 
