@@ -118,6 +118,11 @@ export interface HoloMailTemplateRegistry {}
 export type MailTemplateName = Extract<keyof HoloMailTemplateRegistry, string>
 export type MailTemplateData<TTemplate extends MailTemplateName> = HoloMailTemplateRegistry[TTemplate]
 
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface HoloMailThemeRegistry {}
+
+export type MailThemeName = 'default' | Extract<keyof HoloMailThemeRegistry, string>
+
 interface MailDefinitionFields {
   readonly mailer?: string
   readonly from?: MailAddressInput
@@ -141,6 +146,7 @@ interface MailViewContentInput {
   readonly render?: MailRenderSource
   readonly markdown?: never
   readonly data?: never
+  readonly theme?: never
 }
 
 type MailTemplateDataInput<TData>
@@ -151,6 +157,7 @@ type MailTemplateDataInput<TData>
 type MailTemplateContentInput<TTemplate extends MailTemplateName> = TTemplate extends MailTemplateName
   ? {
       readonly markdown: TTemplate
+      readonly theme?: MailThemeName
       readonly html?: never
       readonly render?: never
     } & MailTemplateDataInput<MailTemplateData<TTemplate>>
@@ -166,6 +173,7 @@ export interface MailDefinitionSource extends MailDefinitionFields {
   readonly render?: MailRenderSource
   readonly markdown?: string
   readonly data?: MailJsonObject
+  readonly theme?: string
 }
 
 export interface MailDefinition {
@@ -180,6 +188,7 @@ export interface MailDefinition {
   readonly html?: string
   readonly markdown?: string
   readonly data?: MailJsonObject
+  readonly theme?: string
   readonly render?: Readonly<MailRenderSource>
   readonly attachments: readonly MailAttachmentInput[]
   readonly headers: Readonly<Record<string, string>>
@@ -314,6 +323,7 @@ export interface MailViewRenderer {
 export interface MailRuntimeBindings {
   readonly config?: NormalizedHoloMailConfig
   readonly compiled?: CompiledMailRegistry
+  readonly app?: { readonly name: string, readonly url: string }
   readonly environment?: HoloAppEnv
   readonly renderView?: MailViewRenderer
   send?(input: MailSendInput): MailSendResult | Promise<MailSendResult>

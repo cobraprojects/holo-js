@@ -8,8 +8,7 @@ import { promisify } from 'node:util'
 import { build } from 'esbuild'
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import { configureMailRuntime, defineMail, MailSendError, normalizeMailConfig, previewMail, renderMailPreview, resetMailRuntime, sendMail } from '../src'
-import { compileMailRegistry } from '../src/templates'
-import './support/mail-templates'
+import { compileWithoutLayout } from './support/mail-templates'
 
 type SmtpServerOptions = {
   readonly rejectRecipient?: boolean
@@ -344,7 +343,7 @@ it('escapes template values, keeps template HTML, and rejects executable markdow
   configureMailRuntime({
     config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }),
     environment: 'test',
-    compiled: compileMailRegistry({ templates: { fixture: '[safe](https://example.test) [bad](javascript:alert)\n\n<p class="note">{{ payload }}</p>' } }),
+    compiled: compileWithoutLayout({ fixture: '[safe](https://example.test) [bad](javascript:alert)\n\n<p class="note">{{ payload }}</p>' }),
   })
   const preview = await previewMail(mail)
   expect(preview.html).toContain('href="https://example.test"')
@@ -368,7 +367,7 @@ it('escapes a markdown link href once and keeps the label escaped once in real p
   configureMailRuntime({
     config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }),
     environment: 'test',
-    compiled: compileMailRegistry({ templates: { fixture: '[Search](https://example.test/?a=1&b=2) [A & B](https://example.test/b) [bad](javascript:alert)' } }),
+    compiled: compileWithoutLayout({ fixture: '[Search](https://example.test/?a=1&b=2) [A & B](https://example.test/b) [bad](javascript:alert)' }),
   })
   const preview = await previewMail(mail)
   expect(preview.html).toContain('<a href="https://example.test/?a=1&amp;b=2">Search</a>')

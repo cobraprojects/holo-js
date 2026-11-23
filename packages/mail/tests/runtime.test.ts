@@ -24,7 +24,7 @@ import {
   type NormalizedHoloMailConfig,
 } from '../src'
 import { compileMailRegistry } from '../src/templates'
-import { configureFakeMailerWithTemplates } from './support/mail-templates'
+import { compileWithoutLayout, configureFakeMailerWithTemplates } from './support/mail-templates'
 
 const previousAppEnv = process.env.APP_ENV
 const previousNodeEnv = process.env.NODE_ENV
@@ -120,7 +120,7 @@ afterEach(() => {
 
 describe('@holo-js/mail runtime', () => {
   it('previews text, html, and markdown mails without a transport driver', async () => {
-    configureMailRuntime({ compiled: compileMailRegistry({ templates: { welcome: '# Welcome\n\nBody text' } }) })
+    configureMailRuntime({ compiled: compileWithoutLayout({ welcome: '# Welcome\n\nBody text' }) })
     const markdown = defineMail({
       from: 'noreply@example.com',
       to: 'ava@example.com',
@@ -260,8 +260,8 @@ describe('@holo-js/mail runtime', () => {
       expect(mail.html).toContain('<ol>\n<li>First</li>\n<li>Second\n<ul>\n<li>Nested</li>\n</ul>\n</li>\n</ol>')
       expect(mail.html).toContain('<blockquote>\n<p>Quoted <em>text</em></p>\n</blockquote>')
       expect(mail.html).toContain('<pre><code class="language-ts">const total = 1 &lt; 2\n</code></pre>')
-      expect(mail.html).toContain('<hr />')
-      expect(mail.html).toContain('<img src="https://example.test/logo.png" alt="Logo" title="Brand" />')
+      expect(mail.html).toContain('<hr>')
+      expect(mail.html).toContain('<img src="https://example.test/logo.png" alt="Logo" title="Brand">')
     })
 
     it('renders GitHub-style tables', async () => {
@@ -372,7 +372,7 @@ describe('@holo-js/mail runtime', () => {
         allowedEnvironments: ['development', 'test'] as const,
       },
     }
-    const compiled = compileMailRegistry({ templates: { welcome: '# Preview' } })
+    const compiled = compileWithoutLayout({ welcome: '# Preview' })
     configureMailRuntime({ config, environment: 'test', compiled })
 
     const markdown = defineMail({

@@ -1,4 +1,5 @@
 import type { MailJsonObject, MailJsonValue } from './contracts-types'
+import { DEFAULT_MAIL_LAYOUT_HTML, DEFAULT_MAIL_LAYOUT_TEXT, DEFAULT_MAIL_THEME_CSS } from './defaults'
 import { MailError } from './errors'
 
 export type MailTemplateNode
@@ -10,12 +11,18 @@ export interface CompiledMailTemplate {
   readonly data: MailTemplateDataObjectShape
 }
 
+export type MailLayoutFormat = 'html' | 'text'
+
 export interface CompiledMailRegistry {
   readonly templates: Readonly<Record<string, CompiledMailTemplate>>
+  readonly layouts: Readonly<Partial<Record<MailLayoutFormat, CompiledMailTemplate>>>
+  readonly themes: Readonly<Record<string, string>>
 }
 
 export interface MailRegistrySources {
   readonly templates: Readonly<Record<string, string>>
+  readonly layouts?: Readonly<Partial<Record<MailLayoutFormat, string>>>
+  readonly themes?: Readonly<Record<string, string>>
 }
 
 export type MailTemplateDataShape
@@ -106,11 +113,30 @@ function compileMailTemplate(name: string, source: string): CompiledMailTemplate
   })
 }
 
+const MAIL_LAYOUT_FILE_NAMES: Readonly<Record<MailLayoutFormat, string>> = {
+  html: 'layout.html',
+  text: 'layout.txt',
+}
+
+const DEFAULT_MAIL_LAYOUTS: Readonly<Record<MailLayoutFormat, CompiledMailTemplate>> = Object.freeze({
+  html: compileMailTemplate(MAIL_LAYOUT_FILE_NAMES.html, DEFAULT_MAIL_LAYOUT_HTML),
+  text: compileMailTemplate(MAIL_LAYOUT_FILE_NAMES.text, DEFAULT_MAIL_LAYOUT_TEXT),
+})
+
+function compileMailLayouts(layouts: MailRegistrySources['layouts'] = {}): CompiledMailRegistry['layouts'] {
+  return Object.freeze({
+    ...(typeof layouts.html === 'string' ? { html: compileMailTemplate(MAIL_LAYOUT_FILE_NAMES.html, layouts.html) } : {}),
+    ...(typeof layouts.text === 'string' ? { text: compileMailTemplate(MAIL_LAYOUT_FILE_NAMES.text, layouts.text) } : {}),
+  })
+}
+
 export function compileMailRegistry(sources: MailRegistrySources): CompiledMailRegistry {
   return Object.freeze({
     templates: Object.freeze(Object.fromEntries(Object.entries(sources.templates).map(([name, source]) => {
       return [name, compileMailTemplate(name, source)]
     }))),
+    layouts: compileMailLayouts(sources.layouts),
+    themes: Object.freeze({ ...sources.themes }),
   })
 }
 
@@ -189,7 +215,24 @@ export function renderMailTemplate(registry: CompiledMailRegistry, name: string,
     )
   }
 
+  return renderCompiledTemplate(name, template, data)
+}
+
+function renderCompiledTemplate(name: string, template: CompiledMailTemplate, data: MailJsonObject): string {
   return template.nodes.map(node => node.type === 'text'
     ? node.value
     : renderOutput(name, data, node.path, node.escaped)).join('')
+}
+
+export function renderMailLayout(registry: CompiledMailRegistry, format: MailLayoutFormat, data: MailJsonObject): string {
+  return renderCompiledTemplate(MAIL_LAYOUT_FILE_NAMES[format], registry.layouts[format] ?? DEFAULT_MAIL_LAYOUTS[format], data)
+}
+
+export function resolveMailTheme(registry: CompiledMailRegistry, name: string): string {
+  if (Object.hasOwn(registry.themes, name)) return registry.themes[name] ?? ''
+  if (name === 'default') return DEFAULT_MAIL_THEME_CSS
+  throw new MailError(
+    `[@holo-js/mail] Mail theme "${name}" is not registered. Run "holo prepare" after adding it under server/mail/themes.`,
+    'MAIL_THEME_NOT_FOUND',
+  )
 }

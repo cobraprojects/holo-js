@@ -1,10 +1,12 @@
 import { describe, it } from 'vitest'
 import {
   defineMail,
+  defineMailConfig,
   sendMail,
   type MailDefinition,
   type MailTemplateData,
   type MailTemplateName,
+  type MailThemeName,
 } from '../src'
 
 declare module '../src/contracts' {
@@ -15,16 +17,20 @@ declare module '../src/contracts' {
       readonly orderId: string | number
     }
   }
+
+  interface HoloMailThemeRegistry {
+    readonly receipt: true
+  }
 }
+
+type Expect<TValue extends true> = TValue
+type Equal<TLeft, TRight>
+  = (<TValue>() => TValue extends TLeft ? 1 : 2) extends (<TValue>() => TValue extends TRight ? 1 : 2)
+    ? ((<TValue>() => TValue extends TRight ? 1 : 2) extends (<TValue>() => TValue extends TLeft ? 1 : 2) ? true : false)
+    : false
 
 describe('@holo-js/mail template typing', () => {
   it('types markdown as a generated Mail template name and data by that template', () => {
-    type Expect<TValue extends true> = TValue
-    type Equal<TLeft, TRight>
-      = (<TValue>() => TValue extends TLeft ? 1 : 2) extends (<TValue>() => TValue extends TRight ? 1 : 2)
-        ? ((<TValue>() => TValue extends TRight ? 1 : 2) extends (<TValue>() => TValue extends TLeft ? 1 : 2) ? true : false)
-        : false
-
     const shipped = defineMail({
       to: 'ava@example.com',
       subject: 'Shipped',
@@ -87,5 +93,25 @@ describe('@holo-js/mail template typing', () => {
     void (0 as unknown as NameAssertion)
     void (0 as unknown as DataAssertion)
     void (0 as unknown as DefinitionAssertion)
+  })
+
+  it('types theme as the built-in default theme or a generated Mail theme name', () => {
+    type ThemeNameAssertion = Expect<Equal<MailThemeName, 'default' | 'receipt'>>
+
+    if (false) {
+      defineMail({ to: 'ava@example.com', subject: 'Receipt', markdown: 'welcome', theme: 'receipt' })
+      defineMailConfig({ markdown: { theme: 'default' } })
+
+      // @ts-expect-error Unknown Mail theme names are rejected.
+      defineMail({ to: 'ava@example.com', subject: 'Typo', markdown: 'welcome', theme: 'reciept' })
+
+      // @ts-expect-error A Mail theme only styles a Mail template.
+      defineMail({ to: 'ava@example.com', subject: 'Html', html: '<p>Hi</p>', theme: 'receipt' })
+
+      // @ts-expect-error Unknown Mail theme names are rejected in config.
+      defineMailConfig({ markdown: { theme: 'reciept' } })
+    }
+
+    void (0 as unknown as ThemeNameAssertion)
   })
 })
