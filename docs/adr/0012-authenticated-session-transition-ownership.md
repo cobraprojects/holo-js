@@ -20,3 +20,17 @@ interface RotateSessionOptions {
 If remember-token issuance or cookie delivery fails after persistence, invalidate the new session and clear affected request identity while retaining the previous identifier's invalidation. Report the failure and any cleanup failures rather than reconstructing the previous session or promising a transaction across browser cookies and persistence.
 
 Lifetime renewal clears the former remember hash in the rotated record. Auth reissues a token for remembered or explicitly preserved transitions. Ordinary rotation keeps its timestamps and remember state. MFA recovery can restore a challenge lease only while the former session still exists; a persisted transition failure never reconstructs it.
+
+## Amendment: rotation applies an update to the current data
+
+Rotation no longer persists a complete payload computed before it runs. Auth passes a pure `update` that adds or replaces the transitioning guard's payload, and the store applies it to the data the previous identifier holds at that moment, inside the lock its rotation already takes: the file store's locks on both identifiers, the database store's row lock, and each Redis copy attempt, including the contended fallback. The rotated session keeps every change other requests committed meanwhile, and auth derives its request context and cookies from the rotated record. `update` is mutually exclusive with `data` and needs a new identifier. A store without `rotate` fails the rotation with `Session store "<name>" does not support atomic rotation updates.` before writing; there is no read-then-write fallback.
+
+```ts
+interface RotateSessionOptions {
+  readonly store?: string
+  readonly newId?: string
+  readonly data?: SessionRecord['data']
+  readonly update?: (current: SessionRecord['data']) => SessionRecord['data']
+  readonly renewLifetime?: boolean
+}
+```

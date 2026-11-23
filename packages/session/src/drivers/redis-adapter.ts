@@ -3,7 +3,7 @@ import type {
 } from '../config'
 import { redisUrlInternals } from '@holo-js/kernel'
 import Redis from 'ioredis'
-import type { SessionRecord, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions, SessionStoreUpdateDataResult } from '../contracts'
+import type { SessionDataUpdate, SessionRecord, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions, SessionStoreUpdateDataResult } from '../contracts'
 import { applyDataUpdate } from './data-update'
 import type { SessionRedisDriverAdapter } from './redis'
 
@@ -344,6 +344,14 @@ function readSessionFields(result: unknown): readonly string[] {
   return result as string[]
 }
 
+function encodeRotatedRecord(record: SessionRecord, fields: readonly string[], update: SessionDataUpdate | undefined): string {
+  if (!update) return serializeSessionRecord(record)
+  const encoded = fields.find((_value, index) => index % 2 === 1 && fields[index - 1] === 'record')
+  const previous = encoded === undefined ? null : deserializeSessionRecord(encoded)
+  if (!previous) throw new Error('[@holo-js/session] Redis returned an invalid session record.')
+  return serializeSessionRecord({ ...record, data: update(previous.data) })
+}
+
 function deserializeTakeResult(result: unknown): SessionStoreTakeResult {
   if (!Array.isArray(result) || (result[0] !== 0 && result[0] !== 1)) {
     throw new Error('[@holo-js/session] Redis returned an invalid atomic take result.')
@@ -423,7 +431,7 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
     await this.client.del(this.qualifyKey(sessionId))
   }
 
-  async rotate(previousSessionId: string, record: SessionRecord): Promise<void> {
+  async rotate(previousSessionId: string, record: SessionRecord, update?: SessionDataUpdate): Promise<void> {
     if (previousSessionId === record.id) {
       await this.set(record)
       return
@@ -431,10 +439,9 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
     const previousKey = this.qualifyKey(previousSessionId)
     const nextKey = this.qualifyKey(record.id)
     const ttlMs = Math.max(1, record.expiresAt.getTime() - this.now().getTime())
-    const encoded = serializeSessionRecord(record)
     for (let attempt = 0; attempt < ROTATE_SESSION_ATTEMPTS; attempt += 1) {
       const fields = await this.readRotationSource(previousSessionId, previousKey)
-      await this.copyRotationTarget(record.id, nextKey, encoded, ttlMs, fields)
+      await this.copyRotationTarget(record.id, nextKey, encodeRotatedRecord(record, fields, update), ttlMs, fields)
       const removed = await this.client.eval(DELETE_UNCHANGED_SESSION_SCRIPT, 1, previousKey, ...fields)
       if (removed === 1) return
       await this.client.del(nextKey)
@@ -443,7 +450,7 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
       }
     }
     const fields = await this.readRotationSource(previousSessionId, previousKey)
-    await this.copyRotationTarget(record.id, nextKey, encoded, ttlMs, fields)
+    await this.copyRotationTarget(record.id, nextKey, encodeRotatedRecord(record, fields, update), ttlMs, fields)
     await this.client.del(previousKey)
   }
 

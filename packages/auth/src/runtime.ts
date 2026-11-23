@@ -2449,15 +2449,15 @@ function findProviderNameForUser(user: unknown): string {
   )
 }
 
-async function rotateSessionWithData(
+async function rotateSessionWithUpdate(
   bindings: RuntimeBindings,
   session: AuthSessionRecord,
-  data: Readonly<Record<string, unknown>>,
+  update: (current: AuthSessionRecord['data']) => AuthSessionRecord['data'],
 ): Promise<AuthSessionRecord> {
   if (!bindings.session.rotate) {
     throw new Error('[@holo-js/auth] Existing auth sessions require state-preserving session rotation.')
   }
-  return bindings.session.rotate(session.id, { store: session.store, data, renewLifetime: true })
+  return bindings.session.rotate(session.id, { store: session.store, update, renewLifetime: true })
 }
 
 async function establishSessionForUser(
@@ -2481,12 +2481,6 @@ async function establishSessionForUser(
     ? await bindings.session.read(sharedSessionId)
     : null
   const existingPayloads = readSessionPayloads(existingSession) ?? {}
-  const sharedGuardNames = existingSession
-    ? sessionGuardNames(bindings).filter(name => (
-        name in existingPayloads
-        || bindings.context.getSessionId(name) === existingSession.id
-      ))
-    : []
   const revocation = options.revocation ?? (bindings.sessionRevocations
     ? await loginRevocationMetadata(bindings.sessionRevocations, bindings.context, { provider: options.provider, userId: user.id }, existingPayloads)
     : undefined)
@@ -2494,17 +2488,23 @@ async function establishSessionForUser(
     ...(options.payload ?? toSessionPayload(options.guard, options.provider, user)),
     ...(revocation ? { revocation } : {}),
   }
-  const sessionPayloads = {
-    ...existingPayloads,
+  const withSessionPayload = (current: AuthSessionRecord['data']) => writeSessionPayloads(current, {
+    ...decodeSessionPayloads(current.auth),
     [options.guard]: sessionPayload,
-  }
-  const nextSessionData = writeSessionPayloads(existingSession?.data ?? {}, sessionPayloads)
+  })
   const forgetRemember = !options.remember
     && !options.preserveRemember
     && Boolean(await getRememberRecaller(bindings, options.guard))
   const session = existingSession
-    ? await rotateSessionWithData(bindings, existingSession, nextSessionData)
-    : await bindings.session.create({ data: nextSessionData })
+    ? await rotateSessionWithUpdate(bindings, existingSession, withSessionPayload)
+    : await bindings.session.create({ data: withSessionPayload({}) })
+  const sessionPayloads = readSessionPayloads(session) ?? {}
+  const sharedGuardNames = existingSession
+    ? sessionGuardNames(bindings).filter(name => (
+        name in sessionPayloads
+        || bindings.context.getSessionId(name) === existingSession.id
+      ))
+    : []
 
   try {
     if (existingSession) {
@@ -2870,7 +2870,7 @@ async function rotateGuardSession(bindings: RuntimeBindings, guardName: string):
     throwAuthError('auth_user_missing', 'The authenticated user no longer exists.')
   }
 
-  const rotated = await rotateSessionWithData(bindings, state.record, state.record.data)
+  const rotated = await rotateSessionWithUpdate(bindings, state.record, current => current)
   for (const name of sessionGuardNames(bindings)) {
     if (bindings.context.getSessionId(name) === state.sessionId) {
       bindings.context.setSessionId(name, rotated.id)

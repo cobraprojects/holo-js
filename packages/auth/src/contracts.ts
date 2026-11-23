@@ -592,7 +592,13 @@ export interface AuthSessionRuntime {
   ): Promise<AuthSessionRecord | null>
   rotate?(
     sessionId: string,
-    options?: { readonly store?: string, readonly newId?: string, readonly data?: AuthSessionRecord['data'], readonly renewLifetime?: boolean },
+    options?: {
+      readonly store?: string
+      readonly newId?: string
+      readonly data?: AuthSessionRecord['data']
+      readonly update?: (current: AuthSessionRecord['data']) => AuthSessionRecord['data']
+      readonly renewLifetime?: boolean
+    },
   ): Promise<AuthSessionRecord>
   touch(
     sessionId: string,

@@ -22,10 +22,13 @@ export interface TouchSessionOptions {
   readonly store?: string
 }
 
+export type SessionDataUpdate = (current: SessionRecord['data']) => SessionRecord['data']
+
 export interface RotateSessionOptions {
   readonly store?: string
   readonly newId?: string
   readonly data?: SessionRecord['data']
+  readonly update?: SessionDataUpdate
   readonly renewLifetime?: boolean
 }
 
@@ -75,7 +78,7 @@ export interface SessionStore {
   touch?(sessionId: string, options: SessionStoreTouchOptions): Promise<SessionRecord | null>
   writeIfAbsent?(record: SessionRecord): Promise<boolean>
   delete(sessionId: string): Promise<void>
-  rotate?(previousSessionId: string, record: SessionRecord): Promise<void>
+  rotate?(previousSessionId: string, record: SessionRecord, update?: SessionDataUpdate): Promise<void>
   flash?(sessionId: string, key: string, value: unknown): Promise<void>
   take?(sessionId: string, key: string): Promise<SessionStoreTakeResult>
   setDataIfAbsent?(sessionId: string, key: string, value: unknown): Promise<SessionStoreSetDataResult>

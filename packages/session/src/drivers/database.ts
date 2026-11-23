@@ -1,11 +1,11 @@
-import type { SessionRecord, SessionStore, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions, SessionStoreUpdateDataResult } from '../contracts'
+import type { SessionDataUpdate, SessionRecord, SessionStore, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions, SessionStoreUpdateDataResult } from '../contracts'
 
 export interface SessionDatabaseDriverAdapter {
   touch?(sessionId: string, options: SessionStoreTouchOptions): Promise<SessionRecord | null>
   read(sessionId: string): Promise<SessionRecord | null>
   write(record: SessionRecord): Promise<void>
   delete(sessionId: string): Promise<void>
-  rotate?(previousSessionId: string, record: SessionRecord): Promise<void>
+  rotate?(previousSessionId: string, record: SessionRecord, update?: SessionDataUpdate): Promise<void>
   flash?(sessionId: string, key: string, value: unknown): Promise<void>
   take?(sessionId: string, key: string): Promise<SessionStoreTakeResult>
   setDataIfAbsent?(sessionId: string, key: string, value: unknown): Promise<SessionStoreSetDataResult>

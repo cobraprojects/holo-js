@@ -702,7 +702,7 @@ function createConfiguredFileSessionStore(root: string, makeDirectory: MakeDirec
         await release()
       }
     },
-    async rotate(previousSessionId, record) {
+    async rotate(previousSessionId, record, update) {
       if (previousSessionId === record.id) {
         await writeRecordAtomically(root, record, makeDirectory)
         return
@@ -712,7 +712,8 @@ function createConfiguredFileSessionStore(root: string, makeDirectory: MakeDirec
       const nextRecordPath = getRecordPath(root, record.id)
       const release = await acquireRecordLocks([previousRecordPath, nextRecordPath], makeDirectory)
       try {
-        if (!(await readActiveRecord(previousRecordPath))) {
+        const previous = await readActiveRecord(previousRecordPath)
+        if (!previous) {
           await Promise.all([
             rm(previousRecordPath, { force: true }),
             rm(getFlashPath(previousRecordPath), { force: true }),
@@ -723,7 +724,7 @@ function createConfiguredFileSessionStore(root: string, makeDirectory: MakeDirec
           throw new Error(`[@holo-js/session] Session "${record.id}" already exists.`)
         }
         const flashEntries = await readFlashEntries(previousRecordPath)
-        await writePathAtomically(nextRecordPath, serializeRecord(record))
+        await writePathAtomically(nextRecordPath, serializeRecord(update ? { ...record, data: update(previous.data) } : record))
         if (flashEntries.size > 0) {
           await writePathAtomically(getFlashPath(nextRecordPath), JSON.stringify([...flashEntries]))
         } else {
