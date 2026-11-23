@@ -2883,9 +2883,12 @@ async function rotateGuardSession(bindings: RuntimeBindings, guardName: string):
   }
 
   const rotated = await rotateSessionWithUpdate(bindings, state.record, current => current)
+  const readPayloads = readSessionPayloads(state.record) ?? {}
+  const rotatedPayloads = readSessionPayloads(rotated) ?? {}
   for (const name of sessionGuardNames(bindings)) {
     if (bindings.context.getSessionId(name) === state.sessionId) {
       bindings.context.setSessionId(name, rotated.id)
+      await refreshChangedGuardUser(bindings, name, readPayloads[name], rotatedPayloads[name])
     }
   }
   await appendResponseCookies(bindings, [bindings.session.sessionCookie(rotated.id)])
