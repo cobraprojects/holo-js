@@ -1520,7 +1520,7 @@ export default {
     expect(listed.stdout).toContain('  make:broadcast                  Create and register a broadcast definition file.')
     expect(listed.stdout).toContain('  make:channel                    Create and register a channel authorization definition file.')
     expect(listed.stdout).toContain('  make:job                        Create and register a queue job file.')
-    expect(listed.stdout).toContain('  make:mail                       Create a mail definition file.')
+    expect(listed.stdout).toContain('  make:mail                       Create a mail definition file and its Mail template.')
     expect(listed.stdout).toContain('  make:model                      Create a model and optionally related database artifacts.')
     expect(listed.stdout).toContain('App commands:')
     expect(listed.stdout).toContain('  courses:reindex                 Reindex course data.')
@@ -9746,24 +9746,15 @@ export default defineMigration({
     const markdownMailIo = createIo(markdownMailProjectRoot)
     await (async () => runMakeMail(markdownMailIo.io, markdownMailProjectRoot, {
       args: ['auth/verify-email'],
-      flags: { type: 'markdown' },
+      flags: {},
     }))()
     expect(markdownMailIo.read().stdout).toContain('Created mail: server/mail/auth/verify-email.ts')
+    expect(markdownMailIo.read().stdout).toContain('Created mail template: server/mail/templates/auth/verify-email.md')
     await expect(readFile(join(markdownMailProjectRoot, 'server/mail/auth/verify-email.ts'), 'utf8')).resolves.toContain('defineMail')
     await expect((async () => runMakeMail(markdownMailIo.io, markdownMailProjectRoot, {
       args: ['auth/verify-email'],
-      flags: { type: 'markdown' },
+      flags: {},
     }))()).rejects.toThrow('Refusing to overwrite existing file')
-
-    const viewMailProjectRoot = await createTempProject()
-    tempDirs.push(viewMailProjectRoot)
-    const viewMailIo = createIo(viewMailProjectRoot)
-    await expect((async () => runMakeMail(viewMailIo.io, viewMailProjectRoot, {
-      args: ['billing/invoice-paid'],
-      flags: { type: 'view' },
-    }))()).rejects.toThrow('View-backed mail scaffolding requires a renderView runtime binding')
-    await expect(stat(join(viewMailProjectRoot, 'server/mail/billing/invoice-paid.ts'))).rejects.toThrow()
-    await expect(stat(join(viewMailProjectRoot, 'server/mail/billing/invoice-paid.view.ts'))).rejects.toThrow()
     expect(renderNuxtMailViewTemplate('ExampleMailInput', './example')).toContain('defineProps<ExampleMailInput>()')
     expect(renderSvelteMailViewTemplate('ExampleMailInput', './example')).toContain('export let to: ExampleMailInput[\'to\']')
     expect(renderGenericMailViewTemplate('ExampleMail', 'ExampleMailInput', './example')).toContain('ExampleMailInput')
@@ -10058,7 +10049,7 @@ export default defineEvent({ name: 'user.registered' })
     const preparedChannel = await makeChannel?.prepare?.({ args: ['orders.{orderId}'], flags: {} }, jobCommandContext as never)
     const preparedEvent = await makeEvent?.prepare?.({ args: ['user/registered'], flags: {} }, jobCommandContext as never)
     const preparedJob = await makeJob?.prepare?.({ args: ['SendEmail'], flags: {} }, jobCommandContext as never)
-    const preparedMarkdownMail = await makeMail?.prepare?.({ args: ['billing/receipt'], flags: { markdown: true } }, jobCommandContext as never)
+    const preparedMarkdownMail = await makeMail?.prepare?.({ args: ['billing/receipt'], flags: { markdown: 'orders/receipt' } }, jobCommandContext as never)
     const preparedDefaultMail = await makeMail?.prepare?.({ args: ['welcome'], flags: {} }, jobCommandContext as never)
     const promptedMailIo = createIo(jobCommandRoot, {
       tty: true,
@@ -10108,20 +10099,20 @@ export default defineEvent({ name: 'user.registered' })
     } as never))()).resolves.toBeUndefined()
     await expect(preparedDefaultMail).toEqual({
       args: ['welcome'],
-      flags: { type: 'markdown' },
+      flags: {},
     })
     await expect(preparedMarkdownMail).toEqual({
       args: ['billing/receipt'],
-      flags: { type: 'markdown' },
+      flags: { markdown: 'orders/receipt' },
     })
     await expect(preparedPromptedMail).toEqual({
       args: ['prompted-mail'],
-      flags: { type: 'markdown' },
+      flags: {},
     })
     await expect(makeMail?.prepare?.({
       args: ['billing/invoice-paid'],
       flags: { view: true },
-    }, jobCommandContext as never)).rejects.toThrow('View-backed mail scaffolding requires a renderView runtime binding')
+    }, jobCommandContext as never)).rejects.toThrow('View-backed mail scaffolding is not available.')
     await expect((async () => makeMail?.run({
       projectRoot: jobCommandRoot,
       cwd: jobCommandRoot,
@@ -10142,10 +10133,9 @@ export default defineEvent({ name: 'user.registered' })
     await expect(makeMail?.prepare?.({
       args: ['billing/interactive'],
       flags: {},
-    }, interactiveMailContext as never)).resolves.toMatchObject({
-      flags: {
-        type: 'markdown',
-      },
+    }, interactiveMailContext as never)).resolves.toEqual({
+      args: ['billing/interactive'],
+      flags: {},
     })
     await expect(makeListener?.prepare?.({ args: ['SendWelcomeEmail'], flags: {} }, jobCommandContext as never)).rejects.toThrow(
       'Listener event name is required. Use "--event <event-name>".',
@@ -10158,10 +10148,6 @@ export default defineEvent({ name: 'user.registered' })
       args: [],
       flags: {},
     }, jobCommandContext as never)).rejects.toThrow('Missing required argument: Channel pattern.')
-    await expect(makeMail?.prepare?.({
-      args: ['bad'],
-      flags: { markdown: true, view: true },
-    }, jobCommandContext as never)).rejects.toThrow('Use either "--markdown" or "--view", not both.')
     await expect((async () => runMakeListener(jobCommandIo.io, jobCommandRoot, {
       args: ['SendWelcomeEmail'],
       flags: { event: 'missing.event' },
@@ -10172,7 +10158,7 @@ export default defineEvent({ name: 'user.registered' })
     }))()).rejects.toThrow('A name is required.')
     await expect((async () => runMakeMail(jobCommandIo.io, jobCommandRoot, {
       args: [],
-      flags: { type: 'markdown' },
+      flags: {},
     }))()).rejects.toThrow('A name is required.')
     await writeProjectFile(jobCommandRoot, 'server/events/audit/activity.ts', `
 import { defineEvent } from '@holo-js/events'
