@@ -1,5 +1,13 @@
 # Upgrade Guide
 
+## Upgrading from 0.6.3 to 0.6.4
+
+Update every installed `@holo-js/*` package to `0.6.4` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. Apps that use the built-in file, database or Redis session stores need no code changes.
+
+### Custom session stores need `updateData`
+
+Session guards now change their part of the session with one atomic store call, so two requests that log out, stop impersonating or start multi-factor enrollment at the same moment keep each other's changes, and keep data that other atomic session updates, such as the CSRF token, store meanwhile. Whole-session writes are not covered: `session.write()` and a login, which rotates the session with the complete data it read, can still replace changes made to that session while they run. Built-in file, database and Redis stores support it. A custom store must add `updateData(sessionId, key, update)` before session guards change state; until then, logout, stopping impersonation and multi-factor enrollment fail with `Session store "<name>" does not support atomic data writes.` Return `{ found: false }` for a missing or expired session without recreating it. Otherwise, call `update` with the key's current value and store its result atomically, deleting the key when it returns `undefined`, then return `{ found: true, value: storedValue }`. `update` is pure, so a store that retries a compare-and-set may call it again. Keep the session's other data and expiry unchanged.
+
 ## Upgrading from 0.6.2 to 0.6.3
 
 Update every installed `@holo-js/*` package to `0.6.3` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. Most apps need no code changes; check the cursor pagination change below. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#063---2026-11-22) lists the release changes.

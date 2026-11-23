@@ -1,4 +1,4 @@
-import type { SessionRecord, SessionStore, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions } from '../contracts'
+import type { SessionRecord, SessionStore, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions, SessionStoreUpdateDataResult } from '../contracts'
 
 export interface SessionRedisDriverAdapter {
   touch?(sessionId: string, options: SessionStoreTouchOptions): Promise<SessionRecord | null>
@@ -10,6 +10,7 @@ export interface SessionRedisDriverAdapter {
   flash?(sessionId: string, key: string, value: unknown): Promise<void>
   take?(sessionId: string, key: string): Promise<SessionStoreTakeResult>
   setDataIfAbsent?(sessionId: string, key: string, value: unknown): Promise<SessionStoreSetDataResult>
+  updateData?(sessionId: string, key: string, update: (current: unknown) => unknown): Promise<SessionStoreUpdateDataResult>
 }
 
 export function createRedisSessionStore(adapter: SessionRedisDriverAdapter): SessionStore {
@@ -19,6 +20,7 @@ export function createRedisSessionStore(adapter: SessionRedisDriverAdapter): Ses
   const flash = adapter.flash?.bind(adapter)
   const take = adapter.take?.bind(adapter)
   const setDataIfAbsent = adapter.setDataIfAbsent?.bind(adapter)
+  const updateData = adapter.updateData?.bind(adapter)
 
   return {
     read(sessionId) {
@@ -36,5 +38,6 @@ export function createRedisSessionStore(adapter: SessionRedisDriverAdapter): Ses
     ...(flash ? { flash } : {}),
     ...(take ? { take } : {}),
     ...(setDataIfAbsent ? { setDataIfAbsent } : {}),
+    ...(updateData ? { updateData } : {}),
   }
 }

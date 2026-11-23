@@ -1,4 +1,4 @@
-import type { SessionRecord, SessionStore, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions } from '../contracts'
+import type { SessionRecord, SessionStore, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions, SessionStoreUpdateDataResult } from '../contracts'
 
 export interface SessionDatabaseDriverAdapter {
   touch?(sessionId: string, options: SessionStoreTouchOptions): Promise<SessionRecord | null>
@@ -9,6 +9,7 @@ export interface SessionDatabaseDriverAdapter {
   flash?(sessionId: string, key: string, value: unknown): Promise<void>
   take?(sessionId: string, key: string): Promise<SessionStoreTakeResult>
   setDataIfAbsent?(sessionId: string, key: string, value: unknown): Promise<SessionStoreSetDataResult>
+  updateData?(sessionId: string, key: string, update: (current: unknown) => unknown): Promise<SessionStoreUpdateDataResult>
   sweepExpired?(now: Date): Promise<number>
 }
 
@@ -18,6 +19,7 @@ export function createDatabaseSessionStore(adapter: SessionDatabaseDriverAdapter
   const flash = adapter.flash?.bind(adapter)
   const take = adapter.take?.bind(adapter)
   const setDataIfAbsent = adapter.setDataIfAbsent?.bind(adapter)
+  const updateData = adapter.updateData?.bind(adapter)
   const sweepExpired = adapter.sweepExpired?.bind(adapter)
 
   return {
@@ -35,6 +37,7 @@ export function createDatabaseSessionStore(adapter: SessionDatabaseDriverAdapter
     ...(flash ? { flash } : {}),
     ...(take ? { take } : {}),
     ...(setDataIfAbsent ? { setDataIfAbsent } : {}),
+    ...(updateData ? { updateData } : {}),
     ...(sweepExpired ? { sweepExpired } : {}),
   }
 }

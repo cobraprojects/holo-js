@@ -44,6 +44,7 @@ export type {
   SessionRuntimeFacade,
   SessionStore,
   SessionStoreSetDataResult,
+  SessionStoreUpdateDataResult,
   SessionStoreTakeResult,
   SessionStoreTouchOptions,
   TouchSessionOptions,

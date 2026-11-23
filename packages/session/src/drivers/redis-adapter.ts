@@ -3,7 +3,8 @@ import type {
 } from '../config'
 import { redisUrlInternals } from '@holo-js/kernel'
 import Redis from 'ioredis'
-import type { SessionRecord, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions } from '../contracts'
+import type { SessionRecord, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions, SessionStoreUpdateDataResult } from '../contracts'
+import { applyDataUpdate } from './data-update'
 import type { SessionRedisDriverAdapter } from './redis'
 
 export interface SessionRedisAdapterOptions {
@@ -495,6 +496,23 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
 
       const next = serializeSessionRecord({ ...record, data: { ...record.data, [key]: value } })
       const result = await this.client.eval(SET_SESSION_DATA_SCRIPT, 1, redisKey, encoded, next)
+      if (result === 1) return { found: true, value }
+      if (result === 0) return { found: false }
+    }
+
+    throw new Error(`[@holo-js/session] Session "${sessionId}" changed too often to store its data.`)
+  }
+
+  async updateData(sessionId: string, key: string, update: (current: unknown) => unknown): Promise<SessionStoreUpdateDataResult> {
+    const redisKey = this.qualifyKey(sessionId)
+    for (let attempt = 0; attempt < SET_SESSION_DATA_ATTEMPTS; attempt += 1) {
+      const encoded = await this.client.eval(READ_SESSION_SCRIPT, 1, redisKey)
+      if (typeof encoded !== 'string') return { found: false }
+
+      const record = deserializeSessionRecord(encoded)
+      if (!record || record.expiresAt.getTime() <= this.now().getTime()) return { found: false }
+      const { data, value } = applyDataUpdate(record.data, key, update)
+      const result = await this.client.eval(SET_SESSION_DATA_SCRIPT, 1, redisKey, encoded, serializeSessionRecord({ ...record, data }))
       if (result === 1) return { found: true, value }
       if (result === 0) return { found: false }
     }

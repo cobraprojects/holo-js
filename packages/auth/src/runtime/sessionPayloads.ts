@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import type { AuthSessionRecord, AuthenticatedAuthUser } from '../contracts'
 
 export type SerializedAuthUser = AuthenticatedAuthUser & {
@@ -84,8 +85,10 @@ function isSessionAuthPayload(value: unknown): value is SessionAuthPayload {
 }
 
 export function readSessionPayloads(record: AuthSessionRecord | null | undefined): SessionAuthPayloadMap | null {
-  if (!record) return null
-  const payload = record.data.auth
+  return record ? decodeSessionPayloads(record.data.auth) : null
+}
+
+export function decodeSessionPayloads(payload: unknown): SessionAuthPayloadMap | null {
   if (!payload) return null
   if (isSessionAuthPayload(payload)) return Object.freeze({ [payload.guard]: payload })
   if (typeof payload !== 'object') return null
@@ -115,18 +118,23 @@ export function writeSessionPayloads(
   currentData: Readonly<Record<string, unknown>>,
   payloads: SessionAuthPayloadMap,
 ): Readonly<Record<string, unknown>> {
-  const nextData = { ...currentData } as Record<string, unknown>
+  const { auth: _auth, ...nextData } = currentData
+  const encoded = encodeSessionPayloads(payloads)
+  return Object.freeze(encoded ? { ...nextData, auth: encoded } : nextData)
+}
+
+export function encodeSessionPayloads(payloads: SessionAuthPayloadMap): SessionAuthPayload | SessionAuthPayloadMap | undefined {
   const values = Object.values(payloads)
-  if (values.length === 0) {
-    delete nextData.auth
-    return Object.freeze(nextData)
-  }
-  if (values.length === 1) {
-    nextData.auth = values[0]
-    return Object.freeze(nextData)
-  }
-  nextData.auth = Object.freeze(Object.fromEntries(values.map(value => [value.guard, value] as const)))
-  return Object.freeze(nextData)
+  if (values.length <= 1) return values[0]
+  return Object.freeze(Object.fromEntries(values.map(value => [value.guard, value] as const)))
+}
+
+export function withoutGuards(payloads: SessionAuthPayloadMap, guardNames: readonly string[]): SessionAuthPayloadMap {
+  return Object.freeze(Object.fromEntries(Object.entries(payloads).filter(([guardName]) => !guardNames.includes(guardName))))
+}
+
+export function withoutPayloads(payloads: SessionAuthPayloadMap, removed: readonly SessionAuthPayload[]): SessionAuthPayloadMap {
+  return Object.freeze(Object.fromEntries(Object.entries(payloads).filter(([, payload]) => !removed.some(candidate => isDeepStrictEqual(candidate, payload)))))
 }
 
 export function stripImpersonation(payload: SessionAuthPayload): SessionIdentityPayload {

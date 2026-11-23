@@ -131,11 +131,15 @@ import {
   serializeRememberCookie,
 } from './runtime/rememberMe'
 import {
+  decodeSessionPayloads,
+  encodeSessionPayloads,
   readSessionPayload,
   readSessionPayloads,
   resolveSessionPayloadProvider,
   stripImpersonation,
   toSessionPayload,
+  withoutGuards,
+  withoutPayloads,
   writeSessionPayloads,
   type SerializedAuthUser,
   type SessionAuthPayload,
@@ -1180,8 +1184,8 @@ async function filterRevokedSessionPayloads(bindings: RuntimeBindings, record: A
     bindings.context.setCachedUser(name, null)
     await setRememberRecaller(bindings, name)
   }
-  if (!Object.keys(valid).length) await bindings.session.invalidate(record.id, { store: record.store })
-  else await writeExistingSession(bindings, record, writeSessionPayloads(record.data, valid))
+  const revoked = Object.values(payloads).filter(payload => !(payload.guard in valid))
+  await updateSessionPayloads(bindings, record, current => withoutPayloads(current, revoked))
   return valid
 }
 
@@ -1286,7 +1290,7 @@ async function resolveGuardUser(
     bindings.context.setCachedUser(guardName, null)
     return null
   }
-  const { sessionId, record } = touched
+  const { record } = touched
   const payloads = record ? await filterRevokedSessionPayloads(bindings, record, options.readOnly) : null
   const payload = payloads?.[guardName]
   if (!record || !payload || payload.guard !== guardName) {
@@ -1319,16 +1323,7 @@ async function resolveGuardUser(
 
   if (!freshUser) {
     if (options.readOnly) return null
-    const remainingPayloads = {
-      /* v8 ignore next -- a resolved payload guarantees readSessionPayloads(record) is non-null here. */
-      ...(readSessionPayloads(record) ?? {}),
-    }
-    delete remainingPayloads[guardName]
-    if (Object.keys(remainingPayloads).length === 0) {
-      await bindings.session.invalidate(sessionId)
-    } else {
-      await writeExistingSession(bindings, record, writeSessionPayloads(record.data, remainingPayloads))
-    }
+    await updateSessionPayloads(bindings, record, current => withoutPayloads(current, [payload]))
     bindings.context.setSessionId(guardName)
     bindings.context.setCachedUser(guardName, null)
     await setRememberRecaller(bindings, guardName)
@@ -1805,23 +1800,21 @@ async function readGuardSessionState(
   }
 }
 
-async function writeExistingSession(
+async function updateSessionPayloads(
   bindings: RuntimeBindings,
-  record: AuthSessionRecord,
-  data: Readonly<Record<string, unknown>>,
-): Promise<AuthSessionRecord> {
-  if (!bindings.session.write) {
-    return bindings.session.create({
-      id: record.id,
-      store: record.store,
-      data,
-    })
-  }
+  session: { readonly id: string, readonly store?: string },
+  change: (payloads: SessionAuthPayloadMap) => SessionAuthPayloadMap,
+): Promise<SessionAuthPayloadMap | null> {
+  const options = { store: session.store }
+  const result = await atomicSessionDataUpdate(bindings)(session.id, 'auth', current => encodeSessionPayloads(change(decodeSessionPayloads(current) ?? {})), options)
+  const remaining = result.found ? decodeSessionPayloads(result.value) ?? {} : null
+  if (!remaining || Object.keys(remaining).length === 0) await bindings.session.invalidate(session.id, options)
+  return remaining
+}
 
-  return bindings.session.write(Object.freeze({
-    ...record,
-    data,
-  }))
+function atomicSessionDataUpdate(bindings: RuntimeBindings): NonNullable<AuthSessionRuntime['updateData']> {
+  if (!bindings.session.updateData) throwAuthError('runtime_unconfigured', 'Session guards require a session runtime that supports atomic data writes.')
+  return bindings.session.updateData.bind(bindings.session)
 }
 
 type MultiFactorAuthenticatedState = NonNullable<Awaited<ReturnType<typeof readGuardSessionState>>>
@@ -1835,20 +1828,18 @@ async function authenticatedMultiFactorState(guardName: string): Promise<MultiFa
   return state
 }
 
-function enrollmentData(record: AuthSessionRecord): Readonly<Record<string, string>> {
-  const value = record.data.authMultiFactorEnrollments
+function enrollmentData(value: unknown): Readonly<Record<string, string>> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return Object.freeze({})
   return Object.freeze(Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string')))
 }
 
 async function writeEnrollment(state: MultiFactorAuthenticatedState, guardName: string, value?: string): Promise<void> {
-  const enrollments = { ...enrollmentData(state.record) }
-  if (value) enrollments[guardName] = value
-  else delete enrollments[guardName]
-  const data = { ...state.record.data } as Record<string, unknown>
-  if (Object.keys(enrollments).length > 0) data.authMultiFactorEnrollments = Object.freeze(enrollments)
-  else delete data.authMultiFactorEnrollments
-  await writeExistingSession(getRuntimeBindings(), state.record, Object.freeze(data))
+  const result = await atomicSessionDataUpdate(getRuntimeBindings())(state.record.id, 'authMultiFactorEnrollments', (current) => {
+    const { [guardName]: _previous, ...others } = enrollmentData(current)
+    const enrollments = value ? { ...others, [guardName]: value } : others
+    return Object.keys(enrollments).length > 0 ? Object.freeze(enrollments) : undefined
+  }, { store: state.record.store })
+  if (value && !result.found) throwAuthError('multi_factor_authentication_required', 'Authentication is required for this multi-factor operation.')
 }
 
 async function verifyCredentialTotp(credential: AuthMultiFactorCredentialRecord, code: string): Promise<AuthMultiFactorVerificationState> {
@@ -2051,7 +2042,7 @@ function createMultiFactorFacade(guardName: string): AuthMultiFactorFacade {
     async confirmEnrollment(input: AuthMultiFactorCodeInput) {
       const state = await authenticatedMultiFactorState(guardName)
       requireNotRememberedSession(state)
-      const encrypted = enrollmentData(state.record)[guardName]
+      const encrypted = enrollmentData(state.record.data.authMultiFactorEnrollments)[guardName]
       if (!encrypted) throwAuthError('multi_factor_enrollment_missing', 'No multi-factor enrollment is pending.')
       let pending: { readonly expiresAt: string, readonly secret: string }
       try {
@@ -2237,21 +2228,14 @@ async function restoreImpersonatedGuardUser(guardName: string): Promise<Retrieve
     return null
   }
 
-  const nextPayloads = { ...state.payloads }
   const original = await originalImpersonationUser(state.payload)
-  if (original) {
-    nextPayloads[guardName] = original.payload
-  } else {
-    delete nextPayloads[guardName]
-  }
+  const stopping = state.payload.impersonation.startedAt
+  const remaining = await updateSessionPayloads(bindings, state.record, (current) => {
+    if (current[guardName]?.impersonation?.startedAt !== stopping) return current
+    return original ? Object.freeze({ ...current, [guardName]: original.payload }) : withoutGuards(current, [guardName])
+  })
 
-  if (Object.keys(nextPayloads).length === 0) {
-    await bindings.session.invalidate(state.sessionId)
-  } else {
-    await writeExistingSession(bindings, state.record, writeSessionPayloads(state.record.data, nextPayloads))
-  }
-
-  if (!original) {
+  if (!original || remaining?.[guardName]?.authenticatedAt !== original.payload.authenticatedAt) {
     await setRememberRecaller(bindings, guardName)
     bindings.context.setSessionId(guardName)
     bindings.context.setCachedUser(guardName, null)
@@ -2296,21 +2280,15 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
   const sessionId = requestOnlyUser ? undefined : bindings.context.getSessionId(guardName)
   setRequestOnlyGuard(bindings, guardName, false)
   if (sessionId) {
-    const record = await bindings.session.read(sessionId)
-    const payloads = {
-      ...(readSessionPayloads(record) ?? {}),
-    }
-    const payload = payloads[guardName]
+    let payload: SessionAuthPayload | undefined
+    const remaining = await updateSessionPayloads(bindings, { id: sessionId }, (current) => {
+      payload = current[guardName]
+      return withoutGuards(current, [guardName])
+    })
+    clearSessionCookies = !remaining || Object.keys(remaining).length === 0
     const rememberedIdentity = payload?.impersonation?.actor ?? payload
-    if (rememberedIdentity && !payload?.multiFactorChallengeExpiresAt) {
+    if (remaining && rememberedIdentity && !payload?.multiFactorChallengeExpiresAt) {
       await cycleRememberToken(rememberedIdentity.provider, rememberedIdentity.userId)
-    }
-    delete payloads[guardName]
-    if (Object.keys(payloads).length === 0) {
-      await bindings.session.invalidate(sessionId)
-      clearSessionCookies = true
-    } else if (payload) {
-      await writeExistingSession(bindings, record!, writeSessionPayloads(record!.data, payloads))
     }
   }
 

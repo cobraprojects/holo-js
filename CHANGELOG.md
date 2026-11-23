@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Auth: logging out, stopping impersonation, clearing a signed-out user and starting or finishing multi-factor enrollment change only the guard's own session data, atomically. Before, two requests on the same session could overwrite each other, such as logging out one guard while another stops impersonating, and could drop other session values written meanwhile, such as the CSRF token. Custom session stores must implement `updateData`; see the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#custom-session-stores-need-updatedata).
+
 ## 0.6.3 - 2026-11-22
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-062-to-063). No database migration is needed. Created models now read their row back after the insert, and `cursorPaginate()` rejects some alias orderings it used to page through wrongly.

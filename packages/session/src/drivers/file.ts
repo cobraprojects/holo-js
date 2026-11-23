@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import type { SessionRecord, SessionStore } from '../contracts'
 import { SESSION_STORE_DISPOSE_SYMBOL, type DisposableSessionStore } from '../store-disposal'
+import { applyDataUpdate } from './data-update'
 
 const RECORD_LOCK_STALE_MS = 10_000
 const RECORD_LOCK_ACQUIRE_STALL_MS = 5_000
@@ -767,6 +768,23 @@ function createConfiguredFileSessionStore(root: string, makeDirectory: MakeDirec
           return { found: true, value: existing }
         }
         await writePathAtomically(recordPath, serializeRecord({ ...record, data: { ...record.data, [key]: value } }))
+        return { found: true, value }
+      } finally {
+        await release()
+      }
+    },
+    async updateData(sessionId, key, update) {
+      await makeDirectory(root, { recursive: true, mode: 0o700 })
+      const recordPath = getRecordPath(root, sessionId)
+      const release = await acquireRecordLock(recordPath, makeDirectory)
+      try {
+        const record = await readActiveRecord(recordPath)
+        if (!record) {
+          await Promise.all([rm(recordPath, { force: true }), rm(getFlashPath(recordPath), { force: true })])
+          return { found: false }
+        }
+        const { data, value } = applyDataUpdate(record.data, key, update)
+        await writePathAtomically(recordPath, serializeRecord({ ...record, data }))
         return { found: true, value }
       } finally {
         await release()
