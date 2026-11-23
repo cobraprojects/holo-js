@@ -55,7 +55,7 @@ describe('session store setDataIfAbsent', () => {
     const previous = createRecord()
     await store.write(previous)
     const replacement = createRecord(randomUUID(), { userId: 42, login: 'fresh' })
-    await store.rotate?.(previous.id, replacement)
+    await store.rotate?.(previous.id, replacement, () => replacement.data)
 
     await expect(setDataIfAbsent(previous.id, '_token', 'stale-token')).resolves.toEqual({ found: false })
 

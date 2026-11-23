@@ -23,14 +23,4 @@ Lifetime renewal clears the former remember hash in the rotated record. Auth rei
 
 ## Amendment: rotation applies an update to the current data
 
-Rotation no longer persists a complete payload computed before it runs. Auth passes a pure `update` that adds or replaces the transitioning guard's payload, and the store applies it to the data the previous identifier holds at that moment, inside the lock its rotation already takes: the file store's locks on both identifiers, the database store's row lock, and each Redis copy attempt, including the contended fallback. The rotated session keeps every change other requests committed meanwhile, and auth derives its request context and cookies from the rotated record. `update` is mutually exclusive with `data` and needs a new identifier. A store without `rotate` fails the rotation with `Session store "<name>" does not support atomic rotation updates.` before writing; there is no read-then-write fallback.
-
-```ts
-interface RotateSessionOptions {
-  readonly store?: string
-  readonly newId?: string
-  readonly data?: SessionRecord['data']
-  readonly update?: (current: SessionRecord['data']) => SessionRecord['data']
-  readonly renewLifetime?: boolean
-}
-```
+Rotation no longer persists a payload computed before it runs. The store contract is `rotate(previousSessionId, next, update): Promise<SessionRecord>`: the store applies the pure `update` to the data the previous identifier holds at that moment, inside the lock its rotation already takes (the file store's locks on both identifiers, the database store's row lock, and each Redis copy attempt, including the contended fallback), and returns the stored record. Every rotation uses it. App rotation passes an update that keeps the current data, or one that returns the given `data`. Auth passes, through its internal session runtime binding, an update that adds or replaces only the transitioning guard's payload, and derives its request context and cookies from the returned record. `update` isn't part of the app-facing `RotateSessionOptions`. The runtime calls `rotate` only with a new identifier, and an internal update on a store without `rotate` fails with `Session store "<name>" does not support atomic rotation updates.` before writing; there is no read-then-write fallback.

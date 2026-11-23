@@ -702,14 +702,10 @@ function createConfiguredFileSessionStore(root: string, makeDirectory: MakeDirec
         await release()
       }
     },
-    async rotate(previousSessionId, record, update) {
-      if (previousSessionId === record.id) {
-        await writeRecordAtomically(root, record, makeDirectory)
-        return
-      }
+    async rotate(previousSessionId, next, update) {
       await makeDirectory(root, { recursive: true, mode: 0o700 })
       const previousRecordPath = getRecordPath(root, previousSessionId)
-      const nextRecordPath = getRecordPath(root, record.id)
+      const nextRecordPath = getRecordPath(root, next.id)
       const release = await acquireRecordLocks([previousRecordPath, nextRecordPath], makeDirectory)
       try {
         const previous = await readActiveRecord(previousRecordPath)
@@ -721,10 +717,11 @@ function createConfiguredFileSessionStore(root: string, makeDirectory: MakeDirec
           throw new Error(`[@holo-js/session] Session "${previousSessionId}" was not found.`)
         }
         if (await readActiveRecord(nextRecordPath)) {
-          throw new Error(`[@holo-js/session] Session "${record.id}" already exists.`)
+          throw new Error(`[@holo-js/session] Session "${next.id}" already exists.`)
         }
         const flashEntries = await readFlashEntries(previousRecordPath)
-        await writePathAtomically(nextRecordPath, serializeRecord(update ? { ...record, data: update(previous.data) } : record))
+        const rotated = { ...next, data: update(previous.data) }
+        await writePathAtomically(nextRecordPath, serializeRecord(rotated))
         if (flashEntries.size > 0) {
           await writePathAtomically(getFlashPath(nextRecordPath), JSON.stringify([...flashEntries]))
         } else {
@@ -734,6 +731,7 @@ function createConfiguredFileSessionStore(root: string, makeDirectory: MakeDirec
           rm(previousRecordPath, { force: true }),
           rm(getFlashPath(previousRecordPath), { force: true }),
         ])
+        return rotated
       } finally {
         await release()
       }

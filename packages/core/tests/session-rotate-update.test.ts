@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime, type SessionStore } from '@holo-js/session'
+import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime, rotateSession, type SessionStore } from '@holo-js/session'
 import { sessionStoreFactories } from './support/session-stores'
 
 function configure(store: SessionStore): void {
@@ -46,7 +46,7 @@ afterEach(() => {
   resetSessionRuntime()
 })
 
-describe.each(sessionStoreFactories)('rotating with an update on the $name session store', ({ create }) => {
+describe.each(sessionStoreFactories)('rotating a session on the $name session store', ({ create }) => {
   it('applies the update to the data stored when the rotation runs', async () => {
     const store = await create()
     const gate = holdRotation(store)
@@ -69,6 +69,23 @@ describe.each(sessionStoreFactories)('rotating with an update on the $name sessi
     expect(rotated.data).toEqual(expected)
     await expect(session.read(rotated.id)).resolves.toMatchObject({ data: expected })
     await expect(session.read(created.id)).resolves.toBeNull()
+  })
+
+  it('keeps data stored while a plain rotation runs', async () => {
+    const store = await create()
+    const gate = holdRotation(store)
+    configure(gate.store)
+    const session = getSessionRuntime()
+    const created = await session.create({ data: { locale: 'en' } })
+
+    const rotation = rotateSession(created.id)
+    await gate.reached
+    await session.setDataIfAbsent(created.id, '_token', 'csrf-token')
+    gate.release()
+    const rotated = await rotation
+
+    expect(rotated.data).toEqual({ locale: 'en', _token: 'csrf-token' })
+    await expect(session.read(rotated.id)).resolves.toMatchObject({ data: { locale: 'en', _token: 'csrf-token' } })
   })
 
   it('carries private flash state and renews the lifetime', async () => {

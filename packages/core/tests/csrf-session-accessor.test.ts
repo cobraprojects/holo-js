@@ -45,7 +45,7 @@ function rotateOnFirstRead(store: SessionStore, sessionId: string, replacement: 
       const current = await store.read(id)
       if (id === sessionId && !rotated) {
         rotated = true
-        await store.rotate?.(sessionId, replacement)
+        await store.rotate?.(sessionId, replacement, () => replacement.data)
       }
       return current
     },

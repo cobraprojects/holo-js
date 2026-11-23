@@ -5,7 +5,7 @@ export interface SessionDatabaseDriverAdapter {
   read(sessionId: string): Promise<SessionRecord | null>
   write(record: SessionRecord): Promise<void>
   delete(sessionId: string): Promise<void>
-  rotate?(previousSessionId: string, record: SessionRecord, update?: SessionDataUpdate): Promise<void>
+  rotate?(previousSessionId: string, next: Omit<SessionRecord, 'data'>, update: SessionDataUpdate): Promise<SessionRecord>
   flash?(sessionId: string, key: string, value: unknown): Promise<void>
   take?(sessionId: string, key: string): Promise<SessionStoreTakeResult>
   setDataIfAbsent?(sessionId: string, key: string, value: unknown): Promise<SessionStoreSetDataResult>

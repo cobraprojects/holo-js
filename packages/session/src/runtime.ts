@@ -12,6 +12,7 @@ import type {
   SessionRecord,
   SessionRuntimeBindings,
   SessionRuntimeFacade,
+  SessionRuntimeRotateOptions,
   SessionStore,
   SessionStoreSetDataResult,
   SessionStoreUpdateDataResult,
@@ -372,13 +373,17 @@ async function writeReplacementRecord(store: SessionStore, record: SessionRecord
   await store.write(record)
 }
 
-export async function rotateSession(sessionId: string, options: RotateSessionOptions = {}): Promise<SessionRecord> {
+export function rotateSession(sessionId: string, options: RotateSessionOptions = {}): Promise<SessionRecord> {
+  return rotateRuntimeSession(sessionId, options)
+}
+
+async function rotateRuntimeSession(sessionId: string, options: SessionRuntimeRotateOptions = {}): Promise<SessionRecord> {
   const rotated = await rotateSessionRecord(sessionId, options)
   await collectExpiredSessions(getStore(rotated.store).store)
   return rotated
 }
 
-async function rotateSessionRecord(sessionId: string, options: RotateSessionOptions): Promise<SessionRecord> {
+async function rotateSessionRecord(sessionId: string, options: SessionRuntimeRotateOptions): Promise<SessionRecord> {
   if (options.data !== undefined && options.update) {
     throw new Error('[@holo-js/session] Session rotation accepts either data or an update, not both.')
   }
@@ -388,28 +393,32 @@ async function rotateSessionRecord(sessionId: string, options: RotateSessionOpti
   }
 
   const { store, name, config } = getStore(options.store ?? located.record.store)
-  if (options.update && (located.store !== store || !store.rotate)) {
-    throw new Error(`[@holo-js/session] Session store "${name}" does not support atomic rotation updates.`)
-  }
   if ((options.data !== undefined || options.renewLifetime) && (located.store !== store || !store.rotate)) {
     throw new Error(`[@holo-js/session] Session store "${name}" does not support state-preserving auth rotation.`)
   }
   const currentTime = now()
   const renewedExpiry = new Date(currentTime.getTime() + Math.min(config.idleTimeout, config.absoluteLifetime) * 60_000)
-  const rotated: SessionRecord = Object.freeze({
-    ...located.record,
+  const { data: currentData, ...current } = located.record
+  const next: Omit<SessionRecord, 'data'> = Object.freeze({
+    ...current,
     id: options.newId?.trim() || createSessionId(),
     store: name,
-    data: Object.freeze({ ...(options.data ?? located.record.data) }),
     ...(options.renewLifetime ? {
       createdAt: currentTime,
       lastActivityAt: currentTime,
       expiresAt: renewedExpiry,
     } : {}),
   })
-  if (options.update && store.rotate) {
-    return rotateWithUpdate(store.rotate.bind(store), name, sessionId, rotated, options.update)
+  const update = rotationUpdate(options)
+  if (store.rotate && located.store === store && next.id !== sessionId) {
+    return Object.freeze(await store.rotate(sessionId, next, update))
   }
+  if (options.update) {
+    throw new Error(next.id === sessionId
+      ? '[@holo-js/session] Session rotation with an update requires a new session id.'
+      : `[@holo-js/session] Session store "${name}" does not support atomic rotation updates.`)
+  }
+  const rotated: SessionRecord = Object.freeze({ ...next, data: update(currentData) })
   if (located.store !== store) {
     if (located.store.flash || located.store.take) {
       throw new Error('[@holo-js/session] Sessions with private flash state cannot be rotated between stores.')
@@ -419,40 +428,22 @@ async function rotateSessionRecord(sessionId: string, options: RotateSessionOpti
     return rotated
   }
   if (rotated.id !== sessionId) {
-    if (!store.rotate) {
-      if (store.flash || store.take) {
-        throw new Error(`[@holo-js/session] Session store "${name}" does not support private-state-preserving rotation.`)
-      }
-      await writeReplacementRecord(store, rotated)
-      await store.delete(sessionId)
-      return rotated
+    if (store.flash || store.take) {
+      throw new Error(`[@holo-js/session] Session store "${name}" does not support private-state-preserving rotation.`)
     }
-    await store.rotate(sessionId, rotated)
+    await writeReplacementRecord(store, rotated)
+    await store.delete(sessionId)
     return rotated
   }
   await store.write(rotated)
   return rotated
 }
 
-async function rotateWithUpdate(
-  rotate: NonNullable<SessionStore['rotate']>,
-  storeName: string,
-  sessionId: string,
-  record: SessionRecord,
-  update: SessionDataUpdate,
-): Promise<SessionRecord> {
-  if (record.id === sessionId) {
-    throw new Error('[@holo-js/session] Session rotation with an update requires a new session id.')
-  }
-  const applied: { data?: SessionRecord['data'] } = {}
-  await rotate(sessionId, record, (current) => {
-    applied.data = Object.freeze({ ...update(current) })
-    return applied.data
-  })
-  if (!applied.data) {
-    throw new Error(`[@holo-js/session] Session store "${storeName}" does not support atomic rotation updates.`)
-  }
-  return Object.freeze({ ...record, data: applied.data })
+function rotationUpdate(options: SessionRuntimeRotateOptions): SessionDataUpdate {
+  const { data, update } = options
+  if (update) return current => Object.freeze({ ...update(current) })
+  if (data !== undefined) return () => Object.freeze({ ...data })
+  return current => Object.freeze({ ...current })
 }
 
 export async function invalidateSession(sessionId: string, options?: ReadSessionOptions): Promise<void> {
@@ -563,7 +554,7 @@ export function getSessionRuntime(): SessionRuntimeFacade {
     create: createSession,
     write: writeSession,
     read: readSession,
-    rotate: rotateSession,
+    rotate: rotateRuntimeSession,
     invalidate: invalidateSession,
     touch: touchSession,
     flash: flashSession,

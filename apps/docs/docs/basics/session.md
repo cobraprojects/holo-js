@@ -283,7 +283,7 @@ Flash keys must start with a letter and use only letters, numbers, `.`, `:`, `-`
 
 ## Rotate the session ID
 
-Give a session a new ID after a privilege change, such as signing in, so an old ID that leaked can't be reused. Data and flash values move to the new ID:
+Give a session a new ID after a privilege change, such as signing in, so an old ID that leaked can't be reused. Data and flash values move to the new ID, including values other requests store while the rotation runs:
 
 ```ts
 import { rotateSession, sessionCookie } from '@holo-js/session'
@@ -296,7 +296,6 @@ const setCookie = sessionCookie(rotated.id)
 |---|---|
 | `newId` | Use this ID instead of a random one. It must be unique and unused: Holo never supplies one, and rotation fails if the ID already holds a session. Concurrent rotations that reuse one `newId` are supported only on the file and Redis stores, where exactly one succeeds. Other stores don't support concurrent reuse, so don't share a `newId` between concurrent rotations on them |
 | `data` | Replace the session data |
-| `update` | Compute the new data from the data the session holds when the rotation runs, such as `current => ({ ...current, locale: 'fr' })`. It keeps changes other requests make meanwhile. It must be pure, because a store may call it more than once. Can't be combined with `data` or with a `newId` equal to the current ID |
 | `renewLifetime` | Restart the lifetime from now |
 | `store` | Move the session to another store (not allowed while it has flash data) |
 
@@ -407,9 +406,9 @@ Records activity and pushes the idle expiry forward, but never past the absolute
 
 ### rotateSession()
 
-`rotateSession(sessionId: string, options?: { newId?: string, data?: object, update?: (current: object) => object, renewLifetime?: boolean, store?: string }): Promise<SessionRecord>`
+`rotateSession(sessionId: string, options?: { newId?: string, data?: object, renewLifetime?: boolean, store?: string }): Promise<SessionRecord>`
 
-Gives the session a new ID and keeps its data and flash values. `update` computes the new data from the current data atomically with the rotation, and the returned record holds the stored result. `renewLifetime` restarts the lifetime. Throws when the session doesn't exist, when `data` and `update` are both passed, when a store can't apply `update`, when the `newId` already holds a session, and when a store can't keep the data. A `newId` must be unique and unused: concurrent rotations that reuse one `newId` are supported only on the file and Redis stores, where exactly one succeeds. Other stores don't support it.
+Gives the session a new ID and keeps its data and flash values. The data moves as the session holds it when the rotation runs, so values other requests store meanwhile, such as the CSRF token, are kept. `renewLifetime` restarts the lifetime. Throws when the session doesn't exist, when the `newId` already holds a session, and when a store can't keep the data. A `newId` must be unique and unused: concurrent rotations that reuse one `newId` are supported only on the file and Redis stores, where exactly one succeeds. Other stores don't support it.
 
 ### invalidateSession()
 
