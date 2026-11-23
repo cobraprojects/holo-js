@@ -393,6 +393,9 @@ async function rotateSessionRecord(sessionId: string, options: SessionRuntimeRot
   }
 
   const { store, name, config } = getStore(options.store ?? located.record.store)
+  if (options.update && (located.store !== store || !store.rotate)) {
+    throw new Error(`[@holo-js/session] Session store "${name}" does not support atomic rotation updates.`)
+  }
   if ((options.data !== undefined || options.renewLifetime) && (located.store !== store || !store.rotate)) {
     throw new Error(`[@holo-js/session] Session store "${name}" does not support state-preserving auth rotation.`)
   }
@@ -414,9 +417,7 @@ async function rotateSessionRecord(sessionId: string, options: SessionRuntimeRot
     return Object.freeze(await store.rotate(sessionId, next, update))
   }
   if (options.update) {
-    throw new Error(next.id === sessionId
-      ? '[@holo-js/session] Session rotation with an update requires a new session id.'
-      : `[@holo-js/session] Session store "${name}" does not support atomic rotation updates.`)
+    throw new Error('[@holo-js/session] Session rotation with an update requires a new session id.')
   }
   const rotated: SessionRecord = Object.freeze({ ...next, data: update(currentData) })
   if (located.store !== store) {

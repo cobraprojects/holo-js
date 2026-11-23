@@ -133,7 +133,7 @@ describe('rotating with an update', () => {
     const session = getSessionRuntime()
     const created = await session.create({ data: { preserved: true } })
 
-    await expect(session.rotate(created.id, { update: withGuard('web') }))
+    await expect(session.rotate(created.id, { update: withGuard('web'), renewLifetime: true }))
       .rejects.toThrow('Session store "file" does not support atomic rotation updates.')
 
     await expect(session.read(created.id)).resolves.toMatchObject({ data: { preserved: true } })
