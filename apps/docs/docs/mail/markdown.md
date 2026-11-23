@@ -1,6 +1,6 @@
 # Markdown Mail
 
-Write the content of an email in a Mail template, a Markdown file with placeholders, and Holo turns it into HTML and a plain-text version. This is the quickest way to write transactional email that reads well in every client.
+Write the content of an email in a Mail template, a Markdown file with placeholders, and Holo turns it into HTML and a plain-text version. Holo wraps the result in a Mail layout and styles it with a Mail theme, so it looks finished without extra work. This is the quickest way to write transactional email that reads well in every client.
 
 ```md [server/mail/templates/password-changed.md]
 # Password changed
@@ -200,7 +200,7 @@ Holo renders Markdown with [CommonMark](https://commonmark.org) plus GitHub-styl
 
 ## Plain-text version
 
-Holo builds the plain-text part from the same filled-in template with the syntax removed: headings, emphasis, and code lose their markers, links become `label (url)`, buttons become `Label: URL`, images become their alt text, lists keep a `-` or number per item, table rows become cells separated by `|`, and HTML tags are dropped. To write your own plain-text version, pass `text` as well:
+Holo builds the plain-text part from the same filled-in template with the syntax removed: headings, emphasis, and code lose their markers, links become `label (url)`, buttons become `Label: URL`, images become their alt text, lists keep a `-` or number per item, table rows become cells separated by `|`, and HTML tags are dropped. The plain-text [Mail layout](/mail/layouts-and-themes#plain-text-layout) then adds its header and footer. To write your own plain-text version, pass `text` as well. Holo sends it exactly as given, without the layout:
 
 ```ts
 defineMail({
@@ -217,5 +217,6 @@ A queued Markdown mail stores its template name and `data`. The worker renders t
 
 ## Next steps
 
+- [Layouts and themes](/mail/layouts-and-themes)
 - [Writing mail](/mail/writing-mail)
 - [Previewing mail](/mail/previewing)

@@ -50,6 +50,8 @@
   "dependencies": {
     "@holo-js/config": "catalog:",
     "@holo-js/kernel": "catalog:",
+    "entities": "catalog:",
+    "juice": "catalog:",
     "markdown-it": "catalog:",
     "nodemailer": "catalog:"
   },

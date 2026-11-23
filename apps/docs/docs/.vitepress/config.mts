@@ -209,6 +209,7 @@ const features: DefaultTheme.SidebarItem[] = [
       { text: 'Getting Started', link: '/mail/' },
       { text: 'Writing Mail', link: '/mail/writing-mail' },
       { text: 'Markdown Mail', link: '/mail/markdown' },
+      { text: 'Layouts & Themes', link: '/mail/layouts-and-themes' },
       { text: 'Sending Mail', link: '/mail/sending' },
       { text: 'Attachments', link: '/mail/attachments' },
       { text: 'Queueing Mail', link: '/mail/queueing' },

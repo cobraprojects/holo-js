@@ -96,9 +96,9 @@ describe('holo make:mail', () => {
     })
     await sendMail({ to: 'ava@example.com', subject: 'Welcome', markdown: 'order-shipped', data: { name: 'Ava', url: 'https://example.test/welcome' } })
     const sent = listFakeSentMails()[0]?.mail
-    expect(sent?.html).toContain('<p>Hello Ava,</p>')
-    expect(sent?.html).toContain('<a href="https://example.test/welcome" class="button button-primary" target="_blank" rel="noopener">Get Started</a>')
-    expect(sent?.text).toBe('Welcome\n\nHello Ava,\n\nYour mail is ready.\n\nGet Started: https://example.test/welcome')
+    expect(sent?.html).toMatch(/<h1[^>]*>Welcome<\/h1>\s*<p[^>]*>Hello Ava,<\/p>\s*<p[^>]*>Your mail is ready\.<\/p>/)
+    expect(sent?.html).toMatch(/<a href="https:\/\/example\.test\/welcome" class="button button-primary" target="_blank" rel="noopener" style="[^"]+">Get Started<\/a>/)
+    expect(sent?.text).toContain('Welcome\n\nHello Ava,\n\nYour mail is ready.\n\nGet Started: https://example.test/welcome')
   })
 
   it('names the Mail template with --markdown and rejects unsafe template names', async () => {

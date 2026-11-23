@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
+import { holoAppDefaults } from '@holo-js/config'
 import { resolveRetryBackoffSeconds } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import {
@@ -19,7 +20,6 @@ import {
   type MailDelayValue,
   type MailDriver,
   type MailDriverExecutionContext,
-  type MailJsonObject,
   type MailOverrideInput,
   type MailPreviewFormat,
   type MailPreviewPolicy,
@@ -35,8 +35,8 @@ import {
   mergeMailDefinitionInputs,
   normalizeMailDefinition,
 } from './contracts'
-import { renderMarkdown, renderMarkdownText } from './markdown'
-import { renderMailTemplate, type CompiledMailRegistry } from './templates'
+import { renderMarkdownMail, type MarkdownMailSource } from './layout'
+import type { CompiledMailRegistry } from './templates'
 import { getRegisteredMailDriver } from './registry'
 import { loadMailPluginDrivers, resetMailPluginDrivers } from './plugins'
 import {
@@ -53,7 +53,12 @@ import {
 } from './preview'
 
 const HOLO_MAIL_DELIVER_JOB = 'holo.mail.deliver'
-const EMPTY_COMPILED_MAIL_REGISTRY: CompiledMailRegistry = Object.freeze({ templates: Object.freeze({}), components: Object.freeze({}) })
+const EMPTY_COMPILED_MAIL_REGISTRY: CompiledMailRegistry = Object.freeze({
+  templates: Object.freeze({}),
+  components: Object.freeze({}),
+  layouts: Object.freeze({}),
+  themes: Object.freeze({}),
+})
 const LOCAL_ATTACHMENT_ROOTS = Object.freeze([
   tmpdir(),
   resolve(process.cwd(), 'storage'),
@@ -236,14 +241,13 @@ type SerializedQueuedAttachment = Readonly<{
   }>
 }>
 
-type QueuedMailTemplateSource = Readonly<{
-  readonly markdown: string
-  readonly data: MailJsonObject
-}>
+type MailTemplateSource = MarkdownMailSource & {
+  readonly theme?: string
+}
 
 type QueuedResolvedMailPayload = Readonly<Omit<ResolvedMail, 'attachments'> & {
   readonly attachments: readonly SerializedQueuedAttachment[]
-  readonly template?: QueuedMailTemplateSource
+  readonly template?: Readonly<MailTemplateSource>
 }>
 
 type QueuedMailDeliveryPayload = Readonly<{
@@ -1146,7 +1150,11 @@ function createQueuedMailContent(
 ): Pick<QueuedResolvedMailPayload, 'html' | 'text' | 'template'> {
   if (typeof definition.markdown === 'string') {
     return {
-      template: Object.freeze({ markdown: definition.markdown, data: definition.data ?? {} }),
+      template: Object.freeze({
+        markdown: definition.markdown,
+        data: definition.data ?? {},
+        ...(definition.theme ? { theme: definition.theme } : {}),
+      }),
       ...(typeof definition.text === 'string' ? { text: definition.text } : {}),
     }
   }
@@ -1191,7 +1199,7 @@ function resolveQueuedMailContent(
   payload: QueuedResolvedMailPayload,
 ): Pick<ResolvedMail, 'html' | 'text'> {
   if (payload.template) {
-    return renderMailTemplateContent(payload.template.markdown, payload.template.data, payload.text)
+    return renderMailTemplateContent(payload.template, payload.subject, payload.text)
   }
 
   return {
@@ -1407,15 +1415,18 @@ function getCompiledMailRegistry(): CompiledMailRegistry {
 }
 
 function renderMailTemplateContent(
-  markdown: string,
-  data: MailJsonObject,
+  template: MailTemplateSource,
+  subject: string,
   text: string | undefined,
 ): { readonly html: string, readonly text: string } {
-  const registry = getCompiledMailRegistry()
-  return Object.freeze({
-    html: renderMarkdown(renderMailTemplate(registry, markdown, data, 'html')),
-    text: text ?? renderMarkdownText(renderMailTemplate(registry, markdown, data, 'text')),
+  const rendered = renderMarkdownMail(template, {
+    registry: getCompiledMailRegistry(),
+    app: getRuntimeBindings().app ?? holoAppDefaults,
+    subject,
+    theme: template.theme ?? getResolvedConfig().markdown.theme,
   })
+
+  return typeof text === 'string' ? Object.freeze({ ...rendered, text }) : rendered
 }
 
 async function renderContent(
@@ -1437,7 +1448,11 @@ async function renderContent(
   if (typeof mail.markdown === 'string') {
     return Object.freeze({
       kind: 'markdown',
-      ...renderMailTemplateContent(mail.markdown, mail.data ?? {}, mail.text),
+      ...renderMailTemplateContent({
+        markdown: mail.markdown,
+        data: mail.data ?? {},
+        ...(mail.theme ? { theme: mail.theme } : {}),
+      }, mail.subject, mail.text),
       source: Object.freeze({
         kind: 'markdown' as const,
         markdown: mail.markdown,
@@ -1812,8 +1827,6 @@ export const mailRuntimeInternals = {
   persistPreviewArtifact,
   prepareMailSend,
   renderContent,
-  renderMarkdown,
-  renderMarkdownText,
   renderPreviewResponse,
   renderView,
   resolveDriver,

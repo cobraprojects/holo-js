@@ -3342,7 +3342,7 @@ export default defineBroadcastConfig({
     })
   })
 
-  it('serves Mail templates from the generated registry without reading template files', async () => {
+  it('serves Mail templates from the generated registry inside the Mail layout with the app name and URL', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
     await writeMailConfig(root)
@@ -3359,7 +3359,10 @@ export default defineBroadcastConfig({
       data: { order: { id: 42 }, name: 'Ava' },
     })
 
-    expect(listFakeSentMails().map(sent => sent.mail.html)).toEqual(['<h1>Order 42</h1>\n<p>Thanks, Ava.</p>'])
+    const [sent] = listFakeSentMails()
+    expect(sent?.mail.html).toMatch(/<h1[^>]*>Order 42<\/h1>\s*<p[^>]*>Thanks, Ava\.<\/p>/)
+    expect(sent?.mail.html).toMatch(/<a href="https:\/\/runtime\.test"[^>]*>\s*Runtime App\s*<\/a>/)
+    expect(sent?.mail.text).toBe(`Runtime App: https://runtime.test\n\nOrder 42\n\nThanks, Ava.\n\n© ${new Date().getFullYear()} Runtime App. All rights reserved.`)
   })
 
   it('passes the application environment from .env to mail previews without reading process.env', async () => {

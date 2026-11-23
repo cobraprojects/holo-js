@@ -9,6 +9,7 @@ export type {
   BuiltInMailDriverRegistry,
   HoloMailDriverRegistry,
   HoloMailTemplateRegistry,
+  HoloMailThemeRegistry,
   MailAddress,
   MailAddressInput,
   MailAttachmentBase,
@@ -52,6 +53,7 @@ export type {
   MailStorageAttachmentHelperOptions,
   MailTemplateData,
   MailTemplateName,
+  MailThemeName,
   MailViewRenderInput,
   MailViewRenderer,
   PendingMailSend,
@@ -634,13 +636,23 @@ function normalizeTemplateData(input: MailDefinitionSource, markdown: string | u
   return normalizeJsonValue(input.data, 'Mail data') as MailJsonObject
 }
 
+function normalizeTemplateTheme(input: MailDefinitionSource, markdown: string | undefined): string | undefined {
+  if (typeof input.theme === 'undefined') return undefined
+  if (typeof markdown !== 'string') {
+    throw new Error('[@holo-js/mail] Mail theme is only valid for mails that name a Mail template with markdown.')
+  }
+
+  return normalizeRequiredString(input.theme, 'Mail theme')
+}
+
 function normalizeContentSource(
   input: MailDefinitionSource,
-): Pick<MailDefinition, 'text' | 'html' | 'markdown' | 'data' | 'render'> {
+): Pick<MailDefinition, 'text' | 'html' | 'markdown' | 'data' | 'theme' | 'render'> {
   const text = normalizeTextLikeContent(input.text, 'Mail text')
   const html = normalizeTextLikeContent(input.html, 'Mail html')
   const markdown = normalizeTextLikeContent(input.markdown, 'Mail markdown template')
   const data = normalizeTemplateData(input, markdown)
+  const theme = normalizeTemplateTheme(input, markdown)
   const render = normalizeRenderSource(input.render)
 
   const primaryKinds = [
@@ -659,6 +671,7 @@ function normalizeContentSource(
     ...(typeof html === 'string' ? { html } : {}),
     ...(typeof markdown === 'string' ? { markdown } : {}),
     ...(data ? { data } : {}),
+    ...(theme ? { theme } : {}),
     ...(render ? { render } : {}),
   }
 }

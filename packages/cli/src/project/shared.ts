@@ -423,6 +423,7 @@ export const GENERATED_QUEUE_TYPES_PATH = join(GENERATED_ROOT, 'queue.d.ts')
 export const GENERATED_MAIL_TYPES_PATH = join(GENERATED_ROOT, 'mail.d.ts')
 export const MAIL_ROOT = 'server/mail'
 export const MAIL_TEMPLATES_ROOT = `${MAIL_ROOT}/templates`
+export const MAIL_THEMES_ROOT = `${MAIL_ROOT}/themes`
 export const GENERATED_EVENT_TYPES_PATH = join(GENERATED_ROOT, 'events.d.ts')
 export const GENERATED_BROADCAST_TYPES_PATH = join(GENERATED_ROOT, 'broadcast.d.ts')
 export const GENERATED_REGISTRY_JSON_PATH = join(GENERATED_ROOT, 'registry.json')

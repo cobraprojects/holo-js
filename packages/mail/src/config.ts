@@ -1,3 +1,5 @@
+import type { MailThemeName } from './contracts-types'
+
 export type HoloAppEnv = 'development' | 'production' | 'test'
 
 export interface HoloMailAddressConfig {
@@ -16,6 +18,10 @@ export interface HoloMailQueueConfig {
 
 export interface HoloMailPreviewConfig {
   readonly allowedEnvironments?: readonly HoloAppEnv[]
+}
+
+export interface HoloMailMarkdownConfig {
+  readonly theme?: MailThemeName
 }
 
 export interface BaseMailDriverConfig {
@@ -61,6 +67,7 @@ export interface HoloMailConfig {
   readonly replyTo?: HoloMailAddressConfig
   readonly queue?: HoloMailQueueConfig
   readonly preview?: HoloMailPreviewConfig
+  readonly markdown?: HoloMailMarkdownConfig
   readonly mailers?: Readonly<Record<string, HoloMailMailerConfig>>
 }
 
@@ -80,6 +87,10 @@ export interface NormalizedHoloMailQueueConfig {
 
 export interface NormalizedHoloMailPreviewConfig {
   readonly allowedEnvironments: readonly HoloAppEnv[]
+}
+
+export interface NormalizedHoloMailMarkdownConfig {
+  readonly theme: string
 }
 
 export interface NormalizedBaseMailDriverConfig {
@@ -126,6 +137,7 @@ export interface NormalizedHoloMailConfig {
   readonly replyTo?: NormalizedHoloMailAddressConfig
   readonly queue: NormalizedHoloMailQueueConfig
   readonly preview: NormalizedHoloMailPreviewConfig
+  readonly markdown: NormalizedHoloMailMarkdownConfig
   readonly mailers: Readonly<Record<string, NormalizedHoloMailMailerConfig>>
 }
 
@@ -150,6 +162,9 @@ export const holoMailDefaults: Readonly<NormalizedHoloMailConfig> = Object.freez
   queue: DEFAULT_MAIL_QUEUE_CONFIG,
   preview: Object.freeze({
     allowedEnvironments: Object.freeze(['development'] as const),
+  }),
+  markdown: Object.freeze({
+    theme: 'default',
   }),
   mailers: Object.freeze({
     preview: Object.freeze({
@@ -424,6 +439,9 @@ export function normalizeMailConfig(
     queue: normalizeMailQueueConfig(config.queue),
     preview: Object.freeze({
       allowedEnvironments: normalizeMailPreviewEnvironments(config.preview?.allowedEnvironments),
+    }),
+    markdown: Object.freeze({
+      theme: normalizeOptionalMailString(config.markdown?.theme, 'Mail markdown theme') ?? holoMailDefaults.markdown.theme,
     }),
     mailers: Object.freeze(mergedMailers),
   })

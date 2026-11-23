@@ -401,6 +401,9 @@ describe('@holo-js/config', () => {
       preview: {
         allowedEnvironments: ['development'],
       },
+      markdown: {
+        theme: 'default',
+      },
       mailers: {
         preview: {
           name: 'preview',
@@ -474,6 +477,9 @@ describe('@holo-js/config', () => {
       preview: {
         allowedEnvironments: ['development', 'test'],
       },
+      markdown: {
+        theme: 'default',
+      },
       mailers: {
         smtp: {
           driver: 'smtp',
@@ -499,6 +505,9 @@ describe('@holo-js/config', () => {
       },
       preview: {
         allowedEnvironments: ['development', 'test'],
+      },
+      markdown: {
+        theme: 'default',
       },
       mailers: {
         preview: {
@@ -1318,6 +1327,9 @@ describe('@holo-js/config', () => {
       },
       preview: {
         allowedEnvironments: ['development'],
+      },
+      markdown: {
+        theme: 'default',
       },
       mailers: {
         preview: {

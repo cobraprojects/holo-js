@@ -578,9 +578,10 @@ export function renderGeneratedQueueTypes(
 }
 
 function renderGeneratedMailTypes(mail: GeneratedProjectRegistry['mail']): string {
-  const members = Object.entries(mail?.templates ?? {}).map(([name, template]) => {
+  const templateMembers = Object.entries(mail?.templates ?? {}).map(([name, template]) => {
     return `    readonly ${JSON.stringify(name)}: ${renderMailTemplateDataType(template.data)}`
   })
+  const themeMembers = Object.keys(mail?.themes ?? {}).map(name => `    readonly ${JSON.stringify(name)}: true`)
 
   const jsonValueImport = Object.values(mail?.templates ?? {}).some(template => usesMailJsonValue(template.data))
     ? ['import type { MailJsonValue } from \'@holo-js/mail\'', '']
@@ -591,7 +592,9 @@ function renderGeneratedMailTypes(mail: GeneratedProjectRegistry['mail']): strin
     '',
     ...jsonValueImport,
     'declare module \'@holo-js/mail\' {',
-    ...renderAugmentationInterface('HoloMailTemplateRegistry', members),
+    ...renderAugmentationInterface('HoloMailTemplateRegistry', templateMembers),
+    '',
+    ...renderAugmentationInterface('HoloMailThemeRegistry', themeMembers),
     '}',
     '',
     'export {}',
