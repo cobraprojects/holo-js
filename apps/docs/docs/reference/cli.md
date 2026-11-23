@@ -419,19 +419,20 @@ npx holo make:listener user/send-welcome-email --event user.registered
 
 ### make:mail
 
-Create a [mail definition](/mail/writing-mail) in `server/mail`. Mail files are created as Markdown mail.
+Create a [mail definition](/mail/writing-mail) in `server/mail` and its [Mail template](/mail/markdown) in `server/mail/templates`.
 
 ```bash
-npx holo make:mail <name> [--markdown]
+npx holo make:mail <name> [--markdown=<template name>]
 ```
 
 | Argument / flag | Description |
 | --- | --- |
 | `<name>` | Mail name, such as `auth/verify-email`. |
-| `--markdown` | Create a Markdown mail. This is already the default. |
+| `--markdown=<template name>` | The Mail template name, such as `orders/shipped`. Defaults to the kebab-case mail name without a `Mail` suffix, so `OrderShipped` creates `server/mail/templates/order-shipped.md`. |
 
 ```bash
 npx holo make:mail orders/order-shipped
+npx holo make:mail OrderShipped --markdown=orders/shipped
 ```
 
 ### make:broadcast

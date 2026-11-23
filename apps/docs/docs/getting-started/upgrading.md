@@ -2,7 +2,7 @@
 
 ## Upgrading from 0.6.3 to 0.6.4
 
-Update every installed `@holo-js/*` package to `0.6.4` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. Apps that use the built-in file, database or Redis session stores need no code changes.
+Update every installed `@holo-js/*` package to `0.6.4` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. Apps that use the built-in file, database or Redis session stores need no session code changes. Apps that send Markdown mail must move its content into Mail templates, as described below.
 
 ### Custom session stores need `updateData`
 
@@ -13,6 +13,47 @@ Session guards now change their part of the session with one atomic store call, 
 Session rotation now moves the data the session holds at the moment it rotates, so a sign-in, a multi-factor challenge, starting impersonation, a password reset or your own `rotateSession()` call keeps changes other requests make to that session meanwhile, such as another guard logging out, the CSRF token or a pending multi-factor enrollment. App code that calls `rotateSession()` doesn't change, and the built-in file, database and Redis stores support it.
 
 A custom store's `rotate` has a new signature: `rotate(previousSessionId, next, update): Promise<SessionRecord>`. `next` is the new record without its data. Read the previous session, call `update` with its current data, and store `{ ...next, data: update(current) }` under `next.id` atomically with removing the previous session; carry private flash state over as before, then return the stored record. If the previous session is missing or expired, throw without creating the new one. `update` is pure, so a store that retries a compare-and-set may call it again. `rotate` is only called with a new identifier. A store whose `rotate` still returns `Promise<void>` no longer typechecks.
+
+### Markdown mail content moves into Mail templates
+
+`markdown` in `defineMail()` now names a [Mail template](/mail/markdown) instead of holding Markdown text. Move each Markdown body into a `.md` file under `server/mail/templates`, pass the values it needs as `data`, and run `npx holo prepare` so the template is compiled and its types are generated:
+
+```ts
+// Before
+defineMail({
+  to: input.to,
+  subject: 'Welcome',
+  markdown: `# Welcome\n\nHello ${input.name},`,
+})
+
+// After
+defineMail({
+  to: input.to,
+  subject: 'Welcome',
+  markdown: 'welcome',
+  data: { name: input.name },
+})
+```
+
+```md [server/mail/templates/welcome.md]
+# Welcome
+
+Hello {{ name }},
+```
+
+`{{ name }}` escapes HTML in the value. HTML written in the template itself is output as written. Values used in a template must be strings or numbers, so format dates before passing them. Passing Markdown text to `markdown` is now a type error, and sending it throws `Mail template "<text>" is not registered.`
+
+### `markdown.wrapper` and `markdownWrapper` are removed
+
+The `markdown.wrapper` option in `config/mail.ts` and the `markdownWrapper` option of `defineMail()` are removed. Delete them; a mail that still sets them no longer typechecks.
+
+### `holo make:mail --markdown` takes a template name
+
+`npx holo make:mail` now creates the mail definition and its Mail template. `--markdown` takes the template name, such as `--markdown=orders/shipped`; without it the name is the kebab-case mail name without a `Mail` suffix.
+
+### A single line break no longer adds `<br>` in Markdown mail
+
+Markdown mail is rendered with CommonMark. A single line break inside a paragraph now stays inside the paragraph as a space instead of becoming a `<br>`. End the line with two spaces or a `\` to keep a line break, or separate the lines with a blank line to start a new paragraph.
 
 ## Upgrading from 0.6.2 to 0.6.3
 

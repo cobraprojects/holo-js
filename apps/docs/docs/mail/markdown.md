@@ -1,6 +1,19 @@
 # Markdown Mail
 
-Write the body of an email in Markdown and Holo turns it into HTML and a plain-text version. This is the quickest way to write transactional email that reads well in every client.
+Write the content of an email in a Mail template, a Markdown file with placeholders, and Holo turns it into HTML and a plain-text version. This is the quickest way to write transactional email that reads well in every client.
+
+```md [server/mail/templates/password-changed.md]
+# Password changed
+
+Hi {{ user.name }},
+
+your password was changed **just now**.
+
+If this wasn't you:
+
+- [Reset your password]({{ resetUrl }})
+- Contact support at [help@example.com](mailto:help@example.com)
+```
 
 ```ts [server/mail/password-changed.ts]
 import { defineMail } from '@holo-js/mail'
@@ -9,22 +22,64 @@ function PasswordChangedMail(input: { readonly to: string, readonly name: string
   return defineMail({
     to: input.to,
     subject: 'Your password was changed',
-    markdown: [
-      '# Password changed',
-      '',
-      `Hi ${input.name},`,
-      'your password was changed **just now**.',
-      '',
-      'If this wasn\'t you:',
-      '',
-      '- [Reset your password](https://app.example.com/forgot-password)',
-      '- Contact support at [help@example.com](mailto:help@example.com)',
-    ].join('\n'),
+    markdown: 'password-changed',
+    data: {
+      user: { name: input.name },
+      resetUrl: 'https://app.example.com/forgot-password',
+    },
   })
 }
 
 export default PasswordChangedMail
 ```
+
+## Mail templates
+
+Mail templates are `.md` files under `server/mail/templates`. A template's name is its path inside that folder without the extension, so `server/mail/templates/orders/shipped.md` is `orders/shipped`. A mail names its template with `markdown` and passes the values the template uses as `data`.
+
+`npx holo make:mail` creates a mail definition together with its template. See [Writing mail](/mail/writing-mail#generate-a-mail-file).
+
+`holo prepare` compiles every template into the generated registry, so your app doesn't read template files when it sends mail. `holo dev` recompiles a template when you save it. After adding or changing a template outside `holo dev`, run `npx holo prepare`. A template with a syntax error, such as an unclosed `{{`, fails `holo prepare` with the template name and line.
+
+## Placeholders
+
+| Syntax | Output |
+| --- | --- |
+| `{{ name }}` | The value of `name`, with HTML escaped. |
+| `{!! name !!}` | The value of `name` exactly as given. |
+| `{{ customer.address.city }}` | A nested value, reached with a dot path. |
+
+A placeholder holds a dot path and nothing else. Templates never run JavaScript: there are no operators, function calls, or filters, so format values before you pass them.
+
+::: danger
+`{!! !!}` outputs HTML exactly as given. Never use it for values that come from users, or they can inject HTML into your email. Use it only for HTML you built yourself.
+:::
+
+HTML you write in the template itself is output as written, so you can add elements Markdown can't express:
+
+```md
+<p align="center">Thanks for your order, {{ customer.name }}!</p>
+```
+
+Placeholders are filled before the Markdown is parsed, so a value can still contain Markdown syntax such as `*`. `{{ }}` only escapes HTML.
+
+## Typed data
+
+`holo prepare` generates a type for each template's `data` from the placeholders it uses. Each value used in `{{ }}` or `{!! !!}` must be a `string` or `number`. An unknown template name, a missing value, or a value of the wrong type is a type error, and your editor autocompletes template names and `data`.
+
+```ts
+defineMail({
+  to: 'ava@example.com',
+  subject: 'Your order shipped',
+  markdown: 'orders/shipped',
+  data: {
+    order: { number: 'A-1001' },
+    shippedOn: new Date().toLocaleDateString('en-US'),
+  },
+})
+```
+
+`data` must be JSON-serializable. A `Date`, a class instance, or a function is a type error; format such values first, as `shippedOn` does above. A template without placeholders needs no `data`.
 
 ## Supported syntax
 
@@ -45,6 +100,7 @@ Holo renders Markdown with [CommonMark](https://commonmark.org) plus GitHub-styl
 | `[label](url)` or `<https://example.com>` | A link. |
 | `![alt](url "title")` | An image. |
 | Pipe tables with a `\| --- \|` separator row | A table. Use `:---`, `:---:`, or `---:` to align a column. |
+| HTML tags | Output as written. |
 
 ```md
 | Item | Price |
@@ -54,49 +110,24 @@ Holo renders Markdown with [CommonMark](https://commonmark.org) plus GitHub-styl
 
 ## Safety
 
-Holo escapes any HTML in your Markdown, so it's safe to interpolate user-provided values like names. Links and images only render for `http:`, `https:`, and `mailto:` URLs, plus relative paths (`/`, `./`, `../`, `#`). Any other link, such as `javascript:`, renders as its label text only, and any other image renders as its alt text only.
+`{{ }}` escapes HTML in values, so it's safe for values that come from users, like names. Markdown links and images only render for `http:`, `https:`, and `mailto:` URLs, plus relative paths (`/`, `./`, `../`, `#`). Any other link, such as `javascript:`, renders as its label text only, and any other image renders as its alt text only.
 
 ## Plain-text version
 
-Holo builds the plain-text part from the same Markdown with the syntax removed: headings, emphasis, and code lose their markers, links become `label (url)`, images become their alt text, lists keep a `-` or number per item, and table rows become cells separated by `|`. To write your own plain-text version, pass `text` as well:
+Holo builds the plain-text part from the same filled-in template with the syntax removed: headings, emphasis, and code lose their markers, links become `label (url)`, images become their alt text, lists keep a `-` or number per item, table rows become cells separated by `|`, and HTML tags are dropped. To write your own plain-text version, pass `text` as well:
 
 ```ts
 defineMail({
   to: 'ava@example.com',
   subject: 'Welcome',
-  markdown: '# Welcome\n\nThanks for joining.',
+  markdown: 'welcome',
   text: 'Welcome! Thanks for joining.',
 })
 ```
 
-## Wrap Markdown in a layout
+## Queued mail
 
-To put every Markdown email inside a shared layout, such as a header with your logo and a footer, set a wrapper view globally or per mail:
-
-```ts [config/mail.ts]
-import { defineMailConfig } from '@holo-js/mail'
-
-export default defineMailConfig({
-  markdown: {
-    wrapper: 'layouts/transactional',
-  },
-})
-```
-
-```ts
-defineMail({
-  to: 'ava@example.com',
-  subject: 'Welcome',
-  markdown: '# Welcome',
-  markdownWrapper: 'layouts/marketing',
-})
-```
-
-The wrapper view receives the converted `html`, the original `markdown`, the `text`, and the `subject`, `from`, `replyTo`, `to`, `cc`, `bcc`, `headers`, `tags`, `metadata`, and `priority`. `markdownWrapper` only works on Markdown mail.
-
-::: warning
-Wrappers are rendered through a view renderer, which the default Next.js, Nuxt, and SvelteKit setups don't provide. Without one, sending a wrapped mail throws. Leave `wrapper` unset unless you have configured a renderer.
-:::
+A queued Markdown mail stores its template name and `data`. The worker renders the template when it sends the mail, so a queued mail renders the same as one sent immediately. See [Queueing mail](/mail/queueing).
 
 ## Next steps
 
