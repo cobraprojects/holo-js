@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises'
 import { extname, join, relative, resolve } from 'node:path'
 import { loaderInternals } from '@holo-js/config'
 import type { SupportedDatabaseDriver } from '@holo-js/db'
+import type { CompiledMailRegistry } from '@holo-js/mail/templates'
 import type { HoloAppCommand } from '../types'
 import {
   SUPPORTED_FRAMEWORK_IDS,
@@ -154,6 +155,7 @@ export type GeneratedProjectRegistry = {
   readonly channels: readonly GeneratedChannelRegistryEntry[]
   readonly authorizationPolicies: readonly GeneratedAuthorizationPolicyRegistryEntry[]
   readonly authorizationAbilities: readonly GeneratedAuthorizationAbilityRegistryEntry[]
+  readonly mail?: CompiledMailRegistry
 }
 
 export type SupportedScaffoldFramework = SupportedFrameworkId
@@ -418,6 +420,9 @@ export const GENERATED_AUTHORIZATION_TYPES_PATH = join(GENERATED_AUTHORIZATION_R
 export const GENERATED_AUTH_TYPES_PATH = join(GENERATED_ROOT, 'auth.d.ts')
 export const GENERATED_CONFIG_TYPES_PATH = join(GENERATED_ROOT, 'config.d.ts')
 export const GENERATED_QUEUE_TYPES_PATH = join(GENERATED_ROOT, 'queue.d.ts')
+export const GENERATED_MAIL_TYPES_PATH = join(GENERATED_ROOT, 'mail.d.ts')
+export const MAIL_ROOT = 'server/mail'
+export const MAIL_TEMPLATES_ROOT = `${MAIL_ROOT}/templates`
 export const GENERATED_EVENT_TYPES_PATH = join(GENERATED_ROOT, 'events.d.ts')
 export const GENERATED_BROADCAST_TYPES_PATH = join(GENERATED_ROOT, 'broadcast.d.ts')
 export const GENERATED_REGISTRY_JSON_PATH = join(GENERATED_ROOT, 'registry.json')

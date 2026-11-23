@@ -139,7 +139,7 @@ describe('@holo-js/mail contracts', () => {
       subject: 'Welcome',
       markdown: 'welcome',
       html: '<p>Hi</p>',
-    })).toThrow('exactly one primary content source')
+    } as never)).toThrow('exactly one primary content source')
 
     expect(() => defineMail({
       to: 'ava@example.com',

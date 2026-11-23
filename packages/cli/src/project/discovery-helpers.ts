@@ -22,7 +22,7 @@ import {
   toPosixPath,
 } from './shared'
 
-export async function collectFiles(root: string): Promise<string[]> {
+export async function collectFiles(root: string, pattern: RegExp = COMMAND_FILE_PATTERN): Promise<string[]> {
   if (!(await pathExists(root))) {
     return []
   }
@@ -33,11 +33,11 @@ export async function collectFiles(root: string): Promise<string[]> {
   for (const entry of entries) {
     const target = join(root, entry.name)
     if (entry.isDirectory()) {
-      files.push(...await collectFiles(target))
+      files.push(...await collectFiles(target, pattern))
       continue
     }
 
-    if (entry.isFile() && COMMAND_FILE_PATTERN.test(entry.name)) {
+    if (entry.isFile() && pattern.test(entry.name)) {
       files.push(target)
     }
   }

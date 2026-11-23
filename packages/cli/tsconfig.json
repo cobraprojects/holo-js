@@ -57,6 +57,9 @@
       "@holo-js/mail": [
         "../mail/src/index.ts"
       ],
+      "@holo-js/mail/templates": [
+        "../mail/src/templates.ts"
+      ],
       "@holo-js/media": [
         "../media/src/index.ts"
       ],

@@ -7,6 +7,7 @@ export type MailTemplateNode
 
 export interface CompiledMailTemplate {
   readonly nodes: readonly MailTemplateNode[]
+  readonly data: MailTemplateDataObjectShape
 }
 
 export interface CompiledMailRegistry {
@@ -77,7 +78,7 @@ function parsePath(template: string, line: number, expression: string): readonly
   return Object.freeze(segments)
 }
 
-export function compileMailTemplate(name: string, source: string): CompiledMailTemplate {
+function compileMailTemplate(name: string, source: string): CompiledMailTemplate {
   const nodes: MailTemplateNode[] = []
   let cursor = 0
   for (let match = findNextDelimiter(source, cursor); match; match = findNextDelimiter(source, cursor)) {
@@ -99,9 +100,10 @@ export function compileMailTemplate(name: string, source: string): CompiledMailT
   }
 
   if (cursor < source.length) nodes.push(Object.freeze({ type: 'text', value: source.slice(cursor) }))
-  const template = Object.freeze({ nodes: Object.freeze(nodes) })
-  describeMailTemplateData(name, template)
-  return template
+  return Object.freeze({
+    nodes: Object.freeze(nodes),
+    data: describeTemplateData(name, nodes),
+  })
 }
 
 export function compileMailRegistry(sources: MailRegistrySources): CompiledMailRegistry {
@@ -139,9 +141,9 @@ function conflictingPathError(template: string, path: readonly string[]): MailEr
   )
 }
 
-export function describeMailTemplateData(name: string, template: CompiledMailTemplate): MailTemplateDataObjectShape {
+function describeTemplateData(name: string, nodes: readonly MailTemplateNode[]): MailTemplateDataObjectShape {
   const properties: Record<string, MailTemplateDataShape> = {}
-  for (const node of template.nodes) {
+  for (const node of nodes) {
     if (node.type === 'output') addPathToShape(name, properties, node.path)
   }
 

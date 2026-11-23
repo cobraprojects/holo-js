@@ -5,6 +5,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { build, type Plugin } from 'esbuild'
 import type { BundleSources } from '@holo-js/core'
+import type * as MailTemplatesModule from '@holo-js/mail/templates'
 import type {
   AuthorizationDiscoveryModule,
   BroadcastDiscoveryModule,
@@ -111,6 +112,10 @@ export async function loadBroadcastDiscoveryModule(projectRoot: string): Promise
 
 export async function loadAuthorizationDiscoveryModule(projectRoot: string): Promise<AuthorizationDiscoveryModule> {
   return await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/authorization')) as AuthorizationDiscoveryModule
+}
+
+export async function loadMailTemplatesModule(projectRoot: string): Promise<typeof MailTemplatesModule> {
+  return await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/mail/templates')) as typeof MailTemplatesModule
 }
 
 export async function resolveFirstExistingPath(
