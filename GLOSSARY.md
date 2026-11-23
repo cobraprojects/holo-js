@@ -75,5 +75,25 @@ The members currently represented in a Flux presence channel.
 **Notification delivery plan**:
 The recipients, channels, queue destinations, and delays selected for a Notification dispatch.
 
+**Mail layout**:
+The header, body panel, and footer that surround every rendered Markdown mail.
+_Avoid_: Wrapper, template
+
+**Mail theme**:
+The stylesheet inlined into a Markdown mail's HTML.
+_Avoid_: Skin, CSS
+
+**Mail template**:
+A Markdown file that holds a mail's content, filled with the values the mail passes to it.
+_Avoid_: View, Markdown file
+
+**Mail component**:
+A reusable block, such as a button or panel, placed in a Mail template with a `mail::` tag.
+_Avoid_: Partial, widget
+
+**Mail action**:
+A call-to-action button in a mail, made of a label and a URL.
+_Avoid_: CTA, link button
+
 **Broadcast browser connection**:
 A browser connection to the Broadcast worker carrying Flux channel events or Realtime query updates.
