@@ -29,7 +29,7 @@ describe('@holo-js/mail package surface', () => {
     const definition = defineMail({
       to: 'ava@example.com',
       subject: 'Welcome',
-      markdown: '# Welcome',
+      markdown: 'welcome',
     })
 
     expect(typeof mail.sendMail).toBe('function')

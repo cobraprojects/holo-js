@@ -28,8 +28,7 @@ describe('@holo-js/mail contracts', () => {
       cc: 'Team@Example.com',
       bcc: [' Audit@Example.com ', 'audit@example.com'],
       subject: ' Welcome ',
-      markdown: '# Welcome',
-      markdownWrapper: 'emails/layout',
+      markdown: 'welcome',
       attachments: [
         {
           path: '/tmp/report.pdf',
@@ -83,7 +82,6 @@ describe('@holo-js/mail contracts', () => {
       },
     ])
     expect(definition.subject).toBe('Welcome')
-    expect(definition.markdownWrapper).toBe('emails/layout')
     expect(definition.attachments).toEqual([
       {
         name: 'report.pdf',
@@ -121,25 +119,25 @@ describe('@holo-js/mail contracts', () => {
     expect(() => defineMail({
       to: 'ava@example.com',
       subject: '   ',
-      markdown: '# Welcome',
+      markdown: 'welcome',
     })).toThrow('Mail subject must be a non-empty string')
 
     expect(() => defineMail({
       to: [],
       subject: 'Welcome',
-      markdown: '# Welcome',
+      markdown: 'welcome',
     })).toThrow('Mail to must include at least one recipient')
 
     expect(() => defineMail({
       to: 'broken',
       subject: 'Welcome',
-      markdown: '# Welcome',
+      markdown: 'welcome',
     })).toThrow('must be a valid email address')
 
     expect(() => defineMail({
       to: 'ava@example.com',
       subject: 'Welcome',
-      markdown: '# Welcome',
+      markdown: 'welcome',
       html: '<p>Hi</p>',
     })).toThrow('exactly one primary content source')
 
@@ -147,8 +145,8 @@ describe('@holo-js/mail contracts', () => {
       to: 'ava@example.com',
       subject: 'Welcome',
       html: '<p>Hi</p>',
-      markdownWrapper: 'emails/layout',
-    })).toThrow('markdown wrappers are only valid for markdown mails')
+      data: { name: 'Ava' },
+    } as never)).toThrow('Mail data is only valid for mails that name a Mail template')
 
     expect(() => defineMail({
       to: 'ava@example.com',
@@ -161,7 +159,7 @@ describe('@holo-js/mail contracts', () => {
     expect(() => defineMail({
       to: 'ava@example.com',
       subject: 'Welcome',
-      markdown: '# Welcome',
+      markdown: 'welcome',
       attachments: [
         {
           content: 'hello',
@@ -172,7 +170,7 @@ describe('@holo-js/mail contracts', () => {
     expect(() => defineMail({
       to: 'ava@example.com',
       subject: 'Welcome',
-      markdown: '# Welcome',
+      markdown: 'welcome',
       attachments: [
         {
           path: '/tmp/logo.png',
@@ -213,7 +211,7 @@ describe('@holo-js/mail contracts', () => {
     const base = defineMail({
       to: 'ava@example.com',
       subject: 'Welcome',
-      markdown: '# Welcome',
+      markdown: 'welcome',
       headers: {
         'X-App': 'base',
       },
@@ -309,7 +307,7 @@ describe('@holo-js/mail contracts', () => {
     expect(mergeMailDefinitionInputs({
       to: 'ava@example.com',
       subject: 'Welcome',
-      markdown: '# Welcome',
+      markdown: 'welcome',
     }, undefined)).toMatchObject({
       to: 'ava@example.com',
       subject: 'Welcome',
@@ -317,7 +315,7 @@ describe('@holo-js/mail contracts', () => {
     expect(mergeMailDefinitionInputs(defineMail({
       to: 'ava@example.com',
       subject: 'Welcome',
-      markdown: '# Welcome',
+      markdown: 'welcome',
     }), {})).toMatchObject({
       subject: 'Welcome',
     })

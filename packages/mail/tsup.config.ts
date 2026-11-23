@@ -7,6 +7,7 @@ export default defineConfig({
     index: 'src/index.ts',
     config: 'src/config.ts',
     contracts: 'src/contracts.ts',
+    templates: 'src/templates.ts',
   },
   format: ['esm'],
   dts: true,
