@@ -166,6 +166,117 @@ describe('@holo-js/mail runtime', () => {
     })
   })
 
+  describe('markdown rendering', () => {
+    function configureFakeMailer(): void {
+      configureMailRuntime({
+        config: normalizeMailConfig({
+          default: 'fake',
+          from: { email: 'noreply@example.com' },
+          mailers: { fake: { driver: 'fake' } },
+        }),
+        environment: 'test',
+      })
+    }
+
+    async function sendMarkdown(markdown: string): Promise<{ readonly html?: string, readonly text?: string }> {
+      configureFakeMailer()
+      await sendMail(defineMail({ to: 'ava@example.com', subject: 'Markdown', markdown }))
+      const sent = listFakeSentMails()
+      expect(sent).toHaveLength(1)
+      return sent[0]!.mail
+    }
+
+    it('renders CommonMark block syntax', async () => {
+      const preview = await previewMail(defineMail({
+        from: 'noreply@example.com',
+        to: 'ava@example.com',
+        subject: 'CommonMark',
+        markdown: [
+          '1. First',
+          '2. Second',
+          '   - Nested',
+          '',
+          '> Quoted *text*',
+          '',
+          '```ts',
+          'const total = 1 < 2',
+          '```',
+          '',
+          '---',
+          '',
+          '![Logo](https://example.test/logo.png "Brand")',
+        ].join('\n'),
+      }))
+
+      expect(preview.html).toContain('<ol>\n<li>First</li>\n<li>Second\n<ul>\n<li>Nested</li>\n</ul>\n</li>\n</ol>')
+      expect(preview.html).toContain('<blockquote>\n<p>Quoted <em>text</em></p>\n</blockquote>')
+      expect(preview.html).toContain('<pre><code class="language-ts">const total = 1 &lt; 2\n</code></pre>')
+      expect(preview.html).toContain('<hr />')
+      expect(preview.html).toContain('<img src="https://example.test/logo.png" alt="Logo" title="Brand" />')
+    })
+
+    it('renders GitHub-style tables', async () => {
+      const mail = await sendMarkdown('| Item | Price |\n| :--- | ---: |\n| Plan | $10 |')
+
+      expect(mail.html).toMatch(/<table>\s*<thead>\s*<tr>\s*<th[^>]*>Item<\/th>\s*<th[^>]*>Price<\/th>/)
+      expect(mail.html).toMatch(/<tbody>\s*<tr>\s*<td[^>]*>Plan<\/td>\s*<td[^>]*>\$10<\/td>\s*<\/tr>\s*<\/tbody>\s*<\/table>/)
+    })
+
+    it('escapes raw HTML and does not link unsafe URLs', async () => {
+      const mail = await sendMarkdown([
+        '<div onclick="steal()">Block</div>',
+        '',
+        'Inline <b>bold</b> [bad](javascript:alert(1)) [ok](https://example.test) ![pixel](javascript:track) <javascript:alert(2)>',
+      ].join('\n'))
+
+      expect(mail.html).toContain('&lt;div onclick=&quot;steal()&quot;&gt;Block&lt;/div&gt;')
+      expect(mail.html).toContain('Inline &lt;b&gt;bold&lt;/b&gt; bad <a href="https://example.test">ok</a> pixel javascript:alert(2)</p>')
+      expect(mail.html).not.toContain('<div')
+      expect(mail.html).not.toContain('<b>')
+      expect(mail.html).not.toContain('href="javascript:')
+      expect(mail.html).not.toContain('<img')
+    })
+
+    it('generates plain text from markdown with syntax removed', async () => {
+      const mail = await sendMarkdown([
+        '# Invoice **paid**',
+        '',
+        'Thanks for using `Holo`. [View invoice](https://example.test/invoices/1) or [bad](javascript:alert).',
+        '',
+        '1. First',
+        '2. Second',
+        '   - Nested',
+        '',
+        '> Quoted *text*',
+        '',
+        '```',
+        'npm install',
+        '```',
+        '',
+        '| Item | Price |',
+        '| --- | --- |',
+        '| Plan | $10 |',
+      ].join('\n'))
+
+      expect(mail.text).toBe([
+        'Invoice paid',
+        '',
+        'Thanks for using Holo. View invoice (https://example.test/invoices/1) or bad.',
+        '',
+        '1. First',
+        '2. Second',
+        '  - Nested',
+        '',
+        'Quoted text',
+        '',
+        'npm install',
+        '',
+        'Item | Price',
+        'Plan | $10',
+      ].join('\n'))
+    })
+  })
+
   it('uses renderView for render-backed mails and markdown wrappers', async () => {
     const renderView = vi.fn(async ({ view, props }: { view: string, props?: Record<string, unknown> }) => {
       if (view === 'emails/layout') {

@@ -28,27 +28,37 @@ export default PasswordChangedMail
 
 ## Supported syntax
 
-Holo uses a small, safe Markdown subset built for email. Separate blocks with a blank line.
+Holo renders Markdown with [CommonMark](https://commonmark.org) plus GitHub-style tables.
 
 | Markdown | Result |
 | --- | --- |
-| `# Heading` to `###### Heading` | `<h1>` to `<h6>`. The heading must be on its own block. |
-| Lines of text | A paragraph. Single line breaks inside a paragraph become `<br />`. |
-| Lines starting with `- ` or `* ` | A bulleted list, when every line in the block is a list item. |
+| `# Heading` to `###### Heading` | `<h1>` to `<h6>` |
+| Lines of text | A paragraph. A single line break stays inside the paragraph; end a line with two spaces or `\` to force a `<br />`. |
+| Lines starting with `- `, `* `, or `+ ` | A bulleted list. Indent items to nest lists. |
+| Lines starting with `1. ` or `1) ` | A numbered list. |
+| `> Quote` | A block quote. |
+| ```` ``` ```` fences or four-space indentation | A code block. A language after the opening fence adds a `language-*` class. |
+| `---`, `***`, or `___` | A horizontal rule. |
 | `**bold**` | `<strong>` |
 | `*italic*` | `<em>` |
 | `` `code` `` | `<code>` |
-| `[label](url)` | A link. |
+| `[label](url)` or `<https://example.com>` | A link. |
+| `![alt](url "title")` | An image. |
+| Pipe tables with a `\| --- \|` separator row | A table. Use `:---`, `:---:`, or `---:` to align a column. |
 
-Other Markdown, such as numbered lists, tables, images, and block quotes, is not converted and shows as plain text. Use `html` when you need more control.
+```md
+| Item | Price |
+| :--- | ---: |
+| Pro plan | $10 |
+```
 
 ## Safety
 
-Holo escapes any HTML in your Markdown, so it's safe to interpolate user-provided values like names. Links only render for `http:`, `https:`, and `mailto:` URLs, plus relative paths (`/`, `./`, `../`, `#`). Any other link, such as `javascript:`, renders as its label text only.
+Holo escapes any HTML in your Markdown, so it's safe to interpolate user-provided values like names. Links and images only render for `http:`, `https:`, and `mailto:` URLs, plus relative paths (`/`, `./`, `../`, `#`). Any other link, such as `javascript:`, renders as its label text only, and any other image renders as its alt text only.
 
 ## Plain-text version
 
-Holo builds the plain-text part by stripping the Markdown syntax: headings and bullets lose their markers, and links become `label (url)`. To write your own plain-text version, pass `text` as well:
+Holo builds the plain-text part from the same Markdown with the syntax removed: headings, emphasis, and code lose their markers, links become `label (url)`, images become their alt text, lists keep a `-` or number per item, and table rows become cells separated by `|`. To write your own plain-text version, pass `text` as well:
 
 ```ts
 defineMail({

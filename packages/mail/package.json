@@ -44,6 +44,7 @@
   "dependencies": {
     "@holo-js/config": "catalog:",
     "@holo-js/kernel": "catalog:",
+    "markdown-it": "catalog:",
     "nodemailer": "catalog:"
   },
   "peerDependencies": {

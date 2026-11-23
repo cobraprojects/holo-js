@@ -35,7 +35,7 @@ import {
   mergeMailDefinitionInputs,
   normalizeMailDefinition,
 } from './contracts'
-import { renderMarkdown, renderMarkdownInline, stripMarkdownSyntax } from './markdown'
+import { renderMarkdown, renderMarkdownText } from './markdown'
 import { getRegisteredMailDriver } from './registry'
 import { loadMailPluginDrivers, resetMailPluginDrivers } from './plugins'
 import {
@@ -1411,7 +1411,7 @@ async function renderContent(
 
   if (typeof mail.markdown === 'string') {
     const baseHtml = renderMarkdown(mail.markdown)
-    const text = mail.text ?? stripMarkdownSyntax(mail.markdown)
+    const text = mail.text ?? renderMarkdownText(mail.markdown)
     const wrapper = mail.markdownWrapper ?? envelope.config.markdown.wrapper
     const html = wrapper
       ? await renderView({
@@ -1799,7 +1799,7 @@ export const mailRuntimeInternals = {
   prepareMailSend,
   renderContent,
   renderMarkdown,
-  renderMarkdownInline,
+  renderMarkdownText,
   renderPreviewResponse,
   renderView,
   resolveDriver,
@@ -1827,5 +1827,4 @@ export const mailRuntimeInternals = {
   setStorageModuleLoader(loader: (() => Promise<StorageModule>) | undefined) {
     getRuntimeState().loadStorageModule = loader
   },
-  stripMarkdownSyntax,
 }

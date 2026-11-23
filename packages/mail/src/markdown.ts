@@ -1,10 +1,13 @@
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;')
+import MarkdownItParser, { type MarkdownIt, type StateCore, type Token } from 'markdown-it'
+
+interface TextListState {
+  readonly ordered: boolean
+  nextNumber: number
+}
+
+interface TextBlock {
+  readonly text: string
+  readonly group: number | undefined
 }
 
 function isSafeMailHref(href: string): boolean {
@@ -18,40 +21,134 @@ function isSafeMailHref(href: string): boolean {
   }
 }
 
-export function renderMarkdownInline(markdown: string): string {
-  return escapeHtml(markdown)
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, escapedHref: string) => {
-      return isSafeMailHref(escapedHref) ? `<a href="${escapedHref}">${label}</a>` : label
-    })
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+function readAttribute(token: Token, name: string): string {
+  return String(token.attrGet(name) ?? '')
 }
 
-export function stripMarkdownSyntax(markdown: string): string {
-  return markdown
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')
-    .replace(/^[-*]\s+/gm, '')
-    .trim()
+function withoutUnsafeLinks(tokens: readonly Token[]): Token[] {
+  let insideUnsafeLink = false
+  return tokens.flatMap((token) => {
+    if (token.type === 'link_open' && !isSafeMailHref(readAttribute(token, 'href'))) {
+      insideUnsafeLink = true
+      return []
+    }
+    if (token.type === 'link_close' && insideUnsafeLink) {
+      insideUnsafeLink = false
+      return []
+    }
+    if (token.type === 'image' && !isSafeMailHref(readAttribute(token, 'src'))) {
+      return token.children ?? []
+    }
+    return [token]
+  })
+}
+
+function removeUnsafeLinks(state: StateCore): void {
+  for (const token of state.tokens) {
+    if (token.type === 'inline' && token.children) {
+      token.children = withoutUnsafeLinks(token.children)
+    }
+  }
+}
+
+function createMarkdownParser(): MarkdownIt {
+  const parser = new MarkdownItParser('commonmark', { html: false }).enable('table')
+  parser.validateLink = () => true
+  parser.core.ruler.push('mail_unsafe_links', removeUnsafeLinks)
+  return parser
+}
+
+const markdownParser = createMarkdownParser()
+
+function renderInlineText(tokens: readonly Token[]): string {
+  const parts: string[] = []
+  const linkStack: { readonly href: string, readonly labelStart: number }[] = []
+  for (const token of tokens) {
+    if (token.type === 'link_open') {
+      linkStack.push({ href: readAttribute(token, 'href'), labelStart: parts.length })
+    } else if (token.type === 'link_close') {
+      const link = linkStack.pop()
+      if (link && parts.slice(link.labelStart).join('') !== link.href) {
+        parts.push(` (${link.href})`)
+      }
+    } else if (token.type === 'softbreak' || token.type === 'hardbreak') {
+      parts.push('\n')
+    } else if (token.type === 'image') {
+      parts.push(renderInlineText(token.children ?? []))
+    } else if (token.type === 'text' || token.type === 'code_inline') {
+      parts.push(token.content)
+    }
+  }
+  return parts.join('')
+}
+
+function joinTextBlocks(blocks: readonly TextBlock[]): string {
+  return blocks.map((block, index) => {
+    if (index === 0) return block.text
+    const previous = blocks[index - 1]
+    const separator = block.group !== undefined && block.group === previous?.group ? '\n' : '\n\n'
+    return `${separator}${block.text}`
+  }).join('')
 }
 
 export function renderMarkdown(markdown: string): string {
-  const blocks = markdown.trim().split(/\n\s*\n/g).map(block => block.trim()).filter(Boolean)
-  return blocks.map((block) => {
-    const lines = block.split('\n').map(line => line.trim()).filter(Boolean)
-    if (lines.every(line => /^[-*]\s+/.test(line))) {
-      return `<ul>${lines.map(line => `<li>${renderMarkdownInline(line.replace(/^[-*]\s+/, ''))}</li>`).join('')}</ul>`
+  return markdownParser.render(markdown).trimEnd()
+}
+
+export function renderMarkdownText(markdown: string): string {
+  const tokens = markdownParser.parse(markdown, {})
+  const blocks: TextBlock[] = []
+  const lists: TextListState[] = []
+  let group: number | undefined
+  let itemPrefix = ''
+  let tableRow: string[] | undefined
+
+  tokens.forEach((token, index) => {
+    switch (token.type) {
+      case 'bullet_list_open':
+      case 'ordered_list_open':
+        group ??= index
+        lists.push({ ordered: token.type === 'ordered_list_open', nextNumber: Number(token.attrGet('start') ?? 1) })
+        return
+      case 'bullet_list_close':
+      case 'ordered_list_close':
+        lists.pop()
+        if (lists.length === 0) group = undefined
+        return
+      case 'list_item_open': {
+        const list = lists.at(-1)
+        const marker = list?.ordered ? `${list.nextNumber++}.` : '-'
+        itemPrefix = `${'  '.repeat(lists.length - 1)}${marker} `
+        return
+      }
+      case 'table_open':
+        group = index
+        return
+      case 'table_close':
+        group = undefined
+        return
+      case 'tr_open':
+        tableRow = []
+        return
+      case 'tr_close':
+        blocks.push({ text: (tableRow ?? []).join(' | '), group })
+        tableRow = undefined
+        return
+      case 'fence':
+      case 'code_block':
+        blocks.push({ text: token.content.trimEnd(), group })
+        return
+      case 'inline': {
+        const text = renderInlineText(token.children ?? [])
+        if (tableRow) {
+          tableRow.push(text)
+          return
+        }
+        blocks.push({ text: `${itemPrefix}${text}`, group })
+        itemPrefix = ''
+      }
     }
-    const heading = lines.length === 1 ? lines[0]!.match(/^(#{1,6})\s+(.+)$/) : null
-    if (heading) {
-      const [, markers, title] = heading
-      const level = markers!.length
-      return `<h${level}>${renderMarkdownInline(title!)}</h${level}>`
-    }
-    return `<p>${lines.map(renderMarkdownInline).join('<br />')}</p>`
-  }).join('\n')
+  })
+
+  return joinTextBlocks(blocks).trim()
 }
