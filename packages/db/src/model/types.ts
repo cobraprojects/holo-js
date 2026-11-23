@@ -124,14 +124,8 @@ export type ModelDefinitionTable<TReference extends ModelDefinitionLike>
       ? TTable
       : TableDefinition
 
-type WithRegisteredModelSerialization<TTable, TDefinition>
-  = TDefinition extends { readonly definition: { readonly table: infer TRegistered extends TableDefinition & { readonly '~modelSerialization'?: object } } }
-    ? Omit<TTable, 'columns' | '~modelSerialization'> & Pick<TRegistered, 'columns' | '~modelSerialization'>
-    : TTable
-
 type ModelEntityTable<TReference extends ModelDefinitionLike>
-  = [NamedModelReferenceName<TReference>] extends [never] ? ModelDefinitionTable<TReference>
-    : WithRegisteredModelSerialization<ModelDefinitionTable<TReference>, ResolveModelDefinition<TReference>>
+  = ModelDefinitionTable<ResolveModelDefinition<TReference>>
 
 type PivotTableDefinition<TPivotTable extends string | TableDefinition>
   = TPivotTable extends string ? GeneratedSchemaTable<TPivotTable> : TPivotTable
