@@ -39,7 +39,7 @@ Mail templates are `.md` files under `server/mail/templates`. A template's name 
 
 `npx holo make:mail` creates a mail definition together with its template. See [Writing mail](/mail/writing-mail#generate-a-mail-file).
 
-`holo prepare` compiles every template into the generated registry, so your app doesn't read template files when it sends mail. `holo dev` recompiles a template when you save it. After adding or changing a template outside `holo dev`, run `npx holo prepare`. A template with a syntax error, such as an unclosed `{{` or `@if`, an unknown directive, or an include cycle, fails `holo prepare` with the template name and line.
+`holo prepare` compiles every template into the generated registry, so your app doesn't read template files when it sends mail. `holo dev` recompiles a template when you save it. After adding or changing a template outside `holo dev`, run `npx holo prepare`. A template with a syntax error, such as an unclosed `{{` or `@if`, or an include cycle, fails `holo prepare` with the template name and line.
 
 ## Placeholders
 
@@ -97,7 +97,7 @@ Questions? Contact us at {{ support.email }}.
 
 `@if` only tests whether a value is truthy. A missing value, `null`, `false`, `0`, and `''` are false; every other value, including an empty list, is true. There are no operators, comparisons, or function calls, so compute flags such as `isOverdue` before you pass them.
 
-A line that holds only a directive leaves no blank line behind, so `@foreach` can produce the rows of a Markdown table. Directives also work inside a line, as long as the `@` doesn't follow a letter, digit, or `_`. Write `@@` to output a literal `@` before a word, as in `@@holo`. Email addresses such as `help@example.com` need no escaping.
+A line that holds only a directive leaves no blank line behind, so `@foreach` can produce the rows of a Markdown table. Directives also work inside a line, as long as the `@` doesn't follow a letter, digit, or `_`. Any other `@` word, such as `@holo` or `@media`, is output as written. To output a directive name as text, write `@@`, as in `@@if`. Email addresses such as `help@example.com` need no escaping.
 
 A loop item's name hides a `data` value with the same name inside the loop. An included template always sees the mail's `data`, even inside a loop. An included template can include others, but a template that includes itself, directly or through other templates, fails `holo prepare`.
 
