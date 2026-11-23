@@ -177,6 +177,7 @@ Every option you can pass to `defineMail()`, grouped by what it controls.
 - [html](#html)
 - [markdown](#markdown)
 - [data](#data)
+- [theme](#theme)
 - [render](#render)
 
 </div>
@@ -284,6 +285,14 @@ The values a Mail template uses. `holo prepare` generates its type from the temp
 
 ```ts
 data: { orderNumber: 'A-1001', customer: { name: 'Ava' } }
+```
+
+### theme
+
+The Mail theme that styles this mail, in place of `markdown.theme` from `config/mail.ts`. Theme names come from `server/mail/themes`, plus the built-in `default`, so an unknown name is a type error. Only valid with `markdown`. See [Layouts and themes](/mail/layouts-and-themes#themes).
+
+```ts
+theme: 'receipt'
 ```
 
 ### render

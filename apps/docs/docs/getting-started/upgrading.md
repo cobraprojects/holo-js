@@ -45,7 +45,11 @@ Hello {{ name }},
 
 ### `markdown.wrapper` and `markdownWrapper` are removed
 
-The `markdown.wrapper` option in `config/mail.ts` and the `markdownWrapper` option of `defineMail()` are removed. Delete them; a mail that still sets them no longer typechecks.
+The `markdown.wrapper` option in `config/mail.ts` and the `markdownWrapper` option of `defineMail()` are removed. Delete them; a mail that still sets them no longer typechecks. To change what surrounds every Markdown mail, write a [Mail layout](/mail/layouts-and-themes#custom-layout) instead.
+
+### Markdown mail is wrapped in a Mail layout and styled by a Mail theme
+
+Every Markdown mail is now wrapped in the default Mail layout, with a header that shows `name` from `config/app.ts` linking to its `url`, and the footer `© {year} {name}. All rights reserved.`. The default theme's CSS is inlined into the HTML, and the plain-text part gets the layout's header and footer too. Check that `name` and `url` in `config/app.ts` are set for your app. To change the look, see [Mail layouts and themes](/mail/layouts-and-themes).
 
 ### `holo make:mail --markdown` takes a template name
 
