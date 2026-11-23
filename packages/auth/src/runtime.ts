@@ -5,6 +5,7 @@ import { syncHostedIdentity } from './runtime/hostedIdentitySync'
 import { resetVerificationOnEmailChange } from './runtime/emailChange'
 import { clearSessionRevocationReads, loginRevocationMetadata, validSessionPayloads } from './runtime/sessionRevocations'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { normalizeAuthConfig } from './config'
 import { isAuthError } from './contracts'
 import type {
@@ -2460,6 +2461,16 @@ async function rotateSessionWithUpdate(
   return bindings.session.rotate(session.id, { store: session.store, update, renewLifetime: true })
 }
 
+async function refreshChangedGuardUser(
+  bindings: RuntimeBindings,
+  guardName: string,
+  read: SessionAuthPayload | undefined,
+  rotated: SessionAuthPayload | undefined,
+): Promise<void> {
+  if (!rotated || isDeepStrictEqual(read, rotated) || bindings.context.getCachedUser(guardName) === undefined) return
+  bindings.context.setCachedUser(guardName, await findSerializedUserById(rotated.provider, rotated.userId))
+}
+
 async function establishSessionForUser(
   user: SerializedAuthUser,
   options: {
@@ -2507,9 +2518,10 @@ async function establishSessionForUser(
     : []
 
   try {
-    if (existingSession) {
-      for (const guardName of sharedGuardNames) {
-        bindings.context.setSessionId(guardName, session.id)
+    for (const guardName of sharedGuardNames) {
+      bindings.context.setSessionId(guardName, session.id)
+      if (guardName !== options.guard) {
+        await refreshChangedGuardUser(bindings, guardName, existingPayloads[guardName], sessionPayloads[guardName])
       }
     }
 

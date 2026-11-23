@@ -347,12 +347,16 @@ describe.each(sessionStoreFactories)('concurrent authenticated session transitio
     const gate = holdFirstWrites(store, 1)
     configure(gate.store)
 
-    const login = request(() => auth.guard('support').loginUsingId(1))
+    const login = request(async () => {
+      await auth.guard('web').user()
+      await auth.guard('support').loginUsingId(1)
+      return auth.guard('web').user()
+    })
     await gate.reached
     await request(() => auth.guard('web').stopImpersonating())
     gate.release()
-    await login
 
+    await expect(login).resolves.toMatchObject({ id: 3 })
     await expect(request(() => auth.guard('web').impersonation())).resolves.toBeNull()
     await expect(request(() => auth.guard('web').user())).resolves.toMatchObject({ id: 3 })
     await expect(request(() => auth.guard('support').user())).resolves.toMatchObject({ id: 1 })
