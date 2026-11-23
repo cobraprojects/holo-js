@@ -3375,6 +3375,21 @@ describe('@holo-js/auth package runtime', () => {
     configureAuthRuntime({ ...bindings, providers, context: resetBrowser })
     const resetSession = unwrapAuthResult(await loginUsing(created!))
     await requestPasswordReset({ email: 'ava@example.com' })
+    const sessionRuntime = getSessionRuntime()
+    let rotatedSessionId: string | undefined
+    configureAuthRuntime({
+      ...bindings,
+      providers,
+      context: resetBrowser,
+      session: {
+        ...sessionRuntime,
+        async rotate(sessionId, options) {
+          const rotated = await sessionRuntime.rotate(sessionId, options)
+          rotatedSessionId = rotated.id
+          return rotated
+        },
+      },
+    })
     resetBrowser.appendResponseCookie = () => {
       throw new Error('response already sent')
     }
@@ -3386,7 +3401,9 @@ describe('@holo-js/auth package runtime', () => {
     })).rejects.toThrow('response already sent')
 
     expect(resetBrowser.getSessionId('web')).toBeUndefined()
-    await expect(getSessionRuntime().read(resetSession.sessionId)).resolves.toBeNull()
+    await expect(sessionRuntime.read(resetSession.sessionId)).resolves.toBeNull()
+    expect(rotatedSessionId).toEqual(expect.any(String))
+    await expect(sessionRuntime.read(rotatedSessionId!)).resolves.toBeNull()
     await expect(check()).resolves.toBe(false)
   }, TIMEBOXED_TEST_TIMEOUT)
 

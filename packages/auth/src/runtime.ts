@@ -2537,10 +2537,10 @@ async function establishSessionForUser(
 
   return completeSessionTransition(bindings, session, [...sharedGuardNames, options.guard], async () => {
     for (const guardName of sharedGuardNames) {
-      bindings.context.setSessionId(guardName, session.id)
       if (guardName !== options.guard) {
         await refreshChangedGuardUser(bindings, guardName, existingPayloads[guardName], sessionPayloads[guardName])
       }
+      bindings.context.setSessionId(guardName, session.id)
     }
 
     bindings.context.setSessionId(options.guard, session.id)
@@ -2899,8 +2899,8 @@ async function rotateGuardSession(bindings: RuntimeBindings, guardName: string):
   const boundGuardNames = sessionGuardNames(bindings).filter(name => bindings.context.getSessionId(name) === state.sessionId)
   await completeSessionTransition(bindings, rotated, boundGuardNames, async () => {
     for (const name of boundGuardNames) {
-      bindings.context.setSessionId(name, rotated.id)
       await refreshChangedGuardUser(bindings, name, readPayloads[name], rotatedPayloads[name])
+      bindings.context.setSessionId(name, rotated.id)
     }
     await appendResponseCookies(bindings, [bindings.session.sessionCookie(rotated.id)])
   })
