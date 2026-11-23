@@ -99,6 +99,10 @@ export function renderMarkdown(markdown: string): string {
   return markdownParser.render(markdown).trimEnd()
 }
 
+export function renderMarkdownInline(markdown: string): string {
+  return markdownParser.renderInline(markdown)
+}
+
 export function renderMarkdownText(markdown: string): string {
   const tokens = markdownParser.parse(markdown, {})
   const blocks: TextBlock[] = []

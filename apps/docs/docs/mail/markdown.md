@@ -126,6 +126,47 @@ defineMail({
 
 `data` must be JSON-serializable. A `Date`, a class instance, or a function is a type error; format such values first, as `shippedOn` does above. A template without placeholders, or with only `@if` values, needs no `data`.
 
+## Mail components
+
+Mail components add email-ready blocks to a template. Write a component as a tag with the `mail::` prefix, its attributes, and its content:
+
+```md [server/mail/templates/orders/shipped.md]
+# Your order shipped
+
+<mail::panel>
+Order **{{ order.number }}** is on its way.
+</mail::panel>
+
+<mail::button url="{{ order.url }}" color="success">
+Track Order
+</mail::button>
+
+<mail::table>
+| Item | Qty | Price |
+| :--- | :---: | ---: |
+| Notebook | 2 | $10 |
+</mail::table>
+
+<mail::subcopy>
+Questions? [Contact support](https://example.com/support).
+</mail::subcopy>
+```
+
+| Component | Attributes | Renders |
+| --- | --- | --- |
+| `<mail::button>` | `url` (required), `color`: `primary` (default), `success`, or `error` | A call-to-action button. The content is the button label. |
+| `<mail::panel>` | None | A highlighted block. |
+| `<mail::table>` | None | A Markdown table with the theme's table styling. |
+| `<mail::subcopy>` | None | Small print, such as a footnote below the main content. |
+
+The content of a component is Markdown, so you can use bold text, links, and tables inside it. Put each opening and closing tag on its own line with a blank line before and after the component, as in the example above.
+
+Attribute values are strings and can contain placeholders. A component escapes attribute values when it outputs them, so `url="{{ order.url }}"` is safe for values that come from users.
+
+A button's `url` must be an absolute `http:` or `https:` URL. Sending a mail whose button has a missing, relative, `javascript:`, or `mailto:` URL throws an error, so a broken button is never sent. Plain Markdown links such as `[Track order](https://example.com)` stay normal links.
+
+Components are part of the template, not of `data`: a value that contains `<mail::button>` is output as escaped text and never creates a component. An unknown component tag, such as `<mail::buton>`, fails `holo prepare` with the template name and line.
+
 ## Supported syntax
 
 Holo renders Markdown with [CommonMark](https://commonmark.org) plus GitHub-style tables.
@@ -159,7 +200,7 @@ Holo renders Markdown with [CommonMark](https://commonmark.org) plus GitHub-styl
 
 ## Plain-text version
 
-Holo builds the plain-text part from the same filled-in template with the syntax removed: headings, emphasis, and code lose their markers, links become `label (url)`, images become their alt text, lists keep a `-` or number per item, table rows become cells separated by `|`, and HTML tags are dropped. To write your own plain-text version, pass `text` as well:
+Holo builds the plain-text part from the same filled-in template with the syntax removed: headings, emphasis, and code lose their markers, links become `label (url)`, buttons become `Label: URL`, images become their alt text, lists keep a `-` or number per item, table rows become cells separated by `|`, and HTML tags are dropped. To write your own plain-text version, pass `text` as well:
 
 ```ts
 defineMail({

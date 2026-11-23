@@ -1,9 +1,27 @@
+import {
+  BUILT_IN_MAIL_COMPONENTS,
+  isAbsoluteHttpUrl,
+  resolveMailComponentBehavior,
+  type MailComponentSource,
+} from './components'
 import type { MailJsonObject, MailJsonValue } from './contracts-types'
 import { MailError } from './errors'
+import { renderMarkdown, renderMarkdownInline } from './markdown'
 
-export type MailTemplateNode
+export type MailTemplateValueNode
   = { readonly type: 'text', readonly value: string }
   | { readonly type: 'output', readonly path: readonly string[], readonly escaped: boolean }
+
+export interface MailTemplateComponentNode {
+  readonly type: 'component'
+  readonly name: string
+  readonly attributes: Readonly<Record<string, readonly MailTemplateValueNode[]>>
+  readonly children: readonly MailTemplateNode[]
+}
+
+export type MailTemplateNode
+  = MailTemplateValueNode
+  | MailTemplateComponentNode
   | {
     readonly type: 'if'
     readonly path: readonly string[]
@@ -13,13 +31,18 @@ export type MailTemplateNode
   | { readonly type: 'foreach', readonly path: readonly string[], readonly item: string, readonly body: readonly MailTemplateNode[] }
   | { readonly type: 'include', readonly template: string }
 
+export type MailTemplateFormat = 'html' | 'text'
+
 export interface CompiledMailTemplate {
   readonly nodes: readonly MailTemplateNode[]
   readonly data: MailTemplateDataObjectShape
 }
 
+export type CompiledMailComponent = Readonly<Record<MailTemplateFormat, readonly MailTemplateNode[]>>
+
 export interface CompiledMailRegistry {
   readonly templates: Readonly<Record<string, CompiledMailTemplate>>
+  readonly components: Readonly<Record<string, CompiledMailComponent>>
 }
 
 export interface MailRegistrySources {
@@ -43,6 +66,11 @@ interface Delimiter {
   readonly escaped: boolean
 }
 
+type TemplateMarker
+  = { readonly kind: 'output', readonly delimiter: Delimiter }
+  | { readonly kind: 'componentOpen' }
+  | { readonly kind: 'componentClose' }
+
 interface DirectiveToken {
   readonly type: 'directive'
   readonly name: string
@@ -50,11 +78,26 @@ interface DirectiveToken {
   readonly line: number
 }
 
-type TemplateToken = Extract<MailTemplateNode, { readonly type: 'text' | 'output' }> | DirectiveToken
+type ComponentTagToken
+  = {
+    readonly type: 'componentOpen'
+    readonly name: string
+    readonly attributes: Readonly<Record<string, readonly MailTemplateValueNode[]>>
+    readonly line: number
+  }
+  | { readonly type: 'componentClose', readonly name: string, readonly line: number }
+
+type TemplateToken = MailTemplateValueNode | DirectiveToken | ComponentTagToken
 
 interface ScannedToken {
   readonly token: TemplateToken
   readonly end: number
+}
+
+interface ScanContext {
+  readonly template: string
+  readonly source: string
+  readonly components: ReadonlySet<string>
 }
 
 interface IncludeReference {
@@ -63,8 +106,17 @@ interface IncludeReference {
 }
 
 type OpenBlock
-  = { readonly directive: 'if', readonly line: number, readonly path: readonly string[], readonly then: MailTemplateNode[], otherwise?: MailTemplateNode[] }
-  | { readonly directive: 'foreach', readonly line: number, readonly path: readonly string[], readonly item: string, readonly body: MailTemplateNode[] }
+  = { readonly kind: 'if', readonly line: number, readonly path: readonly string[], readonly then: MailTemplateNode[], otherwise?: MailTemplateNode[] }
+  | { readonly kind: 'foreach', readonly line: number, readonly path: readonly string[], readonly item: string, readonly body: MailTemplateNode[] }
+  | {
+    readonly kind: 'component'
+    readonly line: number
+    readonly name: string
+    readonly attributes: Readonly<Record<string, readonly MailTemplateValueNode[]>>
+    readonly children: MailTemplateNode[]
+  }
+
+type DirectiveBlock = Exclude<OpenBlock['kind'], 'component'>
 
 interface ParsedMailTemplate {
   readonly nodes: readonly MailTemplateNode[]
@@ -85,6 +137,7 @@ interface LoopValue {
 interface RenderContext {
   readonly registry: CompiledMailRegistry
   readonly template: string
+  readonly format: MailTemplateFormat
   readonly data: MailJsonObject
   readonly loops: readonly LoopValue[]
 }
@@ -93,6 +146,14 @@ const DELIMITERS: readonly Delimiter[] = [
   { open: '{!!', close: '!!}', escaped: false },
   { open: '{{', close: '}}', escaped: true },
 ]
+const TEMPLATE_MARKERS: readonly { readonly open: string, readonly marker: TemplateMarker }[] = [
+  ...DELIMITERS.map(delimiter => ({ open: delimiter.open, marker: { kind: 'output', delimiter } as const })),
+  { open: '<mail::', marker: { kind: 'componentOpen' } },
+  { open: '</mail::', marker: { kind: 'componentClose' } },
+]
+const COMPONENT_OPEN_TAG_PATTERN = /<mail::([a-z][\w-]*)((?:\s+[A-Za-z_][\w-]*="[^"]*")*)\s*>/y
+const COMPONENT_CLOSE_TAG_PATTERN = /<\/mail::([a-z][\w-]*)\s*>/y
+const COMPONENT_ATTRIBUTE_PATTERN = /([A-Za-z_][\w-]*)="([^"]*)"/g
 const DIRECTIVE_PATTERN = /\B@(@?)([A-Za-z]\w*)/g
 const DIRECTIVE_ARGUMENTS: Readonly<Record<string, string>> = {
   if: 'a data path',
@@ -102,7 +163,7 @@ const DIRECTIVE_ARGUMENTS: Readonly<Record<string, string>> = {
   endforeach: '',
   include: 'a Mail template name',
 }
-const BLOCK_CLOSERS: Readonly<Record<OpenBlock['directive'], string>> = { if: 'endif', foreach: 'endforeach' }
+const BLOCK_CLOSERS: Readonly<Record<DirectiveBlock, string>> = { if: 'endif', foreach: 'endforeach' }
 const FOREACH_ARGUMENT_PATTERN = /^(\S+)\s+as\s+([A-Za-z_]\w*)$/
 const TEMPLATE_NAME_PATTERN = /^[\w-][\w.-]*(?:\/[\w-][\w.-]*)*$/
 const PATH_SEGMENT_PATTERN = /^[A-Za-z_]\w*$/
@@ -148,6 +209,13 @@ function lineAt(source: string, index: number): number {
 function findNextDelimiter(source: string, from: number): { readonly index: number, readonly delimiter: Delimiter } | undefined {
   return DELIMITERS
     .map(delimiter => ({ index: source.indexOf(delimiter.open, from), delimiter }))
+    .filter(match => match.index !== -1)
+    .sort((left, right) => left.index - right.index)[0]
+}
+
+function findNextMarker(source: string, from: number): { readonly index: number, readonly marker: TemplateMarker } | undefined {
+  return TEMPLATE_MARKERS
+    .map(({ open, marker }) => ({ index: source.indexOf(open, from), marker }))
     .filter(match => match.index !== -1)
     .sort((left, right) => left.index - right.index)[0]
 }
@@ -199,8 +267,13 @@ function scanDirective(template: string, source: string, match: RegExpExecArray)
   }
 }
 
-function scanOutput(template: string, source: string, index: number, delimiter: Delimiter): ScannedToken {
-  const line = lineAt(source, index)
+function scanOutput(
+  template: string,
+  source: string,
+  index: number,
+  delimiter: Delimiter,
+  line: number,
+): { readonly token: MailTemplateValueNode, readonly end: number } {
   const expressionStart = index + delimiter.open.length
   const closeIndex = source.indexOf(delimiter.close, expressionStart)
   if (closeIndex === -1) {
@@ -213,18 +286,86 @@ function scanOutput(template: string, source: string, index: number, delimiter: 
   }
 }
 
-function* scanTemplate(template: string, source: string): Generator<TemplateToken> {
+function compileValueNodes(template: string, line: number, source: string): readonly MailTemplateValueNode[] {
+  const nodes: MailTemplateValueNode[] = []
+  let cursor = 0
+  for (let match = findNextDelimiter(source, cursor); match; match = findNextDelimiter(source, cursor)) {
+    if (match.index > cursor) nodes.push(Object.freeze({ type: 'text', value: source.slice(cursor, match.index) }))
+    const output = scanOutput(template, source, match.index, match.delimiter, line)
+    nodes.push(Object.freeze(output.token))
+    cursor = output.end
+  }
+
+  if (cursor < source.length) nodes.push(Object.freeze({ type: 'text', value: source.slice(cursor) }))
+  return Object.freeze(nodes)
+}
+
+function matchTag(pattern: RegExp, source: string, index: number): RegExpExecArray | null {
+  pattern.lastIndex = index
+  return pattern.exec(source)
+}
+
+function malformedTagError(context: ScanContext, line: number): MailTemplateSyntaxError {
+  return new MailTemplateSyntaxError(context.template, line, 'Malformed Mail component tag. Write it as <mail::name attribute="value">.')
+}
+
+function compileAttributes(
+  context: ScanContext,
+  line: number,
+  source: string,
+): Readonly<Record<string, readonly MailTemplateValueNode[]>> {
+  const attributes: Record<string, readonly MailTemplateValueNode[]> = {}
+  for (const [, name = '', value = ''] of source.matchAll(COMPONENT_ATTRIBUTE_PATTERN)) {
+    if (Object.hasOwn(attributes, name)) {
+      throw new MailTemplateSyntaxError(context.template, line, `Mail component attribute "${name}" is set more than once.`)
+    }
+    attributes[name] = compileValueNodes(context.template, line, value)
+  }
+
+  return Object.freeze(attributes)
+}
+
+function scanComponentOpen(context: ScanContext, index: number, line: number): ScannedToken {
+  const tag = matchTag(COMPONENT_OPEN_TAG_PATTERN, context.source, index)
+  if (!tag) throw malformedTagError(context, line)
+  const [match, name = '', attributes = ''] = tag
+  if (!context.components.has(name)) {
+    throw new MailTemplateSyntaxError(context.template, line, `<mail::${name}> is not a Mail component.`)
+  }
+
+  return {
+    token: { type: 'componentOpen', name, attributes: compileAttributes(context, line, attributes), line },
+    end: index + match.length,
+  }
+}
+
+function scanComponentClose(context: ScanContext, index: number, line: number): ScannedToken {
+  const tag = matchTag(COMPONENT_CLOSE_TAG_PATTERN, context.source, index)
+  if (!tag) throw malformedTagError(context, line)
+  const [match, name = ''] = tag
+  return { token: { type: 'componentClose', name, line }, end: index + match.length }
+}
+
+function scanMarker(context: ScanContext, index: number, marker: TemplateMarker): ScannedToken {
+  const line = lineAt(context.source, index)
+  if (marker.kind === 'componentOpen') return scanComponentOpen(context, index, line)
+  if (marker.kind === 'componentClose') return scanComponentClose(context, index, line)
+  return scanOutput(context.template, context.source, index, marker.delimiter, line)
+}
+
+function* scanTemplate(context: ScanContext): Generator<TemplateToken> {
+  const { template, source } = context
   let cursor = 0
   while (cursor < source.length) {
-    const output = findNextDelimiter(source, cursor)
+    const marker = findNextMarker(source, cursor)
     const directive = findNextDirective(source, cursor)
-    const start = Math.min(output?.index ?? source.length, directive?.index ?? source.length)
+    const start = Math.min(marker?.index ?? source.length, directive?.index ?? source.length)
     if (start > cursor) yield { type: 'text', value: source.slice(cursor, start) }
     if (start === source.length) return
 
     const scanned = directive?.index === start
       ? scanDirective(template, source, directive)
-      : output && scanOutput(template, source, start, output.delimiter)
+      : marker && scanMarker(context, start, marker.marker)
     if (!scanned) return
     yield scanned.token
     cursor = scanned.end
@@ -232,7 +373,8 @@ function* scanTemplate(template: string, source: string): Generator<TemplateToke
 }
 
 function blockNodes(block: OpenBlock): MailTemplateNode[] {
-  if (block.directive === 'foreach') return block.body
+  if (block.kind === 'component') return block.children
+  if (block.kind === 'foreach') return block.body
   return block.otherwise ?? block.then
 }
 
@@ -242,29 +384,38 @@ function openForeach(template: string, token: DirectiveToken): OpenBlock {
     throw new MailTemplateSyntaxError(template, token.line, '"@foreach" needs "path as name" in parentheses, such as "@foreach (order.items as item)".')
   }
 
-  return { directive: 'foreach', line: token.line, path: parsePath(template, token.line, match[1]), item: match[2], body: [] }
+  return { kind: 'foreach', line: token.line, path: parsePath(template, token.line, match[1]), item: match[2], body: [] }
 }
 
 function openElse(template: string, blocks: readonly OpenBlock[], token: DirectiveToken): void {
   const block = blocks.at(-1)
-  if (block?.directive !== 'if' || block.otherwise) {
+  if (block?.kind !== 'if' || block.otherwise) {
     throw new MailTemplateSyntaxError(template, token.line, '"@else" has no matching "@if".')
   }
 
   block.otherwise = []
 }
 
-function closeBlock(template: string, blocks: OpenBlock[], token: DirectiveToken, directive: OpenBlock['directive']): MailTemplateNode {
+function closeBlock(template: string, blocks: OpenBlock[], token: DirectiveToken, directive: DirectiveBlock): MailTemplateNode {
   const block = blocks.pop()
-  if (block?.directive !== directive) {
+  if (block?.kind !== directive) {
     throw new MailTemplateSyntaxError(template, token.line, `"@${token.name}" has no matching "@${directive}".`)
   }
 
-  if (block.directive === 'foreach') {
+  if (block.kind === 'foreach') {
     return Object.freeze({ type: 'foreach', path: block.path, item: block.item, body: Object.freeze(block.body) })
   }
 
   return Object.freeze({ type: 'if', path: block.path, then: Object.freeze(block.then), otherwise: Object.freeze(block.otherwise ?? []) })
+}
+
+function closeComponent(template: string, blocks: OpenBlock[], token: Extract<ComponentTagToken, { readonly type: 'componentClose' }>): MailTemplateNode {
+  const block = blocks.pop()
+  if (block?.kind !== 'component' || block.name !== token.name) {
+    throw new MailTemplateSyntaxError(template, token.line, `</mail::${token.name}> does not close an open <mail::${token.name}>.`)
+  }
+
+  return Object.freeze({ type: 'component', name: block.name, attributes: block.attributes, children: Object.freeze(block.children) })
 }
 
 function parseInclude(template: string, token: DirectiveToken): IncludeReference {
@@ -275,7 +426,16 @@ function parseInclude(template: string, token: DirectiveToken): IncludeReference
   return { template: token.argument, line: token.line }
 }
 
-function parseTemplate(template: string, source: string): Pick<ParsedMailTemplate, 'nodes' | 'includes'> {
+function unclosedBlockError(template: string, block: OpenBlock): MailTemplateSyntaxError {
+  if (block.kind === 'component') {
+    return new MailTemplateSyntaxError(template, block.line, `<mail::${block.name}> is not closed with </mail::${block.name}>.`)
+  }
+
+  return new MailTemplateSyntaxError(template, block.line, `"@${block.kind}" is not closed with "@${BLOCK_CLOSERS[block.kind]}".`)
+}
+
+function parseTemplate(context: ScanContext): Pick<ParsedMailTemplate, 'nodes' | 'includes'> {
+  const { template } = context
   const root: MailTemplateNode[] = []
   const blocks: OpenBlock[] = []
   const includes: IncludeReference[] = []
@@ -284,9 +444,11 @@ function parseTemplate(template: string, source: string): Pick<ParsedMailTemplat
     ;(block ? blockNodes(block) : root).push(Object.freeze(node))
   }
 
-  for (const token of scanTemplate(template, source)) {
-    if (token.type !== 'directive') append(token)
-    else if (token.name === 'if') blocks.push({ directive: 'if', line: token.line, path: parsePath(template, token.line, token.argument), then: [] })
+  for (const token of scanTemplate(context)) {
+    if (token.type === 'componentOpen') blocks.push({ kind: 'component', line: token.line, name: token.name, attributes: token.attributes, children: [] })
+    else if (token.type === 'componentClose') append(closeComponent(template, blocks, token))
+    else if (token.type !== 'directive') append(token)
+    else if (token.name === 'if') blocks.push({ kind: 'if', line: token.line, path: parsePath(template, token.line, token.argument), then: [] })
     else if (token.name === 'foreach') blocks.push(openForeach(template, token))
     else if (token.name === 'else') openElse(template, blocks, token)
     else if (token.name === 'endif') append(closeBlock(template, blocks, token, 'if'))
@@ -299,9 +461,7 @@ function parseTemplate(template: string, source: string): Pick<ParsedMailTemplat
   }
 
   const unclosed = blocks.at(-1)
-  if (unclosed) {
-    throw new MailTemplateSyntaxError(template, unclosed.line, `"@${unclosed.directive}" is not closed with "@${BLOCK_CLOSERS[unclosed.directive]}".`)
-  }
+  if (unclosed) throw unclosedBlockError(template, unclosed)
 
   return { nodes: Object.freeze(root), includes }
 }
@@ -373,6 +533,10 @@ class TemplateDataCollector {
 
   #collectNode(node: MailTemplateNode): void {
     if (node.type === 'output') this.#use(node.path, VALUE_SHAPE)
+    if (node.type === 'component') {
+      for (const value of Object.values(node.attributes)) this.collect(value)
+      this.collect(node.children)
+    }
     if (node.type === 'if') {
       this.#use(node.path, JSON_SHAPE)
       this.collect(node.then)
@@ -401,8 +565,8 @@ class TemplateDataCollector {
   }
 }
 
-function parseMailTemplate(template: string, source: string): ParsedMailTemplate {
-  const { nodes, includes } = parseTemplate(template, source)
+function parseMailTemplate(template: string, source: string, components: ReadonlySet<string>): ParsedMailTemplate {
+  const { nodes, includes } = parseTemplate({ template, source, components })
   return { nodes, includes, data: new TemplateDataCollector(template).collect(nodes) }
 }
 
@@ -431,14 +595,31 @@ function resolveTemplateData(
   }, current.data)
 }
 
+function compileMailComponent(
+  name: string,
+  source: MailComponentSource,
+  components: ReadonlySet<string>,
+): CompiledMailComponent {
+  const template = `components/${name}`
+  return Object.freeze({
+    html: parseTemplate({ template, source: source.html, components }).nodes,
+    text: parseTemplate({ template, source: source.text, components }).nodes,
+  })
+}
+
 export function compileMailRegistry(sources: MailRegistrySources): CompiledMailRegistry {
+  const componentSources = BUILT_IN_MAIL_COMPONENTS
+  const componentNames = new Set(Object.keys(componentSources))
   const parsed = Object.fromEntries(Object.entries(sources.templates).map(([name, source]) => {
-    return [name, parseMailTemplate(name, source)]
+    return [name, parseMailTemplate(name, source, componentNames)]
   }))
 
   return Object.freeze({
     templates: Object.freeze(Object.fromEntries(Object.entries(parsed).map(([name, template]) => {
       return [name, Object.freeze({ nodes: template.nodes, data: resolveTemplateData(name, parsed, []) })]
+    }))),
+    components: Object.freeze(Object.fromEntries(Object.entries(componentSources).map(([name, source]) => {
+      return [name, compileMailComponent(name, source, componentNames)]
     }))),
   })
 }
@@ -480,6 +661,52 @@ function renderOutput(context: RenderContext, path: readonly string[], escaped: 
   return escaped ? escapeTemplateValue(String(value)) : String(value)
 }
 
+function renderAttributeValue(context: RenderContext, nodes: readonly MailTemplateValueNode[]): string {
+  return nodes.map(node => node.type === 'text' ? node.value : renderOutput(context, node.path, false)).join('')
+}
+
+function resolveComponent(context: RenderContext, name: string): CompiledMailComponent {
+  const component = Object.hasOwn(context.registry.components, name) ? context.registry.components[name] : undefined
+  if (!component) {
+    throw new MailError(`[@holo-js/mail] Mail component "${name}" is not registered. Run "holo prepare".`, 'MAIL_COMPONENT_NOT_FOUND')
+  }
+
+  return component
+}
+
+function resolveComponentAttributes(context: RenderContext, node: MailTemplateComponentNode): Readonly<Record<string, string>> {
+  const behavior = resolveMailComponentBehavior(node.name)
+  const attributes: Readonly<Record<string, string>> = {
+    ...behavior.defaults,
+    ...Object.fromEntries(Object.entries(node.attributes).map(([name, value]) => [name, renderAttributeValue(context, value)])),
+  }
+  const invalidUrlAttribute = behavior.urlAttributes.find(name => !isAbsoluteHttpUrl(attributes[name] ?? ''))
+  if (invalidUrlAttribute) {
+    throw new MailError(
+      `[@holo-js/mail] Mail component "${node.name}" in Mail template "${context.template}" requires an absolute http or https "${invalidUrlAttribute}".`,
+      'MAIL_COMPONENT_INVALID',
+    )
+  }
+
+  return attributes
+}
+
+function renderSlot(context: RenderContext, node: MailTemplateComponentNode): string {
+  const source = renderNodes(context, node.children).trim()
+  if (context.format === 'text') return source
+  return resolveMailComponentBehavior(node.name).slot === 'inline' ? renderMarkdownInline(source) : renderMarkdown(source)
+}
+
+function renderComponent(context: RenderContext, node: MailTemplateComponentNode): string {
+  const component = resolveComponent(context, node.name)
+  const data: MailJsonObject = {
+    ...resolveComponentAttributes(context, node),
+    slot: renderSlot(context, node),
+  }
+
+  return renderNodes({ ...context, template: `components/${node.name}`, data, loops: [] }, component[context.format])
+}
+
 function renderLoop(context: RenderContext, node: Extract<MailTemplateNode, { readonly type: 'foreach' }>): string {
   const items = resolveDataPath(context, node.path)
   if (!Array.isArray(items)) throw invalidDataError(context, 'a list', node.path)
@@ -492,16 +719,22 @@ function renderLoop(context: RenderContext, node: Extract<MailTemplateNode, { re
 function renderNode(context: RenderContext, node: MailTemplateNode): string {
   if (node.type === 'text') return node.value
   if (node.type === 'output') return renderOutput(context, node.path, node.escaped)
+  if (node.type === 'component') return renderComponent(context, node)
   if (node.type === 'if') return renderNodes(context, resolveDataPath(context, node.path) ? node.then : node.otherwise)
   if (node.type === 'foreach') return renderLoop(context, node)
-  return renderMailTemplate(context.registry, node.template, context.data)
+  return renderMailTemplate(context.registry, node.template, context.data, context.format)
 }
 
 function renderNodes(context: RenderContext, nodes: readonly MailTemplateNode[]): string {
   return nodes.map(node => renderNode(context, node)).join('')
 }
 
-export function renderMailTemplate(registry: CompiledMailRegistry, name: string, data: MailJsonObject): string {
+export function renderMailTemplate(
+  registry: CompiledMailRegistry,
+  name: string,
+  data: MailJsonObject,
+  format: MailTemplateFormat,
+): string {
   const template = Object.hasOwn(registry.templates, name) ? registry.templates[name] : undefined
   if (!template) {
     throw new MailError(
@@ -510,5 +743,5 @@ export function renderMailTemplate(registry: CompiledMailRegistry, name: string,
     )
   }
 
-  return renderNodes({ registry, template: name, data, loops: [] }, template.nodes)
+  return renderNodes({ registry, template: name, format, data, loops: [] }, template.nodes)
 }

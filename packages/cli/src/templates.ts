@@ -230,6 +230,7 @@ export function renderMarkdownMailTemplate(mailName: string, inputTypeName: stri
     `export type ${inputTypeName} = {`,
     '  readonly to: string',
     '  readonly name: string',
+    '  readonly url: string',
     '}',
     '',
     `function ${mailName}(input: ${inputTypeName}) {`,
@@ -239,6 +240,7 @@ export function renderMarkdownMailTemplate(mailName: string, inputTypeName: stri
     `    markdown: '${templateName}',`,
     '    data: {',
     '      name: input.name,',
+    '      url: input.url,',
     '    },',
     '  })',
     '}',
@@ -255,6 +257,10 @@ export function renderMailTemplateMarkdown(): string {
     'Hello {{ name }},',
     '',
     'Your mail is ready.',
+    '',
+    '<mail::button url="{{ url }}">',
+    'Get Started',
+    '</mail::button>',
     '',
   ].join('\n')
 }
