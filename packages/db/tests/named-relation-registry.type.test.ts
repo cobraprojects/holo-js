@@ -42,14 +42,11 @@ it('types eager loads that walk a cycle of models related by name', () => {
 it('accepts a model loaded through a relation where the model itself is expected', async () => {
   if (false) {
     const reward = await NamedRelationReward.query().with('tenant', 'allocations').firstOrFail()
-    const tenant: Awaited<ReturnType<typeof NamedRelationTenant.findOrFail>> = reward.tenant!
-    const allocation: Awaited<ReturnType<typeof NamedRelationAllocation.findOrFail>> = reward.allocations[0]!
     const allocated = await NamedRelationAllocation.query().with('reward').firstOrFail()
-    const allocatedReward: Awaited<ReturnType<typeof NamedRelationReward.findOrFail>> = allocated.reward!
 
-    expectTypeOf(tenant).not.toBeAny()
-    expectTypeOf(allocation).not.toBeAny()
-    expectTypeOf(allocatedReward).not.toBeAny()
+    expectTypeOf(reward.tenant!).toEqualTypeOf<Awaited<ReturnType<typeof NamedRelationTenant.findOrFail>>>()
+    expectTypeOf(reward.allocations[0]!).toEqualTypeOf<Awaited<ReturnType<typeof NamedRelationAllocation.findOrFail>>>()
+    expectTypeOf(allocated.reward!).toEqualTypeOf<Awaited<ReturnType<typeof NamedRelationReward.findOrFail>>>()
   }
 })
 
