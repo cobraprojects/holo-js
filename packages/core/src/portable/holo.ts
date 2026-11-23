@@ -1678,6 +1678,7 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
       ...existingMailBindings,
       config: loadedConfig.mail,
       compiled: (await loadGeneratedProjectRegistry(projectRoot))?.mail,
+      app: { name: loadedConfig.app.name, url: loadedConfig.app.url },
       environment: loadedConfig.environment.name,
       projectRoot,
       plugins: loadedConfig.app.plugins,
