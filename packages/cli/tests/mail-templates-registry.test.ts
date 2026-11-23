@@ -26,10 +26,14 @@ async function createProject(): Promise<string> {
   return root
 }
 
-async function writeTemplate(root: string, name: string, source: string): Promise<void> {
-  const filePath = join(root, 'server/mail/templates', `${name}.md`)
+async function writeMailFile(root: string, path: string, source: string): Promise<void> {
+  const filePath = join(root, 'server/mail', path)
   await mkdir(dirname(filePath), { recursive: true })
   await writeFile(filePath, source, 'utf8')
+}
+
+async function writeTemplate(root: string, name: string, source: string): Promise<void> {
+  await writeMailFile(root, `templates/${name}.md`, source)
 }
 
 function typeErrors(root: string, fileName: string): string[] {
@@ -84,6 +88,35 @@ export const missing = defineMail({ to: 'ava@example.com', subject: 'Shipped', m
 export const date = defineMail({ to: 'ava@example.com', subject: 'Shipped', markdown: 'orders/shipped', data: { order: { id: new Date() }, customer: { name: 'Ava' } } })
 `, 'utf8')
     expect(typeErrors(root, 'check-mail-errors.ts')).toHaveLength(3)
+  })
+
+  it('compiles the app Mail layouts and Mail themes into the generated registry and types theme names', async () => {
+    const root = await createProject()
+    await writeMailFile(root, 'layout.html', '<main>{!! body !!}</main>')
+    await writeMailFile(root, 'layout.txt', '{{ app.name }}\n\n{!! body !!}')
+    await writeMailFile(root, 'themes/default.css', 'h1 { color: red; }')
+    await writeMailFile(root, 'themes/receipt.css', 'h1 { color: blue; }')
+
+    const registry = await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    expect(Object.keys(registry.mail?.layouts ?? {})).toEqual(['html', 'text'])
+    expect(registry.mail?.themes).toEqual({ default: 'h1 { color: red; }', receipt: 'h1 { color: blue; }' })
+
+    await writeFile(join(root, 'check-theme.ts'), `
+import { defineMailConfig } from '@holo-js/mail'
+
+export const config = defineMailConfig({ markdown: { theme: 'receipt' } })
+export const typo = defineMailConfig({ markdown: { theme: 'reciept' } })
+`, 'utf8')
+    expect(typeErrors(root, 'check-theme.ts')).toHaveLength(1)
+  })
+
+  it('fails prepare on a Mail layout syntax error', async () => {
+    const root = await createProject()
+    await writeMailFile(root, 'layout.html', '<main>\n{!! body </main>')
+
+    await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig()))
+      .rejects.toThrow('Mail template "layout.html" line 2: "{!!" is not closed with "!!}".')
   })
 
   it('fails prepare on a Mail template syntax error', async () => {

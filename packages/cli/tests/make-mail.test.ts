@@ -95,7 +95,7 @@ describe('holo make:mail', () => {
       compiled: (await loadGeneratedProjectRegistry(root))?.mail,
     })
     await sendMail({ to: 'ava@example.com', subject: 'Welcome', markdown: 'order-shipped', data: { name: 'Ava' } })
-    expect(listFakeSentMails()[0]?.mail.html).toBe('<h1>Welcome</h1>\n<p>Hello Ava,</p>\n<p>Your mail is ready.</p>')
+    expect(listFakeSentMails()[0]?.mail.html).toMatch(/<h1[^>]*>Welcome<\/h1>\s*<p[^>]*>Hello Ava,<\/p>\s*<p[^>]*>Your mail is ready\.<\/p>/)
   })
 
   it('names the Mail template with --markdown and rejects unsafe template names', async () => {

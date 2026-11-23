@@ -3,25 +3,36 @@ import { relative, resolve } from 'node:path'
 import type { CompiledMailRegistry, MailTemplateDataShape } from '@holo-js/mail/templates'
 import { collectFiles } from './discovery-helpers'
 import { loadMailTemplatesModule } from './runtime'
-import { MAIL_TEMPLATES_ROOT, toPosixPath } from './shared'
+import { MAIL_ROOT, MAIL_TEMPLATES_ROOT, MAIL_THEMES_ROOT, pathExists, toPosixPath } from './shared'
 
 const MAIL_TEMPLATE_FILE_PATTERN = /\.md$/
+const MAIL_THEME_FILE_PATTERN = /\.css$/
 
-function deriveMailTemplateName(templatesRoot: string, filePath: string): string {
-  return toPosixPath(relative(templatesRoot, filePath)).replace(MAIL_TEMPLATE_FILE_PATTERN, '')
+async function readNamedFiles(root: string, pattern: RegExp): Promise<Record<string, string>> {
+  const files = await collectFiles(root, pattern)
+  const entries = await Promise.all(files.map(async filePath => {
+    return [toPosixPath(relative(root, filePath)).replace(pattern, ''), await readFile(filePath, 'utf8')] as const
+  }))
+  return Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right)))
+}
+
+async function readOptionalFile(filePath: string): Promise<string | undefined> {
+  return await pathExists(filePath) ? await readFile(filePath, 'utf8') : undefined
 }
 
 export async function discoverMailRegistry(projectRoot: string): Promise<CompiledMailRegistry | undefined> {
-  const templatesRoot = resolve(projectRoot, MAIL_TEMPLATES_ROOT)
-  const files = await collectFiles(templatesRoot, MAIL_TEMPLATE_FILE_PATTERN)
-  if (files.length === 0) return undefined
+  const templates = await readNamedFiles(resolve(projectRoot, MAIL_TEMPLATES_ROOT), MAIL_TEMPLATE_FILE_PATTERN)
+  const themes = await readNamedFiles(resolve(projectRoot, MAIL_THEMES_ROOT), MAIL_THEME_FILE_PATTERN)
+  const html = await readOptionalFile(resolve(projectRoot, MAIL_ROOT, 'layout.html'))
+  const text = await readOptionalFile(resolve(projectRoot, MAIL_ROOT, 'layout.txt'))
+  const layouts = {
+    ...(typeof html === 'string' ? { html } : {}),
+    ...(typeof text === 'string' ? { text } : {}),
+  }
+  if ([templates, themes, layouts].every(section => Object.keys(section).length === 0)) return undefined
 
-  const entries = await Promise.all(files.map(async filePath => {
-    return [deriveMailTemplateName(templatesRoot, filePath), await readFile(filePath, 'utf8')] as const
-  }))
-  const templates = Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right)))
   const { compileMailRegistry } = await loadMailTemplatesModule(projectRoot)
-  return compileMailRegistry({ templates })
+  return compileMailRegistry({ templates, layouts, themes })
 }
 
 export function renderMailTemplateDataType(shape: MailTemplateDataShape): string {
