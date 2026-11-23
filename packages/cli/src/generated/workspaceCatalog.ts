@@ -80,6 +80,7 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "ioredis": "^6.0.0",
   "jiti": "^2.6.1",
   "magic-string": "^1.4.5",
+  "markdown-it": "^15.0.3",
   "minimatch": "^11.0.3",
   "mysql2": "^3.24.6",
   "next": "^16.4.6",
