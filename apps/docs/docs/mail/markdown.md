@@ -167,6 +167,56 @@ A button's `url` must be an absolute `http:` or `https:` URL. Sending a mail who
 
 Components are part of the template, not of `data`: a value that contains `<mail::button>` is output as escaped text and never creates a component. An unknown component tag, such as `<mail::buton>`, fails `holo prepare` with the template name and line.
 
+### Adding components
+
+Add your own component with `server/mail/components/<name>.html`. The file name is the tag name, so `alert.html` adds `<mail::alert>`. A component file uses the same placeholders and directives as a Mail template, but it is HTML, not Markdown. It receives each attribute of the tag as a value, and the rendered content of the tag as `slot`:
+
+```html [server/mail/components/alert.html]
+<table class="alert alert-{{ type }}" width="100%" cellpadding="0" cellspacing="0" role="presentation">
+<tr>
+<td>
+{!! slot !!}
+</td>
+</tr>
+</table>
+```
+
+```md [server/mail/templates/billing/expiring.md]
+<mail::alert type="warning">
+Your plan expires on **{{ date }}**.
+</mail::alert>
+```
+
+`slot` is HTML that Holo already rendered from the tag's Markdown content, so output it with `{!! slot !!}`. Output attributes with `{{ }}`, as `{{ type }}` does above, so they are escaped. An attribute the tag doesn't set is missing, so check optional attributes with `@if` before you output them.
+
+Add `server/mail/components/<name>.txt` for the component's plain-text form. It receives the same values, and its `slot` is the content's Markdown, which the plain-text part turns into plain text:
+
+```txt [server/mail/components/alert.txt]
+WARNING: {!! slot !!}
+```
+
+A component without a `.txt` file shows its content as plain text in the plain-text part. Style a component's classes in your [Mail theme](/mail/layouts-and-themes#themes).
+
+Component names start with a lowercase letter and use letters, digits, `-`, and `_`. Components can use other components, but a component that uses itself, directly or through other components, fails `holo prepare`.
+
+### Overriding components
+
+A component file named after a built-in component replaces it. For example, `server/mail/components/button.html` replaces the button's HTML. It receives `url`, `color` (`primary` when the tag doesn't set it), and the label as `slot`:
+
+```html [server/mail/components/button.html]
+<table class="action" align="center" width="100%" cellpadding="0" cellspacing="0" role="presentation">
+<tr>
+<td align="center">
+<a href="{{ url }}" class="button button-{{ color }}" target="_blank" rel="noopener">{!! slot !!}</a>
+</td>
+</tr>
+</table>
+```
+
+The HTML and plain-text forms are independent. A `button.html` without a `button.txt` keeps the built-in `Label: URL` text, and a `button.txt` without a `button.html` keeps the built-in HTML. An overridden button still requires an absolute `http:` or `https:` `url`.
+
+`holo prepare` compiles your component files into the generated registry together with your Mail templates, and makes their tags valid in templates and layouts. `holo dev` recompiles them when you save; after changing them outside `holo dev`, run `npx holo prepare`.
+
 ## Supported syntax
 
 Holo renders Markdown with [CommonMark](https://commonmark.org) plus GitHub-style tables.
