@@ -135,6 +135,16 @@ describe('App Mail components', () => {
     expect(mail?.text).toBe('Check it\n\nSee you soon.')
   })
 
+  it('compiles components that reference each other only across HTML and text forms', async () => {
+    const mail = await sendWithComponents(
+      '<mail::alert>Hi</mail::alert>',
+      { alert: { html: '<mail::box>{!! slot !!}</mail::box>', text: '{!! slot !!}' }, box: { html: '<div>{!! slot !!}</div>', text: '<mail::alert>{!! slot !!}</mail::alert>' } },
+    )
+
+    expect(mail.html).toBe('<div><p>Hi</p></div>')
+    expect(mail.text).toBe('Hi')
+  })
+
   it.each([
     ['a component', { welcome: '<mail::notice>Hi</mail::notice>' }, 'welcome -> <mail::notice> -> welcome'],
     ['an included template', { welcome: '@include (partials/body)', 'partials/body': '<mail::notice>Hi</mail::notice>' }, 'welcome -> partials/body -> <mail::notice> -> welcome'],

@@ -91,17 +91,34 @@ function findReferenceCycle(graph: MailReferenceGraph): readonly string[] | unde
   return undefined
 }
 
-function componentReferenceGraph(components: Readonly<Record<string, CompiledMailComponent>>): Map<string, MailReferenceNode> {
+const MAIL_TEMPLATE_FORMATS: readonly MailTemplateFormat[] = ['html', 'text']
+
+function componentReferenceGraph(
+  components: Readonly<Record<string, CompiledMailComponent>>,
+  format: MailTemplateFormat,
+): Map<string, MailReferenceNode> {
   return new Map(Object.entries(components).map(([name, component]) => {
-    return [componentReferenceKey(name), { name, nodes: [...component.html, ...component.text] }]
+    return [componentReferenceKey(name), { name, nodes: component[format] }]
   }))
 }
 
-function assertNoComponentCycles(components: Readonly<Record<string, CompiledMailComponent>>): void {
-  const graph = componentReferenceGraph(components)
-  const cycle = findReferenceCycle(graph)?.map(key => graph.get(key)?.name ?? key)
-  if (!cycle) return
+function findFormatReferenceCycle(graphForFormat: (format: MailTemplateFormat) => MailReferenceGraph): {
+  readonly graph: MailReferenceGraph
+  readonly cycle: readonly string[]
+} | undefined {
+  for (const format of MAIL_TEMPLATE_FORMATS) {
+    const graph = graphForFormat(format)
+    const cycle = findReferenceCycle(graph)
+    if (cycle) return { graph, cycle }
+  }
+  return undefined
+}
 
+function assertNoComponentCycles(components: Readonly<Record<string, CompiledMailComponent>>): void {
+  const found = findFormatReferenceCycle(format => componentReferenceGraph(components, format))
+  if (!found) return
+
+  const cycle = found.cycle.map(key => found.graph.get(key)?.name ?? key)
   throw new MailError(
     `[@holo-js/mail] Mail component "${cycle[0]}" creates a component cycle: ${cycle.join(' -> ')}.`,
     'MAIL_TEMPLATE_SYNTAX',
@@ -112,15 +129,14 @@ function assertNoTemplateComponentCycles(
   templates: Readonly<Record<string, ParsedTemplateSyntax>>,
   components: Readonly<Record<string, CompiledMailComponent>>,
 ): void {
-  const graph = new Map([
+  const found = findFormatReferenceCycle(format => new Map([
     ...Object.entries(templates).map(([name, template]) => [name, { name, nodes: template.nodes }] as const),
-    ...componentReferenceGraph(components),
-  ])
-  const cycle = findReferenceCycle(graph)
-  if (!cycle) return
+    ...componentReferenceGraph(components, format),
+  ]))
+  if (!found) return
 
   throw new MailError(
-    `[@holo-js/mail] Mail template "${cycle[0]}" creates a cycle through Mail components: ${cycle.join(' -> ')}.`,
+    `[@holo-js/mail] Mail template "${found.cycle[0]}" creates a cycle through Mail components: ${found.cycle.join(' -> ')}.`,
     'MAIL_TEMPLATE_SYNTAX',
   )
 }
