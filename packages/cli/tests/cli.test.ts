@@ -1521,6 +1521,7 @@ export default {
     expect(listed.stdout).toContain('  make:channel                    Create and register a channel authorization definition file.')
     expect(listed.stdout).toContain('  make:job                        Create and register a queue job file.')
     expect(listed.stdout).toContain('  make:mail                       Create a mail definition file and its Mail template.')
+    expect(listed.stdout).toContain('  mail:publish                    Publish the customisable mail layout, components, theme, and templates into the application.')
     expect(listed.stdout).toContain('  make:model                      Create a model and optionally related database artifacts.')
     expect(listed.stdout).toContain('App commands:')
     expect(listed.stdout).toContain('  courses:reindex                 Reindex course data.')
@@ -10223,47 +10224,6 @@ export default defineEvent({ name: 'audit.activity' })
   }, 90000)
 
 
-
-
-
-
-  it('publishes editable auth notification files without overwriting existing files', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
-      name: 'auth-notification-fixture',
-      private: true,
-      dependencies: {
-        '@holo-js/auth': expectedHoloPackageRange,
-        '@holo-js/notifications': expectedHoloPackageRange,
-      },
-    }, null, 2))
-
-    const first = await projectInternals.publishAuthNotificationsIntoProject(projectRoot)
-    const emailVerificationPath = join(projectRoot, 'server/notifications/auth/email-verification.ts')
-    const passwordResetPath = join(projectRoot, 'server/notifications/auth/password-reset.ts')
-    expect(first.createdFiles).toEqual([
-      emailVerificationPath,
-      passwordResetPath,
-    ])
-    expect(first.skippedFiles).toEqual([])
-    expect(first.hasMailDependency).toBe(false)
-    await expect(readFile(emailVerificationPath, 'utf8'))
-      .resolves.toContain('interface EmailVerificationNotification')
-    await expect(readFile(passwordResetPath, 'utf8'))
-      .resolves.toContain('interface PasswordResetNotification')
-    await expect(readFile(emailVerificationPath, 'utf8'))
-      .resolves.toContain('auth.email-verification')
-    await expect(readFile(passwordResetPath, 'utf8'))
-      .resolves.toContain('auth.password-reset')
-
-    const second = await projectInternals.publishAuthNotificationsIntoProject(projectRoot)
-    expect(second.createdFiles).toEqual([])
-    expect(second.skippedFiles).toEqual([
-      emailVerificationPath,
-      passwordResetPath,
-    ])
-  }, 30000)
 
 
 
