@@ -1551,7 +1551,9 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   options: OptionalSubsystemsOptions = {},
 ): Promise<OptionalSubsystemsResult> {
   assertOutsidePluginBoot('Holo optional subsystem reconfiguration')
-  const optionalSubsystems = await runOptionalSubsystemsSerially(() => configureOptionalHoloSubsystems(projectRoot, loadedConfig, options))
+  const optionalSubsystems = await runOptionalSubsystemsSerially(async () => {
+    return configureOptionalHoloSubsystems(projectRoot, loadedConfig, await loadGeneratedProjectRegistry(projectRoot), options)
+  })
   await bootHoloPluginModules(projectRoot, loadedConfig)
   return optionalSubsystems
 }
@@ -1618,6 +1620,7 @@ async function bootHoloPluginModules<TCustom extends HoloConfigMap>(
 async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
+  registry: GeneratedProjectRegistry | undefined,
   options: OptionalSubsystemsOptions,
 ): Promise<OptionalSubsystemsResult> {
   const cacheConfigured = hasLoadedConfigFile(loadedConfig, 'cache')
@@ -1674,7 +1677,7 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
     mailModule.configureMailRuntime({
       ...existingMailBindings,
       config: loadedConfig.mail,
-      compiled: (await loadGeneratedProjectRegistry(projectRoot))?.mail,
+      compiled: registry?.mail,
       app: { name: loadedConfig.app.name, url: loadedConfig.app.url },
       environment: loadedConfig.environment.name,
       projectRoot,
@@ -2097,7 +2100,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   let servicesBooting = false
 
   const configureRuntimeSubsystems = async (subsystemOptions: HoloRuntimeReconfigureOptions): Promise<OptionalSubsystemsResult> => {
-    const optionalSubsystems = await configureOptionalHoloSubsystems(projectRoot, loadedConfig, {
+    const optionalSubsystems = await configureOptionalHoloSubsystems(projectRoot, loadedConfig, registry, {
       authContext: activeAuthContext,
       renderView: subsystemOptions.renderView,
       authRequest: subsystemOptions.authRequest,
