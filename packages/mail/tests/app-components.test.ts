@@ -177,6 +177,16 @@ describe('App Mail components', () => {
       'Mail template "components/alert.html" line 1: <mail::bx> is not a Mail component.',
     ],
     [
+      'an include of a missing Mail template inside a component HTML form',
+      { notice: { html: '<div>{!! slot !!}</div>\n\n@include (partials/missing)' } },
+      'Mail template "components/notice.html" line 3: "@include (partials/missing)" names a Mail template that does not exist.',
+    ],
+    [
+      'an include of a missing Mail template inside a component text form',
+      { notice: { html: '<div>{!! slot !!}</div>', text: '{!! slot !!}\n@include (partials/missing)' } },
+      'Mail template "components/notice.txt" line 2: "@include (partials/missing)" names a Mail template that does not exist.',
+    ],
+    [
       'a component name that cannot be used as a tag',
       { Alert: { html: '{!! slot !!}' } },
       '"Alert" is not a Mail component name. Start it with a lowercase letter and use letters, digits, "-" and "_".',

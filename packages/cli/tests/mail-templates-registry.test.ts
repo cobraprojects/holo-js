@@ -384,6 +384,31 @@ export const level = { subject: 'Hi', level: 'warning' } satisfies NotificationM
       .rejects.toThrow('Mail template "welcome" creates a cycle through Mail components: welcome -> <mail::notice> -> welcome.')
   })
 
+  it('fails prepare when an app Mail component includes a missing Mail template', async () => {
+    const root = await createProject()
+    await writeMailFile(root, 'components/notice.html', '<div>{!! slot !!}</div>\n\n@include (partials/missing)')
+    await writeTemplate(root, 'welcome', '<mail::notice>Hi</mail::notice>')
+
+    await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig()))
+      .rejects.toThrow('Mail template "components/notice.html" line 3: "@include (partials/missing)" names a Mail template that does not exist.')
+  })
+
+  it('renders a Mail template included from an app Mail component after prepare', async () => {
+    const root = await createProject()
+    await writeMailFile(root, 'components/notice.html', '<div>{!! slot !!}</div>\n\n@include (partials/footer)')
+    await writeTemplate(root, 'partials/footer', 'See you soon.')
+    await writeTemplate(root, 'welcome', '<mail::notice>Hi</mail::notice>')
+
+    const registry = await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+    configureMailRuntime({
+      config: normalizeMailConfig({ default: 'fake', from: { email: 'noreply@example.com' }, mailers: { fake: { driver: 'fake' } } }),
+      compiled: registry.mail,
+    })
+
+    expect((await previewMail({ to: 'ava@example.com', subject: 'Welcome', markdown: 'welcome' })).html)
+      .toMatch(/<div[^>]*><p[^>]*>Hi<\/p><\/div>\s*<p[^>]*>See you soon\.<\/p>/)
+  })
+
   it('fails prepare on an unknown Mail component tag', async () => {
     const root = await createProject()
     await writeTemplate(root, 'welcome', '# Welcome\n\n<mail::buton url="https://example.test">Open</mail::buton>')
