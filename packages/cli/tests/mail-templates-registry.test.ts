@@ -189,6 +189,28 @@ export const date = defineMail({ to: 'a@example.com', subject: 'R', markdown: 'o
     expect(typeErrors(root, 'check-mail-errors.ts')).toHaveLength(4)
   })
 
+  it('types nested @foreach loops as lists of lists', async () => {
+    const root = await createProject()
+    await writeTemplate(root, 'grid', '@foreach (rows as row)\n@foreach (row as cell)\n{{ cell }}\n@endforeach\n@endforeach')
+
+    await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    await writeFile(join(root, 'check-mail.ts'), `
+import { defineMail } from '@holo-js/mail'
+
+const rows: readonly (readonly (string | number)[])[] = [['a', 1], []]
+export const grid = defineMail({ to: 'ava@example.com', subject: 'Grid', markdown: 'grid', data: { rows } })
+`, 'utf8')
+    expect(typeErrors(root, 'check-mail.ts')).toEqual([])
+
+    await writeFile(join(root, 'check-mail-errors.ts'), `
+import { defineMail } from '@holo-js/mail'
+
+export const flat = defineMail({ to: 'ava@example.com', subject: 'Grid', markdown: 'grid', data: { rows: ['a'] } })
+`, 'utf8')
+    expect(typeErrors(root, 'check-mail-errors.ts')).toHaveLength(1)
+  })
+
   it('types the loop item paths of a template included inside @foreach as the item shape', async () => {
     const root = await createProject()
     await writeTemplate(root, 'orders/shipped', '# Order {{ order.id }}\n\n@foreach (order.lines as line)\n@include (partials/line)\n@endforeach')

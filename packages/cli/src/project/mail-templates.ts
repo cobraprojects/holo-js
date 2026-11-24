@@ -87,7 +87,7 @@ export function usesMailJsonValue(shape: MailTemplateDataShape): boolean {
 
 function renderListItemType(shape: MailTemplateDataShape): string {
   const item = renderMailTemplateDataType(shape)
-  return shape.kind === 'value' ? `(${item})` : item
+  return shape.kind === 'value' || shape.kind === 'list' ? `(${item})` : item
 }
 
 export function renderMailTemplateDataType(shape: MailTemplateDataShape): string {
