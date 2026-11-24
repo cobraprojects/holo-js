@@ -136,6 +136,13 @@ function assertNoComponentCycles(components: Readonly<Record<string, CompiledMai
   )
 }
 
+function startCycleAtTemplate(cycle: readonly string[], templates: Readonly<Record<string, ParsedTemplateSyntax>>): readonly string[] {
+  const keys = cycle.slice(0, -1)
+  const start = keys.findIndex(key => Object.hasOwn(templates, key))
+  const rotated = [...keys.slice(start), ...keys.slice(0, start)]
+  return [...rotated, ...rotated.slice(0, 1)]
+}
+
 function assertNoTemplateComponentCycles(
   templates: Readonly<Record<string, ParsedTemplateSyntax>>,
   components: Readonly<Record<string, CompiledMailComponent>>,
@@ -146,8 +153,9 @@ function assertNoTemplateComponentCycles(
   ]))
   if (!found) return
 
+  const cycle = startCycleAtTemplate(found.cycle, templates)
   throw new MailError(
-    `[@holo-js/mail] Mail template "${found.cycle[0]}" creates a cycle through Mail components: ${found.cycle.join(' -> ')}.`,
+    `[@holo-js/mail] Mail template "${cycle[0]}" creates a cycle through Mail components: ${cycle.join(' -> ')}.`,
     'MAIL_TEMPLATE_SYNTAX',
   )
 }

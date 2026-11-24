@@ -164,6 +164,14 @@ describe('App Mail components', () => {
       .toThrow(`Mail template "welcome" creates a cycle through Mail components: ${cycle}.`)
   })
 
+  it('names the Mail template that starts a cycle reached through a Mail component', () => {
+    const templates = { welcome: '<mail::notice>Hi</mail::notice>', 'partials/body': '<mail::notice>Again</mail::notice>' }
+    const components = { notice: { html: '<div>{!! slot !!}</div>\n\n@include (partials/body)' } }
+
+    expect(() => compileMailRegistry({ templates, components }))
+      .toThrow('Mail template "partials/body" creates a cycle through Mail components: partials/body -> <mail::notice> -> partials/body.')
+  })
+
   it.each([
     [
       'a cycle between app components',
