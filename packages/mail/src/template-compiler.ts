@@ -1,17 +1,13 @@
 import { resolveMailComponentSources, type MailComponentFiles, type MailComponentSource } from './components'
 import { DEFAULT_MAIL_SOURCES } from './defaults'
 import { MailError } from './errors'
-import {
-  collectTemplateData,
-  resolveTemplateData,
-  type MailTemplateDataObjectShape,
-  type ParsedMailTemplate,
-} from './template-data'
+import { resolveTemplateData, type MailTemplateDataObjectShape } from './template-data'
 import {
   childNodeLists,
   parseTemplateSyntax,
   type MailTemplateFormat,
   type MailTemplateNode,
+  type ParsedTemplateSyntax,
 } from './template-syntax'
 
 export interface CompiledMailTemplate {
@@ -38,10 +34,6 @@ export interface MailRegistrySources {
 export const MAIL_LAYOUT_FILE_NAMES: Readonly<Record<MailTemplateFormat, string>> = {
   html: 'layout.html',
   text: 'layout.txt',
-}
-
-function parseMailTemplate(template: string, source: string, components: ReadonlySet<string>): ParsedMailTemplate {
-  return collectTemplateData(template, parseTemplateSyntax(template, source, components))
 }
 
 function compileMailComponent(
@@ -97,16 +89,16 @@ function compileMailComponents(sources: Readonly<Record<string, MailComponentSou
 function compileWithTemplates(
   name: string,
   source: string,
-  parsed: Readonly<Record<string, ParsedMailTemplate>>,
+  parsed: Readonly<Record<string, ParsedTemplateSyntax>>,
   components: ReadonlySet<string>,
 ): CompiledMailTemplate {
-  const template = parseMailTemplate(name, source, components)
-  return Object.freeze({ nodes: template.nodes, data: resolveTemplateData(name, { ...parsed, [name]: template }) })
+  const template = parseTemplateSyntax(name, source, components)
+  return Object.freeze({ nodes: template.nodes, data: resolveTemplateData({ ...parsed, [name]: template })(name) })
 }
 
 function compileMailLayouts(
   layouts: MailRegistrySources['layouts'] = {},
-  parsed: Readonly<Record<string, ParsedMailTemplate>>,
+  parsed: Readonly<Record<string, ParsedTemplateSyntax>>,
   components: ReadonlySet<string>,
 ): CompiledMailRegistry['layouts'] {
   return Object.freeze({
@@ -134,12 +126,13 @@ export function compileMailRegistry(sources: MailRegistrySources): CompiledMailR
   const components = compileMailComponents(resolveMailComponentSources(sources.components ?? {}))
   const componentNames = new Set(Object.keys(components))
   const parsed = Object.fromEntries(Object.entries(sources.templates).map(([name, source]) => {
-    return [name, parseMailTemplate(name, source, componentNames)]
+    return [name, parseTemplateSyntax(name, source, componentNames)]
   }))
+  const templateData = resolveTemplateData(parsed)
 
   return Object.freeze({
     templates: Object.freeze(Object.fromEntries(Object.entries(parsed).map(([name, template]) => {
-      return [name, Object.freeze({ nodes: template.nodes, data: resolveTemplateData(name, parsed) })]
+      return [name, Object.freeze({ nodes: template.nodes, data: templateData(name) })]
     }))),
     components,
     layouts: compileMailLayouts(sources.layouts, parsed, componentNames),

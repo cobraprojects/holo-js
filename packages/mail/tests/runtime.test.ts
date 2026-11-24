@@ -297,19 +297,19 @@ describe('@holo-js/mail runtime', () => {
         .rejects.toThrow('Mail template "fixture" requires a list for "items".')
     })
 
-    it('renders an @include with the parent data', async () => {
+    it('renders an @include with the parent data and the loop items in scope', async () => {
       configureFakeMailerWithTemplates({
         'fixture': '# Order {{ order.id }}\n\n@foreach (order.lines as line)\n@include (partials/summary)\n@endforeach\nThanks!',
-        'partials/summary': 'Total: **{{ order.total }}**\n',
+        'partials/summary': '{{ line.name }} of **{{ order.total }}**\n',
       })
       await sendMail(defineMail({
         to: 'ava@example.com',
         subject: 'Include',
         markdown: 'fixture',
-        data: { order: { id: 7, total: '$12', lines: ['Mug'] } },
+        data: { order: { id: 7, total: '$12', lines: [{ name: 'Mug' }, { name: 'Tea' }] } },
       }))
 
-      expect(listFakeSentMails()[0]?.mail.html).toBe('<h1>Order 7</h1>\n<p>Total: <strong>$12</strong>\nThanks!</p>')
+      expect(listFakeSentMails()[0]?.mail.html).toBe('<h1>Order 7</h1>\n<p>Mug of <strong>$12</strong>\nTea of <strong>$12</strong>\nThanks!</p>')
     })
 
     it('rejects template syntax errors when compiling', () => {

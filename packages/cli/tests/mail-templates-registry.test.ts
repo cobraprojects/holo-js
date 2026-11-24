@@ -182,6 +182,34 @@ export const date = defineMail({ to: 'a@example.com', subject: 'R', markdown: 'o
     expect(typeErrors(root, 'check-mail-errors.ts')).toHaveLength(4)
   })
 
+  it('types the loop item paths of a template included inside @foreach as the item shape', async () => {
+    const root = await createProject()
+    await writeTemplate(root, 'orders/shipped', '# Order {{ order.id }}\n\n@foreach (order.lines as line)\n@include (partials/line)\n@endforeach')
+    await writeTemplate(root, 'partials/line', '- {{ line.name }} x {{ line.quantity }} for {{ customer.name }}')
+
+    await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    await writeFile(join(root, 'check-mail.ts'), `
+import { defineMail } from '@holo-js/mail'
+
+export const shipped = defineMail({
+  to: 'ava@example.com',
+  subject: 'Shipped',
+  markdown: 'orders/shipped',
+  data: { order: { id: 42, lines: [{ name: 'Mug', quantity: 2 }] }, customer: { name: 'Ava' } },
+})
+`, 'utf8')
+    expect(typeErrors(root, 'check-mail.ts')).toEqual([])
+
+    await writeFile(join(root, 'check-mail-errors.ts'), `
+import { defineMail } from '@holo-js/mail'
+
+export const badItem = defineMail({ to: 'a@example.com', subject: 'S', markdown: 'orders/shipped', data: { order: { id: 1, lines: [{ name: 'Mug' }] }, customer: { name: 'Ava' } } })
+export const missingRoot = defineMail({ to: 'a@example.com', subject: 'S', markdown: 'orders/shipped', data: { order: { id: 1, lines: [] } } })
+`, 'utf8')
+    expect(typeErrors(root, 'check-mail-errors.ts')).toHaveLength(2)
+  })
+
   it('fails prepare on an include cycle', async () => {
     const root = await createProject()
     await writeTemplate(root, 'orders/shipped', '# Shipped\n\n@include (partials/summary)')

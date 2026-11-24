@@ -71,7 +71,7 @@ Templates support Blade-style directives. Each takes a dot path or a template na
 | --- | --- |
 | `@if (path)` … `@else` … `@endif` | The first block when the value at `path` is truthy, otherwise the `@else` block. `@else` is optional. |
 | `@foreach (path as name)` … `@endforeach` | The block once for each item of the list at `path`. Inside the block, `name` is the current item. |
-| `@include (name)` | Another Mail template, which sees the same `data`. |
+| `@include (name)` | Another Mail template, which sees the same `data` and the loop items in scope where it is included. |
 
 ```md [server/mail/templates/orders/shipped.md]
 # Order {{ order.number }} shipped
@@ -99,7 +99,7 @@ Questions? Contact us at {{ support.email }}.
 
 A line that holds only a directive leaves no blank line behind, so `@foreach` can produce the rows of a Markdown table. Directives also work inside a line, as long as the `@` doesn't follow a letter, digit, or `_`. Any other `@` word, such as `@holo` or `@media`, is output as written. To output a directive name as text, write `@@`, as in `@@if`. Email addresses such as `help@example.com` need no escaping.
 
-A loop item's name hides a `data` value with the same name inside the loop. An included template always sees the mail's `data`, even inside a loop. An included template can include others, but a template that includes itself, directly or through other templates, fails `holo prepare`.
+A loop item's name hides a `data` value with the same name inside the loop. An included template sees the mail's `data` and, when it is included inside `@foreach`, the loop's current item by its name. An included template can include others, but a template that includes itself, directly or through other templates, fails `holo prepare`.
 
 ## Typed data
 
@@ -108,7 +108,7 @@ A loop item's name hides a `data` value with the same name inside the loop. An i
 - A value used in `{{ }}` or `{!! !!}` must be a `string` or `number`.
 - A value used only in `@if` is optional and can be any JSON value.
 - A value used in `@foreach` must be a list. The shape of its items comes from how the loop uses them: `line.name` in the example above requires items with a `name`.
-- The values an included template uses are required by every template that includes it.
+- The values an included template uses are required by every template that includes it. Inside `@foreach`, the included template's values that start with the loop item's name are part of the item shape: `{{ line.name }}` in a template included in the loop above requires items with a `name`.
 
 An unknown template name, a missing value, or a value of the wrong type is a type error, and your editor autocompletes template names and `data`.
 

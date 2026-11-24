@@ -17,10 +17,6 @@ export interface MailTemplateDataObjectShape {
   readonly properties: Readonly<Record<string, MailTemplateDataShape>>
 }
 
-export interface ParsedMailTemplate extends ParsedTemplateSyntax {
-  readonly data: MailTemplateDataObjectShape
-}
-
 interface LoopShape {
   readonly name: string
   item: MailTemplateDataShape | undefined
@@ -89,13 +85,17 @@ function conflictError(template: string, conflict: DataShapeConflict, path: read
   )
 }
 
+type IncludedTemplateData = (template: string) => MailTemplateDataObjectShape
+
 class TemplateDataCollector {
   readonly #template: string
+  readonly #includedData: IncludedTemplateData
   readonly #loops: LoopShape[] = []
   #data: MailTemplateDataObjectShape = { kind: 'object', properties: {} }
 
-  constructor(template: string) {
+  constructor(template: string, includedData: IncludedTemplateData) {
     this.#template = template
+    this.#includedData = includedData
   }
 
   collect(nodes: readonly MailTemplateNode[]): MailTemplateDataObjectShape {
@@ -125,8 +125,10 @@ class TemplateDataCollector {
         this.#use(node.path, { kind: 'list', item: loop.item ?? JSON_SHAPE })
         return
       }
-      case 'text':
       case 'include':
+        this.#include(this.#includedData(node.template))
+        return
+      case 'text':
     }
   }
 
@@ -142,20 +144,27 @@ class TemplateDataCollector {
       throw error
     }
   }
+
+  #include(included: MailTemplateDataObjectShape): void {
+    for (const [name, shape] of Object.entries(included.properties)) {
+      const loop = findInnermostLoop(this.#loops, name)
+      try {
+        if (loop) loop.item = mergeShapes(loop.item, shape, [name])
+        else this.#data = mergeObjectShapes(this.#data, { kind: 'object', properties: { [name]: shape } }, [])
+      } catch (error) {
+        if (error instanceof DataShapeConflict) throw conflictError(this.#template, error, error.path)
+        throw error
+      }
+    }
+  }
 }
 
-export function collectTemplateData(template: string, syntax: ParsedTemplateSyntax): ParsedMailTemplate {
-  return { ...syntax, data: new TemplateDataCollector(template).collect(syntax.nodes) }
-}
-
-export function resolveTemplateData(
+function assertIncludesResolve(
   template: string,
-  parsed: Readonly<Record<string, ParsedMailTemplate>>,
-  trail: readonly string[] = [],
-): MailTemplateDataObjectShape {
-  const current = parsed[template]!
-  const chain = [...trail, template]
-  return current.includes.reduce((data, include) => {
+  parsed: Readonly<Record<string, ParsedTemplateSyntax>>,
+  chain: readonly string[],
+): void {
+  for (const include of parsed[template]?.includes ?? []) {
     if (!Object.hasOwn(parsed, include.template)) {
       throw new MailTemplateSyntaxError(template, include.line, `"@include (${include.template})" names a Mail template that does not exist.`)
     }
@@ -164,11 +173,23 @@ export function resolveTemplateData(
       throw new MailTemplateSyntaxError(template, include.line, `"@include (${include.template})" creates an include cycle: ${cycle}.`)
     }
 
-    try {
-      return mergeObjectShapes(data, resolveTemplateData(include.template, parsed, chain), [])
-    } catch (error) {
-      if (error instanceof DataShapeConflict) throw conflictError(template, error, error.path)
-      throw error
-    }
-  }, current.data)
+    assertIncludesResolve(include.template, parsed, [...chain, include.template])
+  }
+}
+
+export function resolveTemplateData(
+  parsed: Readonly<Record<string, ParsedTemplateSyntax>>,
+): (template: string) => MailTemplateDataObjectShape {
+  const resolved = new Map<string, MailTemplateDataObjectShape>()
+  const resolve = (template: string): MailTemplateDataObjectShape => {
+    const cached = resolved.get(template)
+    if (cached) return cached
+
+    assertIncludesResolve(template, parsed, [template])
+    const data = new TemplateDataCollector(template, resolve).collect(parsed[template]?.nodes ?? [])
+    resolved.set(template, data)
+    return data
+  }
+
+  return resolve
 }

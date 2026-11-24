@@ -171,12 +171,25 @@ function renderNode(context: RenderContext, node: MailTemplateNode): string {
     case 'component': return renderComponent(context, node)
     case 'if': return renderNodes(context, resolveDataPath(context, node.path) ? node.then : node.otherwise)
     case 'foreach': return renderLoop(context, node)
-    case 'include': return renderMailTemplate(context.registry, node.template, context.data, context.format)
+    case 'include': return renderTemplate({ ...context, template: node.template })
   }
 }
 
 function renderNodes(context: RenderContext, nodes: readonly MailTemplateNode[]): string {
   return nodes.map(node => renderNode(context, node)).join('')
+}
+
+function renderTemplate(context: RenderContext): string {
+  const template = findCompiledEntry(context.registry.templates, context.template)
+    ?? findCompiledEntry(BUILT_IN_COMPILED_MAIL_TEMPLATES, context.template)
+  if (!template) {
+    throw new MailError(
+      `[@holo-js/mail] Mail template "${context.template}" is not registered. Run "holo prepare" after adding it under server/mail/templates.`,
+      'MAIL_TEMPLATE_NOT_FOUND',
+    )
+  }
+
+  return renderNodes(context, template.nodes)
 }
 
 export function renderMailTemplate(
@@ -185,15 +198,7 @@ export function renderMailTemplate(
   data: MailJsonObject,
   format: MailTemplateFormat,
 ): string {
-  const template = findCompiledEntry(registry.templates, name) ?? findCompiledEntry(BUILT_IN_COMPILED_MAIL_TEMPLATES, name)
-  if (!template) {
-    throw new MailError(
-      `[@holo-js/mail] Mail template "${name}" is not registered. Run "holo prepare" after adding it under server/mail/templates.`,
-      'MAIL_TEMPLATE_NOT_FOUND',
-    )
-  }
-
-  return renderNodes({ registry, template: name, format, data, htmlValues: NO_HTML_VALUES, loops: [] }, template.nodes)
+  return renderTemplate({ registry, template: name, format, data, htmlValues: NO_HTML_VALUES, loops: [] })
 }
 
 export function renderMailLayout(registry: CompiledMailRegistry, format: MailTemplateFormat, data: MailJsonObject): string {
