@@ -37,7 +37,7 @@ describe('Auth delivery', () => {
       to: { email: 'ava@example.com', name: 'Ava <&"\'>' },
       subject: 'Verify Email Address',
       markdown: 'notifications/email',
-      data: { ...content, greeting: 'Hello!', level: 'info', actionColor: 'primary', salutation: 'Regards,\\\nHolo App' },
+      data: { ...content, greeting: 'Hello!', level: 'info', actionColor: 'primary', appName: 'Holo App' },
       metadata: { provider: 'users', tokenId: 'token-id' },
     }])
   })
@@ -91,7 +91,7 @@ export default { via() { return ['email'] }, build: { email() { return { subject
       to: { email: 'ava@example.com' },
       subject: 'Reset Password Notification',
       markdown: 'notifications/email',
-      data: { ...content, greeting: 'Hello!', level: 'info', actionColor: 'primary', salutation: 'Regards,\\\nHolo App' },
+      data: { ...content, greeting: 'Hello!', level: 'info', actionColor: 'primary', appName: 'Holo App' },
       metadata: { provider: 'users', tokenId: 'token-id' },
     }])
   })

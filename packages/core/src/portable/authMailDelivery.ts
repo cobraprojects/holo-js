@@ -39,7 +39,8 @@ function createNotificationMailData(message: NotificationMailMessage, appName: s
     ...(message.action ? { action: { label: message.action.label, url: message.action.url } } : {}),
     actionColor: level === 'info' ? 'primary' : level,
     outroLines: (message.outroLines ?? []).map(formatNotificationLine),
-    salutation: message.salutation || `Regards,\\\n${appName}`,
+    ...(message.salutation ? { salutation: message.salutation } : {}),
+    appName,
   }
 }
 
