@@ -9215,6 +9215,38 @@ export default {
     })()
   })
 
+  it('prints every error wrapped in an aggregate command failure', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'server/commands/boot.mjs', `
+export default {
+  description: 'Fails to boot and to roll back.',
+  async run() {
+    const rollbackFailure = new AggregateError(
+      [new Error('cache store disconnect failed'), 'queue driver close failed'],
+      'Multiple runtime contributions failed to dispose.',
+    )
+    throw new AggregateError(
+      [new Error('Entities version mismatch.\\nExpected 2, found 1.'), rollbackFailure],
+      '[Holo Runtime] Initialization and rollback both failed.',
+    )
+  },
+}
+`)
+
+    const io = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['boot'], io.io))).resolves.toBe(1)
+    expect(io.read().stderr).toBe([
+      '[Holo Runtime] Initialization and rollback both failed.',
+      '  - Entities version mismatch.',
+      '    Expected 2, found 1.',
+      '  - Multiple runtime contributions failed to dispose.',
+      '      - cache store disconnect failed',
+      '      - queue driver close failed',
+      '',
+    ].join('\n'))
+  })
+
   it('rejects duplicate app command names and aliases', async () => {
     const duplicateAliasRoot = await createTempProject()
     tempDirs.push(duplicateAliasRoot)
