@@ -149,6 +149,77 @@ describe('Mail components', () => {
     ].join('\n'))
   })
 
+  it('renders components inside directives and directives inside components', async () => {
+    configureFakeMailerWithTemplates({
+      'fixture': [
+        '@foreach (links as link)',
+        '<mail::button url="{{ link.url }}">{{ link.label }}</mail::button>',
+        '',
+        '@endforeach',
+        '<mail::panel>',
+        '@if (paid)',
+        'Paid in full.',
+        '@else',
+        'Payment due.',
+        '@endif',
+        '@include (partials/help)',
+        '</mail::panel>',
+      ].join('\n'),
+      'partials/help': 'Questions? Email **{{ support }}**.\n',
+    })
+    const send = async (paid: boolean): Promise<{ readonly html: string, readonly text: string }> => {
+      resetFakeSentMails()
+      await sendMail(defineMail({
+        to: 'ava@example.com',
+        subject: 'Components',
+        markdown: 'fixture',
+        data: {
+          paid,
+          support: 'help@example.test',
+          links: [
+            { url: 'https://example.test/orders/1', label: 'View Order' },
+            { url: 'https://example.test/invoices/1', label: 'Invoice' },
+          ],
+        },
+      }))
+      const mail = listFakeSentMails()[0]?.mail
+      return { html: mail?.html ?? '', text: mail?.text ?? '' }
+    }
+    const panel = (status: string): string => [
+      '<table class="panel" width="100%" cellpadding="0" cellspacing="0" role="presentation">',
+      '<tr>',
+      '<td class="panel-content">',
+      '<table width="100%" cellpadding="0" cellspacing="0" role="presentation">',
+      '<tr>',
+      '<td class="panel-item">',
+      `<p>${status}\nQuestions? Email <strong>help@example.test</strong>.</p>`,
+      '</td>',
+      '</tr>',
+      '</table>',
+      '</td>',
+      '</tr>',
+      '</table>',
+    ].join('\n')
+
+    const paid = await send(true)
+    const due = await send(false)
+
+    expect(paid.html).toBe([
+      button('https://example.test/orders/1', 'primary', 'View Order'),
+      button('https://example.test/invoices/1', 'primary', 'Invoice'),
+      panel('Paid in full.'),
+    ].join('\n'))
+    expect(due.html).toContain(panel('Payment due.'))
+    expect(paid.text).toBe([
+      'View Order: https://example.test/orders/1',
+      '',
+      'Invoice: https://example.test/invoices/1',
+      '',
+      'Paid in full.',
+      'Questions? Email help@example.test.',
+    ].join('\n'))
+  })
+
   it('does not create components from data values', async () => {
     const mail = await sendTemplate('{{ comment }}', {
       comment: '<mail::button url="https://evil.test">Claim</mail::button>',

@@ -314,14 +314,13 @@ describe('@holo-js/mail runtime', () => {
         .toThrow('Mail template "broken" uses "order.id" both as a value and as an object.')
     })
 
-    it('rejects malformed, unclosed, and unknown directives when compiling', () => {
+    it('rejects malformed and unclosed directives when compiling', () => {
       const failures: readonly (readonly [string, string])[] = [
         ['Hi\n@if (paid)\nPaid', 'line 2: "@if" is not closed with "@endif".'],
         ['@foreach (items as item)\n{{ item }}\n@endif', 'line 3: "@endif" has no matching "@if".'],
         ['@foreach (items as item)\n{{ item }}', 'line 1: "@foreach" is not closed with "@endforeach".'],
         ['@else\n', 'line 1: "@else" has no matching "@if".'],
         ['@if (a)\n@else\n@else\n@endif', 'line 3: "@else" has no matching "@if".'],
-        ['Follow us\n@twitter', 'line 2: "@twitter" is not a Mail template directive.'],
         ['@if paid\n@endif', 'line 1: "@if" needs a data path in parentheses.'],
         ['@if (paid\n)\n@endif', 'line 1: "@if" needs a data path in parentheses.'],
         ['@if (order.total > 10)\n@endif', 'line 1: "order.total > 10" is not a data path.'],
@@ -338,6 +337,14 @@ describe('@holo-js/mail runtime', () => {
 
     it('outputs an escaped @@ directive as literal text', async () => {
       expect((await sendTemplate('Follow @@holo on social media')).html).toBe('<p>Follow @holo on social media</p>')
+      expect((await sendTemplate('Write @@if (paid) to check a value')).html).toBe('<p>Write @if (paid) to check a value</p>')
+    })
+
+    it('outputs an unknown @ word as literal text', async () => {
+      const mail = await sendTemplate('Contact @support today\n@media (max-width: 600px)')
+
+      expect(mail.html).toBe('<p>Contact @support today\n@media (max-width: 600px)</p>')
+      expect(mail.text).toBe('Contact @support today\n@media (max-width: 600px)')
     })
   })
 

@@ -255,12 +255,10 @@ function scanDirective(template: string, source: string, match: RegExpExecArray)
   const afterName = match.index + found.length
   if (escape) return { token: { type: 'text', value: found.slice(1) }, end: afterName }
 
-  const line = lineAt(source, match.index)
   const expected = Object.hasOwn(DIRECTIVE_ARGUMENTS, name) ? DIRECTIVE_ARGUMENTS[name] : undefined
-  if (expected === undefined) {
-    throw new MailTemplateSyntaxError(template, line, `"@${name}" is not a Mail template directive.`)
-  }
+  if (expected === undefined) return { token: { type: 'text', value: found }, end: afterName }
 
+  const line = lineAt(source, match.index)
   if (!expected) {
     return { token: { type: 'directive', name, argument: '', line }, end: skipDirectiveLineBreak(source, afterName) }
   }
