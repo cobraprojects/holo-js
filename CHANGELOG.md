@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Mail: `markdown.securedEncoding` in `config/mail.ts` makes `{{ }}` in Mail templates also escape `[`, `]` and `\`, so values from users, such as a name in a notification greeting, can't add links or images to an email. It is Laravel's `Markdown::withSecuredEncoding()`, keeps HTML escaping, and defaults to `false`; new apps and `holo install mail` set it to `true`. See [secured encoding](apps/docs/docs/mail/markdown.md#secured-encoding) and the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#turn-on-secured-encoding-for-mail-templates).
+
 ### Fixed
 
 - Auth: logging out, stopping impersonation, clearing a signed-out user and starting or finishing multi-factor enrollment change only the guard's own session data, atomically. Before, two requests on the same session could overwrite each other, such as logging out one guard while another stops impersonating, and could drop other session values written meanwhile, such as the CSRF token. Custom session stores must implement `updateData`; see the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#custom-session-stores-need-updatedata).

@@ -43,6 +43,20 @@ Hello {{ name }},
 
 `{{ name }}` escapes HTML in the value. HTML written in the template itself is output as written. Values output through `{{ }}` or `{!! !!}` must be strings or numbers, so format dates before passing them. Lists for `@foreach`, nested objects, and any JSON value tested by `@if` stay valid. Passing Markdown text to `markdown` is now a type error, and sending it throws `Mail template "<text>" is not registered.`
 
+### Turn on secured encoding for Mail templates
+
+Add `markdown: { securedEncoding: true }` to `config/mail.ts`, as new apps now do. Without it, `{{ }}` escapes only HTML, so a value from a user, such as a name of `[Claim your prize](https://example.com)`, becomes a link in your email, as in Laravel by default. With it, `[`, `]`, and `\` in `{{ }}` values are escaped too, so links and images can't come from a value. See [Secured encoding](/mail/markdown#secured-encoding).
+
+```ts [config/mail.ts]
+export default defineMailConfig({
+  markdown: {
+    securedEncoding: true,
+  },
+})
+```
+
+Secured encoding covers `{{ }}` only. Review the files that `holo mail:publish` or `holo auth:notifications:publish` left in your app, such as `server/notifications/auth/email-verification.ts`, `server/notifications/auth/password-reset.ts`, and `server/mail/templates/notifications/email.md`, and any notification that puts user data, such as a name, in `greeting`, `lines`, or `outroLines`: keep that data in `{{ }}` and out of `{!! !!}`.
+
 ### `markdown.wrapper` and `markdownWrapper` are removed
 
 The `markdown.wrapper` option in `config/mail.ts` and the `markdownWrapper` option of `defineMail()` are removed. Delete them; a mail that still sets them no longer typechecks. To change what surrounds every Markdown mail, write a [Mail layout](/mail/layouts-and-themes#custom-layout) instead.

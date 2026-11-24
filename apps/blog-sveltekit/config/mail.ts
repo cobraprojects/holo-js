@@ -9,6 +9,9 @@ export default defineMailConfig({
   preview: {
     allowedEnvironments: ['development'],
   },
+  markdown: {
+    securedEncoding: true,
+  },
   mailers: {
     preview: {
       driver: 'preview',

@@ -7,6 +7,7 @@ import {
   type MailTemplateData,
   type MailTemplateName,
   type MailThemeName,
+  type NormalizedHoloMailConfig,
 } from '../src'
 
 declare module '../src/contracts' {
@@ -113,5 +114,19 @@ describe('@holo-js/mail template typing', () => {
     }
 
     void (0 as unknown as ThemeNameAssertion)
+  })
+
+  it('types markdown.securedEncoding as an optional boolean that normalizes to a boolean', () => {
+    type SecuredEncodingAssertion = Expect<Equal<NormalizedHoloMailConfig['markdown']['securedEncoding'], boolean>>
+
+    if (false) {
+      defineMailConfig({ markdown: { securedEncoding: true } })
+      defineMailConfig({ markdown: { theme: 'receipt', securedEncoding: false } })
+
+      // @ts-expect-error securedEncoding is a boolean.
+      defineMailConfig({ markdown: { securedEncoding: 'true' } })
+    }
+
+    void (0 as unknown as SecuredEncodingAssertion)
   })
 })

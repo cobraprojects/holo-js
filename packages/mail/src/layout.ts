@@ -14,6 +14,7 @@ export interface MarkdownMailContext {
   readonly app: MailAppIdentity
   readonly subject: string
   readonly theme: string
+  readonly securedEncoding: boolean
 }
 
 const THEME_INLINING_OPTIONS = Object.freeze({
@@ -26,15 +27,15 @@ export function renderMarkdownMail(
   template: MailTemplateSelection,
   context: MarkdownMailContext,
 ): { readonly html: string, readonly text: string } {
-  const { registry } = context
+  const { registry, securedEncoding } = context
   const themeCss = resolveMailTheme(registry, context.theme)
   const layoutData = {
     app: { name: context.app.name, url: context.app.url },
     subject: context.subject,
     year: new Date().getFullYear(),
   }
-  const htmlBody = renderMarkdown(renderMailTemplate(registry, template.name, template.data, 'html'))
-  const textBody = renderMarkdownText(renderMailTemplate(registry, template.name, template.data, 'text'))
+  const htmlBody = renderMarkdown(renderMailTemplate(registry, template.name, template.data, 'html', { securedEncoding }))
+  const textBody = renderMarkdownText(renderMailTemplate(registry, template.name, template.data, 'text', { securedEncoding }))
   const html = renderMailLayout(registry, 'html', { ...layoutData, body: htmlBody })
   const text = renderMailLayout(registry, 'text', { ...layoutData, body: escapeUTF8(textBody) })
 
