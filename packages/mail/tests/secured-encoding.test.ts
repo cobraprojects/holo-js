@@ -112,8 +112,8 @@ describe('Mail template secured encoding', () => {
     )
 
     expect(hrefs(mail.html)).toEqual([])
-    expect(mail.html).toContain('<td class="panel-item">\n<p>[Claim your prize](https://evil.test)</p>')
-    expect(mail.html).toContain('<strong>[Claim your prize](https://evil.test)</strong>')
+    expect(mail.html.split(injectedLink)).toHaveLength(3)
+    expect(mail.html).toContain(`<strong>${injectedLink}</strong>`)
     expect(mail.text).toBe('[Claim your prize](https://evil.test)\n\n[Claim your prize](https://evil.test)')
   })
 

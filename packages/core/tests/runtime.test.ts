@@ -3504,17 +3504,26 @@ export default defineAppConfig({ name: 'Runtime App', key: 'base64:key', env: 'd
       return sent
     }
 
-    async function bootNotificationMail(mail?: CompiledMailRegistry): Promise<void> {
+    async function bootNotificationMail(mail?: CompiledMailRegistry, securedEncoding = false): Promise<void> {
       const root = await createProject()
       await writeBaseConfig(root)
-      await writeMailConfig(root)
+      await writeMailConfig(root, `
+import { defineMailConfig } from ${mailPackageEntry}
+
+export default defineMailConfig({
+  default: 'fake',
+  from: { email: 'noreply@app.test', name: 'Runtime App' },
+  markdown: { securedEncoding: ${securedEncoding} },
+  mailers: { fake: { driver: 'fake' } },
+})
+`)
       await writeNotificationsConfig(root)
       if (mail) await writeRegistry(root, { models: [], mail })
       await initializeHolo(root)
     }
 
-    it('greets with Hello! and signs off with Regards and the app name by default', async () => {
-      await bootNotificationMail()
+    it.each([false, true])('greets with Hello! and signs off with Regards and the app name by default (securedEncoding %s)', async (securedEncoding) => {
+      await bootNotificationMail(undefined, securedEncoding)
 
       const sent = await sendEmailNotification({
         subject: 'Invoice paid',

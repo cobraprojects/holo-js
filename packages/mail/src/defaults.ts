@@ -367,7 +367,12 @@ const DEFAULT_NOTIFICATION_MAIL_TEMPLATE = `# {{ greeting }}
 {{ line }}
 
 @endforeach
+@if (salutation)
 {{ salutation }}
+@else
+Regards,<br>
+{{ appName }}
+@endif
 @if (action)
 
 <mail::subcopy>

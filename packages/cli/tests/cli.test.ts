@@ -9249,6 +9249,31 @@ export default {
     ].join('\n'))
   })
 
+  it('prints an aggregate command failure that contains itself without overflowing', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'server/commands/boot.mjs', `
+export default {
+  description: 'Fails with a self-referencing aggregate.',
+  async run() {
+    const dispose = new AggregateError([], 'Dispose failed.')
+    const boot = new AggregateError([dispose], 'Boot failed.')
+    dispose.errors.push(boot)
+    throw boot
+  },
+}
+`)
+
+    const io = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['boot'], io.io))).resolves.toBe(1)
+    expect(io.read().stderr).toBe([
+      'Boot failed.',
+      '  - Dispose failed.',
+      '      - [Circular]',
+      '',
+    ].join('\n'))
+  })
+
   it('rejects duplicate app command names and aliases', async () => {
     const duplicateAliasRoot = await createTempProject()
     tempDirs.push(duplicateAliasRoot)
