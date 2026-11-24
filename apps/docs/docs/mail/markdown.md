@@ -62,7 +62,7 @@ HTML you write in the template itself is output as written, so you can add eleme
 ```
 
 ::: warning
-Placeholders are filled before the Markdown is parsed, and `{{ }}` escapes only HTML. A value is still parsed as Markdown, so a value from a user such as `[Claim your prize](https://example.com)` becomes a link, and `# ` or `*` turn into a heading or emphasis. Don't put values from users where Markdown formatting would matter, such as on a line of their own, or remove Markdown syntax from them before you pass them as `data`.
+Placeholders are filled before the Markdown is parsed. Without [secured encoding](#secured-encoding), `{{ }}` escapes only HTML, so a value from a user such as `[Claim your prize](https://example.com)` becomes a link. With secured encoding, links and images can't come from a value, but `# ` or `*` still turn into a heading or emphasis. Don't put values from users where Markdown formatting would matter, such as on a line of their own, or remove Markdown syntax from them before you pass them as `data`.
 :::
 
 ## Conditions, loops, and includes
@@ -252,6 +252,22 @@ Holo renders Markdown with [CommonMark](https://commonmark.org) plus GitHub-styl
 ## Safety
 
 `{{ }}` escapes HTML in values, so it's safe for values that come from users, like names. As in Laravel, Markdown links and images with a `javascript:`, `vbscript:`, `file:`, or `data:` URL lose their URL, in any letter case: such a link renders as `<a>` without an `href`, and such an image renders with an empty `src`. `data:image/png`, `data:image/gif`, `data:image/jpeg`, and `data:image/webp` URLs are kept. Every other URL, such as `https:`, `mailto:`, `tel:`, or a relative path, renders as written. HTML tags you write in a template are output as written, so their URLs aren't checked.
+
+### Secured encoding
+
+Set `markdown.securedEncoding` to `true` in `config/mail.ts` so values from users can't add links or images to your email. New apps and `holo install mail` set it for you. It defaults to `false`, as in Laravel.
+
+```ts [config/mail.ts]
+export default defineMailConfig({
+  markdown: {
+    securedEncoding: true,
+  },
+})
+```
+
+With it on, `{{ }}` also escapes `[`, `]`, and `\` in every Mail template, including the notification email template and the attributes and content of Mail components. A value such as `[Claim your prize](https://example.com)` or `![](https://example.com/pixel.png)` then shows as written, in both the HTML and the plain-text part, instead of becoming a link or an image. HTML is still escaped. `{!! !!}` outputs values exactly as given either way, and URLs in `{{ }}`, such as a `<mail::button>` `url` with `[` or a query string, keep working. The Mail layout isn't affected, because it isn't parsed as Markdown.
+
+This is Laravel's `Markdown::withSecuredEncoding()`. Laravel's secured mode escapes `[`, `<`, and `>` in place of HTML escaping; Holo keeps escaping HTML and also escapes `]` and `\`, so a `\` in a value can't undo the escaping and a URL with brackets stays a working link.
 
 ## Plain-text version
 
