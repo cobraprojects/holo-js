@@ -33,6 +33,7 @@ interface RenderContext {
   readonly format: MailTemplateFormat
   readonly data: MailJsonObject
   readonly htmlValues: ReadonlySet<string>
+  readonly markdownValues: ReadonlySet<string>
   readonly loops: readonly LoopValue[]
 }
 
@@ -41,7 +42,7 @@ interface RenderedAttribute {
   readonly html: boolean
 }
 
-const NO_HTML_VALUES: ReadonlySet<string> = new Set()
+const NO_VALUES: ReadonlySet<string> = new Set()
 
 const HTML_ESCAPES: Readonly<Record<string, string>> = {
   '&': '&amp;',
@@ -88,21 +89,31 @@ function escapeTemplateValue(value: string): string {
   return value.replace(/[&<>"']/g, character => HTML_ESCAPES[character] ?? character)
 }
 
-function isHtmlValue(context: RenderContext, path: readonly string[]): boolean {
+function isNamedValue(context: RenderContext, names: ReadonlySet<string>, path: readonly string[]): boolean {
   const [name, ...rest] = path
-  return rest.length === 0 && name !== undefined && context.htmlValues.has(name) && !findInnermostLoop(context.loops, name)
+  return rest.length === 0 && name !== undefined && names.has(name) && !findInnermostLoop(context.loops, name)
+}
+
+function resolveOutputValue(context: RenderContext, path: readonly string[]): string {
+  const value = resolveDataPath(context, path)
+  if (typeof value !== 'string' && typeof value !== 'number') throw invalidDataError(context, 'a string or number', path)
+  return String(value)
+}
+
+function renderAttributeOutput(context: RenderContext, path: readonly string[], escaped: boolean): string {
+  const value = resolveOutputValue(context, path)
+  return escaped && !isNamedValue(context, context.htmlValues, path) ? escapeTemplateValue(value) : value
 }
 
 function renderOutput(context: RenderContext, path: readonly string[], escaped: boolean): string {
-  const value = resolveDataPath(context, path)
-  if (typeof value !== 'string' && typeof value !== 'number') throw invalidDataError(context, 'a string or number', path)
-  return escaped && !isHtmlValue(context, path) ? escapeTemplateValue(String(value)) : String(value)
+  if (!isNamedValue(context, context.markdownValues, path)) return renderAttributeOutput(context, path, escaped)
+  return escapeMarkdown(resolveOutputValue(context, path))
 }
 
 function renderAttribute(context: RenderContext, nodes: readonly MailTemplateValueNode[]): RenderedAttribute {
   const html = nodes.some(node => node.type === 'output')
   const value = nodes.map((node) => {
-    if (node.type === 'output') return renderOutput(context, node.path, node.escaped)
+    if (node.type === 'output') return renderAttributeOutput(context, node.path, node.escaped)
     return html ? escapeTemplateValue(node.value) : node.value
   }).join('')
 
@@ -140,11 +151,6 @@ function resolveComponentAttributes(context: RenderContext, node: MailTemplateCo
   return attributes
 }
 
-function renderComponentAttribute(context: RenderContext, attribute: RenderedAttribute): RenderedAttribute {
-  if (context.format === 'html') return attribute
-  return { value: escapeMarkdown(attributeText(attribute)), html: true }
-}
-
 function renderSlot(context: RenderContext, node: MailTemplateComponentNode): string {
   const source = renderNodes(context, node.children).trim()
   if (context.format === 'text') return source
@@ -154,14 +160,18 @@ function renderSlot(context: RenderContext, node: MailTemplateComponentNode): st
 function renderComponent(context: RenderContext, node: MailTemplateComponentNode): string {
   const component = resolveComponent(context, node.name)
   const attributes = [...resolveComponentAttributes(context, node)]
-    .map(([name, attribute]) => [name, renderComponentAttribute(context, attribute)] as const)
+  const html = context.format === 'html'
   const data: MailJsonObject = {
-    ...Object.fromEntries(attributes.map(([name, attribute]) => [name, attribute.value])),
+    ...Object.fromEntries(attributes.map(([name, attribute]) => [name, html ? attribute.value : attributeText(attribute)])),
     slot: renderSlot(context, node),
   }
-  const htmlValues = new Set(attributes.filter(([, attribute]) => attribute.html).map(([name]) => name)).add('slot')
+  const htmlValues = new Set(attributes.filter(([, attribute]) => html && attribute.html).map(([name]) => name)).add('slot')
+  const markdownValues = html ? NO_VALUES : new Set(attributes.map(([name]) => name))
 
-  return renderNodes({ ...context, template: `components/${node.name}`, data, htmlValues, loops: [] }, component[context.format])
+  return renderNodes(
+    { ...context, template: `components/${node.name}`, data, htmlValues, markdownValues, loops: [] },
+    component[context.format],
+  )
 }
 
 function renderLoop(context: RenderContext, node: MailTemplateForeachNode): string {
@@ -207,12 +217,12 @@ export function renderMailTemplate(
   data: MailJsonObject,
   format: MailTemplateFormat,
 ): string {
-  return renderTemplate({ registry, template: name, format, data, htmlValues: NO_HTML_VALUES, loops: [] })
+  return renderTemplate({ registry, template: name, format, data, htmlValues: NO_VALUES, markdownValues: NO_VALUES, loops: [] })
 }
 
 export function renderMailLayout(registry: CompiledMailRegistry, format: MailTemplateFormat, data: MailJsonObject): string {
   const layout = registry.layouts[format] ?? BUILT_IN_COMPILED_MAIL_LAYOUTS[format]
-  return renderNodes({ registry, template: MAIL_LAYOUT_FILE_NAMES[format], format, data, htmlValues: NO_HTML_VALUES, loops: [] }, layout.nodes)
+  return renderNodes({ registry, template: MAIL_LAYOUT_FILE_NAMES[format], format, data, htmlValues: NO_VALUES, markdownValues: NO_VALUES, loops: [] }, layout.nodes)
 }
 
 export function resolveMailTheme(registry: CompiledMailRegistry, name: string): string {

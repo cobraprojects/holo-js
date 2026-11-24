@@ -5,6 +5,7 @@ import { isMailTemplateName } from './template-name'
 import { resolveTemplateData, type MailTemplateDataObjectShape } from './template-data'
 import {
   childNodeLists,
+  MailTemplateSyntaxError,
   parseTemplateSyntax,
   type MailTemplateFormat,
   type MailTemplateNode,
@@ -37,14 +38,24 @@ export const MAIL_LAYOUT_FILE_NAMES: Readonly<Record<MailTemplateFormat, string>
   text: 'layout.txt',
 }
 
-function compileMailComponent(
-  name: string,
-  source: MailComponentSource,
-  components: ReadonlySet<string>,
-): CompiledMailComponent {
+interface MailTemplateNames {
+  readonly components: ReadonlySet<string>
+  readonly templates: ReadonlySet<string>
+}
+
+function parseMailComponentForm(file: string, source: string, names: MailTemplateNames): readonly MailTemplateNode[] {
+  const parsed = parseTemplateSyntax(file, source, names.components)
+  const missing = parsed.includes.find(include => !names.templates.has(include.template))
+  if (missing) {
+    throw new MailTemplateSyntaxError(file, missing.line, `"@include (${missing.template})" names a Mail template that does not exist.`)
+  }
+  return parsed.nodes
+}
+
+function compileMailComponent(name: string, source: MailComponentSource, names: MailTemplateNames): CompiledMailComponent {
   return Object.freeze({
-    html: parseTemplateSyntax(`components/${name}.html`, source.html, components).nodes,
-    text: parseTemplateSyntax(`components/${name}.txt`, source.text, components).nodes,
+    html: parseMailComponentForm(`components/${name}.html`, source.html, names),
+    text: parseMailComponentForm(`components/${name}.txt`, source.text, names),
   })
 }
 
@@ -141,8 +152,11 @@ function assertNoTemplateComponentCycles(
   )
 }
 
-function compileMailComponents(sources: Readonly<Record<string, MailComponentSource>>): CompiledMailRegistry['components'] {
-  const names = new Set(Object.keys(sources))
+function compileMailComponents(
+  sources: Readonly<Record<string, MailComponentSource>>,
+  templates: ReadonlySet<string>,
+): CompiledMailRegistry['components'] {
+  const names = { components: new Set(Object.keys(sources)), templates }
   const components = Object.freeze(Object.fromEntries(Object.entries(sources).map(([name, source]) => {
     return [name, compileMailComponent(name, source, names)]
   })))
@@ -171,7 +185,7 @@ function compileMailLayouts(
   })
 }
 
-export const BUILT_IN_COMPILED_MAIL_COMPONENTS: CompiledMailRegistry['components'] = compileMailComponents(DEFAULT_MAIL_SOURCES.components)
+export const BUILT_IN_COMPILED_MAIL_COMPONENTS: CompiledMailRegistry['components'] = compileMailComponents(DEFAULT_MAIL_SOURCES.components, new Set())
 
 const BUILT_IN_MAIL_COMPONENT_NAMES: ReadonlySet<string> = new Set(Object.keys(BUILT_IN_COMPILED_MAIL_COMPONENTS))
 
@@ -196,7 +210,10 @@ function assertMailTemplateFileName(name: string): void {
 }
 
 export function compileMailRegistry(sources: MailRegistrySources): CompiledMailRegistry {
-  const components = compileMailComponents(resolveMailComponentSources(sources.components ?? {}))
+  const components = compileMailComponents(
+    resolveMailComponentSources(sources.components ?? {}),
+    new Set(Object.keys(sources.templates)),
+  )
   const componentNames = new Set(Object.keys(components))
   const parsed = Object.fromEntries(Object.entries(sources.templates).map(([name, source]) => {
     assertMailTemplateFileName(name)

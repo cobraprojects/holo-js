@@ -123,6 +123,15 @@ describe('App Mail components', () => {
     expect(mail.html).toBe('<div class="alert alert-info"><p>Check it</p></div>')
   })
 
+  it('forwards an attribute URL from an app component to a nested button exactly in both formats', async () => {
+    const url = 'https://example.test/reset/_token_/*1*?a=1&b=2'
+    const button = '<mail::button url="{{ url }}">{!! slot !!}</mail::button>'
+    const mail = await sendWithComponents('<mail::cta url="{{ url }}">Reset</mail::cta>', { cta: { html: button, text: button } }, { url })
+
+    expect(mail.html).toContain('<a href="https://example.test/reset/_token_/*1*?a=1&amp;b=2" class="button button-primary"')
+    expect(mail.text).toBe(`Reset: ${url}`)
+  })
+
   it('renders a Mail template included from an app component', async () => {
     configureFakeMailerWithTemplates(
       { fixture: '<mail::notice>Check it</mail::notice>', 'partials/footer': 'See you soon.' },
@@ -175,6 +184,16 @@ describe('App Mail components', () => {
       'an unknown component tag inside a component',
       { alert: { html: '<mail::bx>{!! slot !!}</mail::bx>' } },
       'Mail template "components/alert.html" line 1: <mail::bx> is not a Mail component.',
+    ],
+    [
+      'an include of a missing Mail template inside a component HTML form',
+      { notice: { html: '<div>{!! slot !!}</div>\n\n@include (partials/missing)' } },
+      'Mail template "components/notice.html" line 3: "@include (partials/missing)" names a Mail template that does not exist.',
+    ],
+    [
+      'an include of a missing Mail template inside a component text form',
+      { notice: { html: '<div>{!! slot !!}</div>', text: '{!! slot !!}\n@include (partials/missing)' } },
+      'Mail template "components/notice.txt" line 2: "@include (partials/missing)" names a Mail template that does not exist.',
     ],
     [
       'a component name that cannot be used as a tag',
