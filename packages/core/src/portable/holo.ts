@@ -354,6 +354,10 @@ const reconfigureRuntime = Symbol('holo.runtime.reconfigure')
 
 const frameworkBuildEnvKey = 'HOLO_INTERNAL_FRAMEWORK_BUILD'
 
+function toMailAppIdentity(app: MailFeature.MailAppIdentity): MailFeature.MailAppIdentity {
+  return { name: app.name, url: app.url }
+}
+
 function shouldBootRuntimeServices(processEnv: NodeJS.ProcessEnv = process.env): boolean {
   return processEnv[frameworkBuildEnvKey] !== '1'
 }
@@ -1678,7 +1682,7 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
       ...existingMailBindings,
       config: loadedConfig.mail,
       compiled: registry?.mail,
-      app: { name: loadedConfig.app.name, url: loadedConfig.app.url },
+      app: toMailAppIdentity(loadedConfig.app),
       environment: loadedConfig.environment.name,
       projectRoot,
       plugins: loadedConfig.app.plugins,
@@ -1865,7 +1869,7 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
     const authPersistence = await createCoreAuthPersistence(projectRoot, loadedConfig)
 
     const delivery = createCoreAuthDeliveryHook({
-      app: { name: loadedConfig.app.name, url: loadedConfig.app.url },
+      app: toMailAppIdentity(loadedConfig.app),
       projectRoot,
       notifications: notificationsModule,
       mail: mailModule,

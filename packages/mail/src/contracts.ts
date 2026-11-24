@@ -12,6 +12,7 @@ export type {
   HoloMailThemeRegistry,
   MailAddress,
   MailAddressInput,
+  MailAppIdentity,
   MailAttachmentBase,
   MailAttachmentContent,
   MailAttachmentDisposition,

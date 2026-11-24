@@ -320,10 +320,15 @@ export interface MailViewRenderer {
   (input: MailViewRenderInput): string | Promise<string>
 }
 
+export interface MailAppIdentity {
+  readonly name: string
+  readonly url: string
+}
+
 export interface MailRuntimeBindings {
   readonly config?: NormalizedHoloMailConfig
   readonly compiled?: CompiledMailRegistry
-  readonly app?: { readonly name: string, readonly url: string }
+  readonly app?: MailAppIdentity
   readonly environment?: HoloAppEnv
   readonly renderView?: MailViewRenderer
   send?(input: MailSendInput): MailSendResult | Promise<MailSendResult>
