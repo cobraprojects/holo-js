@@ -10,51 +10,36 @@ interface TextBlock {
   readonly group: number | undefined
 }
 
-function isSafeMailHref(href: string): boolean {
-  const trimmed = href.trim()
-  if (trimmed.startsWith('#') || trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../')) return true
-  try {
-    const url = new URL(trimmed)
-    return url.protocol === 'https:' || url.protocol === 'http:' || url.protocol === 'mailto:'
-  } catch {
-    return false
-  }
+const UNSAFE_URL_SCHEME_PATTERN = /^(?:javascript|vbscript|file|data):/i
+const SAFE_DATA_IMAGE_PATTERN = /^data:image\/(?:png|gif|jpeg|webp)/i
+
+function isPotentiallyUnsafeUrl(url: string): boolean {
+  return UNSAFE_URL_SCHEME_PATTERN.test(url) && !SAFE_DATA_IMAGE_PATTERN.test(url)
 }
 
 function readAttribute(token: Token, name: string): string {
   return String(token.attrGet(name) ?? '')
 }
 
-function withoutUnsafeLinks(tokens: readonly Token[]): Token[] {
-  let insideUnsafeLink = false
-  return tokens.flatMap((token) => {
-    if (token.type === 'link_open' && !isSafeMailHref(readAttribute(token, 'href'))) {
-      insideUnsafeLink = true
-      return []
-    }
-    if (token.type === 'link_close' && insideUnsafeLink) {
-      insideUnsafeLink = false
-      return []
-    }
-    if (token.type === 'image' && !isSafeMailHref(readAttribute(token, 'src'))) {
-      return token.children ?? []
-    }
-    return [token]
-  })
+function forbidUnsafeUrl(token: Token): void {
+  if (token.type === 'link_open' && isPotentiallyUnsafeUrl(readAttribute(token, 'href'))) {
+    token.attrs = token.attrs?.filter(([name]) => name !== 'href') ?? null
+  }
+  if (token.type === 'image' && isPotentiallyUnsafeUrl(readAttribute(token, 'src'))) {
+    token.attrSet('src', '')
+  }
 }
 
-function removeUnsafeLinks(state: StateCore): void {
+function forbidUnsafeUrls(state: StateCore): void {
   for (const token of state.tokens) {
-    if (token.type === 'inline' && token.children) {
-      token.children = withoutUnsafeLinks(token.children)
-    }
+    token.children?.forEach(forbidUnsafeUrl)
   }
 }
 
 function createMarkdownParser(): MarkdownIt {
   const parser = new MarkdownItParser('commonmark', { html: true }).enable('table')
   parser.validateLink = () => true
-  parser.core.ruler.push('mail_unsafe_links', removeUnsafeLinks)
+  parser.core.ruler.push('mail_unsafe_urls', forbidUnsafeUrls)
   return parser
 }
 
@@ -68,7 +53,7 @@ function renderInlineText(tokens: readonly Token[]): string {
       linkStack.push({ href: readAttribute(token, 'href'), labelStart: parts.length })
     } else if (token.type === 'link_close') {
       const link = linkStack.pop()
-      if (link && parts.slice(link.labelStart).join('') !== link.href) {
+      if (link?.href && parts.slice(link.labelStart).join('') !== link.href) {
         parts.push(` (${link.href})`)
       }
     } else if (token.type === 'softbreak' || token.type === 'hardbreak') {

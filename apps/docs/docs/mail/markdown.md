@@ -67,7 +67,7 @@ Placeholders are filled before the Markdown is parsed, and `{{ }}` escapes only 
 
 ## Conditions, loops, and includes
 
-Templates support Blade-style directives. Each takes a dot path or a template name and nothing else.
+Templates support these Blade directives and no others: `@if`, `@else`, `@endif`, `@foreach`, `@endforeach`, and `@include`. Each takes a dot path or a template name and nothing else.
 
 | Directive | Output |
 | --- | --- |
@@ -99,7 +99,7 @@ Questions? Contact us at {{ support.email }}.
 
 `@if` only tests whether a value is truthy, the way Laravel's Blade does. A missing value, `null`, `false`, `0`, `''`, `'0'`, an empty list, and an empty object are false; every other value is true. There are no operators, comparisons, or function calls, so compute flags such as `isOverdue` before you pass them.
 
-A line that holds only a directive leaves no blank line behind, so `@foreach` can produce the rows of a Markdown table. Directives also work inside a line, as long as the `@` doesn't follow a letter, digit, or `_`. Any other `@` word, such as `@holo` or `@media`, is output as written. To output a directive name as text, write `@@`, as in `@@if`. Email addresses such as `help@example.com` need no escaping.
+A line that holds only a directive leaves no blank line behind, so `@foreach` can produce the rows of a Markdown table. Directives also work inside a line, as long as the `@` doesn't follow a letter, digit, or `_`. Any other Blade directive, such as `@elseif`, `@unless`, `@isset`, `@forelse`, `@lang`, or `@php`, fails `holo prepare` with a "not supported in Mail templates" error, so a directive Laravel would run is never sent as text. Any other `@` word, such as `@holo` or `@media`, is output as written. To output a directive name as text, write `@@`, as in `@@if` or `@@unless`. Email addresses such as `help@example.com` need no escaping.
 
 A loop item's name hides a `data` value with the same name inside the loop. An included template sees the mail's `data` and, when it is included inside `@foreach`, the loop's current item by its name. An included template can include others, but a template that includes itself, directly or through other templates, fails `holo prepare`.
 
@@ -250,7 +250,7 @@ Holo renders Markdown with [CommonMark](https://commonmark.org) plus GitHub-styl
 
 ## Safety
 
-`{{ }}` escapes HTML in values, so it's safe for values that come from users, like names. Markdown links and images only render for `http:`, `https:`, and `mailto:` URLs, plus relative paths (`/`, `./`, `../`, `#`). Any other link, such as `javascript:`, renders as its label text only, and any other image renders as its alt text only.
+`{{ }}` escapes HTML in values, so it's safe for values that come from users, like names. As in Laravel, Markdown links and images with a `javascript:`, `vbscript:`, `file:`, or `data:` URL lose their URL, in any letter case: such a link renders as `<a>` without an `href`, and such an image renders with an empty `src`. `data:image/png`, `data:image/gif`, `data:image/jpeg`, and `data:image/webp` URLs are kept. Every other URL, such as `https:`, `mailto:`, `tel:`, or a relative path, renders as written. HTML tags you write in a template are output as written, so their URLs aren't checked.
 
 ## Plain-text version
 

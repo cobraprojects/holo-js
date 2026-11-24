@@ -320,6 +320,14 @@ export const level = { subject: 'Hi', level: 'warning' } satisfies NotificationM
       .rejects.toThrow('Mail template "broken" line 2: "{{" is not closed with "}}".')
   })
 
+  it('fails prepare on a Blade directive that Mail templates do not support', async () => {
+    const root = await createProject()
+    await writeTemplate(root, 'invoice', '# Invoice\n\n@isset (order.note)\n{{ order.note }}\n@endisset')
+
+    await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig()))
+      .rejects.toThrow('Mail template "invoice" line 3: "@isset" is not supported in Mail templates.')
+  })
+
   it('compiles app Mail components into the generated registry and accepts their tags', async () => {
     const root = await createProject()
     await writeMailFile(root, 'components/alert.html', '<div class="alert">{!! slot !!}</div>')

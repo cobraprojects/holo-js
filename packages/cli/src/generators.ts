@@ -44,10 +44,10 @@ import {
 } from './migrations'
 import { writeLine } from './io'
 import { collectFiles } from './project/discovery-helpers'
+import { assertMailPackageInstalled } from './project/scaffold'
 import { loadMailTemplatesModule } from './project/runtime'
 import { MAIL_ROOT, MAIL_TEMPLATES_ROOT } from './project/shared'
 import type { IoStreams, PreparedInput } from './cli-types'
-
 
 export function hasRegisteredModelName(
   registry: Awaited<ReturnType<typeof loadGeneratedProjectRegistry>> | undefined,
@@ -689,6 +689,7 @@ export async function runMakeMail(
   input: PreparedInput,
 ): Promise<void> {
   await ensureProjectConfig(projectRoot)
+  await assertMailPackageInstalled(projectRoot, 'Mail generation')
   const requestedName = String(input.args[0] ?? '')
   const nameParts = splitRequestedName(requestedName)
   const directory = nameParts.directory

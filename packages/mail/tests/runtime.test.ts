@@ -362,9 +362,25 @@ describe('@holo-js/mail runtime', () => {
       }
     })
 
+    it('rejects Blade directives that Mail templates do not support when compiling', () => {
+      const failures: readonly (readonly [string, string])[] = [
+        ['@if (paid)\nPaid\n@elseif (due)\nDue\n@endif', 'line 3: "@elseif" is not supported in Mail templates.'],
+        ['@unless (paid)\nDue\n@endunless', 'line 1: "@unless" is not supported in Mail templates.'],
+        ['@forelse (items as item)\n{{ item }}\n@empty\nNone\n@endforelse', 'line 1: "@forelse" is not supported in Mail templates.'],
+        ['Hello {{ name }}, @lang(\'welcome\')', 'line 1: "@lang" is not supported in Mail templates.'],
+        ['@php\n$x = 1;\n@endphp', 'line 1: "@php" is not supported in Mail templates.'],
+        ['Total: @json(order)', 'line 1: "@json" is not supported in Mail templates.'],
+      ]
+
+      for (const [source, message] of failures) {
+        expect(() => compileMailRegistry({ templates: { broken: source } })).toThrow(`Mail template "broken" ${message}`)
+      }
+    })
+
     it('outputs an escaped @@ directive as literal text', async () => {
       expect((await sendTemplate('Follow @@holo on social media')).html).toBe('<p>Follow @holo on social media</p>')
       expect((await sendTemplate('Write @@if (paid) to check a value')).html).toBe('<p>Write @if (paid) to check a value</p>')
+      expect((await sendTemplate('Write @@unless or @@php in a guide')).html).toBe('<p>Write @unless or @php in a guide</p>')
     })
 
     it('outputs an unknown @ word as literal text', async () => {
@@ -415,7 +431,7 @@ describe('@holo-js/mail runtime', () => {
       expect(mail.html).toMatch(/<tbody>\s*<tr>\s*<td[^>]*>Plan<\/td>\s*<td[^>]*>\$10<\/td>\s*<\/tr>\s*<\/tbody>\s*<\/table>/)
     })
 
-    it('outputs template HTML as written and does not link unsafe URLs', async () => {
+    it('outputs template HTML as written and drops unsafe URLs like league/commonmark', async () => {
       const mail = await sendMarkdown([
         '<div align="center">Block</div>',
         '',
@@ -423,10 +439,24 @@ describe('@holo-js/mail runtime', () => {
       ].join('\n'))
 
       expect(mail.html).toContain('<div align="center">Block</div>')
-      expect(mail.html).toContain('<p>Inline <b>bold</b> bad <a href="https://example.test">ok</a> pixel javascript:alert(2)</p>')
-      expect(mail.html).not.toContain('href="javascript:')
-      expect(mail.html).not.toContain('<img')
+      expect(mail.html).toContain('<p>Inline <b>bold</b> <a>bad</a> <a href="https://example.test">ok</a> <img src alt="pixel"> <a>javascript:alert(2)</a></p>')
       expect(mail.text).toBe('Block\n\nInline bold bad ok (https://example.test) pixel javascript:alert(2)')
+    })
+
+    it('links every URL scheme except javascript:, vbscript:, file:, and data: in any case', async () => {
+      const mail = await sendMarkdown([
+        '[call](tel:+15550100) [text](sms:+15550100) [mail](mailto:help@example.test) [app](myapp://open) [page](/orders) [top](#top)',
+        '',
+        '[a](JavaScript:alert(1)) [b](VBSCRIPT:msgbox) [c](file:///etc/passwd) [d](data:text/html,x) [e](<JAVASCRIPT:alert(1)>)',
+        '',
+        '![png](data:image/png;base64,AAAA) ![webp](DATA:image/webp;base64,AAAA) ![svg](data:image/svg+xml;base64,AAAA)',
+      ].join('\n'))
+
+      expect(mail.html).toBe([
+        '<p><a href="tel:+15550100">call</a> <a href="sms:+15550100">text</a> <a href="mailto:help@example.test">mail</a> <a href="myapp://open">app</a> <a href="/orders">page</a> <a href="#top">top</a></p>',
+        '<p><a>a</a> <a>b</a> <a>c</a> <a>d</a> <a>e</a></p>',
+        '<p><img src="data:image/png;base64,AAAA" alt="png"> <img src="DATA:image/webp;base64,AAAA" alt="webp"> <img src alt="svg"></p>',
+      ].join('\n'))
     })
 
     it('generates plain text from markdown with syntax removed', async () => {
