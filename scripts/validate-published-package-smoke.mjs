@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { cp, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { connect, createServer } from 'node:net'
@@ -340,6 +340,16 @@ async function readPackageVersion(packageRoot) {
   return JSON.parse(await readFile(manifestPath, 'utf8')).version
 }
 
+function resolveVisiblePackageRoot(issuerTarget, appRoot, packageName) {
+  for (let directory = issuerTarget; directory.startsWith(appRoot); directory = dirname(directory)) {
+    const candidate = join(directory, 'node_modules', ...packageName.split('/'))
+    if (basename(directory) !== 'node_modules' && existsSync(join(candidate, 'package.json'))) {
+      return candidate
+    }
+  }
+  return undefined
+}
+
 async function copyPackageWithoutNestedDependencies(source, target) {
   await rm(target, { recursive: true, force: true })
   await mkdir(dirname(target), { recursive: true })
@@ -353,29 +363,31 @@ async function copyPackageWithoutNestedDependencies(source, target) {
   })
 }
 
+async function linkAncestorCopy(ancestorTarget, target) {
+  await rm(target, { recursive: true, force: true })
+  await mkdir(dirname(target), { recursive: true })
+  await symlink(ancestorTarget, target)
+}
+
 export async function copyExternalDependencyClosure(
   sourceAppRoot,
   nodeModulesRoot,
   stagedNodeModules,
   options = {},
 ) {
+  const appRoot = dirname(nodeModulesRoot)
   const appManifest = JSON.parse(await readFile(join(sourceAppRoot, 'package.json'), 'utf8'))
   const appDependencyNames = new Set(listManifestDependencyNames(appManifest))
-  const pending = [...appDependencyNames].map(packageName => ({ packageName }))
-  const visited = new Set()
-  const hoistedVersions = new Map()
+  const pending = [...appDependencyNames].map(packageName => ({ packageName, ancestors: new Map() }))
+  const processedTargets = new Set()
+  const hoistedNames = new Set()
   while (pending.length > 0) {
-    const { packageName, issuerSource, issuerTarget } = pending.shift()
-    const visitKey = `${issuerTarget ?? ''}\0${packageName}`
-    if (visited.has(visitKey)) {
-      continue
-    }
-    visited.add(visitKey)
+    const { packageName, issuerSource, issuerTarget, ancestors } = pending.shift()
     if (packageName.startsWith('@holo-js/')) {
-      const stagedPackageRoot = join(stagedNodeModules, ...packageName.split('/'))
-      const stagedManifestPath = join(stagedPackageRoot, 'package.json')
-      if (existsSync(stagedManifestPath)) {
-        const issuer = { issuerTarget: join(nodeModulesRoot, ...packageName.split('/')) }
+      const stagedManifestPath = join(stagedNodeModules, ...packageName.split('/'), 'package.json')
+      const issuer = { issuerTarget: join(nodeModulesRoot, ...packageName.split('/')), ancestors }
+      if (existsSync(stagedManifestPath) && !processedTargets.has(issuer.issuerTarget)) {
+        processedTargets.add(issuer.issuerTarget)
         pending.push(...listInstalledDependencyNames(JSON.parse(await readFile(stagedManifestPath, 'utf8')))
           .map(dependencyName => ({ packageName: dependencyName, ...issuer })))
       }
@@ -388,34 +400,44 @@ export async function copyExternalDependencyClosure(
     if (!source) {
       continue
     }
+    const sourceIdentity = await realpath(source)
     const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'))
     const hoistedTarget = join(nodeModulesRoot, ...packageName.split('/'))
-    let target = hoistedTarget
-    if (!hoistedVersions.has(packageName)) {
-      const existingVersion = existsSync(hoistedTarget) && !options.replaceExisting
-        ? await readPackageVersion(hoistedTarget)
-        : undefined
-      hoistedVersions.set(packageName, existingVersion ?? manifest.version)
-      if (existingVersion === undefined) {
+    if (!hoistedNames.has(packageName)) {
+      hoistedNames.add(packageName)
+      if (options.replaceExisting || !existsSync(hoistedTarget)) {
         await copyPackageWithoutNestedDependencies(source, hoistedTarget)
       }
     }
-    if (hoistedVersions.get(packageName) !== manifest.version) {
+    let target = resolveVisiblePackageRoot(issuerTarget ?? appRoot, appRoot, packageName)
+    if (!target || (await readPackageVersion(target)) !== manifest.version) {
       if (!issuerTarget) {
         continue
       }
       target = join(issuerTarget, 'node_modules', ...packageName.split('/'))
-      if ((await readPackageVersion(target)) !== manifest.version) {
-        await copyPackageWithoutNestedDependencies(source, target)
+      const ancestorTarget = ancestors.get(sourceIdentity)
+      if (ancestorTarget) {
+        await linkAncestorCopy(ancestorTarget, target)
+        processedTargets.add(target)
+        continue
       }
+      await copyPackageWithoutNestedDependencies(source, target)
     }
-    const issuer = { issuerSource: await realpath(source), issuerTarget: target }
+    if (processedTargets.has(target)) {
+      continue
+    }
+    processedTargets.add(target)
+    const issuer = {
+      issuerSource: sourceIdentity,
+      issuerTarget: target,
+      ancestors: new Map(ancestors).set(sourceIdentity, target),
+    }
     pending.push(...listInstalledDependencyNames(manifest)
       .map(dependencyName => ({ packageName: dependencyName, ...issuer })))
   }
 }
 
-async function createFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules) {
+export async function createFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules) {
   const nodeModulesRoot = join(appRoot, 'node_modules')
   const sourceNodeModules = join(sourceAppRoot, 'node_modules')
   const sourceBin = join(sourceNodeModules, '.bin')
@@ -431,12 +453,11 @@ async function createFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModu
       return !segments.slice(1).includes('node_modules')
     },
   })
-  await copyExternalDependencyClosure(sourceAppRoot, nodeModulesRoot, stagedNodeModules)
-  await rm(join(nodeModulesRoot, '@holo-js'), { recursive: true, force: true })
   await cp(join(stagedNodeModules, '@holo-js'), join(nodeModulesRoot, '@holo-js'), {
     recursive: true,
     dereference: true,
   })
+  await copyExternalDependencyClosure(sourceAppRoot, nodeModulesRoot, stagedNodeModules)
   const binRoot = join(nodeModulesRoot, '.bin')
   await mkdir(binRoot, { recursive: true })
   for (const binary of await readdir(sourceBin)) {
