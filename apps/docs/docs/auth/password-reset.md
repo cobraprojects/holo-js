@@ -205,7 +205,7 @@ The reset email has the subject `Reset Password Notification`, the greeting `Hel
 
 ## Customize the email
 
-Reset emails are sent the same way as verification emails: through notifications, through mail, or only logged if neither is installed. Run `npx holo auth:notifications:publish` to get an editable `server/notifications/auth/password-reset.ts`; it needs `@holo-js/notifications`. Its email builder receives `email`, `url`, and `expiresInMinutes`. See [Customize the email](/auth/email-verification#customize-the-email).
+Reset emails are sent the same way as verification emails: through notifications, through mail, or only logged if neither is installed. Run `npx holo mail:publish` to get an editable `server/notifications/auth/password-reset.ts`; it needs `@holo-js/notifications`. Its email builder receives `email`, `url`, and `expiresInMinutes`. See [Customize the email](/auth/email-verification#customize-the-email).
 
 Queue the reset email in production. A queued email returns the request before mail I/O, which removes the timing difference described under [Request a reset link](#request-a-reset-link). Queueing needs a worker for the queue connection, as described in [Queueing notifications](/notifications/queueing).
 

@@ -213,6 +213,8 @@ A component file named after a built-in component replaces it. For example, `ser
 </table>
 ```
 
+To edit the built-in components' own files, run `npx holo mail:publish`, which copies them into `server/mail/components` along with the [Mail layout and theme](/mail/layouts-and-themes#publishing-the-defaults).
+
 The HTML and plain-text forms are independent. A `button.html` without a `button.txt` keeps the built-in `Label: URL` text, and a `button.txt` without a `button.html` keeps the built-in HTML. An overridden button still requires an absolute `http:` or `https:` `url`.
 
 `holo prepare` compiles your component files into the generated registry together with your Mail templates, and makes their tags valid in templates and layouts. `holo dev` recompiles them when you save; after changing them outside `holo dev`, run `npx holo prepare`.

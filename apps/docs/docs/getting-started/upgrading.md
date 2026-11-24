@@ -67,6 +67,10 @@ Markdown mail is rendered with CommonMark. A single line break inside a paragrap
 
 The built-in email verification and password reset emails now have Laravel's subjects, lines and button labels, start with `Hello!` instead of the user's name, and render inside your Mail layout and theme. The reset email states how many minutes the link is valid instead of the date it expires. The email builders in `server/notifications/auth/email-verification.ts` and `password-reset.ts` now receive `expiresInMinutes` instead of `expiresAt`. Replace `data.expiresAt` in those files, for example with `` `This password reset link will expire in ${data.expiresInMinutes} minutes.` ``. The files declare their own data type, so a file that still reads `expiresAt` typechecks but gets `undefined`. See [Email verification](/auth/email-verification#the-email) and [Password reset](/auth/password-reset#the-email).
 
+### `holo auth:notifications:publish` is replaced by `holo mail:publish`
+
+`npx holo auth:notifications:publish` is removed. Run `npx holo mail:publish` instead. It publishes the same `server/notifications/auth/email-verification.ts` and `password-reset.ts`, and also copies the Mail layout, the `default` theme, the built-in Mail components, and the notification email template into `server/mail`. Those copies match Holo's defaults, so your emails don't change. Existing files are still skipped unless you pass `--force`. See [`mail:publish`](/reference/cli#mail-publish).
+
 ## Upgrading from 0.6.2 to 0.6.3
 
 Update every installed `@holo-js/*` package to `0.6.3` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. Most apps need no code changes; check the cursor pagination change below. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#063---2026-11-22) lists the release changes.
@@ -1388,7 +1392,7 @@ Sign in with Apple takes the user's email only from the signed `id_token`. Befor
 
 Failed logins and every reset-link request now take at least 200 ms, whether or not the account exists, so response time doesn't reveal which emails have accounts. Successful logins aren't delayed. Your code doesn't change, but failed attempts answer a little slower.
 
-A reset-link request that sends its email synchronously can still take longer than 200 ms when the mail server is slow, and that difference can reveal an account. Queue the reset email so the request returns before the mail is sent. Publish the notification with `npx holo auth:notifications:publish` and queue it, as described in [Customize the email](/auth/password-reset#customize-the-email).
+A reset-link request that sends its email synchronously can still take longer than 200 ms when the mail server is slow, and that difference can reveal an account. Queue the reset email so the request returns before the mail is sent. Publish the notification with `npx holo mail:publish` and queue it, as described in [Customize the email](/auth/password-reset#customize-the-email).
 
 ### User records load on every request
 

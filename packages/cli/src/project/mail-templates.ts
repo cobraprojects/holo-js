@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
-import type { CompiledMailRegistry, MailRegistrySources, MailTemplateDataShape } from '@holo-js/mail/templates'
+import type { CompiledMailRegistry, MailRegistrySources, MailTemplateDataShape, MailTemplateFormat } from '@holo-js/mail/templates'
 import { collectFiles } from './discovery-helpers'
 import { loadMailTemplatesModule } from './runtime'
 import { MAIL_COMPONENTS_ROOT, MAIL_ROOT, MAIL_TEMPLATES_ROOT, MAIL_THEMES_ROOT, pathExists, toPosixPath } from './shared'
@@ -9,6 +9,15 @@ const MAIL_TEMPLATE_FILE_PATTERN = /\.md$/
 const MAIL_THEME_FILE_PATTERN = /\.css$/
 const MAIL_COMPONENT_HTML_FILE_PATTERN = /\.html$/
 const MAIL_COMPONENT_TEXT_FILE_PATTERN = /\.txt$/
+const MAIL_LAYOUT_FILES: Readonly<Record<MailTemplateFormat, string>> = {
+  html: `${MAIL_ROOT}/layout.html`,
+  text: `${MAIL_ROOT}/layout.txt`,
+}
+
+export interface PublishableFile {
+  readonly path: string
+  readonly contents: string
+}
 
 async function readNamedFiles(root: string, pattern: RegExp): Promise<Record<string, string>> {
   const files = await collectFiles(root, pattern)
@@ -36,8 +45,8 @@ export async function discoverMailRegistry(projectRoot: string): Promise<Compile
   const templates = await readNamedFiles(resolve(projectRoot, MAIL_TEMPLATES_ROOT), MAIL_TEMPLATE_FILE_PATTERN)
   const themes = await readNamedFiles(resolve(projectRoot, MAIL_THEMES_ROOT), MAIL_THEME_FILE_PATTERN)
   const components = await readMailComponents(resolve(projectRoot, MAIL_COMPONENTS_ROOT))
-  const html = await readOptionalFile(resolve(projectRoot, MAIL_ROOT, 'layout.html'))
-  const text = await readOptionalFile(resolve(projectRoot, MAIL_ROOT, 'layout.txt'))
+  const html = await readOptionalFile(resolve(projectRoot, MAIL_LAYOUT_FILES.html))
+  const text = await readOptionalFile(resolve(projectRoot, MAIL_LAYOUT_FILES.text))
   const layouts = {
     ...(typeof html === 'string' ? { html } : {}),
     ...(typeof text === 'string' ? { text } : {}),
@@ -46,6 +55,20 @@ export async function discoverMailRegistry(projectRoot: string): Promise<Compile
 
   const { compileMailRegistry } = await loadMailTemplatesModule(projectRoot)
   return compileMailRegistry({ templates, components, layouts, themes })
+}
+
+export async function loadPublishableMailFiles(projectRoot: string): Promise<readonly PublishableFile[]> {
+  const { DEFAULT_MAIL_SOURCES: sources } = await loadMailTemplatesModule(projectRoot)
+  return [
+    { path: MAIL_LAYOUT_FILES.html, contents: sources.layouts.html },
+    { path: MAIL_LAYOUT_FILES.text, contents: sources.layouts.text },
+    ...Object.entries(sources.components).flatMap(([name, component]) => [
+      { path: `${MAIL_COMPONENTS_ROOT}/${name}.html`, contents: component.html },
+      { path: `${MAIL_COMPONENTS_ROOT}/${name}.txt`, contents: component.text },
+    ]),
+    ...Object.entries(sources.themes).map(([name, css]) => ({ path: `${MAIL_THEMES_ROOT}/${name}.css`, contents: css })),
+    ...Object.entries(sources.templates).map(([name, source]) => ({ path: `${MAIL_TEMPLATES_ROOT}/${name}.md`, contents: source })),
+  ]
 }
 
 function isOptionalShape(shape: MailTemplateDataShape): boolean {
