@@ -161,7 +161,7 @@ Questions? [Contact support](https://example.com/support).
 
 The content of a component is Markdown, so you can use bold text, links, and tables inside it. Put each opening and closing tag on its own line with a blank line before and after the component, as in the example above.
 
-Attribute values are strings and can contain placeholders. A component escapes attribute values when it outputs them, so `url="{{ order.url }}"` is safe for values that come from users.
+Attribute values are strings and can contain placeholders. A `{{ }}` placeholder inside an attribute is escaped where the attribute is written, so `url="{{ order.url }}"` is safe for values that come from users, whichever way the component outputs it.
 
 A button's `url` must be an absolute `http:` or `https:` URL. Sending a mail whose button has a missing, relative, `javascript:`, or `mailto:` URL throws an error, so a broken button is never sent. Plain Markdown links such as `[Track order](https://example.com)` stay normal links.
 
@@ -187,7 +187,7 @@ Your plan expires on **{{ date }}**.
 </mail::alert>
 ```
 
-`slot` is HTML that Holo already rendered from the tag's Markdown content, so output it with `{!! slot !!}`. Output attributes with `{{ }}`, as `{{ type }}` does above, so they are escaped. An attribute the tag doesn't set is missing, so check optional attributes with `@if` before you output them.
+`slot` is HTML that Holo already rendered from the tag's Markdown content, so output it with `{!! slot !!}`. Output attributes with `{{ }}`, as `{{ type }}` does above. An attribute that contains a placeholder is already escaped HTML, so `{{ }}` outputs it as is and doesn't escape it twice. An attribute written without placeholders is plain text: `{{ }}` escapes it and `{!! !!}` outputs it exactly as written. An attribute the tag doesn't set is missing, so check optional attributes with `@if` before you output them.
 
 Add `server/mail/components/<name>.txt` for the component's plain-text form. It receives the same values, and its `slot` is the content's Markdown, which the plain-text part turns into plain text:
 

@@ -97,6 +97,18 @@ describe('Mail components', () => {
     expect(mail.text).toBe('Search: https://example.test/search?a=1&b="x"')
   })
 
+  it('escapes the written parts of an attribute with placeholders once and validates the unescaped URL', async () => {
+    const mail = await sendTemplate(
+      '<mail::button url="https://example.test/orders?id={{ id }}&ref=mail">Open</mail::button>',
+      { id: '7&8' },
+    )
+
+    expect(mail.html).toContain('<a href="https://example.test/orders?id=7&amp;8&amp;ref=mail" class="button button-primary"')
+    expect(mail.text).toBe('Open: https://example.test/orders?id=7&8&ref=mail')
+    await expect(sendTemplate('<mail::button url="{{ url }}">Open</mail::button>', { url: 'javascript:alert(1)' }))
+      .rejects.toThrow('requires an absolute http or https "url".')
+  })
+
   it('renders panel, table, and subcopy content as Markdown', async () => {
     const mail = await sendTemplate([
       '<mail::panel>',

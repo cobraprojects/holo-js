@@ -1,3 +1,4 @@
+import { decodeHTML } from 'entities'
 import { isAbsoluteHttpUrl, resolveMailComponentBehavior } from './components'
 import type { MailJsonObject, MailJsonValue } from './contracts-types'
 import { DEFAULT_MAIL_SOURCES } from './defaults'
@@ -30,8 +31,16 @@ interface RenderContext {
   readonly template: string
   readonly format: MailTemplateFormat
   readonly data: MailJsonObject
+  readonly htmlValues: ReadonlySet<string>
   readonly loops: readonly LoopValue[]
 }
+
+interface RenderedAttribute {
+  readonly value: string
+  readonly html: boolean
+}
+
+const NO_HTML_VALUES: ReadonlySet<string> = new Set()
 
 const HTML_ESCAPES: Readonly<Record<string, string>> = {
   '&': '&amp;',
@@ -76,14 +85,25 @@ function escapeTemplateValue(value: string): string {
   return value.replace(/[&<>"']/g, character => HTML_ESCAPES[character] ?? character)
 }
 
+function isHtmlValue(context: RenderContext, path: readonly string[]): boolean {
+  const [name, ...rest] = path
+  return rest.length === 0 && name !== undefined && context.htmlValues.has(name) && !findInnermostLoop(context.loops, name)
+}
+
 function renderOutput(context: RenderContext, path: readonly string[], escaped: boolean): string {
   const value = resolveDataPath(context, path)
   if (typeof value !== 'string' && typeof value !== 'number') throw invalidDataError(context, 'a string or number', path)
-  return escaped ? escapeTemplateValue(String(value)) : String(value)
+  return escaped && !isHtmlValue(context, path) ? escapeTemplateValue(String(value)) : String(value)
 }
 
-function renderAttributeValue(context: RenderContext, nodes: readonly MailTemplateValueNode[]): string {
-  return nodes.map(node => node.type === 'text' ? node.value : renderOutput(context, node.path, false)).join('')
+function renderAttribute(context: RenderContext, nodes: readonly MailTemplateValueNode[]): RenderedAttribute {
+  const html = nodes.some(node => node.type === 'output')
+  const value = nodes.map((node) => {
+    if (node.type === 'output') return renderOutput(context, node.path, node.escaped)
+    return html ? escapeTemplateValue(node.value) : node.value
+  }).join('')
+
+  return { value, html }
 }
 
 function resolveComponent(context: RenderContext, name: string): CompiledMailComponent {
@@ -95,13 +115,18 @@ function resolveComponent(context: RenderContext, name: string): CompiledMailCom
   return component
 }
 
-function resolveComponentAttributes(context: RenderContext, node: MailTemplateComponentNode): Readonly<Record<string, string>> {
+function attributeText(attribute: RenderedAttribute | undefined): string {
+  if (!attribute) return ''
+  return attribute.html ? decodeHTML(attribute.value) : attribute.value
+}
+
+function resolveComponentAttributes(context: RenderContext, node: MailTemplateComponentNode): ReadonlyMap<string, RenderedAttribute> {
   const behavior = resolveMailComponentBehavior(node.name)
-  const attributes: Readonly<Record<string, string>> = {
-    ...behavior.defaults,
-    ...Object.fromEntries(Object.entries(node.attributes).map(([name, value]) => [name, renderAttributeValue(context, value)])),
-  }
-  const invalidUrlAttribute = behavior.urlAttributes.find(name => !isAbsoluteHttpUrl(attributes[name] ?? ''))
+  const attributes = new Map<string, RenderedAttribute>([
+    ...Object.entries(behavior.defaults).map(([name, value]) => [name, { value, html: false }] as const),
+    ...Object.entries(node.attributes).map(([name, value]) => [name, renderAttribute(context, value)] as const),
+  ])
+  const invalidUrlAttribute = behavior.urlAttributes.find(name => !isAbsoluteHttpUrl(attributeText(attributes.get(name))))
   if (invalidUrlAttribute) {
     throw new MailError(
       `[@holo-js/mail] Mail component "${node.name}" in Mail template "${context.template}" requires an absolute http or https "${invalidUrlAttribute}".`,
@@ -120,12 +145,14 @@ function renderSlot(context: RenderContext, node: MailTemplateComponentNode): st
 
 function renderComponent(context: RenderContext, node: MailTemplateComponentNode): string {
   const component = resolveComponent(context, node.name)
+  const attributes = resolveComponentAttributes(context, node)
   const data: MailJsonObject = {
-    ...resolveComponentAttributes(context, node),
+    ...Object.fromEntries([...attributes].map(([name, attribute]) => [name, attribute.value])),
     slot: renderSlot(context, node),
   }
+  const htmlValues = new Set([...attributes].filter(([, attribute]) => attribute.html).map(([name]) => name)).add('slot')
 
-  return renderNodes({ ...context, template: `components/${node.name}`, data, loops: [] }, component[context.format])
+  return renderNodes({ ...context, template: `components/${node.name}`, data, htmlValues, loops: [] }, component[context.format])
 }
 
 function renderLoop(context: RenderContext, node: MailTemplateForeachNode): string {
@@ -166,12 +193,12 @@ export function renderMailTemplate(
     )
   }
 
-  return renderNodes({ registry, template: name, format, data, loops: [] }, template.nodes)
+  return renderNodes({ registry, template: name, format, data, htmlValues: NO_HTML_VALUES, loops: [] }, template.nodes)
 }
 
 export function renderMailLayout(registry: CompiledMailRegistry, format: MailTemplateFormat, data: MailJsonObject): string {
   const layout = registry.layouts[format] ?? BUILT_IN_COMPILED_MAIL_LAYOUTS[format]
-  return renderNodes({ registry, template: MAIL_LAYOUT_FILE_NAMES[format], format, data, loops: [] }, layout.nodes)
+  return renderNodes({ registry, template: MAIL_LAYOUT_FILE_NAMES[format], format, data, htmlValues: NO_HTML_VALUES, loops: [] }, layout.nodes)
 }
 
 export function resolveMailTheme(registry: CompiledMailRegistry, name: string): string {
