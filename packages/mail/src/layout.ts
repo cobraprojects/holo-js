@@ -43,8 +43,8 @@ export function renderMarkdownMail(
   }
   const htmlBody = renderMarkdown(renderMailTemplate(registry, template.name, template.data, 'html', encoding))
   const textBody = renderMarkdownText(renderMailTemplate(registry, template.name, template.data, 'text', encoding))
-  const html = renderMailLayout(registry, 'html', { ...layoutData, body: htmlBody })
-  const text = renderMailLayout(registry, 'text', { ...layoutData, body: escapeUTF8(textBody) })
+  const html = renderMailLayout(registry, 'html', { ...layoutData, body: htmlBody }, encoding)
+  const text = renderMailLayout(registry, 'text', { ...layoutData, body: escapeUTF8(textBody) }, encoding)
 
   return Object.freeze({
     html: juice.inlineContent(html, themeCss, THEME_INLINING_OPTIONS),

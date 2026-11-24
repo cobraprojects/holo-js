@@ -3,7 +3,12 @@ import { isAbsoluteHttpUrl, resolveMailComponentBehavior } from './components'
 import type { MailJsonObject, MailJsonValue } from './contracts-types'
 import { DEFAULT_MAIL_SOURCES } from './defaults'
 import { MailError } from './errors'
-import { escapeMarkdown, renderMarkdown, renderMarkdownInline } from './markdown'
+import {
+  createMarkdownHtmlRenderer,
+  escapeMarkdown,
+  MARKDOWN_HTML_RENDERER,
+  type MarkdownHtmlRenderer,
+} from './markdown'
 import { findOwnEntry } from './own-entry'
 import {
   BUILT_IN_COMPILED_MAIL_COMPONENTS,
@@ -41,6 +46,7 @@ interface RenderContext {
 export interface TemplateValueEncoding {
   readonly pattern: RegExp
   readonly entities: Readonly<Record<string, string>>
+  readonly markdown: MarkdownHtmlRenderer
 }
 
 interface RenderedAttribute {
@@ -58,14 +64,22 @@ const HTML_ESCAPES: Readonly<Record<string, string>> = {
   '\'': '&#039;',
 }
 
+const MARKDOWN_LINK_ESCAPES: Readonly<Record<string, string>> = {
+  '[': '&#91;',
+  ']': '&#93;',
+  '\\': '&#92;',
+}
+
 const HTML_ENCODING: TemplateValueEncoding = Object.freeze({
   pattern: /[&<>"']/g,
   entities: HTML_ESCAPES,
+  markdown: MARKDOWN_HTML_RENDERER,
 })
 
 const SECURED_ENCODING: TemplateValueEncoding = Object.freeze({
   pattern: /[&<>"'[\]\\]/g,
-  entities: Object.freeze({ ...HTML_ESCAPES, '[': '&#91;', ']': '&#93;', '\\': '&#92;' }),
+  entities: Object.freeze({ ...HTML_ESCAPES, ...MARKDOWN_LINK_ESCAPES }),
+  markdown: createMarkdownHtmlRenderer(new Set(Object.keys(MARKDOWN_LINK_ESCAPES))),
 })
 
 function isJsonObject(value: MailJsonValue | undefined): value is MailJsonObject {
@@ -170,7 +184,8 @@ function resolveComponentAttributes(context: RenderContext, node: MailTemplateCo
 function renderSlot(context: RenderContext, node: MailTemplateComponentNode): string {
   const source = renderNodes(context, node.children).trim()
   if (context.format === 'text') return source
-  return resolveMailComponentBehavior(node.name).slot === 'inline' ? renderMarkdownInline(source) : renderMarkdown(source)
+  const { markdown } = context.encoding
+  return resolveMailComponentBehavior(node.name).slot === 'inline' ? markdown.renderInline(source) : markdown.render(source)
 }
 
 function renderComponent(context: RenderContext, node: MailTemplateComponentNode): string {
@@ -251,9 +266,14 @@ export function renderMailTemplate(
   return renderTemplate(createRenderContext(registry, name, format, data, encoding))
 }
 
-export function renderMailLayout(registry: CompiledMailRegistry, format: MailTemplateFormat, data: MailJsonObject): string {
+export function renderMailLayout(
+  registry: CompiledMailRegistry,
+  format: MailTemplateFormat,
+  data: MailJsonObject,
+  encoding: TemplateValueEncoding,
+): string {
   const layout = registry.layouts[format] ?? BUILT_IN_COMPILED_MAIL_LAYOUTS[format]
-  return renderNodes(createRenderContext(registry, MAIL_LAYOUT_FILE_NAMES[format], format, data, HTML_ENCODING), layout.nodes)
+  return renderNodes(createRenderContext(registry, MAIL_LAYOUT_FILE_NAMES[format], format, data, encoding), layout.nodes)
 }
 
 export function resolveMailTheme(registry: CompiledMailRegistry, name: string): string {

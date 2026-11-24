@@ -3643,7 +3643,7 @@ export default defineAppConfig({ name: 'Runtime App', key: 'base64:key', env: 'd
       expect(html).not.toContain('<img')
       expect(html).toMatch(/<h1[^>]*>Hi \[Ava\]\(https:\/\/evil\.test\)<\/h1>/)
       expect(html).toMatch(/<p[^>]*>!\[tracker\]\(https:\/\/evil\.test\/pixel\.png\) &lt;b&gt;joined&lt;\/b&gt;<\/p>/)
-      expect(html).toContain('>[Verify](https://evil.test)</a>')
+      expect(html).toContain('>&#91;Verify&#93;(https://evil.test)</a>')
       expect(sent.mail.text).toContain('Hi [Ava](https://evil.test)\n\n![tracker](https://evil.test/pixel.png) <b>joined</b>\n\n[Verify](https://evil.test): ')
     })
 

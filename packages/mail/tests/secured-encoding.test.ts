@@ -116,9 +116,21 @@ describe('Mail template secured encoding', () => {
     )
 
     expect(hrefs(mail.html)).toEqual([])
-    expect(occurrences(mail.html, injectedLink)).toBe(2)
+    expect(occurrences(decodeHTML(mail.html), injectedLink)).toBe(2)
     expect(mail.html).toContain(`<strong>${injectedLink}</strong>`)
     expect(mail.text).toBe('[Claim your prize](https://evil.test)\n\n[Claim your prize](https://evil.test)')
+  })
+
+  it('keeps {{ }} values in a Mail component slot literal when the component places the slot in inline HTML', async () => {
+    const mail = await send(
+      '<mail::note>{{ name }}</mail::note>',
+      { name: injectedLink },
+      true,
+      { note: { html: '<span>{!! slot !!}</span>' } },
+    )
+
+    expect(hrefs(mail.html)).toEqual([])
+    expect(decodeHTML(mail.html)).toContain(injectedLink)
   })
 
   it.each([true, false])('keeps Mail action URLs with brackets and query strings working when securedEncoding is %s', async (securedEncoding) => {
