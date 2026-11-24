@@ -98,10 +98,7 @@ import {
 import { createCoreNotificationStore } from './notificationPersistence'
 import { createCoreDatabaseSessionAdapter } from './sessionPersistence'
 import { createCsrfSessionAccessor } from './csrfSession'
-import {
-  createCoreNotificationMailSender,
-  createNotificationMailText,
-} from './authMailDelivery'
+import { createCoreNotificationMailSender, isCoreNotificationMailSender } from './authMailDelivery'
 import { createAuthMailDeliveryHook, createAuthNotificationsDeliveryHook, createCoreAuthDeliveryHook } from './authDelivery'
 import { createOptionalFeatureModuleLoader } from './optionalFeatureLoader'
 import {
@@ -356,6 +353,10 @@ type HoloRuntimeReconfigureOptions = Pick<
 const reconfigureRuntime = Symbol('holo.runtime.reconfigure')
 
 const frameworkBuildEnvKey = 'HOLO_INTERNAL_FRAMEWORK_BUILD'
+
+function toMailAppIdentity(app: MailFeature.MailAppIdentity): MailFeature.MailAppIdentity {
+  return { name: app.name, url: app.url }
+}
 
 function shouldBootRuntimeServices(processEnv: NodeJS.ProcessEnv = process.env): boolean {
   return processEnv[frameworkBuildEnvKey] !== '1'
@@ -1554,7 +1555,9 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   options: OptionalSubsystemsOptions = {},
 ): Promise<OptionalSubsystemsResult> {
   assertOutsidePluginBoot('Holo optional subsystem reconfiguration')
-  const optionalSubsystems = await runOptionalSubsystemsSerially(() => configureOptionalHoloSubsystems(projectRoot, loadedConfig, options))
+  const optionalSubsystems = await runOptionalSubsystemsSerially(async () => {
+    return configureOptionalHoloSubsystems(projectRoot, loadedConfig, await loadGeneratedProjectRegistry(projectRoot), options)
+  })
   await bootHoloPluginModules(projectRoot, loadedConfig)
   return optionalSubsystems
 }
@@ -1621,6 +1624,7 @@ async function bootHoloPluginModules<TCustom extends HoloConfigMap>(
 async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
+  registry: GeneratedProjectRegistry | undefined,
   options: OptionalSubsystemsOptions,
 ): Promise<OptionalSubsystemsResult> {
   const cacheConfigured = hasLoadedConfigFile(loadedConfig, 'cache')
@@ -1677,6 +1681,8 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
     mailModule.configureMailRuntime({
       ...existingMailBindings,
       config: loadedConfig.mail,
+      compiled: registry?.mail,
+      app: toMailAppIdentity(loadedConfig.app),
       environment: loadedConfig.environment.name,
       projectRoot,
       plugins: loadedConfig.app.plugins,
@@ -1733,8 +1739,8 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
       projectRoot,
       plugins: loadedConfig.app.plugins,
       store: existingNotificationsBindings.store ?? createCoreNotificationStore(loadedConfig),
-      ...(!existingNotificationsBindings.mailer && mailModule
-        ? { mailer: createCoreNotificationMailSender(mailModule) }
+      ...((!existingNotificationsBindings.mailer || isCoreNotificationMailSender(existingNotificationsBindings.mailer)) && mailModule
+        ? { mailer: createCoreNotificationMailSender(mailModule, loadedConfig.app.name) }
         : {}),
       ...(!existingNotificationsBindings.broadcaster && broadcastModule
         ? { broadcaster: createCoreNotificationBroadcaster(broadcastModule) }
@@ -1863,7 +1869,7 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
     const authPersistence = await createCoreAuthPersistence(projectRoot, loadedConfig)
 
     const delivery = createCoreAuthDeliveryHook({
-      appUrl: loadedConfig.app.url,
+      app: toMailAppIdentity(loadedConfig.app),
       projectRoot,
       notifications: notificationsModule,
       mail: mailModule,
@@ -2098,7 +2104,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   let servicesBooting = false
 
   const configureRuntimeSubsystems = async (subsystemOptions: HoloRuntimeReconfigureOptions): Promise<OptionalSubsystemsResult> => {
-    const optionalSubsystems = await configureOptionalHoloSubsystems(projectRoot, loadedConfig, {
+    const optionalSubsystems = await configureOptionalHoloSubsystems(projectRoot, loadedConfig, registry, {
       authContext: activeAuthContext,
       renderView: subsystemOptions.renderView,
       authRequest: subsystemOptions.authRequest,
@@ -2457,7 +2463,6 @@ export const holoRuntimeInternals = {
   createCoreAuthPersistence,
   createCoreHostedIdentityStore,
   createCoreNotificationStore,
-  createNotificationMailText,
   createCoreSessionStores,
   createCsrfSessionAccessor,
   registerProjectAuthorizationDefinitions,

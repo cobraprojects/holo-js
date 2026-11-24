@@ -21,6 +21,7 @@ import {
   renderFactoryTemplate,
   renderJobTemplate,
   renderListenerTemplate,
+  renderMailTemplateMarkdown,
   renderMarkdownMailTemplate,
   renderMultiListenerTemplate,
   renderModelTemplate,
@@ -43,11 +44,10 @@ import {
 } from './migrations'
 import { writeLine } from './io'
 import { collectFiles } from './project/discovery-helpers'
+import { assertMailPackageInstalled } from './project/scaffold'
+import { loadMailTemplatesModule } from './project/runtime'
+import { MAIL_ROOT, MAIL_TEMPLATES_ROOT } from './project/shared'
 import type { IoStreams, PreparedInput } from './cli-types'
-
-type MailTemplateType = 'markdown' | 'view'
-const MAIL_VIEW_SCAFFOLDING_UNAVAILABLE_MESSAGE
-  = 'View-backed mail scaffolding requires a renderView runtime binding, which the first-party app scaffolds do not configure yet. Use "--markdown" instead.'
 
 export function hasRegisteredModelName(
   registry: Awaited<ReturnType<typeof loadGeneratedProjectRegistry>> | undefined,
@@ -664,17 +664,33 @@ export async function runMakeFactory(
   writeLine(io.stdout, `Created factory: ${makeProjectRelativePath(projectRoot, filePath)}`)
 }
 
+function resolveMailTemplateName(
+  requested: string | undefined,
+  directory: string,
+  rawBaseName: string,
+  isMailTemplateName: (name: string) => boolean,
+): string {
+  if (typeof requested === 'undefined') {
+    const fileStem = toKebabCase(rawBaseName.replace(/Mail$/, '') || rawBaseName)
+    return [directory, fileStem].filter(Boolean).join('/')
+  }
+
+  const name = requested.trim().replace(/^\/+|\/+$/g, '')
+  if (!isMailTemplateName(name)) {
+    throw new Error(`Invalid Mail template name "${requested}". Use letters, numbers, dashes, and underscores separated by "/", such as "orders/shipped".`)
+  }
+
+  return name
+}
+
 export async function runMakeMail(
   io: IoStreams,
   projectRoot: string,
   input: PreparedInput,
 ): Promise<void> {
   await ensureProjectConfig(projectRoot)
+  await assertMailPackageInstalled(projectRoot, 'Mail generation')
   const requestedName = String(input.args[0] ?? '')
-  const templateType: MailTemplateType = input.flags.type === 'view' ? 'view' : 'markdown'
-  if (templateType === 'view') {
-    throw new Error(MAIL_VIEW_SCAFFOLDING_UNAVAILABLE_MESSAGE)
-  }
   const nameParts = splitRequestedName(requestedName)
   const directory = nameParts.directory
     .split('/')
@@ -684,13 +700,19 @@ export async function runMakeMail(
   const fileStem = toKebabCase(nameParts.rawBaseName)
   const mailName = ensureSuffix(toPascalCase(nameParts.rawBaseName), 'Mail')
   const inputTypeName = `${mailName}Input`
-  const mailFilePath = resolveArtifactPath(projectRoot, 'server/mail', directory, `${fileStem}.ts`)
+  const { isMailTemplateName } = await loadMailTemplatesModule(projectRoot)
+  const templateName = resolveMailTemplateName(resolveStringFlag(input.flags, 'markdown'), directory, nameParts.rawBaseName, isMailTemplateName)
+  const mailFilePath = resolveArtifactPath(projectRoot, MAIL_ROOT, directory, `${fileStem}.ts`)
+  const templateFilePath = resolve(projectRoot, MAIL_TEMPLATES_ROOT, `${templateName}.md`)
 
   await ensureAbsent(mailFilePath)
+  await ensureAbsent(templateFilePath)
 
-  await writeTextFile(mailFilePath, renderMarkdownMailTemplate(mailName, inputTypeName))
+  await writeTextFile(templateFilePath, renderMailTemplateMarkdown())
+  await writeTextFile(mailFilePath, renderMarkdownMailTemplate(mailName, inputTypeName, templateName))
   await runProjectPrepare(projectRoot)
   writeLine(io.stdout, `Created mail: ${makeProjectRelativePath(projectRoot, mailFilePath)}`)
+  writeLine(io.stdout, `Created mail template: ${makeProjectRelativePath(projectRoot, templateFilePath)}`)
 }
 
 export const generatorInternals = {

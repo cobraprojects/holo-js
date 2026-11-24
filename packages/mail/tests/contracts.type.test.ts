@@ -31,7 +31,7 @@ describe('@holo-js/mail typing', () => {
     const mail = defineMail({
       to: [{ email: 'ava@example.com', name: 'Ava' }],
       subject: 'Welcome',
-      markdown: '# Welcome',
+      markdown: 'welcome',
       attachments: [
         attachFromPath('/tmp/report.pdf'),
         attachFromStorage('reports/invoice.pdf', { disk: 'public' }),
@@ -43,7 +43,7 @@ describe('@holo-js/mail typing', () => {
     const rawPending = sendMail({
       to: 'ava@example.com',
       subject: 'Welcome',
-      markdown: '# Welcome',
+      markdown: 'welcome',
     }, {
       tags: ['transactional'],
     })
@@ -61,7 +61,7 @@ describe('@holo-js/mail typing', () => {
       void previewMail({
         to: 'ava@example.com',
         subject: 'Welcome',
-        markdown: '# Welcome',
+        markdown: 'welcome',
       })
       void renderMailPreview(mail)
     }
@@ -73,7 +73,7 @@ describe('@holo-js/mail typing', () => {
       // @ts-expect-error A mail definition requires a recipient.
       defineMail({
         subject: 'Missing recipient',
-        markdown: '# Welcome',
+        markdown: 'welcome',
       })
     }
 

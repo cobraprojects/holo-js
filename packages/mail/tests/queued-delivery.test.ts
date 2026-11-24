@@ -12,6 +12,8 @@ import {
   resetMailRuntime,
   sendMail,
 } from '../src'
+import { compileMailRegistry } from '../src/templates'
+import './support/mail-templates'
 
 afterEach(() => {
   resetFakeSentMails()
@@ -20,6 +22,46 @@ afterEach(() => {
 })
 
 describe('@holo-js/mail queued delivery options', () => {
+  it('stores the Mail template name and data and renders the same output as an immediate send', async () => {
+    const database = await createSQLiteQueueHarness()
+    try {
+      configureMailRuntime({
+        config: normalizeMailConfig({
+          default: 'fake',
+          from: { email: 'sender@example.com' },
+          mailers: { fake: { driver: 'fake' } },
+        }),
+        compiled: compileMailRegistry({
+          templates: { fixture: '# Order {{ order.id }}\n\nThanks, {{ name }}!' },
+          themes: { receipt: 'h1 { color: #0000ff; }' },
+        }),
+      })
+      const mail = defineMail({
+        to: 'ava@example.com',
+        subject: 'Shipped',
+        markdown: 'fixture',
+        data: { order: { id: 42 }, name: '<Ava>' },
+        theme: 'receipt',
+      })
+
+      await sendMail(mail)
+      await sendMail(mail, { queue: { queued: true, connection: 'database', queue: 'mail' } })
+      const [row] = await database.readJobRows()
+      expect(JSON.parse(String(row?.payload)).mail).toMatchObject({
+        template: { name: 'fixture', data: { order: { id: 42 }, name: '<Ava>' }, theme: 'receipt' },
+      })
+      expect(await runQueueWorker({ connection: 'database', queueNames: ['mail'], once: true }))
+        .toMatchObject({ processed: 1, failed: 0 })
+
+      const [immediate, queued] = listFakeSentMails()
+      expect(immediate?.mail.html).toContain('<h1 style="color: #0000ff;">Order 42</h1>\n<p>Thanks, &lt;Ava&gt;!</p>')
+      expect(queued?.mail.html).toBe(immediate?.mail.html)
+      expect(queued?.mail.text).toBe(immediate?.mail.text)
+    } finally {
+      await database.cleanup()
+    }
+  })
+
   it('persists queued mail tries as max attempts and defaults to one attempt', async () => {
     const database = await createSQLiteQueueHarness()
     try {

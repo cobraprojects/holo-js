@@ -48,18 +48,51 @@ function normalizeDelayValue(value: NotificationDelayValue, label: string): Noti
   return value
 }
 
-export interface NotificationMailMessage {
+interface NotificationMailMessageFields {
   readonly subject: string
+  readonly level?: 'info' | 'success' | 'error'
+  readonly text?: string
+  readonly metadata?: Readonly<Record<string, NotificationJsonValue>>
+}
+
+interface NotificationMailLinesContent {
   readonly greeting?: string
   readonly lines?: readonly string[]
   readonly action?: {
     readonly label: string
     readonly url: string
   }
+  readonly outroLines?: readonly string[]
+  readonly salutation?: string
   readonly html?: string
-  readonly text?: string
-  readonly metadata?: Readonly<Record<string, NotificationJsonValue>>
+  readonly markdown?: never
+  readonly data?: never
 }
+
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface HoloNotificationMailTemplateRegistry {}
+
+type NotificationMailTemplateName = Extract<keyof HoloNotificationMailTemplateRegistry, string>
+
+type NotificationMailTemplateDataInput<TData>
+  = Record<string, never> extends TData
+    ? { readonly data?: TData }
+    : { readonly data: TData }
+
+type NotificationMailTemplateContent<TTemplate extends NotificationMailTemplateName> = TTemplate extends NotificationMailTemplateName
+  ? {
+      readonly markdown: TTemplate
+      readonly greeting?: never
+      readonly lines?: never
+      readonly action?: never
+      readonly outroLines?: never
+      readonly salutation?: never
+      readonly html?: never
+    } & NotificationMailTemplateDataInput<HoloNotificationMailTemplateRegistry[TTemplate]>
+  : never
+
+export type NotificationMailMessage<TTemplate extends NotificationMailTemplateName = NotificationMailTemplateName>
+  = NotificationMailMessageFields & (NotificationMailLinesContent | NotificationMailTemplateContent<TTemplate>)
 
 export interface NotificationDatabaseMessage<TData extends NotificationJsonValue = NotificationJsonValue> {
   readonly data: TData

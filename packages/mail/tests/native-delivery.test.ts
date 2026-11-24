@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import { build } from 'esbuild'
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import { configureMailRuntime, defineMail, MailSendError, normalizeMailConfig, previewMail, renderMailPreview, resetMailRuntime, sendMail } from '../src'
+import { compileWithoutLayout } from './support/mail-templates'
 
 type SmtpServerOptions = {
   readonly rejectRecipient?: boolean
@@ -104,6 +105,15 @@ async function startSmtpProvider(options: SmtpServerOptions = {}) {
 
 afterEach(() => resetMailRuntime())
 
+async function runBundledScript(script: string): Promise<{ stdout: string, stderr: string }> {
+  const compiled = await build({ stdin: { contents: script, resolveDir: import.meta.dirname }, tsconfigRaw: { compilerOptions: {} }, bundle: true, packages: 'external', platform: 'node', format: 'esm', write: false })
+  const entry = compiled.outputFiles[0]
+  if (!entry) throw new Error('Native mail test script compilation produced no entry')
+  const run = promisify(execFile)(process.execPath, ['--input-type=module'], { cwd: resolve(import.meta.dirname, '..'), timeout: 15000 })
+  run.child.stdin?.end(entry.text)
+  return await run
+}
+
 async function runOneShotSmtpSend(port: number): Promise<void> {
   const srcPath = resolve(import.meta.dirname, '../src/index.ts')
   const script = `
@@ -116,10 +126,7 @@ configureMailRuntime({ config: normalizeMailConfig({
 const result = await sendMail(defineMail({ to: 'ava@example.com', subject: 'One-shot script', text: 'Hello' }))
 assert.equal(result.driver, 'smtp')
 `
-  const compiled = await build({ stdin: { contents: script, resolveDir: import.meta.dirname }, bundle: true, packages: 'external', platform: 'node', format: 'esm', write: false })
-  const entry = compiled.outputFiles[0]
-  if (!entry) throw new Error('One-shot mail script compilation produced no entry')
-  await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', entry.text], { cwd: resolve(import.meta.dirname, '..'), timeout: 15000 })
+  await runBundledScript(script)
 }
 
 async function runNativeMailWorker(port: number, operation: 'queue' | 'transaction' | 'queued-transaction' | 'storage' | 'log' | 'delayed' | 'builtins' | 'plugin' | 'broken-plugin', s3Port?: number): Promise<{ stdout: string, stderr: string }> {
@@ -284,10 +291,7 @@ try {
   await harness.cleanup()
 }
 `
-  const compiled = await build({ stdin: { contents: script, resolveDir: import.meta.dirname }, tsconfigRaw: { compilerOptions: {} }, bundle: true, packages: 'external', platform: 'node', format: 'esm', write: false })
-  const entry = compiled.outputFiles[0]
-  if (!entry) throw new Error('Native mail test compilation produced no entry')
-  return await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', entry.text], { cwd: resolve(import.meta.dirname, '..'), timeout: 15000 })
+  return await runBundledScript(script)
 }
 
 it('delivers real MIME, recipients, and attachments through the native SMTP client', async () => {
@@ -331,17 +335,23 @@ it('delivers real MIME, recipients, and attachments through the native SMTP clie
   expect(message).not.toMatch(/^Bcc:/m)
 })
 
-it('escapes app-provided mail content and rejects executable markdown links in real previews', async () => {
+it('escapes template values, keeps template HTML, and rejects executable markdown links in real previews', async () => {
   const mail = defineMail({
     to: 'ava@example.com',
     from: 'sender@example.com',
     subject: '<script>alert(1)</script>',
-    markdown: '[safe](https://example.test) [bad](javascript:alert)\n\n<script>alert(1)</script>',
+    markdown: 'fixture',
+    data: { payload: '<script>alert(1)</script>' },
   })
-  configureMailRuntime({ config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }), environment: 'test' })
+  configureMailRuntime({
+    config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }),
+    environment: 'test',
+    compiled: compileWithoutLayout({ fixture: '[safe](https://example.test) [bad](javascript:alert)\n\n<p class="note">{{ payload }}</p>' }),
+  })
   const preview = await previewMail(mail)
   expect(preview.html).toContain('href="https://example.test"')
   expect(preview.html).not.toContain('href="javascript:')
+  expect(preview.html).toContain('<p class="note">&lt;script&gt;alert(1)&lt;/script&gt;</p>')
   expect(preview.html).not.toContain('<script>')
   const response = await renderMailPreview(mail)
   expect(response.status).toBe(200)
@@ -355,9 +365,13 @@ it('escapes a markdown link href once and keeps the label escaped once in real p
     to: 'ava@example.com',
     from: 'sender@example.com',
     subject: 'Links',
-    markdown: '[Search](https://example.test/?a=1&b=2) [A & B](https://example.test/b) [bad](javascript:alert)',
+    markdown: 'fixture',
   })
-  configureMailRuntime({ config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }), environment: 'test' })
+  configureMailRuntime({
+    config: normalizeMailConfig({ preview: { allowedEnvironments: ['test'] } }),
+    environment: 'test',
+    compiled: compileWithoutLayout({ fixture: '[Search](https://example.test/?a=1&b=2) [A & B](https://example.test/b) [bad](javascript:alert)' }),
+  })
   const preview = await previewMail(mail)
   expect(preview.html).toContain('<a href="https://example.test/?a=1&amp;b=2">Search</a>')
   expect(preview.html).toContain('<a href="https://example.test/b">A &amp; B</a>')

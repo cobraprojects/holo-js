@@ -20,8 +20,11 @@ import {
   resetMailRuntime,
   sendMail,
   type MailDriver,
+  type MailJsonObject,
   type NormalizedHoloMailConfig,
 } from '../src'
+import { compileMailRegistry } from '../src/templates'
+import { compileWithoutLayout, configureFakeMailerWithTemplates } from './support/mail-templates'
 
 const previousAppEnv = process.env.APP_ENV
 const previousNodeEnv = process.env.NODE_ENV
@@ -117,11 +120,12 @@ afterEach(() => {
 
 describe('@holo-js/mail runtime', () => {
   it('previews text, html, and markdown mails without a transport driver', async () => {
+    configureMailRuntime({ compiled: compileWithoutLayout({ welcome: '# Welcome\n\nBody text' }) })
     const markdown = defineMail({
       from: 'noreply@example.com',
       to: 'ava@example.com',
       subject: 'Markdown',
-      markdown: '# Welcome\n\nBody text',
+      markdown: 'welcome',
     })
 
     const html = defineMail({
@@ -147,7 +151,7 @@ describe('@holo-js/mail runtime', () => {
       text: 'Welcome\n\nBody text',
       source: {
         kind: 'markdown',
-        markdown: '# Welcome\n\nBody text',
+        markdown: 'welcome',
       },
     })
     await expect(previewMail(html)).resolves.toMatchObject({
@@ -166,12 +170,353 @@ describe('@holo-js/mail runtime', () => {
     })
   })
 
-  it('uses renderView for render-backed mails and markdown wrappers', async () => {
-    const renderView = vi.fn(async ({ view, props }: { view: string, props?: Record<string, unknown> }) => {
-      if (view === 'emails/layout') {
-        return `<article data-wrapper="true">${String(props?.html)}</article>`
-      }
+  describe('Mail templates', () => {
+    async function sendTemplate(source: string, data: MailJsonObject = {}): Promise<{ readonly html?: string, readonly text?: string }> {
+      resetFakeSentMails()
+      configureFakeMailerWithTemplates({ fixture: source })
+      await sendMail(defineMail({ to: 'ava@example.com', subject: 'Template', markdown: 'fixture', data }))
+      const sent = listFakeSentMails()
+      expect(sent).toHaveLength(1)
+      return sent[0]!.mail
+    }
 
+    it('fills placeholders with data values before rendering Markdown', async () => {
+      const mail = await sendTemplate('# Hello {{ name }}\n\nOrder **#{{ orderId }}** shipped.', { name: 'Ava', orderId: 42 })
+
+      expect(mail.html).toBe('<h1>Hello Ava</h1>\n<p>Order <strong>#42</strong> shipped.</p>')
+      expect(mail.text).toBe('Hello Ava\n\nOrder #42 shipped.')
+    })
+
+    it('escapes {{ }} values and outputs {!! !!} values and template HTML as written', async () => {
+      const mail = await sendTemplate(
+        '<p class="lead">Escaped: {{ value }}</p>\n\nRaw: {!! value !!}',
+        { value: '<b>"Tom" & \'Jerry\'</b>' },
+      )
+
+      expect(mail.html).toBe([
+        '<p class="lead">Escaped: &lt;b&gt;&quot;Tom&quot; &amp; &#039;Jerry&#039;&lt;/b&gt;</p>',
+        '<p>Raw: <b>&quot;Tom&quot; &amp; \'Jerry\'</b></p>',
+      ].join('\n'))
+      expect(mail.text).toBe('Escaped: <b>"Tom" & \'Jerry\'</b>\n\nRaw: "Tom" & \'Jerry\'')
+    })
+
+    it('resolves dot paths in nested data', async () => {
+      const mail = await sendTemplate('Thanks, {{ customer.name }} from {{ customer.address.city }}.', {
+        customer: { name: 'Ava', address: { city: 'Cairo' } },
+      })
+
+      expect(mail.html).toBe('<p>Thanks, Ava from Cairo.</p>')
+    })
+
+    it('rejects a missing data value and an unknown Mail template', async () => {
+      await expect(sendTemplate('Hello {{ customer.name }}', { customer: {} }))
+        .rejects.toThrow('Mail template "fixture" requires a string or number for "customer.name".')
+
+      configureFakeMailerWithTemplates({})
+      await expect(sendMail(defineMail({ to: 'ava@example.com', subject: 'Missing', markdown: 'welcome' })))
+        .rejects.toThrow('Mail template "welcome" is not registered.')
+    })
+
+    it.each([
+      ['an output path', '{{ __proto__ }}', 'line 1: "__proto__" is reserved and cannot be used in a data path.'],
+      ['a nested output path', 'Hi\n{!! order.constructor !!}', 'line 2: "constructor" is reserved and cannot be used in a data path.'],
+      ['an @if path', '@if (order.prototype)\nYes\n@endif', 'line 1: "prototype" is reserved and cannot be used in a data path.'],
+      ['a @foreach loop variable', '@foreach (items as constructor)\nItem\n@endforeach', 'line 1: "constructor" is reserved and cannot be used in a data path.'],
+      ['a component attribute name', '<mail::panel __proto__="x">Hi</mail::panel>', 'line 1: Mail component attribute "__proto__" is reserved.'],
+      ['a component attribute value path', '<mail::panel title="{{ prototype }}">Hi</mail::panel>', 'line 1: "prototype" is reserved and cannot be used in a data path.'],
+    ])('rejects a name that reaches object prototypes in %s when compiling', (_label, source, message) => {
+      expect(() => compileMailRegistry({ templates: { broken: source } }))
+        .toThrow(`Mail template "broken" ${message}`)
+    })
+
+    it('shows the @if branch for values PHP treats as true and the @else branch for falsy or missing values', async () => {
+      const template = '@if (order.paid)\nPaid\n@else\nUnpaid\n@endif\n'
+      const truthy: readonly MailJsonObject[] = [
+        { order: { paid: true } },
+        { order: { paid: 'yes' } },
+        { order: { paid: 'false' } },
+        { order: { paid: '0.0' } },
+        { order: { paid: 1 } },
+        { order: { paid: [0] } },
+        { order: { paid: { at: null } } },
+      ]
+      const falsy: readonly MailJsonObject[] = [
+        {},
+        { order: {} },
+        { order: { paid: null } },
+        { order: { paid: false } },
+        { order: { paid: 0 } },
+        { order: { paid: '' } },
+        { order: { paid: '0' } },
+        { order: { paid: [] } },
+        { order: { paid: {} } },
+      ]
+
+      for (const data of truthy) {
+        expect((await sendTemplate(template, data)).html).toBe('<p>Paid</p>')
+      }
+      for (const data of falsy) {
+        expect((await sendTemplate(template, data)).html).toBe('<p>Unpaid</p>')
+      }
+      expect((await sendTemplate('Write to help@example.com @if (vip)today @endif', { vip: true })).html)
+        .toBe('<p>Write to help@example.com today</p>')
+    })
+
+    it('renders one @foreach block per item, including Markdown table rows', async () => {
+      const mail = await sendTemplate([
+        '# Order {{ order.id }}',
+        '',
+        '| Item | Qty |',
+        '| --- | ---: |',
+        '@foreach (order.lines as line)',
+        '| {{ line.name }} | {{ line.quantity }} |',
+        '@endforeach',
+        '',
+        '@foreach (tags as tag)',
+        '- {{ tag }} for {{ order.id }}',
+        '@endforeach',
+      ].join('\n'), {
+        order: { id: 7, lines: [{ name: 'Mug', quantity: 2 }, { name: 'Tea', quantity: 1 }] },
+        tags: ['gift', 'fragile'],
+      })
+
+      expect(mail.html).toBe([
+        '<h1>Order 7</h1>',
+        '<table>',
+        '<thead>',
+        '<tr>',
+        '<th>Item</th>',
+        '<th style="text-align:right">Qty</th>',
+        '</tr>',
+        '</thead>',
+        '<tbody>',
+        '<tr>',
+        '<td>Mug</td>',
+        '<td style="text-align:right">2</td>',
+        '</tr>',
+        '<tr>',
+        '<td>Tea</td>',
+        '<td style="text-align:right">1</td>',
+        '</tr>',
+        '</tbody>',
+        '</table>',
+        '<ul>',
+        '<li>gift for 7</li>',
+        '<li>fragile for 7</li>',
+        '</ul>',
+      ].join('\n'))
+    })
+
+    it('renders nothing for an empty @foreach list and rejects a value that is not a list', async () => {
+      const template = 'Items:\n@foreach (items as item)\n- {{ item }}\n@endforeach\nDone'
+
+      expect((await sendTemplate(template, { items: [] })).html).toBe('<p>Items:\nDone</p>')
+      await expect(sendTemplate(template, { items: 'Mug' }))
+        .rejects.toThrow('Mail template "fixture" requires a list for "items".')
+    })
+
+    it('renders an @include with the parent data and the loop items in scope', async () => {
+      configureFakeMailerWithTemplates({
+        'fixture': '# Order {{ order.id }}\n\n@foreach (order.lines as line)\n@include (partials/summary)\n@endforeach\nThanks!',
+        'partials/summary': '{{ line.name }} of **{{ order.total }}**\n',
+      })
+      await sendMail(defineMail({
+        to: 'ava@example.com',
+        subject: 'Include',
+        markdown: 'fixture',
+        data: { order: { id: 7, total: '$12', lines: [{ name: 'Mug' }, { name: 'Tea' }] } },
+      }))
+
+      expect(listFakeSentMails()[0]?.mail.html).toBe('<h1>Order 7</h1>\n<p>Mug of <strong>$12</strong>\nTea of <strong>$12</strong>\nThanks!</p>')
+    })
+
+    it('compiles a deep chain of templates that include the next one from both @if branches', () => {
+      const depth = 25
+      const templates: Record<string, string> = Object.fromEntries(Array.from({ length: depth }, (_, level) => {
+        return [`level${level}`, `@if (paid)\n@include (level${level + 1})\n@else\n@include (level${level + 1})\n@endif`]
+      }))
+      templates[`level${depth}`] = 'Done'
+
+      expect(compileMailRegistry({ templates }).templates.level0?.data).toEqual({ kind: 'object', properties: { paid: { kind: 'json' } } })
+    })
+
+    it('rejects template syntax errors when compiling', () => {
+      expect(() => compileMailRegistry({ templates: { broken: 'Hello\n{{ name' } }))
+        .toThrow('Mail template "broken" line 2: "{{" is not closed with "}}".')
+      expect(() => compileMailRegistry({ templates: { broken: 'Hello {!! user.name() !!}' } }))
+        .toThrow('Mail template "broken" line 1: "user.name()" is not a data path.')
+      expect(() => compileMailRegistry({ templates: { broken: '{{ order }} {{ order.id }}' } }))
+        .toThrow('Mail template "broken" uses "order.id" both as a value and as an object.')
+    })
+
+    it('rejects malformed and unclosed directives when compiling', () => {
+      const failures: readonly (readonly [string, string])[] = [
+        ['Hi\n@if (paid)\nPaid', 'line 2: "@if" is not closed with "@endif".'],
+        ['@foreach (items as item)\n{{ item }}\n@endif', 'line 3: "@endif" has no matching "@if".'],
+        ['@foreach (items as item)\n{{ item }}', 'line 1: "@foreach" is not closed with "@endforeach".'],
+        ['@else\n', 'line 1: "@else" has no matching "@if".'],
+        ['@if (a)\n@else\n@else\n@endif', 'line 3: "@else" has no matching "@if".'],
+        ['@if paid\n@endif', 'line 1: "@if" needs a data path in parentheses.'],
+        ['@if (paid\n)\n@endif', 'line 1: "@if" needs a data path in parentheses.'],
+        ['@if (order.total > 10)\n@endif', 'line 1: "order.total > 10" is not a data path.'],
+        ['@foreach (items)\n@endforeach', 'line 1: "@foreach" needs "path as name" in parentheses'],
+        ['@include (../secrets)', 'line 1: "../secrets" is not a Mail template name'],
+        ['@include (partials.footer)', 'line 1: "partials.footer" is not a Mail template name'],
+        ['@include (-draft)', 'line 1: "-draft" is not a Mail template name'],
+        ['@include (partials/missing)', 'line 1: "@include (partials/missing)" names a Mail template that does not exist.'],
+        ['@foreach (items as item)\n{{ item.name }}\n@endforeach\n{{ items }}', 'uses "items" both as a list and as a value.'],
+      ]
+
+      for (const [source, message] of failures) {
+        expect(() => compileMailRegistry({ templates: { broken: source } })).toThrow(`Mail template "broken" ${message}`)
+      }
+    })
+
+    it('rejects Blade directives that Mail templates do not support when compiling', () => {
+      const failures: readonly (readonly [string, string])[] = [
+        ['@if (paid)\nPaid\n@elseif (due)\nDue\n@endif', 'line 3: "@elseif" is not supported in Mail templates.'],
+        ['@unless (paid)\nDue\n@endunless', 'line 1: "@unless" is not supported in Mail templates.'],
+        ['Hi\n@includeIf (partials/footer)', 'line 2: "@includeIf" is not supported in Mail templates.'],
+        ['Hi\n@includeWhen (partials/footer)', 'line 2: "@includeWhen" is not supported in Mail templates.'],
+        ['Hi\n@includeUnless (partials/footer)', 'line 2: "@includeUnless" is not supported in Mail templates.'],
+        ['Hi\n@includeFirst (partials/footer)', 'line 2: "@includeFirst" is not supported in Mail templates.'],
+        ['Hi\n@includeIsolated (partials/footer)', 'line 2: "@includeIsolated" is not supported in Mail templates.'],
+        ['Hi\n@each (partials/footer)', 'line 2: "@each" is not supported in Mail templates.'],
+        ['@forelse (items as item)\n{{ item }}\n@empty\nNone\n@endforelse', 'line 1: "@forelse" is not supported in Mail templates.'],
+        ['Hello {{ name }}, @lang(\'welcome\')', 'line 1: "@lang" is not supported in Mail templates.'],
+        ['@php\n$x = 1;\n@endphp', 'line 1: "@php" is not supported in Mail templates.'],
+        ['Total: @json(order)', 'line 1: "@json" is not supported in Mail templates.'],
+      ]
+
+      for (const [source, message] of failures) {
+        expect(() => compileMailRegistry({ templates: { broken: source } })).toThrow(`Mail template "broken" ${message}`)
+      }
+    })
+
+    it('outputs an escaped @@ directive as literal text', async () => {
+      expect((await sendTemplate('Follow @@holo on social media')).html).toBe('<p>Follow @holo on social media</p>')
+      expect((await sendTemplate('Write @@if (paid) to check a value')).html).toBe('<p>Write @if (paid) to check a value</p>')
+      expect((await sendTemplate('Write @@unless or @@php in a guide')).html).toBe('<p>Write @unless or @php in a guide</p>')
+    })
+
+    it('outputs an unknown @ word as literal text', async () => {
+      const mail = await sendTemplate('Contact @support today\n@media (max-width: 600px)')
+
+      expect(mail.html).toBe('<p>Contact @support today\n@media (max-width: 600px)</p>')
+      expect(mail.text).toBe('Contact @support today\n@media (max-width: 600px)')
+    })
+  })
+
+  describe('markdown rendering', () => {
+    async function sendMarkdown(markdown: string): Promise<{ readonly html?: string, readonly text?: string }> {
+      configureFakeMailerWithTemplates({ fixture: markdown })
+      await sendMail(defineMail({ to: 'ava@example.com', subject: 'Markdown', markdown: 'fixture' }))
+      const sent = listFakeSentMails()
+      expect(sent).toHaveLength(1)
+      return sent[0]!.mail
+    }
+
+    it('renders CommonMark block syntax', async () => {
+      const mail = await sendMarkdown([
+        '1. First',
+        '2. Second',
+        '   - Nested',
+        '',
+        '> Quoted *text*',
+        '',
+        '```ts',
+        'const total = 1 < 2',
+        '```',
+        '',
+        '---',
+        '',
+        '![Logo](https://example.test/logo.png "Brand")',
+      ].join('\n'))
+
+      expect(mail.html).toContain('<ol>\n<li>First</li>\n<li>Second\n<ul>\n<li>Nested</li>\n</ul>\n</li>\n</ol>')
+      expect(mail.html).toContain('<blockquote>\n<p>Quoted <em>text</em></p>\n</blockquote>')
+      expect(mail.html).toContain('<pre><code class="language-ts">const total = 1 &lt; 2\n</code></pre>')
+      expect(mail.html).toContain('<hr>')
+      expect(mail.html).toContain('<img src="https://example.test/logo.png" alt="Logo" title="Brand">')
+    })
+
+    it('renders GitHub-style tables', async () => {
+      const mail = await sendMarkdown('| Item | Price |\n| :--- | ---: |\n| Plan | $10 |')
+
+      expect(mail.html).toMatch(/<table>\s*<thead>\s*<tr>\s*<th[^>]*>Item<\/th>\s*<th[^>]*>Price<\/th>/)
+      expect(mail.html).toMatch(/<tbody>\s*<tr>\s*<td[^>]*>Plan<\/td>\s*<td[^>]*>\$10<\/td>\s*<\/tr>\s*<\/tbody>\s*<\/table>/)
+    })
+
+    it('outputs template HTML as written and drops unsafe URLs like league/commonmark', async () => {
+      const mail = await sendMarkdown([
+        '<div align="center">Block</div>',
+        '',
+        'Inline <b>bold</b> [bad](javascript:alert(1)) [ok](https://example.test) ![pixel](javascript:track) <javascript:alert(2)>',
+      ].join('\n'))
+
+      expect(mail.html).toContain('<div align="center">Block</div>')
+      expect(mail.html).toContain('<p>Inline <b>bold</b> <a>bad</a> <a href="https://example.test">ok</a> <img src alt="pixel"> <a>javascript:alert(2)</a></p>')
+      expect(mail.text).toBe('Block\n\nInline bold bad ok (https://example.test) pixel javascript:alert(2)')
+    })
+
+    it('links every URL scheme except javascript:, vbscript:, file:, and data: in any case', async () => {
+      const mail = await sendMarkdown([
+        '[call](tel:+15550100) [text](sms:+15550100) [mail](mailto:help@example.test) [app](myapp://open) [page](/orders) [top](#top)',
+        '',
+        '[a](JavaScript:alert(1)) [b](VBSCRIPT:msgbox) [c](file:///etc/passwd) [d](data:text/html,x) [e](<JAVASCRIPT:alert(1)>)',
+        '',
+        '![png](data:image/png;base64,AAAA) ![webp](DATA:image/webp;base64,AAAA) ![svg](data:image/svg+xml;base64,AAAA)',
+      ].join('\n'))
+
+      expect(mail.html).toBe([
+        '<p><a href="tel:+15550100">call</a> <a href="sms:+15550100">text</a> <a href="mailto:help@example.test">mail</a> <a href="myapp://open">app</a> <a href="/orders">page</a> <a href="#top">top</a></p>',
+        '<p><a>a</a> <a>b</a> <a>c</a> <a>d</a> <a>e</a></p>',
+        '<p><img src="data:image/png;base64,AAAA" alt="png"> <img src="DATA:image/webp;base64,AAAA" alt="webp"> <img src alt="svg"></p>',
+      ].join('\n'))
+    })
+
+    it('generates plain text from markdown with syntax removed', async () => {
+      const mail = await sendMarkdown([
+        '# Invoice **paid**',
+        '',
+        'Thanks for using `Holo`. [View invoice](https://example.test/invoices/1) or [bad](javascript:alert).',
+        '',
+        '1. First',
+        '2. Second',
+        '   - Nested',
+        '',
+        '> Quoted *text*',
+        '',
+        '```',
+        'npm install',
+        '```',
+        '',
+        '| Item | Price |',
+        '| --- | --- |',
+        '| Plan | $10 |',
+      ].join('\n'))
+
+      expect(mail.text).toBe([
+        'Invoice paid',
+        '',
+        'Thanks for using Holo. View invoice (https://example.test/invoices/1) or bad.',
+        '',
+        '1. First',
+        '2. Second',
+        '  - Nested',
+        '',
+        'Quoted text',
+        '',
+        'npm install',
+        '',
+        'Item | Price',
+        'Plan | $10',
+      ].join('\n'))
+    })
+  })
+
+  it('uses renderView for render-backed mails', async () => {
+    const renderView = vi.fn(async ({ view, props }: { view: string, props?: Record<string, unknown> }) => {
       return `<section data-view="${view}">${String(props?.title ?? '')}</section>`
     })
 
@@ -181,13 +526,6 @@ describe('@holo-js/mail runtime', () => {
         ...normalizeMailConfig(),
         from: { email: 'config@example.com' },
       },
-    })
-
-    const wrappedMarkdown = defineMail({
-      to: 'ava@example.com',
-      subject: 'Wrapped',
-      markdown: '# Wrapped',
-      markdownWrapper: 'emails/layout',
     })
 
     const renderMail = defineMail({
@@ -201,11 +539,8 @@ describe('@holo-js/mail runtime', () => {
       },
     })
 
-    const wrapped = await previewMail(wrappedMarkdown)
     const rendered = await previewMail(renderMail)
 
-    expect(wrapped.html).toBe('<article data-wrapper="true"><h1>Wrapped</h1></article>')
-    expect(wrapped.text).toBe('Wrapped')
     expect(rendered.html).toBe('<section data-view="auth/verify-email">Verify Email</section>')
     expect(rendered.source).toEqual({
       kind: 'render',
@@ -216,22 +551,7 @@ describe('@holo-js/mail runtime', () => {
         },
       },
     })
-    expect(renderView).toHaveBeenCalledTimes(2)
-    expect(renderView).toHaveBeenNthCalledWith(1, {
-      view: 'emails/layout',
-      props: expect.objectContaining({
-        html: '<h1>Wrapped</h1>',
-        markdown: '# Wrapped',
-        text: 'Wrapped',
-        subject: 'Wrapped',
-      }),
-    })
-    expect(renderView).toHaveBeenNthCalledWith(2, {
-      view: 'auth/verify-email',
-      props: {
-        title: 'Verify Email',
-      },
-    })
+    expect(renderView).toHaveBeenCalledTimes(1)
   })
 
   it('renders html, json, and text preview responses and maps preview errors', async () => {
@@ -242,12 +562,13 @@ describe('@holo-js/mail runtime', () => {
         allowedEnvironments: ['development', 'test'] as const,
       },
     }
-    configureMailRuntime({ config, environment: 'test' })
+    const compiled = compileWithoutLayout({ welcome: '# Preview' })
+    configureMailRuntime({ config, environment: 'test', compiled })
 
     const markdown = defineMail({
       to: 'ava@example.com',
       subject: 'Preview',
-      markdown: '# Preview',
+      markdown: 'welcome',
     })
 
     const htmlResponse = await renderMailPreview(markdown)
@@ -285,7 +606,7 @@ describe('@holo-js/mail runtime', () => {
     expect(unavailableText.status).toBe(422)
     await expect(unavailableText.text()).resolves.toContain('text preview is unavailable')
 
-    configureMailRuntime({ config, environment: 'production' })
+    configureMailRuntime({ config, environment: 'production', compiled })
     const disabled = await renderMailPreview(markdown)
     expect(disabled.status).toBe(403)
     await expect(disabled.text()).resolves.toContain('preview is disabled')
@@ -305,7 +626,7 @@ describe('@holo-js/mail runtime', () => {
     const mail = defineMail({
       to: 'ava@example.com',
       subject: 'Preview',
-      markdown: '# Preview',
+      text: 'Preview',
     })
     process.env.APP_ENV = 'development'
     process.env.NODE_ENV = 'development'
@@ -324,7 +645,7 @@ describe('@holo-js/mail runtime', () => {
       from: 'noreply@example.com',
       to: 'ava@example.com',
       subject: 'Base',
-      markdown: '# Base',
+      markdown: 'welcome',
     })
 
     await expect(previewMail(mail, {
@@ -355,7 +676,7 @@ describe('@holo-js/mail runtime', () => {
     const mail = defineMail({
       to: 'ava@example.com',
       subject: 'Attachments',
-      markdown: '# Attachments',
+      text: 'Attachments',
       attachments: [
         {
           path: '/tmp/report.pdf',
@@ -453,7 +774,7 @@ describe('@holo-js/mail runtime', () => {
     const mail = defineMail({
       to: 'ava@example.com',
       subject: 'Queued',
-      markdown: '# Queued',
+      text: 'Queued',
       attachments: [
         {
           resolve: async () => ({
@@ -491,12 +812,12 @@ describe('@holo-js/mail runtime', () => {
     const previewMailDefinition = defineMail({
       to: 'ava@example.com',
       subject: 'Preview Driver',
-      markdown: '# Preview Driver',
+      text: 'Preview Driver',
     })
     const fakeMailDefinition = defineMail({
       to: 'ava@example.com',
       subject: 'Fake Driver',
-      markdown: '# Fake Driver',
+      text: 'Fake Driver',
       mailer: 'fake',
     })
 
@@ -567,7 +888,7 @@ describe('@holo-js/mail runtime', () => {
       const result = await sendMail(defineMail({
         to: 'ava@example.com',
         subject: 'Persisted Preview Driver',
-        markdown: '# Preview Driver',
+        text: 'Preview Driver',
       }))
 
       const persistedEntries = await readdir(previewRoot)
@@ -816,7 +1137,7 @@ export default {
     const mail = defineMail({
       to: 'ava@example.com',
       subject: 'Custom Driver',
-      markdown: '# Custom Driver',
+      text: 'Custom Driver',
     })
 
     const result = await sendMail(mail)

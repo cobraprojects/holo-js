@@ -9,7 +9,7 @@ function InvoiceMail(input: { readonly to: string, readonly invoiceNumber: strin
   return defineMail({
     to: input.to,
     subject: `Invoice ${input.invoiceNumber}`,
-    markdown: 'Your invoice is attached.',
+    text: 'Your invoice is attached.',
     attachments: [
       attachFromStorage(`invoices/${input.invoiceNumber}.pdf`),
     ],

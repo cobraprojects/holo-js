@@ -16,12 +16,12 @@ import {
   SECURITY_CONFIG_FILE_NAMES,
   SESSION_CONFIG_FILE_NAMES,
   type AuthInstallResult,
-  type AuthNotificationsPublishResult,
   type AuthorizationInstallResult,
   type BroadcastInstallResult,
   type CacheInstallResult,
   type EventsInstallResult,
   type MailInstallResult,
+  type MailPublishResult,
   type MediaInstallResult,
   type NotificationsInstallResult,
   type QueueInstallResult,
@@ -41,6 +41,7 @@ import {
   resolveFirstExistingPath,
 } from './runtime'
 import { writeTextFile } from './atomic-file'
+import { loadPublishableMailFiles, type PublishableFile } from './mail-templates'
 import {
   authFeaturesRequireConfigUpdate,
   canSafelyRewriteAuthConfig,
@@ -214,30 +215,29 @@ const AUTH_NOTIFICATION_FILES = Object.freeze([
   }),
 ])
 
-async function writeAuthNotificationFiles(projectRoot: string): Promise<{
-  readonly createdFiles: readonly string[]
-  readonly skippedFiles: readonly string[]
-}> {
-  const createdFiles: string[] = []
+const AUTH_NOTIFICATION_PACKAGES = Object.freeze(['@holo-js/auth', '@holo-js/notifications'])
+
+async function writePublishableFiles(
+  projectRoot: string,
+  files: readonly PublishableFile[],
+  force: boolean,
+): Promise<Pick<MailPublishResult, 'publishedFiles' | 'skippedFiles'>> {
+  const publishedFiles: string[] = []
   const skippedFiles: string[] = []
 
-  await mkdir(resolve(projectRoot, 'server/notifications/auth'), { recursive: true })
-
-  for (const file of AUTH_NOTIFICATION_FILES) {
+  for (const file of files) {
     const filePath = resolve(projectRoot, file.path)
-    if (await pathExists(filePath)) {
-      skippedFiles.push(filePath)
+    if (!force && await pathExists(filePath)) {
+      skippedFiles.push(file.path)
       continue
     }
 
-    await writeTextFile(filePath, file.render())
-    createdFiles.push(filePath)
+    await mkdir(dirname(filePath), { recursive: true })
+    await writeTextFile(filePath, file.contents)
+    publishedFiles.push(file.path)
   }
 
-  return {
-    createdFiles,
-    skippedFiles,
-  }
+  return { publishedFiles, skippedFiles }
 }
 
 async function syncHostedAuthRouteFiles(projectRoot: string, features: AuthInstallFeatures): Promise<void> {
@@ -609,31 +609,40 @@ export async function installNotificationsIntoProject(
   }
 }
 
-export async function publishAuthNotificationsIntoProject(
+async function readDependencyPresence(projectRoot: string): Promise<(name: string) => boolean> {
+  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  return name => Boolean(dependencies[name] ?? devDependencies[name])
+}
+
+function assertMailDependencyPresent(hasDependency: (name: string) => boolean, feature: string): void {
+  if (!hasDependency('@holo-js/mail')) {
+    throw new Error(`${feature} requires @holo-js/mail. Install mail first with \`holo install mail\`.`)
+  }
+}
+
+export async function assertMailPackageInstalled(projectRoot: string, feature: string): Promise<void> {
+  assertMailDependencyPresent(await readDependencyPresence(projectRoot), feature)
+}
+
+export async function publishMailIntoProject(
   projectRoot: string,
-): Promise<AuthNotificationsPublishResult> {
+  options: { readonly force?: boolean } = {},
+): Promise<MailPublishResult> {
   await loadProjectConfig(projectRoot, { required: true })
-  const dependencies = await readPackageJsonDependencyState(projectRoot)
+  const hasDependency = await readDependencyPresence(projectRoot)
+  assertMailDependencyPresent(hasDependency, 'Mail publishing')
 
-  if (!dependencies.dependencies['@holo-js/auth'] && !dependencies.devDependencies['@holo-js/auth']) {
-    throw new Error(
-      'Auth notification publishing requires @holo-js/auth. '
-      + 'Install auth first with `holo install auth`.',
-    )
-  }
-
-  if (!dependencies.dependencies['@holo-js/notifications'] && !dependencies.devDependencies['@holo-js/notifications']) {
-    throw new Error(
-      'Auth notification publishing requires @holo-js/notifications. '
-      + 'Install notifications first with `holo install notifications`.',
-    )
-  }
-
-  const result = await writeAuthNotificationFiles(projectRoot)
+  const mailFiles = await loadPublishableMailFiles(projectRoot)
+  const authFiles = AUTH_NOTIFICATION_FILES.map(file => ({ path: file.path, contents: file.render() }))
+  const missingAuthPackages = AUTH_NOTIFICATION_PACKAGES.filter(name => !hasDependency(name))
+  const publishable = missingAuthPackages.length === 0 ? [...mailFiles, ...authFiles] : mailFiles
+  const written = await writePublishableFiles(projectRoot, publishable, options.force === true)
 
   return {
-    ...result,
-    hasMailDependency: !!dependencies.dependencies['@holo-js/mail'] || !!dependencies.devDependencies['@holo-js/mail'],
+    ...written,
+    filesMissingPackages: missingAuthPackages.length === 0
+      ? []
+      : authFiles.map(file => ({ path: file.path, packages: missingAuthPackages })),
   }
 }
 

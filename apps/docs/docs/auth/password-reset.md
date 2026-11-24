@@ -199,9 +199,13 @@ await requestPasswordReset({ email }, { broker: 'admins' })
 
 `requestPasswordReset()` also accepts `expiresAt` in that options object, to override `expire` for one link.
 
+## The email
+
+The reset email has the subject `Reset Password Notification`, the greeting `Hello!`, the line "You are receiving this email because we received a password reset request for your account.", a **Reset Password** button, and the closing lines "This password reset link will expire in 60 minutes." and "If you did not request a password reset, no further action is required." The minutes come from the link's lifetime: the broker's `expire`, or the `expiresAt` you passed. Like the verification email, it renders inside your app's [Mail layout and theme](/mail/layouts-and-themes).
+
 ## Customize the email
 
-Reset emails are sent the same way as verification emails: through notifications, through mail, or only logged if neither is installed. Run `npx holo auth:notifications:publish` to get an editable `server/notifications/auth/password-reset.ts`. Its email builder receives `email`, `url`, and `expiresAt`. See [Customize the email](/auth/email-verification#customize-the-email).
+Reset emails are sent the same way as verification emails: through notifications, through mail, or only logged if neither is installed. Run `npx holo mail:publish` to get an editable `server/notifications/auth/password-reset.ts`; it needs `@holo-js/notifications`. Its email builder receives `email`, `url`, and `expiresInMinutes`. See [Customize the email](/auth/email-verification#customize-the-email).
 
 Queue the reset email in production. A queued email returns the request before mail I/O, which removes the timing difference described under [Request a reset link](#request-a-reset-link). Queueing needs a worker for the queue connection, as described in [Queueing notifications](/notifications/queueing).
 

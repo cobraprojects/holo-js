@@ -51,7 +51,7 @@ function WeeklyDigestMail(input: { readonly to: string }) {
   return defineMail({
     to: input.to,
     subject: 'Your weekly digest',
-    markdown: '# This week',
+    markdown: 'weekly-digest',
     queue: { connection: 'redis', queue: 'digests' },
   })
 }
@@ -115,7 +115,7 @@ Set `tries` to the total number of attempts, and `backoff` to the seconds to wai
 const mail = defineMail({
   to: 'ava@example.com',
   subject: 'Your invoice',
-  markdown: '# Invoice',
+  text: 'Your invoice is ready.',
   queue: { queue: 'mail', tries: 3, backoff: [10, 60] },
 })
 ```
@@ -124,7 +124,9 @@ The first retry waits 10 seconds and the second waits 60. A single number such a
 
 ## What the worker receives
 
-Holo renders the mail before it goes on the queue. The worker sends the stored subject, HTML, text, recipients, and attachments; it doesn't call your mail function again. Changes you deploy to a mail file only affect mail queued after the deploy.
+Holo resolves the mail when you send it and stores the result on the queue. The worker doesn't call your mail function again, so changes you deploy to a mail file only affect mail queued after the deploy.
+
+A Markdown mail stores its Mail template name and `data`, and the worker renders it with the template deployed when it sends the mail. If you change the template after the mail is queued, the worker renders the new version, so the result can differ from an immediate send. `html`, `text`, and `render` mails store their rendered subject, HTML, and text.
 
 See [Attachments and queues](/mail/attachments#attachments-and-queues) for how files are stored with the job. Failed deliveries show up in [failed jobs](/queue/failed-jobs).
 

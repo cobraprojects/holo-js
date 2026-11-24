@@ -10,6 +10,7 @@ import { holoRuntimeInternals, renderGeneratedSchemaPlaceholder, type MigrationD
 import { writeTextFile } from './atomic-file'
 import { errorMessage } from '../error-message'
 import { loadGeneratedProjectRegistry, writeGeneratedProjectRegistry } from './registry'
+import { discoverMailRegistry, MAIL_SOURCE_FILE_PATTERN, readMailSourceSnapshot, type MailSourceSnapshot } from './mail-templates'
 import {
   createProjectModuleBatch,
   loadAuthorizationDiscoveryModule,
@@ -33,7 +34,9 @@ import {
   type GeneratedModelRegistryEntry,
   type GeneratedProjectRegistry,
   type GeneratedSeederRegistryEntry,
+  type GeneratedSourceFileEntry,
   type MinimalListenerDefinition,
+  MAIL_ROOT,
   makeProjectRelativePath,
   pathExists,
 } from './shared'
@@ -689,6 +692,9 @@ async function discoverProjectRegistry(
     sourcePath: entry.sourcePath,
   })))
   authorizationAbilities.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath))
+  const mailSnapshot = await readMailSourceSnapshot(projectRoot)
+  const mail = await discoverMailRegistry(projectRoot, mailSnapshot)
+  const mailSources = hashSourceSnapshot(projectRoot, mailSnapshot)
 
   const registry: GeneratedProjectRegistry = {
     version: 1,
@@ -718,6 +724,8 @@ async function discoverProjectRegistry(
     channels,
     authorizationPolicies,
     authorizationAbilities,
+    ...(mail ? { mail } : {}),
+    mailSources,
   }
 
   await writeGeneratedProjectRegistry(projectRoot, registry, prepareFramework)
@@ -736,12 +744,19 @@ function withoutShadowedFailedCommands(
   })
 }
 
+function hashSourceSnapshot(projectRoot: string, snapshot: MailSourceSnapshot): GeneratedSourceFileEntry[] {
+  return [...snapshot].map(([filePath, contents]) => {
+    return { sourcePath: makeProjectRelativePath(projectRoot, filePath), sourceHash: hashContents(contents) }
+  })
+}
+
 async function areSourceFilesCurrent(
   projectRoot: string,
   sourceRoot: string,
-  entries: readonly { readonly sourcePath: string, readonly sourceHash?: string }[],
+  entries: readonly GeneratedSourceFileEntry[],
+  pattern?: RegExp,
 ): Promise<boolean> {
-  const sourceFiles = await collectFiles(resolve(projectRoot, sourceRoot))
+  const sourceFiles = await collectFiles(resolve(projectRoot, sourceRoot), pattern)
   const registeredHashes = new Map(entries.map(entry => [entry.sourcePath, entry.sourceHash]))
   if (sourceFiles.length !== registeredHashes.size) return false
 
@@ -775,6 +790,7 @@ async function areCommandDefinitionsCurrent(
   return await areSourceFilesCurrent(projectRoot, config.paths.jobs, registry.jobs)
     && await areSourceFilesCurrent(projectRoot, config.paths.events, registry.events)
     && await areSourceFilesCurrent(projectRoot, config.paths.listeners, registry.listeners)
+    && await areSourceFilesCurrent(projectRoot, MAIL_ROOT, registry.mailSources ?? [], MAIL_SOURCE_FILE_PATTERN)
 }
 
 async function loadCommandDiscoveryRegistry(
@@ -789,9 +805,13 @@ async function loadCommandDiscoveryRegistry(
   return prepareProjectDiscovery(projectRoot, config).catch(async () => await loadGeneratedProjectRegistry(projectRoot) ?? cachedRegistry)
 }
 
+function hashContents(contents: Buffer): string {
+  return createHash('sha256').update(contents).digest('hex')
+}
+
 async function hashSourceFile(filePath: string): Promise<string | undefined> {
   const contents = await readFile(filePath).catch(() => undefined)
-  return contents === undefined ? undefined : createHash('sha256').update(contents).digest('hex')
+  return contents === undefined ? undefined : hashContents(contents)
 }
 
 type DefinitionsLoadedMarkers = Set<string>

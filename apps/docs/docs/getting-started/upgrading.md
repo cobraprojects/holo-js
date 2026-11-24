@@ -2,7 +2,7 @@
 
 ## Upgrading from 0.6.3 to 0.6.4
 
-Update every installed `@holo-js/*` package to `0.6.4` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. Apps that use the built-in file, database or Redis session stores need no code changes.
+Update every installed `@holo-js/*` package to `0.6.4` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. Apps that use the built-in file, database or Redis session stores need no session code changes. Apps that send Markdown mail must move its content into Mail templates, as described below.
 
 ### Custom session stores need `updateData`
 
@@ -13,6 +13,77 @@ Session guards now change their part of the session with one atomic store call, 
 Session rotation now moves the data the session holds at the moment it rotates, so a sign-in, a multi-factor challenge, starting impersonation, a password reset or your own `rotateSession()` call keeps changes other requests make to that session meanwhile, such as another guard logging out, the CSRF token or a pending multi-factor enrollment. App code that calls `rotateSession()` doesn't change, and the built-in file, database and Redis stores support it.
 
 A custom store's `rotate` has a new signature: `rotate(previousSessionId, next, update): Promise<SessionRecord>`. `next` is the new record without its data. Read the previous session, call `update` with its current data, and store `{ ...next, data: update(current) }` under `next.id` atomically with removing the previous session; carry private flash state over as before, then return the stored record. If the previous session is missing or expired, throw without creating the new one. `update` is pure, so a store that retries a compare-and-set may call it again. `rotate` is only called with a new identifier. A store whose `rotate` still returns `Promise<void>` no longer typechecks.
+
+### Markdown mail content moves into Mail templates
+
+`markdown` in `defineMail()` now names a [Mail template](/mail/markdown) instead of holding Markdown text. Move each Markdown body into a `.md` file under `server/mail/templates`, pass the values it needs as `data`, and run `npx holo prepare` so the template is compiled and its types are generated:
+
+```ts
+// Before
+defineMail({
+  to: input.to,
+  subject: 'Welcome',
+  markdown: `# Welcome\n\nHello ${input.name},`,
+})
+
+// After
+defineMail({
+  to: input.to,
+  subject: 'Welcome',
+  markdown: 'welcome',
+  data: { name: input.name },
+})
+```
+
+```md [server/mail/templates/welcome.md]
+# Welcome
+
+Hello {{ name }},
+```
+
+`{{ name }}` escapes HTML in the value. HTML written in the template itself is output as written. Values output through `{{ }}` or `{!! !!}` must be strings or numbers, so format dates before passing them. Lists for `@foreach`, nested objects, and any JSON value tested by `@if` stay valid. Passing Markdown text to `markdown` is now a type error, and sending it throws `Mail template "<text>" is not registered.`
+
+### Turn on secured encoding for Mail templates
+
+Add `markdown: { securedEncoding: true }` to `config/mail.ts`, as new apps now do. Without it, `{{ }}` escapes only HTML, so a value from a user, such as a name of `[Claim your prize](https://example.com)`, becomes a link in your email, as in Laravel by default. With it, `[`, `]`, and `\` in `{{ }}` values are escaped too, so links and images can't come from a value. See [Secured encoding](/mail/markdown#secured-encoding).
+
+```ts [config/mail.ts]
+export default defineMailConfig({
+  markdown: {
+    securedEncoding: true,
+  },
+})
+```
+
+Secured encoding covers `{{ }}` only. Review the files that `holo mail:publish` or `holo auth:notifications:publish` left in your app, such as `server/notifications/auth/email-verification.ts`, `server/notifications/auth/password-reset.ts`, and `server/mail/templates/notifications/email.md`, and any notification that puts user data, such as a name, in `greeting`, `lines`, or `outroLines`: keep that data in `{{ }}` and out of `{!! !!}`.
+
+### `markdown.wrapper` and `markdownWrapper` are removed
+
+The `markdown.wrapper` option in `config/mail.ts` and the `markdownWrapper` option of `defineMail()` are removed. Delete them; a mail that still sets them no longer typechecks. To change what surrounds every Markdown mail, write a [Mail layout](/mail/layouts-and-themes#custom-layout) instead.
+
+### Markdown mail is wrapped in a Mail layout and styled by a Mail theme
+
+Every Markdown mail is now wrapped in the default Mail layout, with a header that shows `name` from `config/app.ts` linking to its `url`, and the footer `© {year} {name}. All rights reserved.`. The default theme's CSS is inlined into the HTML, and the plain-text part gets the layout's header and footer too. Check that `name` and `url` in `config/app.ts` are set for your app. To change the look, see [Mail layouts and themes](/mail/layouts-and-themes).
+
+### `holo make:mail --markdown` takes a template name
+
+`npx holo make:mail` now creates the mail definition and its Mail template. `--markdown` takes the template name, such as `--markdown=orders/shipped`; without it the name is the kebab-case mail name without a `Mail` suffix.
+
+### Notification emails render through Mail templates
+
+Email notifications are now rendered by the `notifications/email` [Mail template](/notifications/channels#email) inside your Mail layout and theme, like Laravel's notification emails. They start with `Hello!` (or `Whoops!` for `level: 'error'`) unless you set `greeting`, and end with `Regards,` and your app name unless you set `salutation`. The subject is no longer repeated as a heading, `lines` are no longer trimmed or filtered, and the link under the button now reads `If you're having trouble clicking the "{label}" button, copy and paste the URL below into your web browser:`. A notification that sets only `text` is now sent as plain text without a generated HTML body. Notifications that set `html` are sent unchanged.
+
+### A single line break no longer adds `<br>` in Markdown mail
+
+Markdown mail is rendered with CommonMark. A single line break inside a paragraph now stays inside the paragraph as a space instead of becoming a `<br>`. End the line with two spaces or a `\` to keep a line break, or separate the lines with a blank line to start a new paragraph.
+
+### Auth emails use Laravel's content
+
+The built-in email verification and password reset emails now have Laravel's subjects, lines and button labels, start with `Hello!` instead of the user's name, and render inside your Mail layout and theme. The reset email states how many minutes the link is valid instead of the date it expires. The email builders in `server/notifications/auth/email-verification.ts` and `password-reset.ts` now receive `expiresInMinutes` instead of `expiresAt`. Replace `data.expiresAt` in those files, for example with `` `This password reset link will expire in ${data.expiresInMinutes} minutes.` ``. The files declare their own data type, so a file that still reads `expiresAt` typechecks but gets `undefined`. See [Email verification](/auth/email-verification#the-email) and [Password reset](/auth/password-reset#the-email).
+
+### `holo auth:notifications:publish` is replaced by `holo mail:publish`
+
+`npx holo auth:notifications:publish` is removed. Run `npx holo mail:publish` instead. It publishes the same `server/notifications/auth/email-verification.ts` and `password-reset.ts`, and also copies the Mail layout, the `default` theme, the built-in Mail components, and the notification email template into `server/mail`. Those copies match Holo's defaults, so your emails don't change. Existing files are still skipped unless you pass `--force`. See [`mail:publish`](/reference/cli#mail-publish).
 
 ## Upgrading from 0.6.2 to 0.6.3
 
@@ -1335,7 +1406,7 @@ Sign in with Apple takes the user's email only from the signed `id_token`. Befor
 
 Failed logins and every reset-link request now take at least 200 ms, whether or not the account exists, so response time doesn't reveal which emails have accounts. Successful logins aren't delayed. Your code doesn't change, but failed attempts answer a little slower.
 
-A reset-link request that sends its email synchronously can still take longer than 200 ms when the mail server is slow, and that difference can reveal an account. Queue the reset email so the request returns before the mail is sent. Publish the notification with `npx holo auth:notifications:publish` and queue it, as described in [Customize the email](/auth/password-reset#customize-the-email).
+A reset-link request that sends its email synchronously can still take longer than 200 ms when the mail server is slow, and that difference can reveal an account. Queue the reset email so the request returns before the mail is sent. Publish the notification with `npx holo mail:publish` and queue it, as described in [Customize the email](/auth/password-reset#customize-the-email).
 
 ### User records load on every request
 

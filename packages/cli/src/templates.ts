@@ -223,30 +223,44 @@ export function renderMultiListenerTemplate(
   ].join('\n')
 }
 
-export function renderMarkdownMailTemplate(mailName: string, inputTypeName: string): string {
+export function renderMarkdownMailTemplate(mailName: string, inputTypeName: string, templateName: string): string {
   return [
     'import { defineMail } from \'@holo-js/mail\'',
     '',
     `export type ${inputTypeName} = {`,
     '  readonly to: string',
     '  readonly name: string',
+    '  readonly url: string',
     '}',
     '',
     `function ${mailName}(input: ${inputTypeName}) {`,
     '  return defineMail({',
     '    to: input.to,',
     '    subject: `Welcome, ${input.name}`,',
-    '    markdown: [',
-    '      \'# Welcome\',',
-    '      \'\',',
-    '      `Hello ${input.name},`,',
-    '      \'\',',
-    '      \'Your mail definition is ready.\',',
-    '    ].join(\'\\n\'),',
+    `    markdown: '${templateName}',`,
+    '    data: {',
+    '      name: input.name,',
+    '      url: input.url,',
+    '    },',
     '  })',
     '}',
     '',
     `export default ${mailName}`,
+    '',
+  ].join('\n')
+}
+
+export function renderMailTemplateMarkdown(): string {
+  return [
+    '# Welcome',
+    '',
+    'Hello {{ name }},',
+    '',
+    'Your mail is ready.',
+    '',
+    '<mail::button url="{{ url }}">',
+    'Get Started',
+    '</mail::button>',
     '',
   ].join('\n')
 }

@@ -8,6 +8,7 @@ import type { ObservedPrepareChange } from './framework-restart'
 import { isUnchangedWrittenOutput, PACKAGE_MANIFEST_DISCOVERY_PATHS } from './written-outputs'
 import { resolveProjectPlugins } from './project/plugins'
 import { normalizeArtifactPath } from './project/plugin-prepare/paths'
+import { MAIL_ROOT } from './project/shared'
 import { isIgnorableWatchError, isRecursiveWatchUnsupported, isVanishedEntryUnderWatchRoot, normalizeWatchedFilePath, toPosixSlashes } from './watch-paths'
 
 export { PACKAGE_MANIFEST_DISCOVERY_PATHS }
@@ -150,6 +151,7 @@ function resolveConfiguredDiscoveryRoots(project: LoadedProjectConfig): readonly
     resolveConfiguredBroadcastPath(project),
     resolveConfiguredChannelsPath(project),
     resolveConfiguredRealtimePath(project),
+    MAIL_ROOT,
     'config',
   ].map(root => toPosixSlashes(normalize(root)).replace(/\/+$/, '') || '.'))
 }

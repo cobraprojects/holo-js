@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
+import { holoAppDefaults } from '@holo-js/config'
 import { resolveRetryBackoffSeconds } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import {
@@ -19,7 +20,6 @@ import {
   type MailDelayValue,
   type MailDriver,
   type MailDriverExecutionContext,
-  type MailJsonObject,
   type MailOverrideInput,
   type MailPreviewFormat,
   type MailPreviewPolicy,
@@ -35,7 +35,8 @@ import {
   mergeMailDefinitionInputs,
   normalizeMailDefinition,
 } from './contracts'
-import { renderMarkdown, renderMarkdownInline, stripMarkdownSyntax } from './markdown'
+import { renderMarkdownMail, type MailTemplateSelection } from './layout'
+import type { CompiledMailRegistry } from './templates'
 import { getRegisteredMailDriver } from './registry'
 import { loadMailPluginDrivers, resetMailPluginDrivers } from './plugins'
 import {
@@ -52,6 +53,12 @@ import {
 } from './preview'
 
 const HOLO_MAIL_DELIVER_JOB = 'holo.mail.deliver'
+const EMPTY_COMPILED_MAIL_REGISTRY: CompiledMailRegistry = Object.freeze({
+  templates: Object.freeze({}),
+  components: Object.freeze({}),
+  layouts: Object.freeze({}),
+  themes: Object.freeze({}),
+})
 const LOCAL_ATTACHMENT_ROOTS = Object.freeze([
   tmpdir(),
   resolve(process.cwd(), 'storage'),
@@ -234,8 +241,13 @@ type SerializedQueuedAttachment = Readonly<{
   }>
 }>
 
+type MailTemplateSource = MailTemplateSelection & {
+  readonly theme?: string
+}
+
 type QueuedResolvedMailPayload = Readonly<Omit<ResolvedMail, 'attachments'> & {
   readonly attachments: readonly SerializedQueuedAttachment[]
+  readonly template?: Readonly<MailTemplateSource>
 }>
 
 type QueuedMailDeliveryPayload = Readonly<{
@@ -1132,8 +1144,30 @@ function deserializeQueuedAttachment(
   })
 }
 
+function createQueuedMailContent(
+  mail: ResolvedMail,
+  definition: MailDefinition,
+): Pick<QueuedResolvedMailPayload, 'html' | 'text' | 'template'> {
+  if (typeof definition.markdown === 'string') {
+    return {
+      template: Object.freeze({
+        name: definition.markdown,
+        data: definition.data ?? {},
+        ...(definition.theme ? { theme: definition.theme } : {}),
+      }),
+      ...(typeof definition.text === 'string' ? { text: definition.text } : {}),
+    }
+  }
+
+  return {
+    ...(typeof mail.html === 'string' ? { html: mail.html } : {}),
+    ...(typeof mail.text === 'string' ? { text: mail.text } : {}),
+  }
+}
+
 function createQueuedMailPayload(
   mail: ResolvedMail,
+  definition: MailDefinition,
   context: MailDriverExecutionContext,
   backoff?: number | readonly number[],
 ): QueuedMailDeliveryPayload {
@@ -1151,8 +1185,7 @@ function createQueuedMailPayload(
       cc: mail.cc,
       bcc: mail.bcc,
       subject: mail.subject,
-      ...(typeof mail.html === 'string' ? { html: mail.html } : {}),
-      ...(typeof mail.text === 'string' ? { text: mail.text } : {}),
+      ...createQueuedMailContent(mail, definition),
       attachments: Object.freeze(mail.attachments.map(serializeQueuedAttachment)),
       headers: mail.headers,
       tags: mail.tags,
@@ -1160,6 +1193,19 @@ function createQueuedMailPayload(
       ...(mail.priority ? { priority: mail.priority } : {}),
     }),
   })
+}
+
+function resolveQueuedMailContent(
+  payload: QueuedResolvedMailPayload,
+): Pick<ResolvedMail, 'html' | 'text'> {
+  if (payload.template) {
+    return renderMailTemplateContent(payload.template, payload.subject, payload.text)
+  }
+
+  return {
+    ...(typeof payload.html === 'string' ? { html: payload.html } : {}),
+    ...(typeof payload.text === 'string' ? { text: payload.text } : {}),
+  }
 }
 
 function createResolvedMailFromQueuedPayload(
@@ -1172,8 +1218,7 @@ function createResolvedMailFromQueuedPayload(
     cc: payload.mail.cc,
     bcc: payload.mail.bcc,
     subject: payload.mail.subject,
-    ...(typeof payload.mail.html === 'string' ? { html: payload.mail.html } : {}),
-    ...(typeof payload.mail.text === 'string' ? { text: payload.mail.text } : {}),
+    ...resolveQueuedMailContent(payload.mail),
     attachments: Object.freeze(payload.mail.attachments.map(deserializeQueuedAttachment)),
     headers: payload.mail.headers,
     tags: payload.mail.tags,
@@ -1255,13 +1300,14 @@ async function ensureMailQueueJobRegistered(queueModule?: QueueModule): Promise<
 
 async function dispatchQueuedMail(
   mail: ResolvedMail,
+  definition: MailDefinition,
   context: MailDriverExecutionContext,
   plan: ResolvedQueuePlan,
 ): Promise<Readonly<MailSendResult>> {
   const queueModule = await ensureMailQueueJobRegistered()
   let pending = queueModule.dispatch(
     HOLO_MAIL_DELIVER_JOB,
-    createQueuedMailPayload(mail, context, plan.backoff),
+    createQueuedMailPayload(mail, definition, context, plan.backoff),
     typeof plan.tries === 'undefined' ? {} : { tries: plan.tries },
   )
 
@@ -1364,37 +1410,29 @@ function resolveEnvelope(mail: MailDefinition): ResolvedEnvelope {
   })
 }
 
-function createMarkdownWrapperProps(
-  mail: MailDefinition,
-  envelope: ResolvedEnvelope,
-  html: string,
-  text: string,
-): MailJsonObject {
-  const serializeAddress = (address: MailAddress): MailJsonObject => Object.freeze({
-    email: address.email,
-    ...(address.name ? { name: address.name } : {}),
+function getCompiledMailRegistry(): CompiledMailRegistry {
+  return getRuntimeBindings().compiled ?? EMPTY_COMPILED_MAIL_REGISTRY
+}
+
+function renderMailTemplateContent(
+  template: MailTemplateSource,
+  subject: string,
+  text: string | undefined,
+): { readonly html: string, readonly text: string } {
+  const { markdown } = getResolvedConfig()
+  const rendered = renderMarkdownMail(template, {
+    registry: getCompiledMailRegistry(),
+    app: getRuntimeBindings().app ?? holoAppDefaults,
+    subject,
+    theme: template.theme ?? markdown.theme,
+    securedEncoding: markdown.securedEncoding,
   })
 
-  return Object.freeze({
-    subject: mail.subject,
-    html,
-    markdown: mail.markdown!,
-    text,
-    from: serializeAddress(envelope.from),
-    replyTo: serializeAddress(envelope.replyTo),
-    to: Object.freeze(envelope.to.map(serializeAddress)),
-    cc: Object.freeze(envelope.cc.map(serializeAddress)),
-    bcc: Object.freeze(envelope.bcc.map(serializeAddress)),
-    headers: Object.freeze({ ...mail.headers }),
-    tags: Object.freeze([...mail.tags]),
-    ...(mail.metadata ? { metadata: mail.metadata } : {}),
-    ...(mail.priority ? { priority: mail.priority } : {}),
-  })
+  return typeof text === 'string' ? Object.freeze({ ...rendered, text }) : rendered
 }
 
 async function renderContent(
   mail: MailDefinition,
-  envelope: ResolvedEnvelope,
 ): Promise<RenderedContent> {
   if (mail.render) {
     const html = await renderView(mail.render)
@@ -1410,20 +1448,13 @@ async function renderContent(
   }
 
   if (typeof mail.markdown === 'string') {
-    const baseHtml = renderMarkdown(mail.markdown)
-    const text = mail.text ?? stripMarkdownSyntax(mail.markdown)
-    const wrapper = mail.markdownWrapper ?? envelope.config.markdown.wrapper
-    const html = wrapper
-      ? await renderView({
-          view: wrapper,
-          props: createMarkdownWrapperProps(mail, envelope, baseHtml, text),
-        })
-      : baseHtml
-
     return Object.freeze({
       kind: 'markdown',
-      html,
-      text,
+      ...renderMailTemplateContent({
+        name: mail.markdown,
+        data: mail.data ?? {},
+        ...(mail.theme ? { theme: mail.theme } : {}),
+      }, mail.subject, mail.text),
       source: Object.freeze({
         kind: 'markdown' as const,
         markdown: mail.markdown,
@@ -1456,7 +1487,7 @@ async function computePreview(
   mail: MailDefinition,
 ): Promise<PreviewComputation> {
   const envelope = resolveEnvelope(mail)
-  const rendered = await renderContent(mail, envelope)
+  const rendered = await renderContent(mail)
   const preview: MailPreviewResult = Object.freeze({
     from: envelope.from,
     replyTo: envelope.replyTo,
@@ -1574,7 +1605,7 @@ class PendingSend implements PendingMailSend<MailSendResult> {
     if (execution.allowAfterCommitDeferral !== false && plan.afterCommit) {
       const deferredResult = await deferSendUntilCommit(executionContext, async () => {
         if (plan.queued) {
-          return await dispatchQueuedMail(resolvedMail, executionContext, plan)
+          return await dispatchQueuedMail(resolvedMail, this.#mail, executionContext, plan)
         }
 
         return await deliverResolvedMail(resolvedMail, resolvedDriver, executionContext)
@@ -1588,6 +1619,7 @@ class PendingSend implements PendingMailSend<MailSendResult> {
     if (plan.queued) {
       return await dispatchQueuedMail(
         resolvedMail,
+        this.#mail,
         createSendContext(messageId, resolvedDriver, true),
         plan,
       )
@@ -1769,7 +1801,6 @@ export const mailRuntimeInternals = {
   createSendContext,
   createResolvedMailFromQueuedPayload,
   computePreview,
-  createMarkdownWrapperProps,
   createPreviewHtml,
   createPreviewPolicy,
   deferSendUntilCommit,
@@ -1798,8 +1829,6 @@ export const mailRuntimeInternals = {
   persistPreviewArtifact,
   prepareMailSend,
   renderContent,
-  renderMarkdown,
-  renderMarkdownInline,
   renderPreviewResponse,
   renderView,
   resolveDriver,
@@ -1827,5 +1856,4 @@ export const mailRuntimeInternals = {
   setStorageModuleLoader(loader: (() => Promise<StorageModule>) | undefined) {
     getRuntimeState().loadStorageModule = loader
   },
-  stripMarkdownSyntax,
 }

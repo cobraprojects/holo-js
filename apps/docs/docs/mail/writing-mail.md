@@ -15,15 +15,23 @@ function OrderShippedMail(input: OrderShippedMailInput) {
   return defineMail({
     to: input.to,
     subject: `Order ${input.orderNumber} has shipped`,
-    markdown: [
-      '# Your order is on its way',
-      '',
-      `Track it here: [${input.trackingUrl}](${input.trackingUrl})`,
-    ].join('\n'),
+    markdown: 'order-shipped',
+    data: {
+      orderNumber: input.orderNumber,
+      trackingUrl: input.trackingUrl,
+    },
   })
 }
 
 export default OrderShippedMail
+```
+
+The content lives in a [Mail template](/mail/markdown), a Markdown file under `server/mail/templates`:
+
+```md [server/mail/templates/order-shipped.md]
+# Your order is on its way
+
+Order {{ orderNumber }} has shipped. [Track it here]({{ trackingUrl }}).
 ```
 
 ## Generate a mail file
@@ -32,13 +40,17 @@ export default OrderShippedMail
 npx holo make:mail order-shipped
 ```
 
-This creates `server/mail/order-shipped.ts` with an `OrderShippedMail` function and an `OrderShippedMailInput` type. Use a path to group mail into folders:
+This creates `server/mail/order-shipped.ts` with an `OrderShippedMail` function and an `OrderShippedMailInput` type, and its Mail template `server/mail/templates/order-shipped.md`. The template has a heading, a `{{ name }}` greeting, and a [`<mail::button>`](/mail/markdown#mail-components) linking to `{{ url }}`, and the mail passes `name` and `url` as `data`. The template name is the kebab-case mail name without a `Mail` suffix. Use a path to group mail into folders:
 
 ```bash
 npx holo make:mail auth/verify-email
 ```
 
-That creates `server/mail/auth/verify-email.ts` exporting `VerifyEmailMail`. The generated file uses a Markdown body. `--markdown` is accepted but is already the default.
+That creates `server/mail/auth/verify-email.ts` exporting `VerifyEmailMail` and the template `server/mail/templates/auth/verify-email.md`. To choose the template name yourself, pass `--markdown`:
+
+```bash
+npx holo make:mail OrderShipped --markdown=orders/shipped
+```
 
 ## Recipients
 
@@ -81,7 +93,7 @@ Give each mail exactly one main body. Holo throws if you set none or more than o
 
 | Option | Use it for |
 | --- | --- |
-| `markdown` | Most transactional email. Holo converts it to HTML and builds a plain-text version for you. See [Markdown mail](/mail/markdown). |
+| `markdown` | Most transactional email. Names a Mail template that Holo fills with `data`, converts to HTML, and turns into a plain-text version. See [Markdown mail](/mail/markdown). |
 | `html` | A full HTML body you wrote or generated yourself. |
 | `text` | Plain-text-only email. |
 | `render` | HTML rendered from a view: `{ view: 'emails/welcome', props: { ... } }`. |
@@ -98,7 +110,7 @@ defineMail({
 ```
 
 ::: warning
-`render` (and Markdown wrappers) need a view renderer, and the default Next.js, Nuxt, and SvelteKit setups don't provide one. Sending a `render` mail without one throws `Mail view rendering requires a renderView runtime binding`. Use `markdown` or `html` unless you have set up a renderer. `npx holo make:mail` doesn't support `--view` for the same reason.
+`render` needs a view renderer, and the default Next.js, Nuxt, and SvelteKit setups don't provide one. Sending a `render` mail without one throws `Mail view rendering requires a renderView runtime binding`. Use `markdown` or `html` unless you have set up a renderer. `npx holo make:mail` doesn't support `--view` for the same reason.
 :::
 
 `html` is sent exactly as you pass it. If it includes user input, escape that input first.
@@ -109,7 +121,7 @@ defineMail({
 defineMail({
   to: 'ava@example.com',
   subject: 'Your weekly report',
-  markdown: '# Weekly report',
+  markdown: 'reports/weekly',
   headers: { 'X-Campaign': 'weekly-report' },
   tags: ['reports', 'weekly'],
   metadata: { userId: 42 },
@@ -132,7 +144,7 @@ A mail can carry its own delivery defaults. Callers can still override them when
 defineMail({
   to: 'ava@example.com',
   subject: 'Your export is ready',
-  markdown: 'Download it from your dashboard.',
+  text: 'Download it from your dashboard.',
   mailer: 'smtp',
   queue: { connection: 'redis', queue: 'mail' },
   delay: 60,
@@ -164,8 +176,9 @@ Every option you can pass to `defineMail()`, grouped by what it controls.
 - [text](#text)
 - [html](#html)
 - [markdown](#markdown)
+- [data](#data)
+- [theme](#theme)
 - [render](#render)
-- [markdownWrapper](#markdownwrapper)
 
 </div>
 
@@ -260,10 +273,26 @@ html: '<p>Your password was changed.</p>'
 
 ### markdown
 
-A Markdown body. Holo converts it to HTML and builds a plain-text version by stripping the syntax. See [Markdown mail](/mail/markdown) for the supported syntax.
+The name of a Mail template: its path under `server/mail/templates` without `.md`. Holo fills the template with `data`, converts it to HTML, and builds a plain-text version. An unknown name is a type error. See [Markdown mail](/mail/markdown).
 
 ```ts
-markdown: '# Welcome to Acme\n\nYour account is ready.'
+markdown: 'orders/shipped'
+```
+
+### data
+
+The values a Mail template uses. `holo prepare` generates its type from the template, so a missing or wrongly typed value is a type error. Values used in `{{ }}` or `{!! !!}` must be strings or numbers; format dates and other objects before passing them. Only valid with `markdown`.
+
+```ts
+data: { orderNumber: 'A-1001', customer: { name: 'Ava' } }
+```
+
+### theme
+
+The Mail theme that styles this mail, in place of `markdown.theme` from `config/mail.ts`. Theme names come from `server/mail/themes`, plus the built-in `default`, so an unknown name is a type error. Only valid with `markdown`. See [Layouts and themes](/mail/layouts-and-themes#themes).
+
+```ts
+theme: 'receipt'
 ```
 
 ### render
@@ -272,14 +301,6 @@ HTML rendered from a view. Pass the view name and optional `props`, which must b
 
 ```ts
 render: { view: 'emails/welcome', props: { name: 'Ava' } }
-```
-
-### markdownWrapper
-
-The view that wraps the HTML of a Markdown mail, such as a shared header and footer. It only works on `markdown` mails and overrides the global `markdown.wrapper` setting.
-
-```ts
-markdownWrapper: 'layouts/marketing'
 ```
 
 ### attachments

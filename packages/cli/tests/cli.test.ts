@@ -896,6 +896,21 @@ async function linkWorkspaceBroadcast(projectRoot: string): Promise<void> {
   await linkWorkspaceExternalDependency(projectRoot, 'valibot')
 }
 
+async function installWorkspaceMail(projectRoot: string): Promise<void> {
+  const { mailPackageRoot } = ensureBuiltWorkspacePackagesSync()
+  const packageJsonPath = join(projectRoot, 'package.json')
+  const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8')) as { dependencies?: Record<string, string> }
+  await writeFile(packageJsonPath, JSON.stringify({
+    ...packageJson,
+    dependencies: { ...packageJson.dependencies, '@holo-js/mail': 'workspace:*' },
+  }, null, 2))
+  await writeProjectFile(projectRoot, 'config/mail.ts', 'export default {}')
+  const targetDir = join(projectRoot, 'node_modules', '@holo-js')
+  await mkdir(targetDir, { recursive: true })
+  await rm(join(targetDir, 'mail'), { recursive: true, force: true }).catch(() => {})
+  await symlink(mailPackageRoot, join(targetDir, 'mail')).catch(() => {})
+}
+
 async function linkWorkspaceAuthorization(projectRoot: string): Promise<void> {
   const { authorizationPackageRoot } = ensureBuiltWorkspacePackagesSync()
   const targetDir = join(projectRoot, 'node_modules', '@holo-js')
@@ -1520,7 +1535,8 @@ export default {
     expect(listed.stdout).toContain('  make:broadcast                  Create and register a broadcast definition file.')
     expect(listed.stdout).toContain('  make:channel                    Create and register a channel authorization definition file.')
     expect(listed.stdout).toContain('  make:job                        Create and register a queue job file.')
-    expect(listed.stdout).toContain('  make:mail                       Create a mail definition file.')
+    expect(listed.stdout).toContain('  make:mail                       Create a mail definition file and its Mail template.')
+    expect(listed.stdout).toContain('  mail:publish                    Publish the customisable mail layout, components, theme, and templates into the application.')
     expect(listed.stdout).toContain('  make:model                      Create a model and optionally related database artifacts.')
     expect(listed.stdout).toContain('App commands:')
     expect(listed.stdout).toContain('  courses:reindex                 Reindex course data.')
@@ -4772,7 +4788,9 @@ export default defineCacheConfig({
     expect(result.stdout).toContain('Installed mail support.')
     expect(result.stdout).toContain('  - created config/mail.ts')
     expect(result.stdout).toContain('  - created server/mail')
-    expect(await readFile(join(projectRoot, 'config/mail.ts'), 'utf8')).toContain('defineMailConfig')
+    const mailConfig = await readFile(join(projectRoot, 'config/mail.ts'), 'utf8')
+    expect(mailConfig).toContain('defineMailConfig')
+    expect(mailConfig).toMatch(/markdown: \{\s*securedEncoding: true,\s*\}/)
     expect((await stat(join(projectRoot, 'server/mail'))).isDirectory()).toBe(true)
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('MAIL_MAILER=preview')
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('MAIL_MAILER=')
@@ -9199,6 +9217,63 @@ export default {
     })()
   })
 
+  it('prints every error wrapped in an aggregate command failure', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'server/commands/boot.mjs', `
+export default {
+  description: 'Fails to boot and to roll back.',
+  async run() {
+    const rollbackFailure = new AggregateError(
+      [new Error('cache store disconnect failed'), 'queue driver close failed'],
+      'Multiple runtime contributions failed to dispose.',
+    )
+    throw new AggregateError(
+      [new Error('Entities version mismatch.\\nExpected 2, found 1.'), rollbackFailure],
+      '[Holo Runtime] Initialization and rollback both failed.',
+    )
+  },
+}
+`)
+
+    const io = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['boot'], io.io))).resolves.toBe(1)
+    expect(io.read().stderr).toBe([
+      '[Holo Runtime] Initialization and rollback both failed.',
+      '  - Entities version mismatch.',
+      '    Expected 2, found 1.',
+      '  - Multiple runtime contributions failed to dispose.',
+      '      - cache store disconnect failed',
+      '      - queue driver close failed',
+      '',
+    ].join('\n'))
+  })
+
+  it('prints an aggregate command failure that contains itself without overflowing', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'server/commands/boot.mjs', `
+export default {
+  description: 'Fails with a self-referencing aggregate.',
+  async run() {
+    const dispose = new AggregateError([], 'Dispose failed.')
+    const boot = new AggregateError([dispose], 'Boot failed.')
+    dispose.errors.push(boot)
+    throw boot
+  },
+}
+`)
+
+    const io = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['boot'], io.io))).resolves.toBe(1)
+    expect(io.read().stderr).toBe([
+      'Boot failed.',
+      '  - Dispose failed.',
+      '      - [Circular]',
+      '',
+    ].join('\n'))
+  })
+
   it('rejects duplicate app command names and aliases', async () => {
     const duplicateAliasRoot = await createTempProject()
     tempDirs.push(duplicateAliasRoot)
@@ -9743,27 +9818,19 @@ export default defineMigration({
 
     const markdownMailProjectRoot = await createTempProject()
     tempDirs.push(markdownMailProjectRoot)
+    await installWorkspaceMail(markdownMailProjectRoot)
     const markdownMailIo = createIo(markdownMailProjectRoot)
     await (async () => runMakeMail(markdownMailIo.io, markdownMailProjectRoot, {
       args: ['auth/verify-email'],
-      flags: { type: 'markdown' },
+      flags: {},
     }))()
     expect(markdownMailIo.read().stdout).toContain('Created mail: server/mail/auth/verify-email.ts')
+    expect(markdownMailIo.read().stdout).toContain('Created mail template: server/mail/templates/auth/verify-email.md')
     await expect(readFile(join(markdownMailProjectRoot, 'server/mail/auth/verify-email.ts'), 'utf8')).resolves.toContain('defineMail')
     await expect((async () => runMakeMail(markdownMailIo.io, markdownMailProjectRoot, {
       args: ['auth/verify-email'],
-      flags: { type: 'markdown' },
+      flags: {},
     }))()).rejects.toThrow('Refusing to overwrite existing file')
-
-    const viewMailProjectRoot = await createTempProject()
-    tempDirs.push(viewMailProjectRoot)
-    const viewMailIo = createIo(viewMailProjectRoot)
-    await expect((async () => runMakeMail(viewMailIo.io, viewMailProjectRoot, {
-      args: ['billing/invoice-paid'],
-      flags: { type: 'view' },
-    }))()).rejects.toThrow('View-backed mail scaffolding requires a renderView runtime binding')
-    await expect(stat(join(viewMailProjectRoot, 'server/mail/billing/invoice-paid.ts'))).rejects.toThrow()
-    await expect(stat(join(viewMailProjectRoot, 'server/mail/billing/invoice-paid.view.ts'))).rejects.toThrow()
     expect(renderNuxtMailViewTemplate('ExampleMailInput', './example')).toContain('defineProps<ExampleMailInput>()')
     expect(renderSvelteMailViewTemplate('ExampleMailInput', './example')).toContain('export let to: ExampleMailInput[\'to\']')
     expect(renderGenericMailViewTemplate('ExampleMail', 'ExampleMailInput', './example')).toContain('ExampleMailInput')
@@ -10040,6 +10107,7 @@ export default defineEvent({ name: 'user.registered' })
     const jobCommandRoot = await createTempProject()
     tempDirs.push(jobCommandRoot)
     await linkWorkspaceBroadcast(jobCommandRoot)
+    await installWorkspaceMail(jobCommandRoot)
     const jobCommandIo = createIo(jobCommandRoot)
     const jobCommandContext = {
       ...jobCommandIo.io,
@@ -10058,7 +10126,7 @@ export default defineEvent({ name: 'user.registered' })
     const preparedChannel = await makeChannel?.prepare?.({ args: ['orders.{orderId}'], flags: {} }, jobCommandContext as never)
     const preparedEvent = await makeEvent?.prepare?.({ args: ['user/registered'], flags: {} }, jobCommandContext as never)
     const preparedJob = await makeJob?.prepare?.({ args: ['SendEmail'], flags: {} }, jobCommandContext as never)
-    const preparedMarkdownMail = await makeMail?.prepare?.({ args: ['billing/receipt'], flags: { markdown: true } }, jobCommandContext as never)
+    const preparedMarkdownMail = await makeMail?.prepare?.({ args: ['billing/receipt'], flags: { markdown: 'orders/receipt' } }, jobCommandContext as never)
     const preparedDefaultMail = await makeMail?.prepare?.({ args: ['welcome'], flags: {} }, jobCommandContext as never)
     const promptedMailIo = createIo(jobCommandRoot, {
       tty: true,
@@ -10108,20 +10176,20 @@ export default defineEvent({ name: 'user.registered' })
     } as never))()).resolves.toBeUndefined()
     await expect(preparedDefaultMail).toEqual({
       args: ['welcome'],
-      flags: { type: 'markdown' },
+      flags: {},
     })
     await expect(preparedMarkdownMail).toEqual({
       args: ['billing/receipt'],
-      flags: { type: 'markdown' },
+      flags: { markdown: 'orders/receipt' },
     })
     await expect(preparedPromptedMail).toEqual({
       args: ['prompted-mail'],
-      flags: { type: 'markdown' },
+      flags: {},
     })
     await expect(makeMail?.prepare?.({
       args: ['billing/invoice-paid'],
       flags: { view: true },
-    }, jobCommandContext as never)).rejects.toThrow('View-backed mail scaffolding requires a renderView runtime binding')
+    }, jobCommandContext as never)).rejects.toThrow('View-backed mail scaffolding is not available.')
     await expect((async () => makeMail?.run({
       projectRoot: jobCommandRoot,
       cwd: jobCommandRoot,
@@ -10142,10 +10210,9 @@ export default defineEvent({ name: 'user.registered' })
     await expect(makeMail?.prepare?.({
       args: ['billing/interactive'],
       flags: {},
-    }, interactiveMailContext as never)).resolves.toMatchObject({
-      flags: {
-        type: 'markdown',
-      },
+    }, interactiveMailContext as never)).resolves.toEqual({
+      args: ['billing/interactive'],
+      flags: {},
     })
     await expect(makeListener?.prepare?.({ args: ['SendWelcomeEmail'], flags: {} }, jobCommandContext as never)).rejects.toThrow(
       'Listener event name is required. Use "--event <event-name>".',
@@ -10158,10 +10225,6 @@ export default defineEvent({ name: 'user.registered' })
       args: [],
       flags: {},
     }, jobCommandContext as never)).rejects.toThrow('Missing required argument: Channel pattern.')
-    await expect(makeMail?.prepare?.({
-      args: ['bad'],
-      flags: { markdown: true, view: true },
-    }, jobCommandContext as never)).rejects.toThrow('Use either "--markdown" or "--view", not both.')
     await expect((async () => runMakeListener(jobCommandIo.io, jobCommandRoot, {
       args: ['SendWelcomeEmail'],
       flags: { event: 'missing.event' },
@@ -10172,7 +10235,7 @@ export default defineEvent({ name: 'user.registered' })
     }))()).rejects.toThrow('A name is required.')
     await expect((async () => runMakeMail(jobCommandIo.io, jobCommandRoot, {
       args: [],
-      flags: { type: 'markdown' },
+      flags: {},
     }))()).rejects.toThrow('A name is required.')
     await writeProjectFile(jobCommandRoot, 'server/events/audit/activity.ts', `
 import { defineEvent } from '@holo-js/events'
@@ -10237,47 +10300,6 @@ export default defineEvent({ name: 'audit.activity' })
   }, 90000)
 
 
-
-
-
-
-  it('publishes editable auth notification files without overwriting existing files', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
-      name: 'auth-notification-fixture',
-      private: true,
-      dependencies: {
-        '@holo-js/auth': expectedHoloPackageRange,
-        '@holo-js/notifications': expectedHoloPackageRange,
-      },
-    }, null, 2))
-
-    const first = await projectInternals.publishAuthNotificationsIntoProject(projectRoot)
-    const emailVerificationPath = join(projectRoot, 'server/notifications/auth/email-verification.ts')
-    const passwordResetPath = join(projectRoot, 'server/notifications/auth/password-reset.ts')
-    expect(first.createdFiles).toEqual([
-      emailVerificationPath,
-      passwordResetPath,
-    ])
-    expect(first.skippedFiles).toEqual([])
-    expect(first.hasMailDependency).toBe(false)
-    await expect(readFile(emailVerificationPath, 'utf8'))
-      .resolves.toContain('interface EmailVerificationNotification')
-    await expect(readFile(passwordResetPath, 'utf8'))
-      .resolves.toContain('interface PasswordResetNotification')
-    await expect(readFile(emailVerificationPath, 'utf8'))
-      .resolves.toContain('auth.email-verification')
-    await expect(readFile(passwordResetPath, 'utf8'))
-      .resolves.toContain('auth.password-reset')
-
-    const second = await projectInternals.publishAuthNotificationsIntoProject(projectRoot)
-    expect(second.createdFiles).toEqual([])
-    expect(second.skippedFiles).toEqual([
-      emailVerificationPath,
-      passwordResetPath,
-    ])
-  }, 30000)
 
 
 
@@ -11333,7 +11355,7 @@ export default defineConfig({
     expect(generatedHooks).toContain("from '../../src/hooks'")
     expect(generatedHooks).toContain('reroute')
     expect(generatedHooks).toContain('process.env.STORAGE_ROUTE_PREFIX')
-    expect(generatedHooks).toContain('/// <reference path="./sveltekit/paths.d.ts" />')
+    expect(generatedHooks).not.toContain('/// <reference')
     expect(generatedHooks).toContain('const pathname = appPathname(typeof userPath === \'string\' ? userPath : event.url.pathname, base)')
     expect(generatedHooks).toContain('return withBase(suffix ? `/storage${suffix}` : \'/storage\', base)')
     expect(await readFile(join(projectRoot, '.holo-js/generated/sveltekit/paths.d.ts'), 'utf8')).toContain('declare module \'virtual:holo-sveltekit/paths\'')
@@ -11345,7 +11367,7 @@ export default defineConfig({
     expect(generatedServerHooks).toContain('cause.name !== \'AuthorizationError\'')
     expect(generatedServerHooks).toContain('svelteKitError(cause.decision.status, cause.message)')
     expect(generatedServerHooks).not.toContain('event.url.pathname =')
-    expect(generatedServerHooks).toContain('/// <reference path="./sveltekit/paths.d.ts" />')
+    expect(generatedServerHooks).not.toContain('/// <reference')
     expect(generatedServerHooks).toContain('import { base } from \'virtual:holo-sveltekit/paths\'')
     expect(generatedServerHooks).toContain('import { appPathname, withBase } from \'@holo-js/adapter-sveltekit/internal/paths\'')
     expect(generatedServerHooks).toContain('paths.includes(appPathname(event.url.pathname, base))')

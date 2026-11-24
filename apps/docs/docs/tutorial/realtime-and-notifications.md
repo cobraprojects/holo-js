@@ -492,8 +492,8 @@ The import looks like it pulls server code into the browser, but it doesn't. Hol
 
 Because you selected `auth` and `notifications`, the project creator added two notifications:
 
-- `server/notifications/auth/email-verification.ts` — the "verify your email address" message
-- `server/notifications/auth/password-reset.ts` — the "reset your password" message
+- `server/notifications/auth/email-verification.ts` — the "Verify Email Address" message
+- `server/notifications/auth/password-reset.ts` — the "Reset Password Notification" message
 
 Each one uses `defineNotification()` and describes the email:
 
@@ -504,7 +504,7 @@ interface EmailVerificationNotification {
   readonly email: string
   readonly name?: string
   readonly url: string
-  readonly expiresAt: Date
+  readonly expiresInMinutes: number
 }
 
 export default defineNotification({
@@ -515,23 +515,24 @@ export default defineNotification({
   build: {
     email(data: EmailVerificationNotification) {
       return {
-        subject: 'Verify your email address',
-        greeting: data.name ? `Hello ${data.name},` : undefined,
+        subject: 'Verify Email Address',
         lines: [
-          'Confirm your account to finish signing in.',
-          `This verification link expires at ${data.expiresAt.toUTCString()}.`,
+          'Please click the button below to verify your email address.',
         ],
         action: {
-          label: 'Verify email address',
+          label: 'Verify Email Address',
           url: data.url,
         },
+        outroLines: [
+          'If you did not create an account, no further action is required.',
+        ],
       }
     },
   },
 })
 ```
 
-Edit the subject, lines, or button label to change the email. Holo's auth flows use these notifications for email verification (see `emailVerification.required` in chapter 7) and password reset.
+Edit the subject, lines, button label, or outro lines to change the email. The message renders inside your app's [Mail layout and theme](/mail/layouts-and-themes). Holo's auth flows use these notifications for email verification (see `emailVerification.required` in chapter 7) and password reset.
 
 In development the mailer is `preview`, so no real email leaves your machine. Each message is saved as a JSON file in `.holo-js/runtime/mail-preview/`. Set `MAIL_MAILER=smtp` and the `MAIL_HOST`/`MAIL_PORT` values in `.env` to send through a local mail catcher or a real server.
 

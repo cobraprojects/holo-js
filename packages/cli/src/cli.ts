@@ -1242,35 +1242,34 @@ export function createInternalCommands(
       },
     },
     {
-      name: 'auth:notifications:publish',
-      description: 'Publish editable auth notification definitions into the application.',
-      usage: 'holo auth:notifications:publish',
+      name: 'mail:publish',
+      description: 'Publish the customisable mail layout, components, theme, and templates into the application.',
+      usage: 'holo mail:publish [--force]',
       source: 'internal',
-      async prepare() {
-        return { args: [], flags: {} }
+      async prepare(input) {
+        return {
+          args: [],
+          flags: resolveBooleanFlag(input.flags, 'force') === true ? { force: true } : {},
+        }
       },
-      async run() {
-        const { publishAuthNotificationsIntoProject } = await loadProjectScaffoldModule()
-        const result = await publishAuthNotificationsIntoProject(context.projectRoot)
-        const changed = result.createdFiles.length > 0
+      async run(commandContext) {
+        const { publishMailIntoProject } = await loadProjectScaffoldModule()
+        const result = await publishMailIntoProject(context.projectRoot, { force: commandContext.flags.force === true })
 
-        writeLine(context.stdout, changed
-          ? 'Published auth notification files.'
-          : 'Auth notification files are already published.')
+        writeLine(context.stdout, result.publishedFiles.length > 0
+          ? 'Published mail files.'
+          : 'Mail files are already published.')
 
-        for (const filePath of result.createdFiles) {
-          writeLine(context.stdout, `  - created ${filePath}`)
+        for (const filePath of result.publishedFiles) {
+          writeLine(context.stdout, `  - published ${filePath}`)
         }
 
         for (const filePath of result.skippedFiles) {
           writeLine(context.stdout, `  - skipped existing ${filePath}`)
         }
 
-        if (!result.hasMailDependency) {
-          writeLine(
-            context.stdout,
-            '  - note: install @holo-js/mail or configure a notification mailer before email delivery can send.',
-          )
+        for (const file of result.filesMissingPackages) {
+          writeLine(context.stdout, `  - skipped ${file.path} (requires ${file.packages.join(' and ')})`)
         }
       },
     },
@@ -1921,26 +1920,18 @@ export function createInternalCommands(
     },
     {
       name: 'make:mail',
-      description: 'Create a mail definition file.',
-      usage: 'holo make:mail <name> [--markdown]',
+      description: 'Create a mail definition file and its Mail template.',
+      usage: 'holo make:mail <name> [--markdown=<template name>]',
       source: 'internal',
       async prepare(input) {
-        const markdown = resolveBooleanFlag(input.flags, 'markdown') === true
-        const view = resolveBooleanFlag(input.flags, 'view') === true
-
-        if (markdown && view) {
-          throw new Error('Use either "--markdown" or "--view", not both.')
+        if (resolveBooleanFlag(input.flags, 'view')) {
+          throw new Error('View-backed mail scaffolding is not available. "holo make:mail" creates a Mail template; use "--markdown=<template name>" to name it.')
         }
 
-        if (view) {
-          throw new Error(
-            'View-backed mail scaffolding requires a renderView runtime binding, which the first-party app scaffolds do not configure yet. Use "--markdown" instead.',
-          )
-        }
-
+        const markdown = resolveStringFlag(input.flags, 'markdown')
         return {
           args: [await ensureRequiredArg(context, input, 0, 'Mail name')],
-          flags: { type: 'markdown' },
+          flags: typeof markdown === 'undefined' ? {} : { markdown },
         }
       },
       async run(commandContext) {
@@ -2365,7 +2356,7 @@ export async function runCli(input: readonly string[], io: IoStreams): Promise<n
       || requestedCommandName === 'agents:install'
       || requestedCommandName === 'agent:install'
       || requestedCommandName === 'ai:install'
-      || requestedCommandName === 'auth:notifications:publish'
+      || requestedCommandName === 'mail:publish'
       || requestedCommandName === 'prepare'
       || requestedCommandName === 'dev'
       || requestedCommandName === 'build'
@@ -2454,7 +2445,7 @@ export async function runCli(input: readonly string[], io: IoStreams): Promise<n
     await command.run(commandContext)
     return 0
   } catch (error) {
-    writeLine(io.stderr, error instanceof Error ? error.message : String(error))
+    writeLine(io.stderr, errorMessage(error))
     return 1
   } finally {
     if (appEnvOverridden) {

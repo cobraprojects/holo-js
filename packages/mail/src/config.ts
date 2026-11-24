@@ -1,3 +1,5 @@
+import type { MailThemeName } from './contracts-types'
+
 export type HoloAppEnv = 'development' | 'production' | 'test'
 
 export interface HoloMailAddressConfig {
@@ -19,7 +21,8 @@ export interface HoloMailPreviewConfig {
 }
 
 export interface HoloMailMarkdownConfig {
-  readonly wrapper?: string
+  readonly theme?: MailThemeName
+  readonly securedEncoding?: boolean
 }
 
 export interface BaseMailDriverConfig {
@@ -88,7 +91,8 @@ export interface NormalizedHoloMailPreviewConfig {
 }
 
 export interface NormalizedHoloMailMarkdownConfig {
-  readonly wrapper?: string
+  readonly theme: string
+  readonly securedEncoding: boolean
 }
 
 export interface NormalizedBaseMailDriverConfig {
@@ -162,7 +166,8 @@ export const holoMailDefaults: Readonly<NormalizedHoloMailConfig> = Object.freez
     allowedEnvironments: Object.freeze(['development'] as const),
   }),
   markdown: Object.freeze({
-    wrapper: undefined,
+    theme: 'default',
+    securedEncoding: false,
   }),
   mailers: Object.freeze({
     preview: Object.freeze({
@@ -215,6 +220,17 @@ function normalizeOptionalMailString(
   }
 
   return normalized
+}
+
+function normalizeOptionalMailBoolean(
+  value: boolean | undefined,
+  label: string,
+): boolean | undefined {
+  if (typeof value === 'undefined' || typeof value === 'boolean') {
+    return value
+  }
+
+  throw new Error(`[Holo Mail] ${label} must be a boolean when provided.`)
 }
 
 function isValidMailAddress(email: string): boolean {
@@ -439,7 +455,9 @@ export function normalizeMailConfig(
       allowedEnvironments: normalizeMailPreviewEnvironments(config.preview?.allowedEnvironments),
     }),
     markdown: Object.freeze({
-      wrapper: normalizeOptionalMailString(config.markdown?.wrapper, 'Mail markdown wrapper') ?? holoMailDefaults.markdown.wrapper,
+      theme: normalizeOptionalMailString(config.markdown?.theme, 'Mail markdown theme') ?? holoMailDefaults.markdown.theme,
+      securedEncoding: normalizeOptionalMailBoolean(config.markdown?.securedEncoding, 'Mail markdown securedEncoding')
+        ?? holoMailDefaults.markdown.securedEncoding,
     }),
     mailers: Object.freeze(mergedMailers),
   })

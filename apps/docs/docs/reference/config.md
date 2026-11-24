@@ -324,7 +324,7 @@ export default defineMailConfig({
 | `queue.connection`, `queue.queue` | queue defaults | Where queued mail goes. |
 | `queue.afterCommit` | `false` | Wait for the current database transaction to commit before queueing. |
 | `preview.allowedEnvironments` | `['development']` | Environments where mail previews are available. |
-| `markdown.wrapper` | none | Custom wrapper for Markdown mail. |
+| `markdown.theme` | `'default'` | [Mail theme](/mail/layouts-and-themes#themes) for every Markdown mail. A mail's `theme` overrides it. |
 | `mailers` | `preview`, `log`, `fake`, `smtp` | Named mailers. Each can override `from`, `replyTo`, and `queue`. |
 
 Mailer options by driver:
