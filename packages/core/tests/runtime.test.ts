@@ -292,8 +292,8 @@ export default defineBroadcastConfig({
 `, 'utf8')
 }
 
-async function writeMailConfig(root: string, contents?: string): Promise<void> {
-  await writeFile(join(root, 'config/mail.ts'), contents ?? `
+async function writeMailConfig(root: string, options: { securedEncoding?: boolean } = {}): Promise<void> {
+  await writeFile(join(root, 'config/mail.ts'), `
 import { defineMailConfig } from ${mailPackageEntry}
 
 export default defineMailConfig({
@@ -302,6 +302,7 @@ export default defineMailConfig({
     email: 'noreply@app.test',
     name: 'Runtime App',
   },
+  markdown: { securedEncoding: ${options.securedEncoding ?? false} },
   mailers: {
     fake: {
       driver: 'fake',
@@ -3504,26 +3505,17 @@ export default defineAppConfig({ name: 'Runtime App', key: 'base64:key', env: 'd
       return sent
     }
 
-    async function bootNotificationMail(mail?: CompiledMailRegistry, securedEncoding = false): Promise<void> {
+    async function bootNotificationMail(options: { mail?: CompiledMailRegistry, securedEncoding?: boolean } = {}): Promise<void> {
       const root = await createProject()
       await writeBaseConfig(root)
-      await writeMailConfig(root, `
-import { defineMailConfig } from ${mailPackageEntry}
-
-export default defineMailConfig({
-  default: 'fake',
-  from: { email: 'noreply@app.test', name: 'Runtime App' },
-  markdown: { securedEncoding: ${securedEncoding} },
-  mailers: { fake: { driver: 'fake' } },
-})
-`)
+      await writeMailConfig(root, { securedEncoding: options.securedEncoding })
       await writeNotificationsConfig(root)
-      if (mail) await writeRegistry(root, { models: [], mail })
+      if (options.mail) await writeRegistry(root, { models: [], mail: options.mail })
       await initializeHolo(root)
     }
 
     it.each([false, true])('greets with Hello! and signs off with Regards and the app name by default (securedEncoding %s)', async (securedEncoding) => {
-      await bootNotificationMail(undefined, securedEncoding)
+      await bootNotificationMail({ securedEncoding })
 
       const sent = await sendEmailNotification({
         subject: 'Invoice paid',
@@ -3610,8 +3602,8 @@ export default defineMailConfig({
       expect(sent.mail.html).toMatch(/<h1[^>]*>Hello!<\/h1>/)
     })
 
-    it('uses a custom greeting and salutation and omits the subcopy without a Mail action', async () => {
-      await bootNotificationMail()
+    it.each([false, true])('uses a custom greeting and salutation and omits the subcopy without a Mail action (securedEncoding %s)', async (securedEncoding) => {
+      await bootNotificationMail({ securedEncoding })
 
       const sent = await sendEmailNotification({
         subject: 'Welcome',
@@ -3631,16 +3623,7 @@ export default defineMailConfig({
     it('keeps notification data from forming Markdown links when markdown.securedEncoding is on', async () => {
       const root = await createProject()
       await writeBaseConfig(root)
-      await writeMailConfig(root, `
-import { defineMailConfig } from ${mailPackageEntry}
-
-export default defineMailConfig({
-  default: 'fake',
-  from: { email: 'noreply@app.test', name: 'Runtime App' },
-  markdown: { securedEncoding: true },
-  mailers: { fake: { driver: 'fake' } },
-})
-`)
+      await writeMailConfig(root, { securedEncoding: true })
       await writeNotificationsConfig(root)
       await initializeHolo(root)
       const url = 'https://runtime.test/verify?ids[0]=1&sig=a%2Bb'
@@ -3665,7 +3648,7 @@ export default defineMailConfig({
     })
 
     it('renders a custom Mail template with its data inside the app Mail layout', async () => {
-      await bootNotificationMail(compileMailRegistry({ templates: { 'orders/shipped': '# Order {{ order.id }}\n\nThanks, {{ name }}.' } }))
+      await bootNotificationMail({ mail: compileMailRegistry({ templates: { 'orders/shipped': '# Order {{ order.id }}\n\nThanks, {{ name }}.' } }) })
 
       const sent = await sendEmailNotification({
         subject: 'Shipped',
@@ -3680,9 +3663,9 @@ export default defineMailConfig({
     })
 
     it('renders an app notifications/email Mail template instead of the built-in one', async () => {
-      await bootNotificationMail(compileMailRegistry({
+      await bootNotificationMail({ mail: compileMailRegistry({
         templates: { 'notifications/email': '## {{ greeting }} ({{ level }})\n\n@foreach (lines as line)\n- {{ line }}\n@endforeach\n\n{{ salutation }}' },
-      }))
+      }) })
 
       const sent = await sendEmailNotification({ subject: 'Paid', level: 'success', lines: ['Paid in full.'], salutation: 'Thanks' })
 
