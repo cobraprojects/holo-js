@@ -3531,6 +3531,21 @@ export default defineAppConfig({ name: 'Runtime App', key: 'base64:key', env: 'd
       expect(sent.mail.text).toBe(`Runtime App: https://runtime.test\n\nHello!\n\nYour invoice was paid.\n\nRegards,\nRuntime App\n\n© ${new Date().getFullYear()} Runtime App. All rights reserved.`)
     })
 
+    it('signs off with the current app name after the app config changes', async () => {
+      const root = await createProject()
+      await writeBaseConfig(root)
+      await writeMailConfig(root)
+      await writeNotificationsConfig(root)
+      await initializeHolo(root)
+      const appConfig = await readFile(join(root, 'config/app.ts'), 'utf8')
+      await writeFile(join(root, 'config/app.ts'), appConfig.replace('Runtime App', 'Renamed App'), 'utf8')
+      await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root, { preferCache: false }))
+
+      const sent = await sendEmailNotification({ subject: 'Invoice paid', lines: ['Your invoice was paid.'] })
+
+      expect(sent.mail.text).toContain('Regards,\nRenamed App')
+    })
+
     it('joins the internal line breaks of each line into one trimmed paragraph like Laravel', async () => {
       await bootNotificationMail()
 
