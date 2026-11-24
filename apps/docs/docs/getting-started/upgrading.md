@@ -63,6 +63,10 @@ Email notifications are now rendered by the `notifications/email` [Mail template
 
 Markdown mail is rendered with CommonMark. A single line break inside a paragraph now stays inside the paragraph as a space instead of becoming a `<br>`. End the line with two spaces or a `\` to keep a line break, or separate the lines with a blank line to start a new paragraph.
 
+### Auth emails use Laravel's content
+
+The built-in email verification and password reset emails now have Laravel's subjects, lines and button labels, start with `Hello!` instead of the user's name, and render inside your Mail layout and theme. The reset email states how many minutes the link is valid instead of the date it expires. The email builders in `server/notifications/auth/email-verification.ts` and `password-reset.ts` now receive `expiresInMinutes` instead of `expiresAt`. Replace `data.expiresAt` in those files, for example with `` `This password reset link will expire in ${data.expiresInMinutes} minutes.` ``. The files declare their own data type, so a file that still reads `expiresAt` typechecks but gets `undefined`. See [Email verification](/auth/email-verification#the-email) and [Password reset](/auth/password-reset#the-email).
+
 ## Upgrading from 0.6.2 to 0.6.3
 
 Update every installed `@holo-js/*` package to `0.6.3` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. Most apps need no code changes; check the cursor pagination change below. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#063---2026-11-22) lists the release changes.

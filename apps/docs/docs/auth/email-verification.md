@@ -242,9 +242,13 @@ export async function POST() {
 
 For page-level rules, an [authorization policy](/authorization/policies) can check the same field.
 
-## Customize the email
+## The email
+
+The verification email has the subject `Verify Email Address`, the greeting `Hello!`, the line "Please click the button below to verify your email address.", a **Verify Email Address** button, and the closing line "If you did not create an account, no further action is required." It renders with the built-in `notifications/email` Mail template inside your app's [Mail layout and theme](/mail/layouts-and-themes), so changing those changes this email too.
 
 Holo sends the email through [notifications](/notifications/) when `@holo-js/notifications` and a mailer are installed, or directly through [mail](/mail/) when only `@holo-js/mail` is installed. With neither, Holo still creates the token but only logs a warning instead of sending.
+
+## Customize the email
 
 To change the subject, text, or queueing, publish the notification files:
 
@@ -252,14 +256,14 @@ To change the subject, text, or queueing, publish the notification files:
 npx holo auth:notifications:publish
 ```
 
-This creates `server/notifications/auth/email-verification.ts` and `server/notifications/auth/password-reset.ts`. They are normal notifications, and Holo uses them automatically. The email builder receives:
+This creates `server/notifications/auth/email-verification.ts` and `server/notifications/auth/password-reset.ts`, filled with the default content above. They are normal notifications built with `defineNotification()`, so they need `@holo-js/notifications`. When a file exists, Holo uses it instead of the built-in email, and its message renders in your Mail layout and theme like any notification email. The email builder receives:
 
 | Field | Description |
 | --- | --- |
 | `email` | The recipient address |
 | `name` | The user's name, if set |
 | `url` | The full verification link |
-| `expiresAt` | When the link expires |
+| `expiresInMinutes` | How many minutes the link stays valid: `60` by default, or the lifetime of the `expiresAt` you passed |
 
 Holo sends verification email the same way the rest of your app sends mail. If your mailer or notification is queued, so is this email.
 
