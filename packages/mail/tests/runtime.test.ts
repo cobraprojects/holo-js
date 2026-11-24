@@ -217,9 +217,16 @@ describe('@holo-js/mail runtime', () => {
         .rejects.toThrow('Mail template "welcome" is not registered.')
     })
 
-    it('does not resolve inherited properties from data', async () => {
-      await expect(sendTemplate('{{ constructor }}'))
-        .rejects.toThrow('requires a string or number for "constructor"')
+    it.each([
+      ['an output path', '{{ __proto__ }}', 'line 1: "__proto__" is reserved and cannot be used in a data path.'],
+      ['a nested output path', 'Hi\n{!! order.constructor !!}', 'line 2: "constructor" is reserved and cannot be used in a data path.'],
+      ['an @if path', '@if (order.prototype)\nYes\n@endif', 'line 1: "prototype" is reserved and cannot be used in a data path.'],
+      ['a @foreach loop variable', '@foreach (items as constructor)\nItem\n@endforeach', 'line 1: "constructor" is reserved and cannot be used in a data path.'],
+      ['a component attribute name', '<mail::panel __proto__="x">Hi</mail::panel>', 'line 1: Mail component attribute "__proto__" is reserved.'],
+      ['a component attribute value path', '<mail::panel title="{{ prototype }}">Hi</mail::panel>', 'line 1: "prototype" is reserved and cannot be used in a data path.'],
+    ])('rejects a name that reaches object prototypes in %s when compiling', (_label, source, message) => {
+      expect(() => compileMailRegistry({ templates: { broken: source } }))
+        .toThrow(`Mail template "broken" ${message}`)
     })
 
     it('shows the @if branch for truthy values and the @else branch for falsy or missing values', async () => {

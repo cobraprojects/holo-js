@@ -49,7 +49,7 @@ Mail templates are `.md` files under `server/mail/templates`. A template's name 
 | `{!! name !!}` | The value of `name` exactly as given. |
 | `{{ customer.address.city }}` | A nested value, reached with a dot path. |
 
-A placeholder holds a dot path and nothing else. Templates never run JavaScript: there are no operators, function calls, or filters, so format values before you pass them.
+A placeholder holds a dot path and nothing else. Templates never run JavaScript: there are no operators, function calls, or filters, so format values before you pass them. The names `__proto__`, `constructor`, and `prototype` can't appear in a dot path, a loop item name, or a component attribute name; a template that uses them fails `holo prepare`.
 
 ::: danger
 `{!! !!}` outputs HTML exactly as given. Never use it for values that come from users, or they can inject HTML into your email. Use it only for HTML you built yourself.

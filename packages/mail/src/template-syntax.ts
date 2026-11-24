@@ -133,6 +133,7 @@ const BLOCK_CLOSERS: Readonly<Record<DirectiveBlock, string>> = { if: 'endif', f
 const FOREACH_ARGUMENT_PATTERN = /^(\S+)\s+as\s+([A-Za-z_]\w*)$/
 const TEMPLATE_NAME_PATTERN = /^[\w-][\w.-]*(?:\/[\w-][\w.-]*)*$/
 const PATH_SEGMENT_PATTERN = /^[A-Za-z_]\w*$/
+const RESERVED_NAMES: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
 
 export class MailTemplateSyntaxError extends MailError {
   readonly template: string
@@ -185,12 +186,19 @@ function findNextDirective(source: string, from: number): RegExpExecArray | unde
   return pattern.exec(source) ?? undefined
 }
 
+function assertNotReservedPathSegment(template: string, line: number, segment: string): void {
+  if (RESERVED_NAMES.has(segment)) {
+    throw new MailTemplateSyntaxError(template, line, `"${segment}" is reserved and cannot be used in a data path.`)
+  }
+}
+
 function parsePath(template: string, line: number, expression: string): readonly string[] {
   const segments = expression.trim().split('.')
   if (!segments.every(segment => PATH_SEGMENT_PATTERN.test(segment))) {
     throw new MailTemplateSyntaxError(template, line, `"${expression.trim()}" is not a data path. Use names separated by dots, such as "order.id".`)
   }
 
+  for (const segment of segments) assertNotReservedPathSegment(template, line, segment)
   return Object.freeze(segments)
 }
 
@@ -271,15 +279,18 @@ function compileAttributes(
   line: number,
   source: string,
 ): Readonly<Record<string, readonly MailTemplateValueNode[]>> {
-  const attributes: Record<string, readonly MailTemplateValueNode[]> = {}
+  const attributes = new Map<string, readonly MailTemplateValueNode[]>()
   for (const [, name = '', value = ''] of source.matchAll(COMPONENT_ATTRIBUTE_PATTERN)) {
-    if (Object.hasOwn(attributes, name)) {
+    if (RESERVED_NAMES.has(name)) {
+      throw new MailTemplateSyntaxError(context.template, line, `Mail component attribute "${name}" is reserved.`)
+    }
+    if (attributes.has(name)) {
       throw new MailTemplateSyntaxError(context.template, line, `Mail component attribute "${name}" is set more than once.`)
     }
-    attributes[name] = compileValueNodes(context.template, line, value)
+    attributes.set(name, compileValueNodes(context.template, line, value))
   }
 
-  return Object.freeze(attributes)
+  return Object.freeze(Object.fromEntries(attributes))
 }
 
 function scanComponentOpen(context: ScanContext, index: number, line: number): ScannedToken {
@@ -345,7 +356,9 @@ function openForeach(template: string, token: DirectiveToken): OpenBlock {
     throw new MailTemplateSyntaxError(template, token.line, '"@foreach" needs "path as name" in parentheses, such as "@foreach (order.items as item)".')
   }
 
-  return { kind: 'foreach', line: token.line, path: parsePath(template, token.line, match[1]), item: match[2], body: [] }
+  const path = parsePath(template, token.line, match[1])
+  assertNotReservedPathSegment(template, token.line, match[2])
+  return { kind: 'foreach', line: token.line, path, item: match[2], body: [] }
 }
 
 function openElse(template: string, blocks: readonly OpenBlock[], token: DirectiveToken): void {
