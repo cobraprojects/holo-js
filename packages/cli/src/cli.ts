@@ -2445,7 +2445,7 @@ export async function runCli(input: readonly string[], io: IoStreams): Promise<n
     await command.run(commandContext)
     return 0
   } catch (error) {
-    writeLine(io.stderr, errorMessage(error))
+    writeLine(io.stderr, error instanceof Error ? error.message : String(error))
     return 1
   } finally {
     if (appEnvOverridden) {

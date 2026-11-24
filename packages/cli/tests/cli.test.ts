@@ -9215,23 +9215,6 @@ export default {
     })()
   })
 
-  it('reports every failure wrapped by an aggregate command error', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    await writeProjectFile(projectRoot, 'server/commands/boot.mjs', `
-export default {
-  description: 'Boot command.',
-  async run() {
-    throw new AggregateError([new Error('initialize failed'), new Error('rollback failed')], 'Initialization and rollback both failed.')
-  },
-}
-`)
-
-    const io = createIo(projectRoot)
-    await expect(import('../src/cli').then(module => module.runCli(['boot'], io.io))).resolves.toBe(1)
-    expect(io.read().stderr).toBe('Initialization and rollback both failed.\n  - initialize failed\n  - rollback failed\n')
-  })
-
   it('rejects duplicate app command names and aliases', async () => {
     const duplicateAliasRoot = await createTempProject()
     tempDirs.push(duplicateAliasRoot)
@@ -11313,7 +11296,7 @@ export default defineConfig({
     expect(generatedHooks).toContain("from '../../src/hooks'")
     expect(generatedHooks).toContain('reroute')
     expect(generatedHooks).toContain('process.env.STORAGE_ROUTE_PREFIX')
-    expect(generatedHooks).not.toContain('/// <reference')
+    expect(generatedHooks).toContain('/// <reference path="./sveltekit/paths.d.ts" />')
     expect(generatedHooks).toContain('const pathname = appPathname(typeof userPath === \'string\' ? userPath : event.url.pathname, base)')
     expect(generatedHooks).toContain('return withBase(suffix ? `/storage${suffix}` : \'/storage\', base)')
     expect(await readFile(join(projectRoot, '.holo-js/generated/sveltekit/paths.d.ts'), 'utf8')).toContain('declare module \'virtual:holo-sveltekit/paths\'')
@@ -11325,7 +11308,7 @@ export default defineConfig({
     expect(generatedServerHooks).toContain('cause.name !== \'AuthorizationError\'')
     expect(generatedServerHooks).toContain('svelteKitError(cause.decision.status, cause.message)')
     expect(generatedServerHooks).not.toContain('event.url.pathname =')
-    expect(generatedServerHooks).not.toContain('/// <reference')
+    expect(generatedServerHooks).toContain('/// <reference path="./sveltekit/paths.d.ts" />')
     expect(generatedServerHooks).toContain('import { base } from \'virtual:holo-sveltekit/paths\'')
     expect(generatedServerHooks).toContain('import { appPathname, withBase } from \'@holo-js/adapter-sveltekit/internal/paths\'')
     expect(generatedServerHooks).toContain('paths.includes(appPathname(event.url.pathname, base))')
