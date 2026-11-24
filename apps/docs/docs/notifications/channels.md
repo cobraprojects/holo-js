@@ -52,7 +52,7 @@ email(recipient) {
 | `text` | `string` | Your own plain-text body, sent as given. |
 | `metadata` | JSON object | Passed to the mail as `metadata`. |
 
-Holo renders these fields with the `notifications/email` [Mail template](/mail/markdown#mail-templates), inside your app's [Mail layout and theme](/mail/layouts-and-themes), and escapes every value. To change how every notification email looks, add your own `server/mail/templates/notifications/email.md`; it receives `greeting`, `level`, `lines`, `action`, `outroLines`, `salutation` (only when the notification sets one), `appName`, and `actionColor` (`primary`, `success`, or `error`), and replaces the built-in template after `holo prepare`. Run `npx holo mail:publish` to start from a copy of the built-in template.
+Holo renders these fields with the `notifications/email` [Mail template](/mail/markdown#mail-templates), inside your app's [Mail layout and theme](/mail/layouts-and-themes), and escapes every value it renders through that template. A custom `html` or `text` body is sent as given: Holo does not escape or sanitize it. To change how every notification email looks, add your own `server/mail/templates/notifications/email.md`; it receives `greeting`, `level`, `lines`, `action`, `outroLines`, `salutation` (only when the notification sets one), `appName`, and `actionColor` (`primary`, `success`, or `error`), and replaces the built-in template after `holo prepare`. Run `npx holo mail:publish` to start from a copy of the built-in template.
 
 The email channel supports only these fields. If you need attachments, `cc`, or a custom sender, send a [mail](/mail/sending) directly instead.
 
