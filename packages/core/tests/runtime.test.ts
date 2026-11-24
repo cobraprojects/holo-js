@@ -3531,6 +3531,20 @@ export default defineAppConfig({ name: 'Runtime App', key: 'base64:key', env: 'd
       expect(sent.mail.text).toBe(`Runtime App: https://runtime.test\n\nHello!\n\nYour invoice was paid.\n\nRegards,\nRuntime App\n\n© ${new Date().getFullYear()} Runtime App. All rights reserved.`)
     })
 
+    it('joins the internal line breaks of each line into one trimmed paragraph like Laravel', async () => {
+      await bootNotificationMail()
+
+      const sent = await sendEmailNotification({
+        subject: 'Invoice paid',
+        lines: ['    Your invoice\nwas paid.', 'Thanks\n\nagain.'],
+        outroLines: ['  Questions?\r\n  Reply to this mail.  '],
+      })
+
+      expect(sent.mail.html).toMatch(/<p[^>]*>Your invoice was paid\.<\/p>\s*<p[^>]*>Thanks {2}again\.<\/p>\s*<p[^>]*>Questions\? Reply to this mail\.<\/p>/)
+      expect(sent.mail.html).not.toContain('<pre')
+      expect(sent.mail.text).toContain('Hello!\n\nYour invoice was paid.\n\nThanks  again.\n\nQuestions? Reply to this mail.\n\nRegards,')
+    })
+
     it('renders intro lines, the level-colored Mail action, outro lines, and the action subcopy in order', async () => {
       await bootNotificationMail()
 
