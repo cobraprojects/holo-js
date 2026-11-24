@@ -41,10 +41,17 @@ const mailFiles = [
 ]
 const authToken = { id: 'token-id', plainTextToken: 'secret', createdAt: new Date('2026-10-08T12:00:00Z'), expiresAt: new Date('2026-10-08T13:00:00Z') }
 
-async function createProject(options: { readonly notifications: boolean }): Promise<string> {
+async function createProject(options: { readonly notifications: boolean, readonly auth: boolean }): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-cli-mail-publish-'))
   tempDirs.push(root)
-  const packages = ['config', 'db', 'kernel', 'mail', ...(options.notifications ? ['notifications', 'queue'] : [])]
+  const packages = [
+    'config',
+    'db',
+    'kernel',
+    'mail',
+    ...(options.notifications ? ['notifications', 'queue'] : []),
+    ...(options.auth ? ['auth'] : []),
+  ]
   await mkdir(join(root, 'config'), { recursive: true })
   await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
   await mkdir(join(root, '.holo-js/generated'), { recursive: true })
@@ -133,7 +140,7 @@ afterEach(async () => {
 
 describe('holo mail:publish', () => {
   it('publishes every customisable mail file with the framework defaults and reports each one', async () => {
-    const root = await createProject({ notifications: true })
+    const root = await createProject({ notifications: true, auth: true })
 
     const output = await runMailPublish(root)
 
@@ -144,7 +151,7 @@ describe('holo mail:publish', () => {
   })
 
   it('skips existing files and reports them, and overwrites them with --force', async () => {
-    const root = await createProject({ notifications: true })
+    const root = await createProject({ notifications: true, auth: true })
     await runMailPublish(root)
     await writeProjectFile(root, 'server/mail/layout.txt', 'edited')
     await writeProjectFile(root, authOverrideFiles[0] ?? '', 'edited')
@@ -166,8 +173,12 @@ describe('holo mail:publish', () => {
     }
   })
 
-  it('skips the auth override files when @holo-js/notifications is not installed', async () => {
-    const root = await createProject({ notifications: false })
+  it.each([
+    [{ notifications: false, auth: true }, '@holo-js/notifications'],
+    [{ notifications: true, auth: false }, '@holo-js/auth'],
+    [{ notifications: false, auth: false }, '@holo-js/auth and @holo-js/notifications'],
+  ])('skips the auth override files when a package they need is not installed (%o)', async (packages, requirement) => {
+    const root = await createProject(packages)
 
     const output = await runMailPublish(root, { force: true })
 
@@ -175,20 +186,20 @@ describe('holo mail:publish', () => {
       expect(output).toContain(`  - published ${path}`)
     }
     for (const path of authOverrideFiles) {
-      expect(output).toContain(`  - skipped ${path} (requires @holo-js/notifications)`)
+      expect(output).toContain(`  - skipped ${path} (requires ${requirement})`)
       await expect(readFile(join(root, path), 'utf8')).rejects.toThrow()
     }
   })
 
   it('fails with an install hint when @holo-js/mail is not installed', async () => {
-    const root = await createProject({ notifications: false })
+    const root = await createProject({ notifications: false, auth: true })
     await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'mail-publish-fixture', private: true, type: 'module' }))
 
     await expect(runMailPublish(root)).rejects.toThrow('Mail publishing requires @holo-js/mail. Install mail first with `holo install mail`.')
   })
 
   it('leaves mail, notification, and auth email output unchanged until a published file is edited', async () => {
-    const root = await createProject({ notifications: true })
+    const root = await createProject({ notifications: true, auth: true })
     await writeProjectFile(root, 'server/mail/templates/receipt.md', [
       '# Receipt',
       '',

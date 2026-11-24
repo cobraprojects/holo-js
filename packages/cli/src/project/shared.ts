@@ -279,7 +279,7 @@ export type NotificationsInstallResult = {
 export type MailPublishResult = {
   readonly publishedFiles: readonly string[]
   readonly skippedFiles: readonly string[]
-  readonly filesRequiringNotifications: readonly string[]
+  readonly filesMissingPackages: readonly { readonly path: string, readonly packages: readonly string[] }[]
 }
 
 export type MailInstallResult = {

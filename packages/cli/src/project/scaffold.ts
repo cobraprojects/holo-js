@@ -215,6 +215,8 @@ const AUTH_NOTIFICATION_FILES = Object.freeze([
   }),
 ])
 
+const AUTH_NOTIFICATION_PACKAGES = Object.freeze(['@holo-js/auth', '@holo-js/notifications'])
+
 async function writePublishableFiles(
   projectRoot: string,
   files: readonly PublishableFile[],
@@ -621,12 +623,15 @@ export async function publishMailIntoProject(
 
   const mailFiles = await loadPublishableMailFiles(projectRoot)
   const authFiles = AUTH_NOTIFICATION_FILES.map(file => ({ path: file.path, contents: file.render() }))
-  const hasNotifications = hasDependency('@holo-js/notifications')
-  const written = await writePublishableFiles(projectRoot, hasNotifications ? [...mailFiles, ...authFiles] : mailFiles, options.force === true)
+  const missingAuthPackages = AUTH_NOTIFICATION_PACKAGES.filter(name => !hasDependency(name))
+  const publishable = missingAuthPackages.length === 0 ? [...mailFiles, ...authFiles] : mailFiles
+  const written = await writePublishableFiles(projectRoot, publishable, options.force === true)
 
   return {
     ...written,
-    filesRequiringNotifications: hasNotifications ? [] : authFiles.map(file => file.path),
+    filesMissingPackages: missingAuthPackages.length === 0
+      ? []
+      : authFiles.map(file => ({ path: file.path, packages: missingAuthPackages })),
   }
 }
 
