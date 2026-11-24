@@ -229,10 +229,28 @@ describe('@holo-js/mail runtime', () => {
         .toThrow(`Mail template "broken" ${message}`)
     })
 
-    it('shows the @if branch for truthy values and the @else branch for falsy or missing values', async () => {
+    it('shows the @if branch for values PHP treats as true and the @else branch for falsy or missing values', async () => {
       const template = '@if (order.paid)\nPaid\n@else\nUnpaid\n@endif\n'
-      const truthy: readonly MailJsonObject[] = [{ order: { paid: true } }, { order: { paid: 'yes' } }, { order: { paid: 1 } }, { order: { paid: [] } }]
-      const falsy: readonly MailJsonObject[] = [{}, { order: {} }, { order: { paid: null } }, { order: { paid: false } }, { order: { paid: 0 } }, { order: { paid: '' } }]
+      const truthy: readonly MailJsonObject[] = [
+        { order: { paid: true } },
+        { order: { paid: 'yes' } },
+        { order: { paid: 'false' } },
+        { order: { paid: '0.0' } },
+        { order: { paid: 1 } },
+        { order: { paid: [0] } },
+        { order: { paid: { at: null } } },
+      ]
+      const falsy: readonly MailJsonObject[] = [
+        {},
+        { order: {} },
+        { order: { paid: null } },
+        { order: { paid: false } },
+        { order: { paid: 0 } },
+        { order: { paid: '' } },
+        { order: { paid: '0' } },
+        { order: { paid: [] } },
+        { order: { paid: {} } },
+      ]
 
       for (const data of truthy) {
         expect((await sendTemplate(template, data)).html).toBe('<p>Paid</p>')

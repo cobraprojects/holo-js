@@ -81,6 +81,12 @@ function invalidDataError(context: RenderContext, expected: string, path: readon
   )
 }
 
+function isTruthy(value: MailJsonValue | undefined): boolean {
+  if (Array.isArray(value)) return value.length > 0
+  if (isJsonObject(value)) return Object.keys(value).length > 0
+  return !!value && value !== '0'
+}
+
 function escapeTemplateValue(value: string): string {
   return value.replace(/[&<>"']/g, character => HTML_ESCAPES[character] ?? character)
 }
@@ -169,7 +175,7 @@ function renderNode(context: RenderContext, node: MailTemplateNode): string {
     case 'text': return node.value
     case 'output': return renderOutput(context, node.path, node.escaped)
     case 'component': return renderComponent(context, node)
-    case 'if': return renderNodes(context, resolveDataPath(context, node.path) ? node.then : node.otherwise)
+    case 'if': return renderNodes(context, isTruthy(resolveDataPath(context, node.path)) ? node.then : node.otherwise)
     case 'foreach': return renderLoop(context, node)
     case 'include': return renderTemplate({ ...context, template: node.template })
   }

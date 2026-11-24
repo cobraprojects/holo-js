@@ -95,7 +95,7 @@ Thanks for your order!
 Questions? Contact us at {{ support.email }}.
 ```
 
-`@if` only tests whether a value is truthy. A missing value, `null`, `false`, `0`, and `''` are false; every other value, including an empty list, is true. There are no operators, comparisons, or function calls, so compute flags such as `isOverdue` before you pass them.
+`@if` only tests whether a value is truthy, the way Laravel's Blade does. A missing value, `null`, `false`, `0`, `''`, `'0'`, an empty list, and an empty object are false; every other value is true. There are no operators, comparisons, or function calls, so compute flags such as `isOverdue` before you pass them.
 
 A line that holds only a directive leaves no blank line behind, so `@foreach` can produce the rows of a Markdown table. Directives also work inside a line, as long as the `@` doesn't follow a letter, digit, or `_`. Any other `@` word, such as `@holo` or `@media`, is output as written. To output a directive name as text, write `@@`, as in `@@if`. Email addresses such as `help@example.com` need no escaping.
 
