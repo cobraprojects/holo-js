@@ -6,6 +6,10 @@
 
 - Mail: `markdown.securedEncoding` in `config/mail.ts` makes `{{ }}` in Mail templates also escape `[`, `]` and `\`, so values from users, such as a name in a notification greeting, can't add links or images to an email. It is Laravel's `Markdown::withSecuredEncoding()`, keeps HTML escaping, and defaults to `false`; new apps and `holo install mail` set it to `true`. See [secured encoding](apps/docs/docs/mail/markdown.md#secured-encoding) and the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#turn-on-secured-encoding-for-mail-templates).
 
+### Changed
+
+- Nuxt: `@holo-js/adapter-nuxt` requires Nuxt 4.7.0 or newer on the 4 line and Vue 3.5.46 or newer, and new Nuxt apps start on them. Nuxt 4.7.0 fixes three security advisories ([GHSA-jxc9-w3j6-pwp2](https://github.com/nuxt/nuxt/security/advisories/GHSA-jxc9-w3j6-pwp2), [GHSA-vrh2-cfcx-c3fg](https://github.com/nuxt/nuxt/security/advisories/GHSA-vrh2-cfcx-c3fg), [GHSA-h5xj-x893-p5f7](https://github.com/nuxt/nuxt/security/advisories/GHSA-h5xj-x893-p5f7)) and writes its generated tsconfig and type files atomically, and it requires Vue 3.5.46. New apps also set `compatibilityDate` in `nuxt.config.ts`, as Nuxt's own starter does. Holo still runs on Nitro v2; keep the `nitro` package out of your `package.json`, because listing it switches Nuxt 4.7 to Nitro v3. See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrade-nuxt-to-470).
+
 ### Fixed
 
 - Auth: logging out, stopping impersonation, clearing a signed-out user and starting or finishing multi-factor enrollment change only the guard's own session data, atomically. Before, two requests on the same session could overwrite each other, such as logging out one guard while another stops impersonating, and could drop other session values written meanwhile, such as the CSRF token. Custom session stores must implement `updateData`; see the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#custom-session-stores-need-updatedata).

@@ -4,6 +4,16 @@
 
 Update every installed `@holo-js/*` package to `0.6.4` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed. Apps that use the built-in file, database or Redis session stores need no session code changes. Apps that send Markdown mail must move its content into Mail templates, as described below.
 
+### Upgrade Nuxt to 4.7.0
+
+In a Nuxt app, upgrade Nuxt first. `@holo-js/adapter-nuxt` now requires `nuxt` 4.7.0 or newer on the 4 line and `vue` 3.5.46 or newer on the 3 line. Nuxt 4.7.0 fixes three security advisories, and Nuxt warns with `NUXT_B7042` when `vue` is older than it needs. Running `npx nuxt upgrade --dedupe` updates both.
+
+If your app uses `cache`, `swr` or `isr` route rules on pages with user-specific data, purge your CDN or edge cache after you upgrade. One of the advisories ([GHSA-jxc9-w3j6-pwp2](https://github.com/nuxt/nuxt/security/advisories/GHSA-jxc9-w3j6-pwp2)) let one user's `_payload.json` be cached and served to another, and upgrading doesn't remove a payload a cache already holds.
+
+Keep your app on Nitro v2. Holo doesn't support Nitro v3 yet, and Nuxt 4.7 switches to it whenever your `package.json` lists the `nitro` package. If it's listed, remove it, and don't add it.
+
+Nuxt 4.7 also checks links in your templates: a `<NuxtLink>` whose `to` matches no page logs `NUXT_B4025`. For a link to a server route or a file in `public/`, add the `external` prop.
+
 ### Custom session stores need `updateData`
 
 Session guards now change their part of the session with one atomic store call, so two requests that log out, stop impersonating or start multi-factor enrollment at the same moment keep each other's changes, and keep data that other atomic session updates, such as the CSRF token, store meanwhile. Whole-session writes are not covered: `session.write()` can still replace changes made to that session while it runs. Built-in file, database and Redis stores support it. A custom store must add `updateData(sessionId, key, update)` before session guards change state; until then, logout, stopping impersonation and multi-factor enrollment fail with `Session store "<name>" does not support atomic data writes.` Return `{ found: false }` for a missing or expired session without recreating it. Otherwise, call `update` with the key's current value and store its result atomically, deleting the key when it returns `undefined`, then return `{ found: true, value: storedValue }`. `update` is pure, so a store that retries a compare-and-set may call it again. Keep the session's other data and expiry unchanged.
