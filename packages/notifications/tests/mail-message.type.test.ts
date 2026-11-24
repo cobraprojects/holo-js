@@ -1,8 +1,8 @@
 import { describe, it } from 'vitest'
 import { defineNotification, type NotificationMailMessage } from '../src'
 
-declare module '@holo-js/mail' {
-  interface HoloMailTemplateRegistry {
+declare module '../src/contracts' {
+  interface HoloNotificationMailTemplateRegistry {
     readonly 'invoices/paid': { readonly invoice: { readonly id: string | number } }
     readonly 'welcome': Record<string, never>
   }

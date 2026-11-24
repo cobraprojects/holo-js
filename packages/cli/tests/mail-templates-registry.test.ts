@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import ts from 'typescript'
@@ -10,7 +10,7 @@ import { discoverAppCommands, prepareProjectDiscovery } from '../src/project/dis
 const tempDirs: string[] = []
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
 
-async function createProject(): Promise<string> {
+async function createProject(packages: readonly string[] = ['config', 'db', 'kernel', 'mail']): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-cli-mail-templates-'))
   tempDirs.push(root)
   await mkdir(join(root, 'config'), { recursive: true })
@@ -20,7 +20,7 @@ async function createProject(): Promise<string> {
   await writeFile(join(root, 'config/app.ts'), 'export default {}', 'utf8')
   await writeFile(join(root, 'config/database.ts'), 'export default {}', 'utf8')
   await writeFile(join(root, '.holo-js/generated/schema.generated.ts'), renderGeneratedSchemaPlaceholder(), 'utf8')
-  await Promise.all(['config', 'db', 'kernel', 'mail'].map(async (name) => {
+  await Promise.all(packages.map(async (name) => {
     await symlink(join(workspaceRoot, 'packages', name), join(root, 'node_modules/@holo-js', name))
   }))
   return root
@@ -235,6 +235,52 @@ export const missingRoot = defineMail({ to: 'a@example.com', subject: 'S', markd
     await rm(join(root, 'server/mail/themes/receipt.css'))
     await discoverAppCommands(root, config)
     expect((await readMail())?.themes).toEqual({})
+  })
+
+  it('types notification mail templates and data from the generated registry', async () => {
+    const root = await createProject(['config', 'db', 'kernel', 'mail', 'notifications'])
+    await writeTemplate(root, 'invoices/paid', '# Invoice {{ invoice.id }} paid')
+
+    await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    await writeFile(join(root, 'check-notification.ts'), `
+import type { NotificationMailMessage } from '@holo-js/notifications'
+
+export const paid = { subject: 'Paid', markdown: 'invoices/paid', data: { invoice: { id: 7 } } } satisfies NotificationMailMessage
+export const lines = { subject: 'Paid', lines: ['Paid.'] } satisfies NotificationMailMessage
+`, 'utf8')
+    expect(typeErrors(root, 'check-notification.ts')).toEqual([])
+
+    await writeFile(join(root, 'check-notification-errors.ts'), `
+import type { NotificationMailMessage } from '@holo-js/notifications'
+
+export const typo = { subject: 'Paid', markdown: 'invoices/payed', data: { invoice: { id: 7 } } } satisfies NotificationMailMessage
+export const badData = { subject: 'Paid', markdown: 'invoices/paid', data: { invoice: { id: true } } } satisfies NotificationMailMessage
+`, 'utf8')
+    expect(typeErrors(root, 'check-notification-errors.ts')).toHaveLength(2)
+  })
+
+  it('types notification mail messages without Mail templates when @holo-js/mail is not installed', async () => {
+    const root = await createProject(['config', 'db', 'kernel'])
+    const notificationsRoot = join(root, 'node_modules/@holo-js/notifications')
+    await mkdir(notificationsRoot, { recursive: true })
+    await cp(join(workspaceRoot, 'packages/notifications/dist'), join(notificationsRoot, 'dist'), { recursive: true })
+    await cp(join(workspaceRoot, 'packages/notifications/package.json'), join(notificationsRoot, 'package.json'))
+
+    await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    await writeFile(join(root, 'check-notification.ts'), `
+import type { NotificationMailMessage } from '@holo-js/notifications'
+
+export const lines = { subject: 'Hi', greeting: 'Hello', lines: ['Line.'], action: { label: 'Open', url: 'https://example.com' } } satisfies NotificationMailMessage
+export const template = { subject: 'Hi', markdown: 'welcome', data: {} } satisfies NotificationMailMessage
+export const level = { subject: 'Hi', level: 'warning' } satisfies NotificationMailMessage
+`, 'utf8')
+    expect(typeErrors(root, 'check-notification.ts')).toEqual([
+      'Type \'string\' is not assignable to type \'undefined\'.',
+      'Type \'{}\' is not assignable to type \'undefined\'.',
+      'Type \'"warning"\' is not assignable to type \'"info" | "success" | "error" | undefined\'.',
+    ])
   })
 
   it('fails prepare on an include cycle', async () => {
