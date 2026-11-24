@@ -110,13 +110,13 @@ Put notification files in `server/notifications/`. There's no generator command;
 
 ## Auth emails
 
-When auth and notifications are both installed, Holo sends email verification and password reset messages as notifications. Publish editable copies of those notifications with:
+When auth and notifications are both installed, Holo sends email verification and password reset messages as notifications, with the same content as Laravel's. Publish editable copies of those notifications with:
 
 ```bash
 npx holo auth:notifications:publish
 ```
 
-The files land in `server/notifications/auth/`. See [Email verification](/auth/email-verification) and [Password reset](/auth/password-reset).
+The files land in `server/notifications/auth/`. Their email builders receive `email`, `url`, and `expiresInMinutes` (plus `name` for verification). See [Email verification](/auth/email-verification) and [Password reset](/auth/password-reset).
 
 ## Next steps
 
