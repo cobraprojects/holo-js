@@ -6,9 +6,9 @@ import {
   renderMailLayout,
   renderMailTemplate,
   resolveMailTheme,
-  resolveTemplateValueEncoding,
   type CompiledMailRegistry,
 } from './templates'
+import { resolveTemplateValueEncoding } from './template-renderer'
 
 export interface MailTemplateSelection {
   readonly name: string

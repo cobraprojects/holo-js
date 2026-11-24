@@ -9,8 +9,7 @@ export type {
 } from './template-compiler'
 export type { MailTemplateDataObjectShape, MailTemplateDataShape } from './template-data'
 export { isMailTemplateName } from './template-name'
-export { renderMailLayout, renderMailTemplate, resolveMailTheme, resolveTemplateValueEncoding } from './template-renderer'
-export type { TemplateValueEncoding } from './template-renderer'
+export { renderMailLayout, renderMailTemplate, resolveMailTheme } from './template-renderer'
 export { MailTemplateSyntaxError } from './template-syntax'
 export type {
   MailTemplateComponentNode,
