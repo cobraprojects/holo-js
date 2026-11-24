@@ -46,13 +46,9 @@
     "@holo-js/kernel": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/mail": ">=0.4.0",
     "@holo-js/queue": ">=0.4.0"
   },
   "peerDependenciesMeta": {
-    "@holo-js/mail": {
-      "optional": true
-    },
     "@holo-js/queue": {
       "optional": true
     }
@@ -63,8 +59,7 @@
     "typescript": "catalog:",
     "vitest": "catalog:",
     "@holo-js/db": "catalog:",
-    "@holo-js/queue": "catalog:",
-    "@holo-js/mail": "catalog:"
+    "@holo-js/queue": "catalog:"
   },
   "engines": {
     "node": "^22.18.0 || ^24.0.0 || ^26.0.0"
