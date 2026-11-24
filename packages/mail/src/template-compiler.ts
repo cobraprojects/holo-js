@@ -5,7 +5,7 @@ import { isMailTemplateName } from './template-name'
 import { resolveTemplateData, type MailTemplateDataObjectShape } from './template-data'
 import {
   childNodeLists,
-  MailTemplateSyntaxError,
+  missingIncludedTemplateError,
   parseTemplateSyntax,
   type MailTemplateFormat,
   type MailTemplateNode,
@@ -47,7 +47,7 @@ function parseMailComponentForm(file: string, source: string, names: MailTemplat
   const parsed = parseTemplateSyntax(file, source, names.components)
   const missing = parsed.includes.find(include => !names.templates.has(include.template))
   if (missing) {
-    throw new MailTemplateSyntaxError(file, missing.line, `"@include (${missing.template})" names a Mail template that does not exist.`)
+    throw missingIncludedTemplateError(file, missing)
   }
   return parsed.nodes
 }

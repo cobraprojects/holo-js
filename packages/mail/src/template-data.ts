@@ -2,6 +2,7 @@ import { MailError } from './errors'
 import {
   findInnermostLoop,
   MailTemplateSyntaxError,
+  missingIncludedTemplateError,
   type MailTemplateNode,
   type ParsedTemplateSyntax,
 } from './template-syntax'
@@ -168,7 +169,7 @@ function assertIncludesResolve(
   if (validated.has(template)) return
   for (const include of parsed[template]?.includes ?? []) {
     if (!Object.hasOwn(parsed, include.template)) {
-      throw new MailTemplateSyntaxError(template, include.line, `"@include (${include.template})" names a Mail template that does not exist.`)
+      throw missingIncludedTemplateError(template, include)
     }
     if (chain.includes(include.template)) {
       const cycle = [...chain.slice(chain.indexOf(include.template)), include.template].join(' -> ')

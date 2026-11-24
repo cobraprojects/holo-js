@@ -100,20 +100,20 @@ function resolveOutputValue(context: RenderContext, path: readonly string[]): st
   return String(value)
 }
 
-function renderAttributeOutput(context: RenderContext, path: readonly string[], escaped: boolean): string {
+function renderEscapedOutput(context: RenderContext, path: readonly string[], escaped: boolean): string {
   const value = resolveOutputValue(context, path)
   return escaped && !isNamedValue(context, context.htmlValues, path) ? escapeTemplateValue(value) : value
 }
 
 function renderOutput(context: RenderContext, path: readonly string[], escaped: boolean): string {
-  if (!isNamedValue(context, context.markdownValues, path)) return renderAttributeOutput(context, path, escaped)
+  if (!isNamedValue(context, context.markdownValues, path)) return renderEscapedOutput(context, path, escaped)
   return escapeMarkdown(resolveOutputValue(context, path))
 }
 
 function renderAttribute(context: RenderContext, nodes: readonly MailTemplateValueNode[]): RenderedAttribute {
   const html = nodes.some(node => node.type === 'output')
   const value = nodes.map((node) => {
-    if (node.type === 'output') return renderAttributeOutput(context, node.path, node.escaped)
+    if (node.type === 'output') return renderEscapedOutput(context, node.path, node.escaped)
     return html ? escapeTemplateValue(node.value) : node.value
   }).join('')
 

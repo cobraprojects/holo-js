@@ -157,6 +157,10 @@ export class MailTemplateSyntaxError extends MailError {
   }
 }
 
+export function missingIncludedTemplateError(file: string, include: IncludeReference): MailTemplateSyntaxError {
+  return new MailTemplateSyntaxError(file, include.line, `"@include (${include.template})" names a Mail template that does not exist.`)
+}
+
 export function findInnermostLoop<TLoop extends { readonly name: string }>(
   loops: readonly TLoop[],
   name: string | undefined,
