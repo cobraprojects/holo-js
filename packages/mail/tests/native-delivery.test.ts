@@ -105,6 +105,15 @@ async function startSmtpProvider(options: SmtpServerOptions = {}) {
 
 afterEach(() => resetMailRuntime())
 
+async function runBundledScript(script: string): Promise<{ stdout: string, stderr: string }> {
+  const compiled = await build({ stdin: { contents: script, resolveDir: import.meta.dirname }, tsconfigRaw: { compilerOptions: {} }, bundle: true, packages: 'external', platform: 'node', format: 'esm', write: false })
+  const entry = compiled.outputFiles[0]
+  if (!entry) throw new Error('Native mail test script compilation produced no entry')
+  const run = promisify(execFile)(process.execPath, ['--input-type=module'], { cwd: resolve(import.meta.dirname, '..'), timeout: 15000 })
+  run.child.stdin?.end(entry.text)
+  return await run
+}
+
 async function runOneShotSmtpSend(port: number): Promise<void> {
   const srcPath = resolve(import.meta.dirname, '../src/index.ts')
   const script = `
@@ -117,10 +126,7 @@ configureMailRuntime({ config: normalizeMailConfig({
 const result = await sendMail(defineMail({ to: 'ava@example.com', subject: 'One-shot script', text: 'Hello' }))
 assert.equal(result.driver, 'smtp')
 `
-  const compiled = await build({ stdin: { contents: script, resolveDir: import.meta.dirname }, bundle: true, packages: 'external', platform: 'node', format: 'esm', write: false })
-  const entry = compiled.outputFiles[0]
-  if (!entry) throw new Error('One-shot mail script compilation produced no entry')
-  await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', entry.text], { cwd: resolve(import.meta.dirname, '..'), timeout: 15000 })
+  await runBundledScript(script)
 }
 
 async function runNativeMailWorker(port: number, operation: 'queue' | 'transaction' | 'queued-transaction' | 'storage' | 'log' | 'delayed' | 'builtins' | 'plugin' | 'broken-plugin', s3Port?: number): Promise<{ stdout: string, stderr: string }> {
@@ -285,10 +291,7 @@ try {
   await harness.cleanup()
 }
 `
-  const compiled = await build({ stdin: { contents: script, resolveDir: import.meta.dirname }, tsconfigRaw: { compilerOptions: {} }, bundle: true, packages: 'external', platform: 'node', format: 'esm', write: false })
-  const entry = compiled.outputFiles[0]
-  if (!entry) throw new Error('Native mail test compilation produced no entry')
-  return await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', entry.text], { cwd: resolve(import.meta.dirname, '..'), timeout: 15000 })
+  return await runBundledScript(script)
 }
 
 it('delivers real MIME, recipients, and attachments through the native SMTP client', async () => {
