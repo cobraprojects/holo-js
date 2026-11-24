@@ -468,6 +468,9 @@ export default defineSessionConfig({
   const devPort = await findAvailablePort()
   const devServer = startDevServer(projectRoot, cliPath, localPackageEnv, devPort)
   const devJourney = { projectName: projectRoot.split('/').at(-1), port: devPort }
+  let devOutput = ''
+  devServer.stdout?.on('data', chunk => devOutput += String(chunk))
+  devServer.stderr?.on('data', chunk => devOutput += String(chunk))
   try {
     await waitForRenderedApp(devJourney, devServer)
     await writeFile(databasePath, `
@@ -495,6 +498,9 @@ export default defineDatabaseConfig({
       'holo dev did not detect removal of the Postgres connection',
     )
     await waitForRenderedApp(devJourney, devServer)
+    if (framework === 'nuxt') {
+      assertNoNuxtCodeWarnings('holo dev with configured drivers', devOutput)
+    }
   } finally {
     await writeFile(databasePath, originalDatabase, 'utf8')
     await stopServer(devServer)
