@@ -24,6 +24,8 @@ The module:
 
 You don't need any other setup. Start the app with `npm run dev`, which runs `holo dev` and then `nuxt dev`.
 
+Holo runs on Nuxt's default Nitro v2 server. It doesn't support Nitro v3 yet, so don't add the `nitro` package to your `package.json`: Nuxt 4.7 builds with Nitro v3 whenever that package is listed.
+
 ## Where server code goes
 
 Nuxt's `server/` folder holds both Nitro code and Holo code:

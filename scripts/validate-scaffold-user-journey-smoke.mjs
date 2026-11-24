@@ -10,6 +10,7 @@ import {
   restoreProjectManifest,
   stageLocalWorkspacePackages,
 } from './local-workspace-packages.mjs'
+import { assertNoNuxtCodeWarnings } from './nuxt-code-warnings.mjs'
 import { liveRegistryVariable, scaffoldSmokeNpmEnvironment } from './scaffold-smoke-registry.mjs'
 
 const rootDir = resolve(import.meta.dirname, '..')
@@ -134,6 +135,10 @@ function run(framework, command, args, options = {}) {
       result.stdout,
       result.stderr,
     ].filter(Boolean).join('\n'))
+  }
+
+  if (framework === 'nuxt') {
+    assertNoNuxtCodeWarnings(`${command} ${args.join(' ')}`, `${result.stdout}\n${result.stderr}`)
   }
 
   return result
@@ -570,6 +575,9 @@ async function assertFreshCloneServesWithoutDatabase(projectRoot, journey, cliPa
     await waitForOutput(() => `${body}\n${output}`, missingDatabaseMessage)
     assert.equal(devServer.exitCode, null, 'holo dev exited on a fresh clone without a database')
     assert.equal(await pathExists(databaseFile), false, 'The app runtime created the SQLite database file')
+    if (journey.framework === 'nuxt') {
+      assertNoNuxtCodeWarnings('holo dev', output)
+    }
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}\n${output}`, { cause: error })
   } finally {

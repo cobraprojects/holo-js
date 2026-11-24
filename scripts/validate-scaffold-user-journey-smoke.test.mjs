@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { assertNoNuxtCodeWarnings } from './nuxt-code-warnings.mjs'
 
 const repoRoot = join(import.meta.dirname, '..')
 
@@ -52,4 +53,31 @@ test('blog apps use the scaffold lifecycle contract', async () => {
     assert.match(gitignore, /^\.holo-js\/framework$/m)
     assert.match(eslintConfig, /tseslint\.configs\.recommended/)
   }
+})
+
+test('the Nuxt code warning gate fails with each warning code and its output line', () => {
+  const output = [
+    '✔ Types generated in .nuxt',
+    ' WARN  [NUXT_B7042] vue@3.5.13 is older than the ^3.5.46 Nuxt requires.',
+    'ℹ Building server...',
+    ' WARN  [NUXT_B4025] <NuxtLink to="/abuot"> in app/pages/broken-link.vue does not match any page route.',
+  ].join('\n')
+
+  assert.throws(() => assertNoNuxtCodeWarnings('nuxt build', output), {
+    message: [
+      'Nuxt reported 2 code warning(s) during nuxt build:',
+      '  NUXT_B7042: WARN  [NUXT_B7042] vue@3.5.13 is older than the ^3.5.46 Nuxt requires.',
+      '  NUXT_B4025: WARN  [NUXT_B4025] <NuxtLink to="/abuot"> in app/pages/broken-link.vue does not match any page route.',
+    ].join('\n'),
+  })
+})
+
+test('the Nuxt code warning gate passes output without Nuxt build warning codes', () => {
+  const output = [
+    ' WARN  Sourcemap is likely to be incorrect',
+    ' ERROR [NUXT_E1014] runtime config mutated',
+    'Visit https://nuxt.com/docs/4.x/errors/NUXT_B7042x for details',
+  ].join('\n')
+
+  assert.doesNotThrow(() => assertNoNuxtCodeWarnings('holo dev', output))
 })
