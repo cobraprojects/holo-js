@@ -153,6 +153,13 @@ describe('App Mail components', () => {
     expect(() => compileMailRegistry({ templates: {}, components })).toThrow(message)
   })
 
+  it.each([
+    ['a component name that cannot be used as a tag', { Alert: { html: '{!! slot !!}' } }, 'MAIL_COMPONENT_NAME_INVALID'],
+    ['a text form without an HTML form', { alert: { text: '{!! slot !!}' } }, 'MAIL_COMPONENT_HTML_MISSING'],
+  ])('reports %s with its own error code', (_label, components, code) => {
+    expect(() => compileMailRegistry({ templates: {}, components })).toThrow(expect.objectContaining({ code }))
+  })
+
   it('makes app components valid tags in Mail templates', () => {
     expect(() => compileMailRegistry({ templates: { welcome: '<mail::alert>Hi</mail::alert>' } }))
       .toThrow('<mail::alert> is not a Mail component.')

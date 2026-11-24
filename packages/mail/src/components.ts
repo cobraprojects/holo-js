@@ -22,7 +22,7 @@ function resolveAppMailComponent(name: string, files: MailComponentFiles): MailC
   if (!MAIL_COMPONENT_NAME_PATTERN.test(name)) {
     throw new MailError(
       `[@holo-js/mail] "${name}" is not a Mail component name. Start it with a lowercase letter and use letters, digits, "-" and "_".`,
-      'MAIL_TEMPLATE_SYNTAX',
+      'MAIL_COMPONENT_NAME_INVALID',
     )
   }
 
@@ -31,7 +31,7 @@ function resolveAppMailComponent(name: string, files: MailComponentFiles): MailC
   if (html === undefined) {
     throw new MailError(
       `[@holo-js/mail] Mail component "${name}" has a text form but no HTML form. Add server/mail/components/${name}.html.`,
-      'MAIL_TEMPLATE_SYNTAX',
+      'MAIL_COMPONENT_HTML_MISSING',
     )
   }
 

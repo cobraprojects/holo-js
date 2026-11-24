@@ -48,7 +48,7 @@ describe('@holo-js/mail queued delivery options', () => {
       await sendMail(mail, { queue: { queued: true, connection: 'database', queue: 'mail' } })
       const [row] = await database.readJobRows()
       expect(JSON.parse(String(row?.payload)).mail).toMatchObject({
-        template: { markdown: 'fixture', data: { order: { id: 42 }, name: '<Ava>' }, theme: 'receipt' },
+        template: { name: 'fixture', data: { order: { id: 42 }, name: '<Ava>' }, theme: 'receipt' },
       })
       expect(await runQueueWorker({ connection: 'database', queueNames: ['mail'], once: true }))
         .toMatchObject({ processed: 1, failed: 0 })

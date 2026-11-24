@@ -35,7 +35,7 @@ import {
   mergeMailDefinitionInputs,
   normalizeMailDefinition,
 } from './contracts'
-import { renderMarkdownMail, type MarkdownMailSource } from './layout'
+import { renderMarkdownMail, type MailTemplateSelection } from './layout'
 import type { CompiledMailRegistry } from './templates'
 import { getRegisteredMailDriver } from './registry'
 import { loadMailPluginDrivers, resetMailPluginDrivers } from './plugins'
@@ -241,7 +241,7 @@ type SerializedQueuedAttachment = Readonly<{
   }>
 }>
 
-type MailTemplateSource = MarkdownMailSource & {
+type MailTemplateSource = MailTemplateSelection & {
   readonly theme?: string
 }
 
@@ -1151,7 +1151,7 @@ function createQueuedMailContent(
   if (typeof definition.markdown === 'string') {
     return {
       template: Object.freeze({
-        markdown: definition.markdown,
+        name: definition.markdown,
         data: definition.data ?? {},
         ...(definition.theme ? { theme: definition.theme } : {}),
       }),
@@ -1449,7 +1449,7 @@ async function renderContent(
     return Object.freeze({
       kind: 'markdown',
       ...renderMailTemplateContent({
-        markdown: mail.markdown,
+        name: mail.markdown,
         data: mail.data ?? {},
         ...(mail.theme ? { theme: mail.theme } : {}),
       }, mail.subject, mail.text),
