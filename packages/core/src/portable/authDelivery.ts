@@ -1,58 +1,77 @@
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import type { NotificationDefinition, defineNotification, notify, NotificationMailSender } from '@holo-js/notifications'
+import type { NotificationBuildContext, NotificationDefinition, NotificationMailMessage, defineNotification, notify, NotificationMailSender } from '@holo-js/notifications'
 import { importBundledRuntimeModule } from '../runtimeModule'
-import { createAuthActionUrl, formatAuthEmailExpiration, sendNotificationMail } from './authMailDelivery'
+import { createAuthActionUrl, sendNotificationMail } from './authMailDelivery'
 
 type NotificationsModule = { readonly defineNotification: typeof defineNotification, readonly notify: typeof notify }
 type MailSender = Parameters<typeof sendNotificationMail>[0]
+type AuthEmailPurpose = 'email-verification' | 'password-reset'
 type AuthDeliveryInput = {
   readonly provider: string
   readonly email: string
-  readonly token: { readonly id: string, readonly plainTextToken: string, readonly expiresAt: Date }
+  readonly token: { readonly id: string, readonly plainTextToken: string, readonly createdAt: Date, readonly expiresAt: Date }
   readonly route: string
 }
+type AuthEmailRecipient = {
+  readonly email: string
+  readonly name?: string
+  readonly url: string
+  readonly expiresInMinutes: number
+}
+type AuthEmail = {
+  readonly purpose: AuthEmailPurpose
+  readonly recipient: AuthEmailRecipient
+  readonly message: NotificationMailMessage
+}
 
-const authEmailContent = {
-  'email-verification': {
-    subject: 'Verify your email address',
-    introduction: 'Confirm your account to finish signing in.',
-    expiration: 'This verification link expires at',
-    actionLabel: 'Verify email address',
-  },
-  'password-reset': {
-    subject: 'Reset your password',
-    introduction: 'Click the link below to choose a new password.',
-    expiration: 'This reset link expires at',
-    actionLabel: 'Reset password',
-  },
-} as const
-
-type AuthEmailPurpose = keyof typeof authEmailContent
-
-function composeAuthEmail(purpose: AuthEmailPurpose, input: AuthDeliveryInput, appUrl: string, name?: string) {
-  const content = authEmailContent[purpose]
-  const url = createAuthActionUrl(appUrl, input.route, input.token.plainTextToken)
+function createEmailVerificationMessage(url: string): NotificationMailMessage {
   return {
-    purpose,
-    recipient: Object.freeze({ email: input.email, ...(name ? { name } : {}), url, expiresAt: input.token.expiresAt }),
-    message: {
-      subject: content.subject,
-      ...(name ? { greeting: `Hello ${name},` } : {}),
-      lines: [content.introduction, `${content.expiration} ${formatAuthEmailExpiration(input.token.expiresAt)}.`],
-      action: { label: content.actionLabel, url },
-      metadata: { provider: input.provider, tokenId: input.token.id },
-    },
+    subject: 'Verify Email Address',
+    lines: ['Please click the button below to verify your email address.'],
+    action: { label: 'Verify Email Address', url },
+    outroLines: ['If you did not create an account, no further action is required.'],
   }
 }
 
-function createAuthDeliveryHook(appUrl: string, send: (delivery: ReturnType<typeof composeAuthEmail>) => Promise<void>) {
+function createPasswordResetMessage(url: string, expiresInMinutes: number): NotificationMailMessage {
+  return {
+    subject: 'Reset Password Notification',
+    lines: ['You are receiving this email because we received a password reset request for your account.'],
+    action: { label: 'Reset Password', url },
+    outroLines: [
+      `This password reset link will expire in ${expiresInMinutes} minutes.`,
+      'If you did not request a password reset, no further action is required.',
+    ],
+  }
+}
+
+function resolveTokenLifetimeInMinutes(token: AuthDeliveryInput['token']): number {
+  return Math.round((token.expiresAt.getTime() - token.createdAt.getTime()) / 60_000)
+}
+
+function composeAuthEmail(purpose: AuthEmailPurpose, input: AuthDeliveryInput, appUrl: string, name?: string): AuthEmail {
+  const url = createAuthActionUrl(appUrl, input.route, input.token.plainTextToken)
+  const expiresInMinutes = resolveTokenLifetimeInMinutes(input.token)
+  const message = purpose === 'email-verification'
+    ? createEmailVerificationMessage(url)
+    : createPasswordResetMessage(url, expiresInMinutes)
+  return {
+    purpose,
+    recipient: Object.freeze({ email: input.email, ...(name ? { name } : {}), url, expiresInMinutes }),
+    message: { ...message, metadata: { provider: input.provider, tokenId: input.token.id } },
+  }
+}
+
+function resolveRecipientName(user: unknown): string | undefined {
+  const name = (user as { name?: unknown } | null)?.name
+  return typeof name === 'string' ? name.trim() || undefined : undefined
+}
+
+function createAuthDeliveryHook(appUrl: string, send: (email: AuthEmail) => Promise<void>) {
   return Object.freeze({
     async sendEmailVerification(input: AuthDeliveryInput & { readonly user: unknown }): Promise<void> {
-      const recipientName = typeof (input.user as { name?: unknown })?.name === 'string'
-        ? (input.user as { name?: string }).name?.trim()
-        : undefined
-      await send(composeAuthEmail('email-verification', input, appUrl, recipientName))
+      await send(composeAuthEmail('email-verification', input, appUrl, resolveRecipientName(input.user)))
     },
     async sendPasswordReset(input: AuthDeliveryInput & { readonly broker: string }): Promise<void> {
       await send(composeAuthEmail('password-reset', input, appUrl))
@@ -60,23 +79,22 @@ function createAuthDeliveryHook(appUrl: string, send: (delivery: ReturnType<type
   })
 }
 
-export function createAuthMailDeliveryHook(mail: MailSender, app: { readonly name: string, readonly url: string }) {
+export function createAuthMailDeliveryHook(mail: MailSender, app: { readonly name: string, readonly url: string }, projectRoot?: string) {
   return createAuthDeliveryHook(app.url, async ({ purpose, recipient, message }) => {
-    const to = purpose === 'email-verification'
-      ? { email: recipient.email, ...(recipient.name ? { name: recipient.name } : {}) }
-      : recipient.email
-    await sendNotificationMail(mail, app.name, to, message)
+    const projectNotification = await loadProjectAuthNotification(projectRoot, purpose)
+    const to = { email: recipient.email, ...(recipient.name ? { name: recipient.name } : {}) }
+    await sendNotificationMail(
+      mail,
+      app.name,
+      to,
+      projectNotification ? projectNotification.build.email(recipient, { channel: 'email', anonymous: false }) : message,
+    )
   })
 }
 
 export function createAuthNotificationsDeliveryHook(notifications: NotificationsModule, appUrl: string, projectRoot?: string) {
   return createAuthDeliveryHook(appUrl, async ({ purpose, recipient, message }) => {
-    const projectNotification = await loadProjectAuthNotification(
-      projectRoot,
-      purpose === 'email-verification' ? AUTH_EMAIL_VERIFICATION_NOTIFICATION_PATHS : AUTH_PASSWORD_RESET_NOTIFICATION_PATHS,
-      purpose === 'email-verification' ? 'emailVerificationNotification' : 'passwordResetNotification',
-    )
-    const notification = projectNotification ?? notifications.defineNotification({
+    const notification = await loadProjectAuthNotification(projectRoot, purpose) ?? notifications.defineNotification({
       type: `auth.${purpose}`,
       via() { return ['email'] },
       build: {
@@ -97,7 +115,7 @@ export function createCoreAuthDeliveryHook(options: {
   if (options.notifications && (options.mail || options.notificationsMailer)) {
     return createAuthNotificationsDeliveryHook(options.notifications, options.app.url, options.projectRoot)
   }
-  return options.mail ? createAuthMailDeliveryHook(options.mail, options.app) : undefined
+  return options.mail ? createAuthMailDeliveryHook(options.mail, options.app, options.projectRoot) : undefined
 }
 
 type AuthNotificationModule = {
@@ -106,74 +124,42 @@ type AuthNotificationModule = {
   readonly emailVerificationNotification?: unknown
   readonly passwordResetNotification?: unknown
 }
+type AuthNotification = NotificationDefinition<AuthEmailRecipient, {
+  readonly email: (recipient: AuthEmailRecipient, context: NotificationBuildContext<'email'>) => NotificationMailMessage
+}>
 
-const AUTH_EMAIL_VERIFICATION_NOTIFICATION_PATHS = [
-  'server/notifications/auth/email-verification.ts',
-  'server/notifications/auth/email-verification.mts',
-  'server/notifications/auth/email-verification.js',
-  'server/notifications/auth/email-verification.mjs',
-  'server/notifications/auth/email-verification.cts',
-  'server/notifications/auth/email-verification.cjs',
-] as const
+const AUTH_NOTIFICATION_EXTENSIONS = ['ts', 'mts', 'js', 'mjs', 'cts', 'cjs'] as const
+const AUTH_NOTIFICATION_EXPORTS = {
+  'email-verification': 'emailVerificationNotification',
+  'password-reset': 'passwordResetNotification',
+} as const satisfies Record<AuthEmailPurpose, keyof AuthNotificationModule>
 
-const AUTH_PASSWORD_RESET_NOTIFICATION_PATHS = [
-  'server/notifications/auth/password-reset.ts',
-  'server/notifications/auth/password-reset.mts',
-  'server/notifications/auth/password-reset.js',
-  'server/notifications/auth/password-reset.mjs',
-  'server/notifications/auth/password-reset.cts',
-  'server/notifications/auth/password-reset.cjs',
-] as const
-
-function resolveExistingProjectFile(projectRoot: string | undefined, candidates: readonly string[]): string | undefined {
-  if (!projectRoot) {
-    return undefined
-  }
-
-  return candidates.find(candidate => existsSync(resolve(projectRoot, candidate)))
+function resolveExistingAuthNotificationFile(projectRoot: string, purpose: AuthEmailPurpose): string | undefined {
+  return AUTH_NOTIFICATION_EXTENSIONS
+    .map(extension => `server/notifications/auth/${purpose}.${extension}`)
+    .find(candidate => existsSync(resolve(projectRoot, candidate)))
 }
 
-function resolveAuthNotification(
-  module: AuthNotificationModule,
-  exportName: 'emailVerificationNotification' | 'passwordResetNotification',
-  filePath: string,
-): NotificationDefinition {
-  const notification = module[exportName] ?? module.notification ?? module.default
-  if (!isAuthNotificationDefinition(notification)) {
-    throw new Error(
-      `[@holo-js/core] Auth notification file "${filePath}" must export a notification definition.`,
-    )
-  }
-
-  return notification
-}
-
-function isAuthNotificationDefinition(notification: unknown): notification is NotificationDefinition {
+function isAuthNotification(notification: unknown): notification is AuthNotification {
   if (!notification || typeof notification !== 'object') {
     return false
   }
 
-  const candidate = notification as {
-    readonly via?: unknown
-    readonly build?: unknown
-  }
-  if (typeof candidate.via !== 'function' || !candidate.build || typeof candidate.build !== 'object') {
-    return false
-  }
-
-  return Object.values(candidate.build).some(factory => typeof factory === 'function')
+  const candidate = notification as { readonly via?: unknown, readonly build?: { readonly email?: unknown } }
+  return typeof candidate.via === 'function' && typeof candidate.build?.email === 'function'
 }
 
-async function loadProjectAuthNotification(
-  projectRoot: string | undefined,
-  candidates: readonly string[],
-  exportName: 'emailVerificationNotification' | 'passwordResetNotification',
-): Promise<NotificationDefinition | undefined> {
-  const filePath = resolveExistingProjectFile(projectRoot, candidates)
-  if (!filePath) {
+async function loadProjectAuthNotification(projectRoot: string | undefined, purpose: AuthEmailPurpose): Promise<AuthNotification | undefined> {
+  const filePath = projectRoot ? resolveExistingAuthNotificationFile(projectRoot, purpose) : undefined
+  if (!projectRoot || !filePath) {
     return undefined
   }
 
-  const module = await importBundledRuntimeModule(projectRoot!, filePath) as AuthNotificationModule
-  return resolveAuthNotification(module, exportName, filePath)
+  const module = await importBundledRuntimeModule(projectRoot, filePath) as AuthNotificationModule
+  const notification = module[AUTH_NOTIFICATION_EXPORTS[purpose]] ?? module.notification ?? module.default
+  if (!isAuthNotification(notification)) {
+    throw new Error(`[@holo-js/core] Auth notification file "${filePath}" must export a notification definition with an email message.`)
+  }
+
+  return notification
 }

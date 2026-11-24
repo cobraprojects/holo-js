@@ -9,9 +9,10 @@ import { configureAuthRuntime, createAsyncAuthContext, getAuthRuntime, normalize
 import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, parseCookieHeader } from '@holo-js/session'
 import { createCoreSessionRevocationStore } from '../src/portable/authSessionRevocations'
 import { mysqlIntegration, mysqlTestConnection, postgresIntegration, postgresTestConnection } from '../../../tests/support/real-database'
-import { listFakeSentMails, resetFakeSentMails } from '@holo-js/mail'
+import { listFakeSentMails, resetFakeSentMails, type CompiledMailRegistry, type FakeSentMail } from '@holo-js/mail'
+import { compileMailRegistry } from '../../mail/src/templates'
 import { configureNotificationsRuntime } from '@holo-js/notifications'
-import { createHolo, holoRuntimeInternals, initializeHolo, initializeHoloAdapterProject, resetHoloRuntime } from '../src'
+import { createHolo, holoRuntimeInternals, initializeHolo, initializeHoloAdapterProject, resetHoloRuntime, resolveGeneratedProjectRegistryPath } from '../src'
 import { reconfigureHoloRuntime } from '../src/portable'
 
 function holoCookieValue(setCookie: string): string {
@@ -81,6 +82,8 @@ async function createProject(options: {
   session?: 'file' | 'database' | 'redis' | false
   auth?: boolean
   mail?: boolean
+  mailRegistry?: CompiledMailRegistry
+  passwordResetExpire?: number
   notifications?: boolean
   social?: boolean
   socialEncryptionKey?: string
@@ -212,6 +215,7 @@ export default defineAuthConfig({
       model: 'User',
     },
   },
+  ${options.passwordResetExpire ? `passwords: { users: { provider: 'users', expire: ${options.passwordResetExpire} } },` : ''}
   ${options.socialEncryptionKey ? `socialEncryptionKey: '${options.socialEncryptionKey}',` : ''}
   ${options.social ? `social: {
     google: {
@@ -280,7 +284,84 @@ export default defineMailConfig({
 `, 'utf8')
   }
 
+  if (options.mailRegistry) {
+    await mkdir(join(root, '.holo-js/generated'), { recursive: true })
+    await writeFile(resolveGeneratedProjectRegistryPath(root), JSON.stringify({
+      version: 1,
+      generatedAt: '2026-11-24T00:00:00.000Z',
+      paths: { models: 'server/models', migrations: 'server/db/migrations', seeders: 'server/db/seeders', commands: 'server/commands', jobs: 'server/jobs', events: 'server/events', listeners: 'server/listeners', generatedSchema: '.holo-js/generated/schema.generated.ts' },
+      models: [{ sourcePath: 'server/models/User.ts', name: 'User', prunable: false }],
+      migrations: [],
+      seeders: [],
+      commands: [],
+      jobs: [],
+      events: [],
+      listeners: [],
+      mail: options.mailRegistry,
+    }), 'utf8')
+  }
+
   return root
+}
+
+async function writeAuthNotification(root: string, name: 'email-verification' | 'password-reset', email: string): Promise<void> {
+  await mkdir(join(root, 'server/notifications/auth'), { recursive: true })
+  await writeFile(join(root, `server/notifications/auth/${name}.ts`), `
+import { defineNotification } from ${notificationsEntry}
+
+export default defineNotification({
+  type: 'auth.${name}',
+  via() {
+    return ['email']
+  },
+  build: {
+    email(data: { readonly email: string, readonly name?: string, readonly url: string, readonly expiresInMinutes: number }) {
+      return ${email}
+    },
+  },
+})
+`, 'utf8')
+}
+
+async function createAuthTokenTables(): Promise<void> {
+  await createSchemaService(DB.connection()).createTable('email_verification_tokens', (table) => {
+    table.uuid('id').primaryKey()
+    table.string('provider').default('users')
+    table.string('user_id')
+    table.string('email')
+    table.string('token_hash')
+    table.timestamp('expires_at')
+    table.timestamp('used_at').nullable()
+    table.timestamps()
+  })
+  await createSchemaService(DB.connection()).createTable('password_reset_tokens', (table) => {
+    table.uuid('id').primaryKey()
+    table.string('provider').default('users')
+    table.string('email')
+    table.string('token_hash')
+    table.timestamp('expires_at')
+    table.timestamp('used_at').nullable()
+    table.timestamps()
+  })
+}
+
+async function sendAuthEmails(root: string): Promise<{ readonly verification: FakeSentMail, readonly reset: FakeSentMail, readonly verificationToken: string }> {
+  const runtime = await createHolo(root, { processEnv: process.env, preferCache: false })
+  await runtime.initialize()
+  await createAuthTokenTables()
+  const registered = unwrapAuthResult(await runtime.auth?.register({
+    name: 'Ava',
+    email: 'ava@example.com',
+    password: 'supersecret',
+    passwordConfirmation: 'supersecret',
+  }))
+  const token = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
+  await runtime.auth?.requestPasswordReset({ email: 'ava@example.com' })
+  const [verification, reset] = listFakeSentMails()
+  if (!verification || !reset || !token) {
+    throw new Error('Expected verification and password reset mails')
+  }
+  return { verification, reset, verificationToken: token.plainTextToken }
 }
 
 async function createVerificationTokenTable(): Promise<void> {
@@ -400,12 +481,10 @@ describe('@holo-js/core auth/session boot', () => {
 
     expect(mailer.send).toHaveBeenCalledTimes(2)
     expect(mailer.send).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      subject: 'Verify your email address',
-      lines: expect.arrayContaining([
-        'Confirm your account to finish signing in.',
-      ]),
+      subject: 'Verify Email Address',
+      lines: ['Please click the button below to verify your email address.'],
       action: {
-        label: 'Verify email address',
+        label: 'Verify Email Address',
         url: `http://localhost:3000/verify-email?token=${encodeURIComponent(verificationToken?.plainTextToken ?? '')}`,
       },
       metadata: {
@@ -420,12 +499,10 @@ describe('@holo-js/core auth/session boot', () => {
       },
     }))
     expect(mailer.send).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      subject: 'Reset your password',
-      lines: expect.arrayContaining([
-        'Click the link below to choose a new password.',
-      ]),
+      subject: 'Reset Password Notification',
+      lines: ['You are receiving this email because we received a password reset request for your account.'],
       action: expect.objectContaining({
-        label: 'Reset password',
+        label: 'Reset Password',
         url: expect.stringContaining('/reset-password?token='),
       }),
       metadata: expect.objectContaining({
@@ -494,12 +571,10 @@ describe('@holo-js/core auth/session boot', () => {
 
     expect(mailer.send).toHaveBeenCalledTimes(2)
     expect(mailer.send).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      subject: 'Verify your email address',
-      lines: expect.arrayContaining([
-        'Confirm your account to finish signing in.',
-      ]),
+      subject: 'Verify Email Address',
+      lines: ['Please click the button below to verify your email address.'],
       action: {
-        label: 'Verify email address',
+        label: 'Verify Email Address',
         url: `http://localhost:3000/verify-email?token=${encodeURIComponent(verificationToken?.plainTextToken ?? '')}`,
       },
     }), expect.objectContaining({
@@ -510,12 +585,10 @@ describe('@holo-js/core auth/session boot', () => {
       },
     }))
     expect(mailer.send).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      subject: 'Reset your password',
-      lines: expect.arrayContaining([
-        'Click the link below to choose a new password.',
-      ]),
+      subject: 'Reset Password Notification',
+      lines: ['You are receiving this email because we received a password reset request for your account.'],
       action: expect.objectContaining({
-        label: 'Reset password',
+        label: 'Reset Password',
         url: expect.stringContaining('/reset-password?token='),
       }),
     }), expect.objectContaining({
@@ -574,81 +647,82 @@ describe('@holo-js/core auth/session boot', () => {
     }
   })
 
-  it('falls back to mail delivery when mail is installed and notifications are absent', async () => {
-    const root = await createProject({
-      auth: true,
-      mail: true,
+  describe('auth emails', () => {
+    const appLayout = compileMailRegistry({
+      templates: {},
+      layouts: { html: '<main class="app-layout">{!! body !!}</main>', text: '[Core Auth App]\n\n{!! body !!}' },
+      themes: { default: 'h1 { color: #ff0000; }' },
     })
 
-    const runtime = await createHolo(root, {
-      processEnv: process.env,
-      preferCache: false,
+    it('sends Laravel\'s verification and password reset emails in the app Mail layout and theme', async () => {
+      const root = await createProject({ auth: true, mail: true, mailRegistry: appLayout })
+
+      const { verification, reset, verificationToken } = await sendAuthEmails(root)
+
+      const verificationUrl = `http://localhost:3000/verify-email?token=${encodeURIComponent(verificationToken)}`
+      expect(verification.mail).toMatchObject({
+        subject: 'Verify Email Address',
+        to: [{ email: 'ava@example.com', name: 'Ava' }],
+        metadata: expect.objectContaining({ provider: 'users' }),
+      })
+      expect(verification.mail.html).toMatch(/^<main class="app-layout">/)
+      expect(verification.mail.html).toMatch(/<h1[^>]*style="[^"]*color: #ff0000[^"]*"[^>]*>Hello!<\/h1>/)
+      expect(verification.mail.text).toBe([
+        '[Core Auth App]',
+        'Hello!',
+        'Please click the button below to verify your email address.',
+        `Verify Email Address: ${verificationUrl}`,
+        'If you did not create an account, no further action is required.',
+        'Regards,\nCore Auth App',
+        `If you're having trouble clicking the "Verify Email Address" button, copy and paste the URL below\ninto your web browser: ${verificationUrl}`,
+      ].join('\n\n'))
+
+      expect(reset.mail).toMatchObject({ subject: 'Reset Password Notification', to: [{ email: 'ava@example.com' }] })
+      expect(reset.mail.html).toMatch(/^<main class="app-layout">/)
+      expect(reset.mail.text).toMatch(new RegExp([
+        'Hello!',
+        'You are receiving this email because we received a password reset request for your account\\.',
+        'Reset Password: http://localhost:3000/reset-password\\?token=\\S+',
+        'This password reset link will expire in 60 minutes\\.',
+        'If you did not request a password reset, no further action is required\\.',
+        'Regards,\\nCore Auth App',
+      ].join('\n\n')))
     })
 
-    await runtime.initialize()
-    await createSchemaService(DB.connection()).createTable('email_verification_tokens', (table) => {
-      table.uuid('id').primaryKey()
-      table.string('provider').default('users')
-      table.string('user_id')
-      table.string('email')
-      table.string('token_hash')
-      table.timestamp('expires_at')
-      table.timestamp('used_at').nullable()
-      table.timestamps()
-      table.index(['provider'])
-      table.index(['user_id'])
-      table.index(['email'])
-    })
-    await createSchemaService(DB.connection()).createTable('password_reset_tokens', (table) => {
-      table.uuid('id').primaryKey()
-      table.string('provider').default('users')
-      table.string('email')
-      table.string('token_hash')
-      table.timestamp('expires_at')
-      table.timestamp('used_at').nullable()
-      table.timestamps()
-      table.index(['provider'])
-      table.index(['email'])
+    it('states the password reset expiry from the broker token lifetime', async () => {
+      const root = await createProject({ auth: true, mail: true, passwordResetExpire: 15 })
+
+      const { reset } = await sendAuthEmails(root)
+
+      expect(reset.mail.text).toContain('This password reset link will expire in 15 minutes.')
     })
 
-    const registered = unwrapAuthResult(await runtime.auth?.register({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password: 'supersecret',
-      passwordConfirmation: 'supersecret',
-    }))
+    it.each([
+      ['with Notifications', { notifications: true }],
+      ['without Notifications configured', {}],
+    ] as const)('replaces the built-in auth emails with the app override files %s', async (_case, options) => {
+      const root = await createProject({ auth: true, mail: true, passwordResetExpire: 30, mailRegistry: appLayout, ...options })
+      await writeAuthNotification(root, 'email-verification', `{
+        subject: 'Confirm your Core account',
+        lines: ['Confirm within ' + data.expiresInMinutes + ' minutes.'],
+        action: { label: 'Confirm', url: data.url },
+      }`)
+      await writeAuthNotification(root, 'password-reset', `{
+        subject: 'Choose a new password',
+        lines: ['Reset for ' + data.email + ' within ' + data.expiresInMinutes + ' minutes.'],
+        action: { label: 'Choose password', url: data.url },
+      }`)
 
-    const verificationToken = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
-    await runtime.auth?.requestPasswordReset({ email: 'ava@example.com' })
+      const { verification, reset, verificationToken } = await sendAuthEmails(root)
 
-    expect(listFakeSentMails()).toHaveLength(2)
-    expect(listFakeSentMails()[0]!.mail).toMatchObject({
-      subject: 'Verify your email address',
-      to: [
-        {
-          email: 'ava@example.com',
-          name: 'Ava',
-        },
-      ],
-      text: expect.stringContaining(`Verify email address: http://localhost:3000/verify-email?token=${encodeURIComponent(verificationToken?.plainTextToken ?? '')}`),
-      html: expect.stringContaining(`/verify-email?token=${encodeURIComponent(verificationToken?.plainTextToken ?? '')}`),
-      metadata: expect.objectContaining({
-        provider: 'users',
-        tokenId: verificationToken?.id,
-      }),
-    })
-    expect(listFakeSentMails()[1]!.mail).toMatchObject({
-      subject: 'Reset your password',
-      to: [
-        {
-          email: 'ava@example.com',
-        },
-      ],
-      text: expect.stringContaining('Reset password: http://localhost:3000/reset-password?token='),
-      html: expect.stringContaining('/reset-password?token='),
-      metadata: expect.objectContaining({
-        provider: 'users',
-      }),
+      expect(verification.mail.subject).toBe('Confirm your Core account')
+      expect(verification.mail.html).toMatch(/^<main class="app-layout">/)
+      expect(verification.mail.text).toContain([
+        'Confirm within 60 minutes.',
+        `Confirm: http://localhost:3000/verify-email?token=${encodeURIComponent(verificationToken)}`,
+      ].join('\n\n'))
+      expect(reset.mail.subject).toBe('Choose a new password')
+      expect(reset.mail.text).toMatch(/Reset for ava@example\.com within 30 minutes\.\n\nChoose password: http:\/\/localhost:3000\/reset-password\?token=\S+/)
     })
   })
 

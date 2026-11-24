@@ -18,16 +18,6 @@ type MailSender = {
 
 const NOTIFICATION_MAIL_TEMPLATE = 'notifications/email'
 
-const authEmailDateFormatter = new Intl.DateTimeFormat('en-US', {
-  dateStyle: 'long',
-  timeStyle: 'short',
-  timeZone: 'UTC',
-})
-
-export function formatAuthEmailExpiration(expiresAt: Date): string {
-  return `${authEmailDateFormatter.format(expiresAt)} UTC`
-}
-
 export function createAuthActionUrl(appUrl: string, path: string, token: string): string {
   const normalizedBaseUrl = appUrl.endsWith('/') ? appUrl.slice(0, -1) : appUrl
   const normalizedPath = path.startsWith('/') ? path : `/${path}`

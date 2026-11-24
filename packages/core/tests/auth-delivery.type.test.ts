@@ -10,6 +10,7 @@ it('retains concrete Auth delivery inputs and asynchronous completion', () => {
   expectTypeOf<VerificationInput['token']>().toEqualTypeOf<{
     readonly id: string
     readonly plainTextToken: string
+    readonly createdAt: Date
     readonly expiresAt: Date
   }>()
   expectTypeOf<ResetInput['broker']>().toEqualTypeOf<string>()
@@ -21,7 +22,7 @@ it('retains concrete Auth delivery inputs and asynchronous completion', () => {
 
 function rejectInvalidAuthDeliveryInputs() {
   const delivery = holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail() {} }, { name: 'Holo', url: 'https://example.com' })
-  const input = { provider: 'users', email: 'ava@example.com', token: { id: 'id', plainTextToken: 'token', expiresAt: new Date() }, route: '/reset' }
+  const input = { provider: 'users', email: 'ava@example.com', token: { id: 'id', plainTextToken: 'token', createdAt: new Date(), expiresAt: new Date() }, route: '/reset' }
   // @ts-expect-error Password reset requires its broker
   void delivery.sendPasswordReset(input)
   // @ts-expect-error Email verification requires its user
