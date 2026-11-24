@@ -32,9 +32,19 @@ interface RenderContext {
   readonly template: string
   readonly format: MailTemplateFormat
   readonly data: MailJsonObject
+  readonly encoding: TemplateValueEncoding
   readonly htmlValues: ReadonlySet<string>
   readonly markdownValues: ReadonlySet<string>
   readonly loops: readonly LoopValue[]
+}
+
+interface TemplateValueEncoding {
+  readonly pattern: RegExp
+  readonly entities: Readonly<Record<string, string>>
+}
+
+interface MailTemplateRenderOptions {
+  readonly securedEncoding: boolean
 }
 
 interface RenderedAttribute {
@@ -51,6 +61,16 @@ const HTML_ESCAPES: Readonly<Record<string, string>> = {
   '"': '&quot;',
   '\'': '&#039;',
 }
+
+const HTML_ENCODING: TemplateValueEncoding = Object.freeze({
+  pattern: /[&<>"']/g,
+  entities: HTML_ESCAPES,
+})
+
+const SECURED_ENCODING: TemplateValueEncoding = Object.freeze({
+  pattern: /[&<>"'[\]\\]/g,
+  entities: Object.freeze({ ...HTML_ESCAPES, '[': '&#91;', ']': '&#93;', '\\': '&#92;' }),
+})
 
 function isJsonObject(value: MailJsonValue | undefined): value is MailJsonObject {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -85,8 +105,8 @@ function isTruthy(value: MailJsonValue | undefined): boolean {
   return !!value && value !== '0'
 }
 
-function escapeTemplateValue(value: string): string {
-  return value.replace(/[&<>"']/g, character => HTML_ESCAPES[character] ?? character)
+function escapeTemplateValue(value: string, encoding: TemplateValueEncoding = HTML_ENCODING): string {
+  return value.replace(encoding.pattern, character => encoding.entities[character] ?? character)
 }
 
 function isNamedValue(context: RenderContext, names: ReadonlySet<string>, path: readonly string[]): boolean {
@@ -102,7 +122,7 @@ function resolveOutputValue(context: RenderContext, path: readonly string[]): st
 
 function renderEscapedOutput(context: RenderContext, path: readonly string[], escaped: boolean): string {
   const value = resolveOutputValue(context, path)
-  return escaped && !isNamedValue(context, context.htmlValues, path) ? escapeTemplateValue(value) : value
+  return escaped && !isNamedValue(context, context.htmlValues, path) ? escapeTemplateValue(value, context.encoding) : value
 }
 
 function renderOutput(context: RenderContext, path: readonly string[], escaped: boolean): string {
@@ -216,13 +236,15 @@ export function renderMailTemplate(
   name: string,
   data: MailJsonObject,
   format: MailTemplateFormat,
+  options: MailTemplateRenderOptions,
 ): string {
-  return renderTemplate({ registry, template: name, format, data, htmlValues: NO_VALUES, markdownValues: NO_VALUES, loops: [] })
+  const encoding = options.securedEncoding ? SECURED_ENCODING : HTML_ENCODING
+  return renderTemplate({ registry, template: name, format, data, encoding, htmlValues: NO_VALUES, markdownValues: NO_VALUES, loops: [] })
 }
 
 export function renderMailLayout(registry: CompiledMailRegistry, format: MailTemplateFormat, data: MailJsonObject): string {
   const layout = registry.layouts[format] ?? BUILT_IN_COMPILED_MAIL_LAYOUTS[format]
-  return renderNodes({ registry, template: MAIL_LAYOUT_FILE_NAMES[format], format, data, htmlValues: NO_VALUES, markdownValues: NO_VALUES, loops: [] }, layout.nodes)
+  return renderNodes({ registry, template: MAIL_LAYOUT_FILE_NAMES[format], format, data, encoding: HTML_ENCODING, htmlValues: NO_VALUES, markdownValues: NO_VALUES, loops: [] }, layout.nodes)
 }
 
 export function resolveMailTheme(registry: CompiledMailRegistry, name: string): string {

@@ -22,6 +22,7 @@ export interface HoloMailPreviewConfig {
 
 export interface HoloMailMarkdownConfig {
   readonly theme?: MailThemeName
+  readonly securedEncoding?: boolean
 }
 
 export interface BaseMailDriverConfig {
@@ -91,6 +92,7 @@ export interface NormalizedHoloMailPreviewConfig {
 
 export interface NormalizedHoloMailMarkdownConfig {
   readonly theme: string
+  readonly securedEncoding: boolean
 }
 
 export interface NormalizedBaseMailDriverConfig {
@@ -165,6 +167,7 @@ export const holoMailDefaults: Readonly<NormalizedHoloMailConfig> = Object.freez
   }),
   markdown: Object.freeze({
     theme: 'default',
+    securedEncoding: false,
   }),
   mailers: Object.freeze({
     preview: Object.freeze({
@@ -217,6 +220,17 @@ function normalizeOptionalMailString(
   }
 
   return normalized
+}
+
+function normalizeOptionalMailBoolean(
+  value: boolean | undefined,
+  label: string,
+): boolean | undefined {
+  if (typeof value === 'undefined' || typeof value === 'boolean') {
+    return value
+  }
+
+  throw new Error(`[Holo Mail] ${label} must be a boolean when provided.`)
 }
 
 function isValidMailAddress(email: string): boolean {
@@ -442,6 +456,8 @@ export function normalizeMailConfig(
     }),
     markdown: Object.freeze({
       theme: normalizeOptionalMailString(config.markdown?.theme, 'Mail markdown theme') ?? holoMailDefaults.markdown.theme,
+      securedEncoding: normalizeOptionalMailBoolean(config.markdown?.securedEncoding, 'Mail markdown securedEncoding')
+        ?? holoMailDefaults.markdown.securedEncoding,
     }),
     mailers: Object.freeze(mergedMailers),
   })

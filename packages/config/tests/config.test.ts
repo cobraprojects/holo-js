@@ -403,6 +403,7 @@ describe('@holo-js/config', () => {
       },
       markdown: {
         theme: 'default',
+        securedEncoding: false,
       },
       mailers: {
         preview: {
@@ -508,6 +509,7 @@ describe('@holo-js/config', () => {
       },
       markdown: {
         theme: 'default',
+        securedEncoding: false,
       },
       mailers: {
         preview: {
@@ -1330,6 +1332,7 @@ describe('@holo-js/config', () => {
       },
       markdown: {
         theme: 'default',
+        securedEncoding: false,
       },
       mailers: {
         preview: {

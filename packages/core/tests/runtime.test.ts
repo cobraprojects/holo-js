@@ -3619,6 +3619,42 @@ export default defineAppConfig({ name: 'Runtime App', key: 'base64:key', env: 'd
       expect(sent.mail.text).toContain('Hi <Ava>\n\nWelcome aboard.\n\nCheers, the team\n\n©')
     })
 
+    it('keeps notification data from forming Markdown links when markdown.securedEncoding is on', async () => {
+      const root = await createProject()
+      await writeBaseConfig(root)
+      await writeMailConfig(root, `
+import { defineMailConfig } from ${mailPackageEntry}
+
+export default defineMailConfig({
+  default: 'fake',
+  from: { email: 'noreply@app.test', name: 'Runtime App' },
+  markdown: { securedEncoding: true },
+  mailers: { fake: { driver: 'fake' } },
+})
+`)
+      await writeNotificationsConfig(root)
+      await initializeHolo(root)
+      const url = 'https://runtime.test/verify?ids[0]=1&sig=a%2Bb'
+
+      const sent = await sendEmailNotification({
+        subject: 'Welcome',
+        greeting: 'Hi [Ava](https://evil.test)',
+        lines: ['![tracker](https://evil.test/pixel.png) <b>joined</b>'],
+        action: { label: '[Verify](https://evil.test)', url },
+      })
+
+      const html = sent.mail.html ?? ''
+      const hrefs = [...html.matchAll(/href="([^"]*)"/g)].map(match => match[1])
+      expect(hrefs).toHaveLength(3)
+      expect(hrefs.filter(href => href?.includes('evil.test'))).toEqual([])
+      expect(html).toContain('href="https://runtime.test/verify?ids%5B0%5D=1&amp;sig=a%2Bb"')
+      expect(html).not.toContain('<img')
+      expect(html).toMatch(/<h1[^>]*>Hi \[Ava\]\(https:\/\/evil\.test\)<\/h1>/)
+      expect(html).toMatch(/<p[^>]*>!\[tracker\]\(https:\/\/evil\.test\/pixel\.png\) &lt;b&gt;joined&lt;\/b&gt;<\/p>/)
+      expect(html).toContain('>[Verify](https://evil.test)</a>')
+      expect(sent.mail.text).toContain('Hi [Ava](https://evil.test)\n\n![tracker](https://evil.test/pixel.png) <b>joined</b>\n\n[Verify](https://evil.test): ')
+    })
+
     it('renders a custom Mail template with its data inside the app Mail layout', async () => {
       await bootNotificationMail(compileMailRegistry({ templates: { 'orders/shipped': '# Order {{ order.id }}\n\nThanks, {{ name }}.' } }))
 

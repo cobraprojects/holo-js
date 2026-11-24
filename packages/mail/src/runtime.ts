@@ -1419,11 +1419,13 @@ function renderMailTemplateContent(
   subject: string,
   text: string | undefined,
 ): { readonly html: string, readonly text: string } {
+  const { markdown } = getResolvedConfig()
   const rendered = renderMarkdownMail(template, {
     registry: getCompiledMailRegistry(),
     app: getRuntimeBindings().app ?? holoAppDefaults,
     subject,
-    theme: template.theme ?? getResolvedConfig().markdown.theme,
+    theme: template.theme ?? markdown.theme,
+    securedEncoding: markdown.securedEncoding,
   })
 
   return typeof text === 'string' ? Object.freeze({ ...rendered, text }) : rendered
