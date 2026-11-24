@@ -332,14 +332,6 @@ function resolveDependencyRoot(issuerSource, sourceAppRoot, packageName) {
   return resolveInstalledPackageRoot(sourceAppRoot, packageName)
 }
 
-async function readPackageVersion(packageRoot) {
-  const manifestPath = join(packageRoot, 'package.json')
-  if (!existsSync(manifestPath)) {
-    return undefined
-  }
-  return JSON.parse(await readFile(manifestPath, 'utf8')).version
-}
-
 function resolveVisiblePackageRoot(issuerTarget, appRoot, packageName) {
   for (let directory = issuerTarget; directory.startsWith(appRoot); directory = dirname(directory)) {
     const candidate = join(directory, 'node_modules', ...packageName.split('/'))
@@ -379,61 +371,71 @@ export async function copyExternalDependencyClosure(
   const appManifest = JSON.parse(await readFile(join(sourceAppRoot, 'package.json'), 'utf8'))
   const appDependencyNames = new Set(listManifestDependencyNames(appManifest))
   const pending = [...appDependencyNames].map(packageName => ({ packageName, ancestors: new Map() }))
-  const processedTargets = new Set()
+  const targetSources = new Map()
+  const expandedTargets = new Set()
   const hoistedNames = new Set()
+  const enqueueDependencies = (manifest, issuer) => pending.push(...listInstalledDependencyNames(manifest)
+    .map(dependencyName => ({ packageName: dependencyName, ...issuer })))
   while (pending.length > 0) {
     const { packageName, issuerSource, issuerTarget, ancestors } = pending.shift()
+    const source = resolveDependencyRoot(issuerSource, sourceAppRoot, packageName)
     if (packageName.startsWith('@holo-js/')) {
       const stagedManifestPath = join(stagedNodeModules, ...packageName.split('/'), 'package.json')
-      const issuer = { issuerTarget: join(nodeModulesRoot, ...packageName.split('/')), ancestors }
-      if (existsSync(stagedManifestPath) && !processedTargets.has(issuer.issuerTarget)) {
-        processedTargets.add(issuer.issuerTarget)
-        pending.push(...listInstalledDependencyNames(JSON.parse(await readFile(stagedManifestPath, 'utf8')))
-          .map(dependencyName => ({ packageName: dependencyName, ...issuer })))
+      const stagedTarget = join(nodeModulesRoot, ...packageName.split('/'))
+      if (existsSync(stagedManifestPath) && !expandedTargets.has(stagedTarget)) {
+        expandedTargets.add(stagedTarget)
+        enqueueDependencies(JSON.parse(await readFile(stagedManifestPath, 'utf8')), {
+          issuerSource: source && await realpath(source),
+          issuerTarget: stagedTarget,
+          ancestors,
+        })
       }
       continue
     }
-    if (options.includeAppDependencies === false && appDependencyNames.has(packageName)) {
-      continue
-    }
-    const source = resolveDependencyRoot(issuerSource, sourceAppRoot, packageName)
     if (!source) {
       continue
     }
     const sourceIdentity = await realpath(source)
     const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'))
     const hoistedTarget = join(nodeModulesRoot, ...packageName.split('/'))
+    const isLinkedAppDependency = options.linkedAppDependencies === true && appDependencyNames.has(packageName)
     if (!hoistedNames.has(packageName)) {
       hoistedNames.add(packageName)
-      if (options.replaceExisting || !existsSync(hoistedTarget)) {
+      const keepsExistingCopy = isLinkedAppDependency || !options.replaceExisting
+      if (keepsExistingCopy && existsSync(hoistedTarget)) {
+        targetSources.set(hoistedTarget, await realpath(join(sourceAppRoot, 'node_modules', ...packageName.split('/'))))
+        if (isLinkedAppDependency) {
+          expandedTargets.add(hoistedTarget)
+        }
+      } else {
         await copyPackageWithoutNestedDependencies(source, hoistedTarget)
+        targetSources.set(hoistedTarget, sourceIdentity)
       }
     }
     let target = resolveVisiblePackageRoot(issuerTarget ?? appRoot, appRoot, packageName)
-    if (!target || (await readPackageVersion(target)) !== manifest.version) {
+    if (!target || targetSources.get(target) !== sourceIdentity) {
       if (!issuerTarget) {
         continue
       }
       target = join(issuerTarget, 'node_modules', ...packageName.split('/'))
+      targetSources.set(target, sourceIdentity)
       const ancestorTarget = ancestors.get(sourceIdentity)
       if (ancestorTarget) {
         await linkAncestorCopy(ancestorTarget, target)
-        processedTargets.add(target)
+        expandedTargets.add(target)
         continue
       }
       await copyPackageWithoutNestedDependencies(source, target)
     }
-    if (processedTargets.has(target)) {
+    if (expandedTargets.has(target)) {
       continue
     }
-    processedTargets.add(target)
-    const issuer = {
+    expandedTargets.add(target)
+    enqueueDependencies(manifest, {
       issuerSource: sourceIdentity,
       issuerTarget: target,
       ancestors: new Map(ancestors).set(sourceIdentity, target),
-    }
-    pending.push(...listInstalledDependencyNames(manifest)
-      .map(dependencyName => ({ packageName: dependencyName, ...issuer })))
+    })
   }
 }
 
@@ -479,7 +481,7 @@ export async function createFrameworkNodeModules(sourceAppRoot, appRoot, stagedN
   await symlink(join(nodeModulesRoot, '@holo-js/cli/dist/bin/holo.mjs'), holoBinary)
 }
 
-async function createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules) {
+export async function createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules) {
   const sourceNodeModules = join(sourceAppRoot, 'node_modules')
   const nodeModulesRoot = join(appRoot, 'node_modules')
   await mkdir(nodeModulesRoot, { recursive: true })
@@ -503,7 +505,7 @@ async function createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNo
     dereference: true,
   })
   await copyExternalDependencyClosure(sourceAppRoot, nodeModulesRoot, stagedNodeModules, {
-    includeAppDependencies: false,
+    linkedAppDependencies: true,
     replaceExisting: true,
   })
   const binRoot = join(nodeModulesRoot, '.bin')

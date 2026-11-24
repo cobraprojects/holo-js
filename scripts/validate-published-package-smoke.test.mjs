@@ -9,6 +9,7 @@ import {
   assertProductionApp,
   copyExternalDependencyClosure,
   createFrameworkNodeModules,
+  createLinkedFrameworkNodeModules,
 } from './validate-published-package-smoke.mjs'
 
 test('resolves catalog and workspace ranges in published manifests', () => {
@@ -106,13 +107,16 @@ test('a production app that exits before listening fails with its exit code and 
   })
 })
 
-async function writeStorePackage(storeRoot, name, version, dependencies = {}) {
-  const packageRoot = join(storeRoot, `${name}@${version}/node_modules/${name}`)
+async function writeStorePackage(storeRoot, name, storeVersion, dependencies = {}) {
+  const [version] = storeVersion.split('+')
+  const modulesRoot = join(storeRoot, `${name}@${storeVersion}/node_modules`)
+  const packageRoot = join(modulesRoot, name)
   await mkdir(packageRoot, { recursive: true })
   await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name, version, dependencies }))
   await writeFile(join(packageRoot, 'index.js'), `module.exports = ${JSON.stringify(version)}\n`)
-  for (const [dependencyName, dependencyVersion] of Object.entries(dependencies)) {
-    await symlink(join(storeRoot, `${dependencyName}@${dependencyVersion}/node_modules/${dependencyName}`), join(packageRoot, '..', dependencyName))
+  for (const [dependencyName, dependencyStoreVersion] of Object.entries(dependencies)) {
+    await mkdir(dirname(join(modulesRoot, dependencyName)), { recursive: true })
+    await symlink(join(storeRoot, `${dependencyName}@${dependencyStoreVersion}/node_modules/${dependencyName}`), join(modulesRoot, dependencyName))
   }
   return packageRoot
 }
@@ -155,6 +159,7 @@ async function withClosureFixture(callback) {
       await writeFile(join(sourceAppRoot, 'package.json'), JSON.stringify({ dependencies: Object.fromEntries(Object.entries(dependencies).map(([name, packageRoot]) => [name, packageRoot ? 'installed' : 'staged'])) }))
       for (const [name, packageRoot] of Object.entries(dependencies)) {
         if (packageRoot) {
+          await mkdir(dirname(join(sourceAppRoot, 'node_modules', name)), { recursive: true })
           await symlink(packageRoot, join(sourceAppRoot, 'node_modules', name))
         }
       }
@@ -228,5 +233,62 @@ test('staged framework packages keep the nested dependency versions they declare
     const requireFromThing = createRequire(join(root, 'app/node_modules/@holo-js/thing/dist/index.js'))
     const ulidFromThing = dirname(requireFromThing.resolve('ulid/package.json'))
     assert.equal(JSON.parse(await readFile(join(ulidFromThing, 'package.json'), 'utf8')).version, rootUlidVersion)
+  })
+})
+
+test('two installations of the same package version keep the dependencies each was installed with', async () => {
+  await withClosureFixture(async ({ root, storeRoot, sourceAppRoot, nodeModulesRoot, installApp, requireChain }) => {
+    await writeStorePackage(storeRoot, 'dep', '1.0.0')
+    await writeStorePackage(storeRoot, 'dep', '2.0.0')
+    await writeStorePackage(storeRoot, 'plugin', '1.0.0+second', { dep: '2.0.0' })
+    await installApp({
+      plugin: await writeStorePackage(storeRoot, 'plugin', '1.0.0+first', { dep: '1.0.0' }),
+      consumer: await writeStorePackage(storeRoot, 'consumer', '1.0.0', { plugin: '1.0.0+second' }),
+    })
+
+    await copyExternalDependencyClosure(sourceAppRoot, nodeModulesRoot, join(root, 'staged'))
+
+    assert.deepEqual(requireChain('plugin', 'dep'), ['1.0.0', '1.0.0'])
+    assert.deepEqual(requireChain('consumer', 'plugin', 'dep'), ['1.0.0', '1.0.0', '2.0.0'])
+  })
+})
+
+test('staged framework packages resolve dependencies from their own installation before the app', async () => {
+  await withClosureFixture(async ({ root, storeRoot, sourceAppRoot, installApp, requireChain }) => {
+    await writeStorePackage(storeRoot, 'dep', '2.0.0')
+    await installApp({
+      dep: await writeStorePackage(storeRoot, 'dep', '1.0.0'),
+      '@holo-js/thing': await writeStorePackage(storeRoot, '@holo-js/thing', '1.0.0', { dep: '2.0.0' }),
+    })
+    const stagedNodeModules = join(root, 'registry/node_modules')
+    await mkdir(join(stagedNodeModules, '@holo-js/thing'), { recursive: true })
+    await writeFile(join(stagedNodeModules, '@holo-js/thing/package.json'), JSON.stringify({ name: '@holo-js/thing', version: '1.0.0', dependencies: { dep: '2.0.0' } }))
+    await writeFile(join(stagedNodeModules, '@holo-js/thing/index.js'), 'module.exports = \'staged\'\n')
+
+    await createFrameworkNodeModules(sourceAppRoot, join(root, 'app'), stagedNodeModules)
+
+    assert.deepEqual(requireChain('dep'), ['1.0.0'])
+    assert.deepEqual(requireChain('@holo-js/thing', 'dep'), ['staged', '2.0.0'])
+  })
+})
+
+test('linked framework packages get their own copy of an app dependency version they need', async () => {
+  await withClosureFixture(async ({ root, storeRoot, sourceAppRoot, installApp, requireChain }) => {
+    await writeStorePackage(storeRoot, 'dep', '2.0.0')
+    const appDep = await writeStorePackage(storeRoot, 'dep', '1.0.0')
+    await installApp({
+      dep: appDep,
+      '@holo-js/thing': await writeStorePackage(storeRoot, '@holo-js/thing', '1.0.0', { dep: '2.0.0' }),
+    })
+    const stagedNodeModules = join(root, 'registry/node_modules')
+    await mkdir(join(stagedNodeModules, '@holo-js/thing'), { recursive: true })
+    await writeFile(join(stagedNodeModules, '@holo-js/thing/package.json'), JSON.stringify({ name: '@holo-js/thing', version: '1.0.0', dependencies: { dep: '2.0.0' } }))
+    await writeFile(join(stagedNodeModules, '@holo-js/thing/index.js'), 'module.exports = \'staged\'\n')
+
+    await createLinkedFrameworkNodeModules(sourceAppRoot, join(root, 'app'), stagedNodeModules)
+
+    assert.deepEqual(requireChain('dep'), ['1.0.0'])
+    assert.equal(await realpath(join(root, 'app/node_modules/dep')), await realpath(appDep))
+    assert.deepEqual(requireChain('@holo-js/thing', 'dep'), ['staged', '2.0.0'])
   })
 })
