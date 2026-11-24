@@ -353,6 +353,15 @@ export const level = { subject: 'Hi', level: 'warning' } satisfies NotificationM
       .rejects.toThrow('Mail component "alert" creates a component cycle: alert -> box -> alert.')
   })
 
+  it('fails prepare on a cycle between a Mail template and an app Mail component', async () => {
+    const root = await createProject()
+    await writeMailFile(root, 'components/notice.html', '<div>{!! slot !!}</div>\n\n@include (welcome)')
+    await writeTemplate(root, 'welcome', '<mail::notice>Hi</mail::notice>')
+
+    await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig()))
+      .rejects.toThrow('Mail template "welcome" creates a cycle through Mail components: welcome -> <mail::notice> -> welcome.')
+  })
+
   it('fails prepare on an unknown Mail component tag', async () => {
     const root = await createProject()
     await writeTemplate(root, 'welcome', '# Welcome\n\n<mail::buton url="https://example.test">Open</mail::buton>')
