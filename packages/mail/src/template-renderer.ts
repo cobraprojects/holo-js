@@ -38,13 +38,9 @@ interface RenderContext {
   readonly loops: readonly LoopValue[]
 }
 
-interface TemplateValueEncoding {
+export interface TemplateValueEncoding {
   readonly pattern: RegExp
   readonly entities: Readonly<Record<string, string>>
-}
-
-interface MailTemplateRenderOptions {
-  readonly securedEncoding: boolean
 }
 
 interface RenderedAttribute {
@@ -105,7 +101,7 @@ function isTruthy(value: MailJsonValue | undefined): boolean {
   return !!value && value !== '0'
 }
 
-function escapeTemplateValue(value: string, encoding: TemplateValueEncoding = HTML_ENCODING): string {
+function escapeTemplateValue(value: string, encoding: TemplateValueEncoding): string {
   return value.replace(encoding.pattern, character => encoding.entities[character] ?? character)
 }
 
@@ -134,7 +130,7 @@ function renderAttribute(context: RenderContext, nodes: readonly MailTemplateVal
   const html = nodes.some(node => node.type === 'output')
   const value = nodes.map((node) => {
     if (node.type === 'output') return renderEscapedOutput(context, node.path, node.escaped)
-    return html ? escapeTemplateValue(node.value) : node.value
+    return html ? escapeTemplateValue(node.value, HTML_ENCODING) : node.value
   }).join('')
 
   return { value, html }
@@ -231,20 +227,33 @@ function renderTemplate(context: RenderContext): string {
   return renderNodes(context, template.nodes)
 }
 
+function createRenderContext(
+  registry: CompiledMailRegistry,
+  template: string,
+  format: MailTemplateFormat,
+  data: MailJsonObject,
+  encoding: TemplateValueEncoding,
+): RenderContext {
+  return { registry, template, format, data, encoding, htmlValues: NO_VALUES, markdownValues: NO_VALUES, loops: [] }
+}
+
+export function resolveTemplateValueEncoding(securedEncoding: boolean): TemplateValueEncoding {
+  return securedEncoding ? SECURED_ENCODING : HTML_ENCODING
+}
+
 export function renderMailTemplate(
   registry: CompiledMailRegistry,
   name: string,
   data: MailJsonObject,
   format: MailTemplateFormat,
-  options: MailTemplateRenderOptions,
+  encoding: TemplateValueEncoding,
 ): string {
-  const encoding = options.securedEncoding ? SECURED_ENCODING : HTML_ENCODING
-  return renderTemplate({ registry, template: name, format, data, encoding, htmlValues: NO_VALUES, markdownValues: NO_VALUES, loops: [] })
+  return renderTemplate(createRenderContext(registry, name, format, data, encoding))
 }
 
 export function renderMailLayout(registry: CompiledMailRegistry, format: MailTemplateFormat, data: MailJsonObject): string {
   const layout = registry.layouts[format] ?? BUILT_IN_COMPILED_MAIL_LAYOUTS[format]
-  return renderNodes({ registry, template: MAIL_LAYOUT_FILE_NAMES[format], format, data, encoding: HTML_ENCODING, htmlValues: NO_VALUES, markdownValues: NO_VALUES, loops: [] }, layout.nodes)
+  return renderNodes(createRenderContext(registry, MAIL_LAYOUT_FILE_NAMES[format], format, data, HTML_ENCODING), layout.nodes)
 }
 
 export function resolveMailTheme(registry: CompiledMailRegistry, name: string): string {
