@@ -44,10 +44,10 @@ import {
 } from './migrations'
 import { writeLine } from './io'
 import { collectFiles } from './project/discovery-helpers'
+import { loadMailTemplatesModule } from './project/runtime'
 import { MAIL_ROOT, MAIL_TEMPLATES_ROOT } from './project/shared'
 import type { IoStreams, PreparedInput } from './cli-types'
 
-const MAIL_TEMPLATE_NAME_SEGMENT_PATTERN = /^[A-Za-z0-9][\w-]*$/
 
 export function hasRegisteredModelName(
   registry: Awaited<ReturnType<typeof loadGeneratedProjectRegistry>> | undefined,
@@ -664,14 +664,19 @@ export async function runMakeFactory(
   writeLine(io.stdout, `Created factory: ${makeProjectRelativePath(projectRoot, filePath)}`)
 }
 
-function resolveMailTemplateName(requested: string | undefined, directory: string, rawBaseName: string): string {
+function resolveMailTemplateName(
+  requested: string | undefined,
+  directory: string,
+  rawBaseName: string,
+  isMailTemplateName: (name: string) => boolean,
+): string {
   if (typeof requested === 'undefined') {
     const fileStem = toKebabCase(rawBaseName.replace(/Mail$/, '') || rawBaseName)
     return [directory, fileStem].filter(Boolean).join('/')
   }
 
   const name = requested.trim().replace(/^\/+|\/+$/g, '')
-  if (!name.split('/').every(segment => MAIL_TEMPLATE_NAME_SEGMENT_PATTERN.test(segment))) {
+  if (!isMailTemplateName(name)) {
     throw new Error(`Invalid Mail template name "${requested}". Use letters, numbers, dashes, and underscores separated by "/", such as "orders/shipped".`)
   }
 
@@ -694,7 +699,8 @@ export async function runMakeMail(
   const fileStem = toKebabCase(nameParts.rawBaseName)
   const mailName = ensureSuffix(toPascalCase(nameParts.rawBaseName), 'Mail')
   const inputTypeName = `${mailName}Input`
-  const templateName = resolveMailTemplateName(resolveStringFlag(input.flags, 'markdown'), directory, nameParts.rawBaseName)
+  const { isMailTemplateName } = await loadMailTemplatesModule(projectRoot)
+  const templateName = resolveMailTemplateName(resolveStringFlag(input.flags, 'markdown'), directory, nameParts.rawBaseName, isMailTemplateName)
   const mailFilePath = resolveArtifactPath(projectRoot, MAIL_ROOT, directory, `${fileStem}.ts`)
   const templateFilePath = resolve(projectRoot, MAIL_TEMPLATES_ROOT, `${templateName}.md`)
 

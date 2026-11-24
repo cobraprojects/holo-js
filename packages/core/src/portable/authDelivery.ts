@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import type { MailAppIdentity } from '@holo-js/mail'
 import type { NotificationBuildContext, NotificationDefinition, NotificationMailMessage, defineNotification, notify, NotificationMailSender } from '@holo-js/notifications'
 import { importBundledRuntimeModule } from '../runtimeModule'
 import { createAuthActionUrl, sendNotificationMail } from './authMailDelivery'
@@ -82,7 +83,7 @@ function createAuthDeliveryHook(appUrl: string, send: (email: AuthEmail) => Prom
   })
 }
 
-export function createAuthMailDeliveryHook(mail: MailSender, app: { readonly name: string, readonly url: string }, projectRoot?: string) {
+export function createAuthMailDeliveryHook(mail: MailSender, app: MailAppIdentity, projectRoot?: string) {
   return createAuthDeliveryHook(app.url, async ({ purpose, recipient, message }) => {
     const projectNotification = await loadProjectAuthNotification(projectRoot, purpose)
     const to = { email: recipient.email, ...(recipient.name ? { name: recipient.name } : {}) }
@@ -109,7 +110,7 @@ export function createAuthNotificationsDeliveryHook(notifications: Notifications
 }
 
 export function createCoreAuthDeliveryHook(options: {
-  readonly app: { readonly name: string, readonly url: string }
+  readonly app: MailAppIdentity
   readonly projectRoot?: string
   readonly notifications?: NotificationsModule
   readonly mail?: MailSender

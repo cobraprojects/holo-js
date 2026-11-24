@@ -1,5 +1,6 @@
 import { DEFAULT_MAIL_COMPONENTS, MAIL_COMPONENT_SLOT_TEXT } from './defaults'
 import { MailError } from './errors'
+import { findOwnEntry } from './own-entry'
 
 export interface MailComponentSource {
   readonly html: string
@@ -26,7 +27,7 @@ function resolveAppMailComponent(name: string, files: MailComponentFiles): MailC
     )
   }
 
-  const builtIn = Object.hasOwn(DEFAULT_MAIL_COMPONENTS, name) ? DEFAULT_MAIL_COMPONENTS[name] : undefined
+  const builtIn = findOwnEntry(DEFAULT_MAIL_COMPONENTS, name)
   const html = files.html ?? builtIn?.html
   if (html === undefined) {
     throw new MailError(
@@ -62,7 +63,7 @@ const BUILT_IN_MAIL_COMPONENT_BEHAVIORS: Readonly<Record<string, MailComponentBe
 })
 
 export function resolveMailComponentBehavior(name: string): MailComponentBehavior {
-  const behavior = Object.hasOwn(BUILT_IN_MAIL_COMPONENT_BEHAVIORS, name) ? BUILT_IN_MAIL_COMPONENT_BEHAVIORS[name] : undefined
+  const behavior = findOwnEntry(BUILT_IN_MAIL_COMPONENT_BEHAVIORS, name)
   return behavior ?? DEFAULT_MAIL_COMPONENT_BEHAVIOR
 }
 

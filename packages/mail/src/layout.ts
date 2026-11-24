@@ -1,6 +1,6 @@
 import { decodeHTML, escapeUTF8 } from 'entities'
 import juice from 'juice'
-import type { MailJsonObject } from './contracts-types'
+import type { MailAppIdentity, MailJsonObject } from './contracts-types'
 import { renderMarkdown, renderMarkdownText } from './markdown'
 import { renderMailLayout, renderMailTemplate, resolveMailTheme, type CompiledMailRegistry } from './templates'
 
@@ -11,7 +11,7 @@ export interface MailTemplateSelection {
 
 export interface MarkdownMailContext {
   readonly registry: CompiledMailRegistry
-  readonly app: { readonly name: string, readonly url: string }
+  readonly app: MailAppIdentity
   readonly subject: string
   readonly theme: string
 }

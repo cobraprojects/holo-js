@@ -351,6 +351,8 @@ describe('@holo-js/mail runtime', () => {
         ['@if (order.total > 10)\n@endif', 'line 1: "order.total > 10" is not a data path.'],
         ['@foreach (items)\n@endforeach', 'line 1: "@foreach" needs "path as name" in parentheses'],
         ['@include (../secrets)', 'line 1: "../secrets" is not a Mail template name'],
+        ['@include (partials.footer)', 'line 1: "partials.footer" is not a Mail template name'],
+        ['@include (-draft)', 'line 1: "-draft" is not a Mail template name'],
         ['@include (partials/missing)', 'line 1: "@include (partials/missing)" names a Mail template that does not exist.'],
         ['@foreach (items as item)\n{{ item.name }}\n@endforeach\n{{ items }}', 'uses "items" both as a list and as a value.'],
       ]

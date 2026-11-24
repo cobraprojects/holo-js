@@ -12,6 +12,7 @@ export type {
   HoloMailThemeRegistry,
   MailAddress,
   MailAddressInput,
+  MailAppIdentity,
   MailAttachmentBase,
   MailAttachmentContent,
   MailAttachmentDisposition,
@@ -52,7 +53,6 @@ export type {
   MailStorageAttachment,
   MailStorageAttachmentHelperOptions,
   MailTemplateData,
-  MailTemplateDataInput,
   MailTemplateName,
   MailThemeName,
   MailViewRenderInput,
@@ -170,12 +170,23 @@ function normalizeJsonValue(
   }
 
   if (isObject(value)) {
-    return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, entry]) => {
-      return [key, normalizeJsonValue(entry, `${label}.${key}`)]
-    }))) as MailJsonObject
+    return normalizeJsonObject(value, label)
   }
 
   throw new Error(`[@holo-js/mail] ${label} must be JSON-serializable.`)
+}
+
+function normalizeJsonObject(
+  value: unknown,
+  label: string,
+): MailJsonObject {
+  if (!isObject(value)) {
+    throw new Error(`[@holo-js/mail] ${label} must be a plain object.`)
+  }
+
+  return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, entry]): [string, MailJsonValue] => {
+    return [key, normalizeJsonValue(entry, `${label}.${key}`)]
+  })))
 }
 
 function normalizeHeaders(
@@ -585,7 +596,7 @@ function normalizeRenderSource(render: MailRenderSource | undefined): Readonly<M
     view: normalizeViewIdentifier(render.view, 'Mail render view'),
     ...(typeof render.props === 'undefined'
       ? {}
-      : { props: normalizeJsonValue(render.props, 'Mail render props') as MailJsonObject }),
+      : { props: normalizeJsonObject(render.props, 'Mail render props') }),
   })
 }
 
@@ -630,11 +641,7 @@ function normalizeTemplateData(input: MailDefinitionSource, markdown: string | u
     throw new Error('[@holo-js/mail] Mail data is only valid for mails that name a Mail template with markdown.')
   }
 
-  if (!isObject(input.data)) {
-    throw new Error('[@holo-js/mail] Mail data must be a plain object.')
-  }
-
-  return normalizeJsonValue(input.data, 'Mail data') as MailJsonObject
+  return normalizeJsonObject(input.data, 'Mail data')
 }
 
 function normalizeTemplateTheme(input: MailDefinitionSource, markdown: string | undefined): string | undefined {
@@ -699,8 +706,8 @@ export function mergeMailDefinitionInputs(
       ...(overrides.headers ?? {}),
     },
     metadata: {
-      ...((base.metadata ?? {}) as MailJsonObject),
-      ...((overrides.metadata ?? {}) as MailJsonObject),
+      ...base.metadata,
+      ...overrides.metadata,
     },
   }
 }
@@ -728,7 +735,7 @@ export function normalizeMailDefinition(
     : undefined
   const metadata = typeof input.metadata === 'undefined'
     ? undefined
-    : normalizeJsonValue(input.metadata, 'Mail metadata') as MailJsonObject
+    : normalizeJsonObject(input.metadata, 'Mail metadata')
   const normalized: MailDefinition = {
     ...(mailer ? { mailer } : {}),
     ...(from ? { from } : {}),

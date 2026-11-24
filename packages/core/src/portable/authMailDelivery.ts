@@ -26,15 +26,19 @@ export function createAuthActionUrl(appUrl: string, path: string, token: string)
   return url.toString()
 }
 
+function formatNotificationLine(line: string): string {
+  return line.split(/\r\n|\r|\n/).map(piece => piece.trim()).join(' ').trim()
+}
+
 function createNotificationMailData(message: NotificationMailMessage, appName: string): MailJsonObject {
   const level = message.level ?? 'info'
   return {
     greeting: message.greeting || (level === 'error' ? 'Whoops!' : 'Hello!'),
     level,
-    lines: [...(message.lines ?? [])],
+    lines: (message.lines ?? []).map(formatNotificationLine),
     ...(message.action ? { action: { label: message.action.label, url: message.action.url } } : {}),
     actionColor: level === 'info' ? 'primary' : level,
-    outroLines: [...(message.outroLines ?? [])],
+    outroLines: (message.outroLines ?? []).map(formatNotificationLine),
     salutation: message.salutation || `Regards,\\\n${appName}`,
   }
 }

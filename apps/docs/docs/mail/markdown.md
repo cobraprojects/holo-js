@@ -35,7 +35,7 @@ export default PasswordChangedMail
 
 ## Mail templates
 
-Mail templates are `.md` files under `server/mail/templates`. A template's name is its path inside that folder without the extension, so `server/mail/templates/orders/shipped.md` is `orders/shipped`. A mail names its template with `markdown` and passes the values the template uses as `data`.
+Mail templates are `.md` files under `server/mail/templates`. A template's name is its path inside that folder without the extension, so `server/mail/templates/orders/shipped.md` is `orders/shipped`. Each part of the name starts with a letter or number and uses only letters, numbers, `-`, and `_`; `holo prepare` fails for a template file with any other name, such as `shipped.v2.md`. A mail names its template with `markdown` and passes the values the template uses as `data`.
 
 `npx holo make:mail` creates a mail definition together with its template. See [Writing mail](/mail/writing-mail#generate-a-mail-file).
 
@@ -61,7 +61,9 @@ HTML you write in the template itself is output as written, so you can add eleme
 <p align="center">Thanks for your order, {{ customer.name }}!</p>
 ```
 
-Placeholders are filled before the Markdown is parsed, so a value can still contain Markdown syntax such as `*`. `{{ }}` only escapes HTML.
+::: warning
+Placeholders are filled before the Markdown is parsed, and `{{ }}` escapes only HTML. A value is still parsed as Markdown, so a value from a user such as `[Claim your prize](https://example.com)` becomes a link, and `# ` or `*` turn into a heading or emphasis. Don't put values from users where Markdown formatting would matter, such as on a line of their own, or remove Markdown syntax from them before you pass them as `data`.
+:::
 
 ## Conditions, loops, and includes
 
