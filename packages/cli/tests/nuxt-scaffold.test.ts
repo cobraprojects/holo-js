@@ -31,9 +31,21 @@ async function scaffoldNuxtApp(): Promise<string> {
   return projectRoot
 }
 
+type RollupWarning = {
+  readonly message: string
+}
+
 type NuxtConfig = {
   readonly compatibilityDate?: string
   readonly modules?: readonly string[]
+  readonly sourcemap?: Readonly<Record<string, boolean>>
+  readonly vite?: {
+    readonly build?: {
+      readonly rollupOptions?: {
+        readonly onwarn?: (warning: RollupWarning, defaultHandler: (warning: RollupWarning) => void) => void
+      }
+    }
+  }
 }
 
 async function loadNuxtConfig(projectRoot: string): Promise<NuxtConfig> {
@@ -68,6 +80,22 @@ describe('scaffolded Nuxt app', () => {
 
     expect(config.compatibilityDate).toBe('2025-07-15')
     expect(config.modules).toEqual(['@holo-js/adapter-nuxt'])
+    expect(config.sourcemap).toEqual({ client: false, server: false })
+  })
+
+  it('silences only the module preload polyfill sourcemap warning', async () => {
+    const config = await loadNuxtConfig(await scaffoldNuxtApp())
+    const onwarn = config.vite?.build?.rollupOptions?.onwarn
+    const reported: string[] = []
+    const report = (warning: RollupWarning): void => {
+      reported.push(warning.message)
+    }
+
+    expect(onwarn).toBeTypeOf('function')
+    onwarn!({ message: 'nuxt:module-preload-polyfill didn\'t generate a sourcemap' }, report)
+    onwarn!({ message: 'Circular dependency in app/utils.ts' }, report)
+
+    expect(reported).toEqual(['Circular dependency in app/utils.ts'])
   })
 
   it('declares Nuxt 4.7 with the Vue and Vue Router ranges it requires', async () => {
