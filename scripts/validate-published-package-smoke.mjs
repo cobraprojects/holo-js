@@ -319,7 +319,41 @@ function resolveInstalledPackageRoot(sourceAppRoot, packageName) {
   return candidates.find(candidate => existsSync(join(candidate, 'package.json')))
 }
 
-async function copyExternalDependencyClosure(
+function resolveDependencyRoot(issuerSource, sourceAppRoot, packageName) {
+  if (!issuerSource) {
+    return resolveInstalledPackageRoot(sourceAppRoot, packageName)
+  }
+  for (let directory = issuerSource; dirname(directory) !== directory; directory = dirname(directory)) {
+    const candidate = join(directory, 'node_modules', ...packageName.split('/'))
+    if (existsSync(join(candidate, 'package.json'))) {
+      return candidate
+    }
+  }
+  return resolveInstalledPackageRoot(sourceAppRoot, packageName)
+}
+
+async function readPackageVersion(packageRoot) {
+  const manifestPath = join(packageRoot, 'package.json')
+  if (!existsSync(manifestPath)) {
+    return undefined
+  }
+  return JSON.parse(await readFile(manifestPath, 'utf8')).version
+}
+
+async function copyPackageWithoutNestedDependencies(source, target) {
+  await rm(target, { recursive: true, force: true })
+  await mkdir(dirname(target), { recursive: true })
+  const nestedNodeModules = join(source, 'node_modules')
+  await cp(source, target, {
+    recursive: true,
+    dereference: true,
+    filter(path) {
+      return path !== nestedNodeModules && !path.startsWith(`${nestedNodeModules}/`)
+    },
+  })
+}
+
+export async function copyExternalDependencyClosure(
   sourceAppRoot,
   nodeModulesRoot,
   stagedNodeModules,
@@ -327,44 +361,57 @@ async function copyExternalDependencyClosure(
 ) {
   const appManifest = JSON.parse(await readFile(join(sourceAppRoot, 'package.json'), 'utf8'))
   const appDependencyNames = new Set(listManifestDependencyNames(appManifest))
-  const pending = [...appDependencyNames]
+  const pending = [...appDependencyNames].map(packageName => ({ packageName }))
   const visited = new Set()
+  const hoistedVersions = new Map()
   while (pending.length > 0) {
-    const packageName = pending.shift()
-    if (!packageName || visited.has(packageName)) {
+    const { packageName, issuerSource, issuerTarget } = pending.shift()
+    const visitKey = `${issuerTarget ?? ''}\0${packageName}`
+    if (visited.has(visitKey)) {
       continue
     }
-    visited.add(packageName)
+    visited.add(visitKey)
     if (packageName.startsWith('@holo-js/')) {
-      const stagedManifestPath = join(stagedNodeModules, ...packageName.split('/'), 'package.json')
+      const stagedPackageRoot = join(stagedNodeModules, ...packageName.split('/'))
+      const stagedManifestPath = join(stagedPackageRoot, 'package.json')
       if (existsSync(stagedManifestPath)) {
-        pending.push(...listInstalledDependencyNames(JSON.parse(await readFile(stagedManifestPath, 'utf8'))))
+        const issuer = { issuerTarget: join(nodeModulesRoot, ...packageName.split('/')) }
+        pending.push(...listInstalledDependencyNames(JSON.parse(await readFile(stagedManifestPath, 'utf8')))
+          .map(dependencyName => ({ packageName: dependencyName, ...issuer })))
       }
       continue
     }
     if (options.includeAppDependencies === false && appDependencyNames.has(packageName)) {
       continue
     }
-    const source = resolveInstalledPackageRoot(sourceAppRoot, packageName)
+    const source = resolveDependencyRoot(issuerSource, sourceAppRoot, packageName)
     if (!source) {
       continue
     }
     const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'))
-    pending.push(...listInstalledDependencyNames(manifest))
-    const target = join(nodeModulesRoot, ...packageName.split('/'))
-    if (existsSync(target) && !options.replaceExisting) {
-      continue
+    const hoistedTarget = join(nodeModulesRoot, ...packageName.split('/'))
+    let target = hoistedTarget
+    if (!hoistedVersions.has(packageName)) {
+      const existingVersion = existsSync(hoistedTarget) && !options.replaceExisting
+        ? await readPackageVersion(hoistedTarget)
+        : undefined
+      hoistedVersions.set(packageName, existingVersion ?? manifest.version)
+      if (existingVersion === undefined) {
+        await copyPackageWithoutNestedDependencies(source, hoistedTarget)
+      }
     }
-    await rm(target, { recursive: true, force: true })
-    await mkdir(dirname(target), { recursive: true })
-    const nestedNodeModules = join(source, 'node_modules')
-    await cp(source, target, {
-      recursive: true,
-      dereference: true,
-      filter(path) {
-        return path !== nestedNodeModules && !path.startsWith(`${nestedNodeModules}/`)
-      },
-    })
+    if (hoistedVersions.get(packageName) !== manifest.version) {
+      if (!issuerTarget) {
+        continue
+      }
+      target = join(issuerTarget, 'node_modules', ...packageName.split('/'))
+      if ((await readPackageVersion(target)) !== manifest.version) {
+        await copyPackageWithoutNestedDependencies(source, target)
+      }
+    }
+    const issuer = { issuerSource: await realpath(source), issuerTarget: target }
+    pending.push(...listInstalledDependencyNames(manifest)
+      .map(dependencyName => ({ packageName: dependencyName, ...issuer })))
   }
 }
 
