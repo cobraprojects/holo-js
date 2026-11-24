@@ -8,7 +8,7 @@
 
 ### Changed
 
-- Nuxt: `@holo-js/adapter-nuxt` requires Nuxt 4.7.0 or newer on the 4 line and Vue 3.5.46 or newer, and new Nuxt apps start on them. Nuxt 4.7.0 fixes three security advisories ([GHSA-jxc9-w3j6-pwp2](https://github.com/nuxt/nuxt/security/advisories/GHSA-jxc9-w3j6-pwp2), [GHSA-vrh2-cfcx-c3fg](https://github.com/nuxt/nuxt/security/advisories/GHSA-vrh2-cfcx-c3fg), [GHSA-h5xj-x893-p5f7](https://github.com/nuxt/nuxt/security/advisories/GHSA-h5xj-x893-p5f7)) and writes its generated tsconfig and type files atomically, and it requires Vue 3.5.46. New apps also set `compatibilityDate` in `nuxt.config.ts`, as Nuxt's own starter does. Holo still runs on Nitro v2; don't add the `nitro` package, which switches Nuxt 4.7 to Nitro v3. See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrade-nuxt-to-470).
+- Nuxt: `@holo-js/adapter-nuxt` requires Nuxt 4.7.0 or newer on the 4 line and Vue 3.5.46 or newer, and new Nuxt apps start on them. Nuxt 4.7.0 fixes three security advisories ([GHSA-jxc9-w3j6-pwp2](https://github.com/nuxt/nuxt/security/advisories/GHSA-jxc9-w3j6-pwp2), [GHSA-vrh2-cfcx-c3fg](https://github.com/nuxt/nuxt/security/advisories/GHSA-vrh2-cfcx-c3fg), [GHSA-h5xj-x893-p5f7](https://github.com/nuxt/nuxt/security/advisories/GHSA-h5xj-x893-p5f7)) and writes its generated tsconfig and type files atomically, and it requires Vue 3.5.46. New apps also set `compatibilityDate` in `nuxt.config.ts`, as Nuxt's own starter does. Holo still runs on Nitro v2; keep the `nitro` package out of your `package.json`, because listing it switches Nuxt 4.7 to Nitro v3. See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrade-nuxt-to-470).
 
 ### Fixed
 

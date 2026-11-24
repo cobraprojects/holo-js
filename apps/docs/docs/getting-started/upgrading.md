@@ -8,7 +8,9 @@ Update every installed `@holo-js/*` package to `0.6.4` together. Change the vers
 
 In a Nuxt app, upgrade Nuxt first. `@holo-js/adapter-nuxt` now requires `nuxt` 4.7.0 or newer on the 4 line and `vue` 3.5.46 or newer on the 3 line. Nuxt 4.7.0 fixes three security advisories, and Nuxt warns with `NUXT_B7042` when `vue` is older than it needs. Running `npx nuxt upgrade --dedupe` updates both.
 
-Keep your app on Nitro v2. Holo doesn't support Nitro v3 yet, and Nuxt 4.7 switches to it when your `package.json` lists the `nitro` package, so don't add it.
+If your app uses `cache`, `swr` or `isr` route rules on pages with user-specific data, purge your CDN or edge cache after you upgrade. One of the advisories ([GHSA-jxc9-w3j6-pwp2](https://github.com/nuxt/nuxt/security/advisories/GHSA-jxc9-w3j6-pwp2)) let one user's `_payload.json` be cached and served to another, and upgrading doesn't remove a payload a cache already holds.
+
+Keep your app on Nitro v2. Holo doesn't support Nitro v3 yet, and Nuxt 4.7 switches to it whenever your `package.json` lists the `nitro` package. If it's listed, remove it, and don't add it.
 
 Nuxt 4.7 also checks links in your templates: a `<NuxtLink>` whose `to` matches no page logs `NUXT_B4025`. For a link to a server route or a file in `public/`, add the `external` prop.
 

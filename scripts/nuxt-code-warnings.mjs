@@ -1,6 +1,6 @@
 const nuxtBuildCodePattern = /\bNUXT_B\d{4}\b/
 
-export function findNuxtCodeWarnings(output) {
+function findNuxtCodeWarnings(output) {
   return output
     .split(/\r?\n/)
     .flatMap((line) => {
