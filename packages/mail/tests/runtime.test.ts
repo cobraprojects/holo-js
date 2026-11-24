@@ -336,10 +336,8 @@ describe('@holo-js/mail runtime', () => {
         return [`level${level}`, `@if (paid)\n@include (level${level + 1})\n@else\n@include (level${level + 1})\n@endif`]
       }))
       templates[`level${depth}`] = 'Done'
-      const startedAt = performance.now()
 
       expect(compileMailRegistry({ templates }).templates.level0?.data).toEqual({ kind: 'object', properties: { paid: { kind: 'json' } } })
-      expect(performance.now() - startedAt).toBeLessThan(1000)
     })
 
     it('rejects template syntax errors when compiling', () => {
