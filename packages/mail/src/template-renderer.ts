@@ -3,7 +3,7 @@ import { isAbsoluteHttpUrl, resolveMailComponentBehavior } from './components'
 import type { MailJsonObject, MailJsonValue } from './contracts-types'
 import { DEFAULT_MAIL_SOURCES } from './defaults'
 import { MailError } from './errors'
-import { renderMarkdown, renderMarkdownInline } from './markdown'
+import { escapeMarkdown, renderMarkdown, renderMarkdownInline } from './markdown'
 import { findOwnEntry } from './own-entry'
 import {
   BUILT_IN_COMPILED_MAIL_COMPONENTS,
@@ -140,6 +140,11 @@ function resolveComponentAttributes(context: RenderContext, node: MailTemplateCo
   return attributes
 }
 
+function renderComponentAttribute(context: RenderContext, attribute: RenderedAttribute): RenderedAttribute {
+  if (context.format === 'html') return attribute
+  return { value: escapeMarkdown(attributeText(attribute)), html: true }
+}
+
 function renderSlot(context: RenderContext, node: MailTemplateComponentNode): string {
   const source = renderNodes(context, node.children).trim()
   if (context.format === 'text') return source
@@ -148,12 +153,13 @@ function renderSlot(context: RenderContext, node: MailTemplateComponentNode): st
 
 function renderComponent(context: RenderContext, node: MailTemplateComponentNode): string {
   const component = resolveComponent(context, node.name)
-  const attributes = resolveComponentAttributes(context, node)
+  const attributes = [...resolveComponentAttributes(context, node)]
+    .map(([name, attribute]) => [name, renderComponentAttribute(context, attribute)] as const)
   const data: MailJsonObject = {
-    ...Object.fromEntries([...attributes].map(([name, attribute]) => [name, attribute.value])),
+    ...Object.fromEntries(attributes.map(([name, attribute]) => [name, attribute.value])),
     slot: renderSlot(context, node),
   }
-  const htmlValues = new Set([...attributes].filter(([, attribute]) => attribute.html).map(([name]) => name)).add('slot')
+  const htmlValues = new Set(attributes.filter(([, attribute]) => attribute.html).map(([name]) => name)).add('slot')
 
   return renderNodes({ ...context, template: `components/${node.name}`, data, htmlValues, loops: [] }, component[context.format])
 }
