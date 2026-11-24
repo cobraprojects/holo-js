@@ -415,7 +415,7 @@ describe('@holo-js/mail runtime', () => {
       expect(mail.html).toMatch(/<tbody>\s*<tr>\s*<td[^>]*>Plan<\/td>\s*<td[^>]*>\$10<\/td>\s*<\/tr>\s*<\/tbody>\s*<\/table>/)
     })
 
-    it('outputs template HTML as written and does not link unsafe URLs', async () => {
+    it('outputs template HTML as written and drops unsafe URLs like league/commonmark', async () => {
       const mail = await sendMarkdown([
         '<div align="center">Block</div>',
         '',
@@ -423,10 +423,24 @@ describe('@holo-js/mail runtime', () => {
       ].join('\n'))
 
       expect(mail.html).toContain('<div align="center">Block</div>')
-      expect(mail.html).toContain('<p>Inline <b>bold</b> bad <a href="https://example.test">ok</a> pixel javascript:alert(2)</p>')
-      expect(mail.html).not.toContain('href="javascript:')
-      expect(mail.html).not.toContain('<img')
+      expect(mail.html).toContain('<p>Inline <b>bold</b> <a>bad</a> <a href="https://example.test">ok</a> <img src alt="pixel"> <a>javascript:alert(2)</a></p>')
       expect(mail.text).toBe('Block\n\nInline bold bad ok (https://example.test) pixel javascript:alert(2)')
+    })
+
+    it('links every URL scheme except javascript:, vbscript:, file:, and data: in any case', async () => {
+      const mail = await sendMarkdown([
+        '[call](tel:+15550100) [text](sms:+15550100) [mail](mailto:help@example.test) [app](myapp://open) [page](/orders) [top](#top)',
+        '',
+        '[a](JavaScript:alert(1)) [b](VBSCRIPT:msgbox) [c](file:///etc/passwd) [d](data:text/html,x) [e](<JAVASCRIPT:alert(1)>)',
+        '',
+        '![png](data:image/png;base64,AAAA) ![webp](DATA:image/webp;base64,AAAA) ![svg](data:image/svg+xml;base64,AAAA)',
+      ].join('\n'))
+
+      expect(mail.html).toBe([
+        '<p><a href="tel:+15550100">call</a> <a href="sms:+15550100">text</a> <a href="mailto:help@example.test">mail</a> <a href="myapp://open">app</a> <a href="/orders">page</a> <a href="#top">top</a></p>',
+        '<p><a>a</a> <a>b</a> <a>c</a> <a>d</a> <a>e</a></p>',
+        '<p><img src="data:image/png;base64,AAAA" alt="png"> <img src="DATA:image/webp;base64,AAAA" alt="webp"> <img src alt="svg"></p>',
+      ].join('\n'))
     })
 
     it('generates plain text from markdown with syntax removed', async () => {

@@ -250,7 +250,7 @@ Holo renders Markdown with [CommonMark](https://commonmark.org) plus GitHub-styl
 
 ## Safety
 
-`{{ }}` escapes HTML in values, so it's safe for values that come from users, like names. Markdown links and images only render for `http:`, `https:`, and `mailto:` URLs, plus relative paths (`/`, `./`, `../`, `#`). Any other link, such as `javascript:`, renders as its label text only, and any other image renders as its alt text only.
+`{{ }}` escapes HTML in values, so it's safe for values that come from users, like names. As in Laravel, Markdown links and images with a `javascript:`, `vbscript:`, `file:`, or `data:` URL lose their URL, in any letter case: such a link renders as `<a>` without an `href`, and such an image renders with an empty `src`. `data:image/png`, `data:image/gif`, `data:image/jpeg`, and `data:image/webp` URLs are kept. Every other URL, such as `https:`, `mailto:`, `tel:`, or a relative path, renders as written. HTML tags you write in a template are output as written, so their URLs aren't checked.
 
 ## Plain-text version
 
