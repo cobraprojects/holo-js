@@ -7,7 +7,7 @@ export const DEFAULT_MAIL_LAYOUT_HTML = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTM
 <meta name="color-scheme" content="light">
 <meta name="supported-color-schemes" content="light">
 <style>
-@@media only screen and (max-width: 600px) {
+@media only screen and (max-width: 600px) {
 .inner-body {
 width: 100% !important;
 }
@@ -17,7 +17,7 @@ width: 100% !important;
 }
 }
 
-@@media only screen and (max-width: 500px) {
+@media only screen and (max-width: 500px) {
 .button {
 width: 100% !important;
 }

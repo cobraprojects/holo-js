@@ -84,7 +84,7 @@ The two layouts are independent. A `layout.html` without a `layout.txt` keeps th
 
 ## Themes
 
-A Mail theme is a CSS file in `server/mail/themes`. Holo inlines its rules into the `style` attribute of each element they match after wrapping the mail in its layout. Rules that can't be inlined, such as `@media` queries, are dropped, so put those in a `<style>` block in your layout, as the default layout does. A layout uses [Mail template directives](/mail/markdown#conditions-loops-and-includes), so write `@@media` there to output a literal `@media`.
+A Mail theme is a CSS file in `server/mail/themes`. Holo inlines its rules into the `style` attribute of each element they match after wrapping the mail in its layout. Rules that can't be inlined, such as `@media` queries, are dropped, so put those in a `<style>` block in your layout, as the default layout does.
 
 Holo ships a built-in `default` theme, the same as Laravel's. It styles the default layout, headings, paragraphs, links, and tables, and the `button`, `panel`, `table`, and `subcopy` classes. To change it, create `server/mail/themes/default.css`, which replaces the built-in theme completely:
 
