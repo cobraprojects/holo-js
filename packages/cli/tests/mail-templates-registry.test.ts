@@ -8,6 +8,12 @@ import { normalizeHoloProjectConfig } from '@holo-js/kernel'
 import { configureMailRuntime, normalizeMailConfig, previewMail, resetMailRuntime } from '@holo-js/mail'
 import { discoverAppCommands, prepareProjectDiscovery } from '../src/project/discovery'
 
+declare module '@holo-js/mail' {
+  interface HoloMailTemplateRegistry {
+    readonly welcome: Record<string, never>
+  }
+}
+
 const tempDirs: string[] = []
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
 
