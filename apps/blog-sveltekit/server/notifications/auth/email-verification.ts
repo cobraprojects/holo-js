@@ -4,7 +4,7 @@ interface EmailVerificationNotification {
   readonly email: string
   readonly name?: string
   readonly url: string
-  readonly expiresAt: Date
+  readonly expiresInMinutes: number
 }
 
 export default defineNotification({
@@ -15,16 +15,17 @@ export default defineNotification({
   build: {
     email(data: EmailVerificationNotification) {
       return {
-        subject: 'Verify your email address',
-        greeting: data.name ? `Hello ${data.name},` : undefined,
+        subject: 'Verify Email Address',
         lines: [
-          'Confirm your account to finish signing in.',
-          `This verification link expires at ${data.expiresAt.toUTCString()}.`,
+          'Please click the button below to verify your email address.',
         ],
         action: {
-          label: 'Verify email address',
+          label: 'Verify Email Address',
           url: data.url,
         },
+        outroLines: [
+          'If you did not create an account, no further action is required.',
+        ],
       }
     },
   },
