@@ -253,10 +253,10 @@ Holo sends the email through [notifications](/notifications/) when `@holo-js/not
 To change the subject, text, or queueing, publish the notification files:
 
 ```bash
-npx holo auth:notifications:publish
+npx holo mail:publish
 ```
 
-This creates `server/notifications/auth/email-verification.ts` and `server/notifications/auth/password-reset.ts`, filled with the default content above. They are normal notifications built with `defineNotification()`, so they need `@holo-js/notifications`. When a file exists, Holo uses it instead of the built-in email, and its message renders in your Mail layout and theme like any notification email. The email builder receives:
+Along with your [Mail layout, theme, and components](/mail/layouts-and-themes#publishing-the-defaults), this creates `server/notifications/auth/email-verification.ts` and `server/notifications/auth/password-reset.ts`, filled with the default content above. They are normal notifications built with `defineNotification()`, so they need `@holo-js/notifications`; without it, the command skips them. When a file exists, Holo uses it instead of the built-in email, and its message renders in your Mail layout and theme like any notification email. The email builder receives:
 
 | Field | Description |
 | --- | --- |

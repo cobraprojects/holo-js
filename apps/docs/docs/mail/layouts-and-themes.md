@@ -135,6 +135,16 @@ defineMail({
 
 `holo prepare` generates the theme names, so an unknown name in `theme` or `markdown.theme` is a type error. If a mail names a theme that isn't in the generated registry, for example after you delete the file without running `holo prepare`, sending it throws `Mail theme "receipt" is not registered`.
 
+## Publishing the defaults
+
+To start from Holo's own files instead of writing them from scratch, run:
+
+```bash
+npx holo mail:publish
+```
+
+This copies the default `layout.html`, `layout.txt`, the `default` theme, and the built-in [Mail components](/mail/markdown#overriding-components) into `server/mail`, together with the notification email template. They are the same files Holo uses when yours are missing, so your emails look the same until you edit them. Files you already have are skipped; add `--force` to overwrite them. See [`mail:publish`](/reference/cli#mail-publish) for the full list.
+
 ## Preparing layouts and themes
 
 `holo prepare` compiles `layout.html`, `layout.txt`, and every theme into the generated registry together with your Mail templates, so your app doesn't read these files when it sends mail. `holo dev` recompiles them when you save. After changing them outside `holo dev`, run `npx holo prepare`. A syntax error in a layout, such as an unclosed `{{`, fails `holo prepare` with the file name and line.

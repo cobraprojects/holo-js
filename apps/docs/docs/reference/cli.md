@@ -279,13 +279,27 @@ Aliases: `agent:install`, `ai:install`.
 npx holo agents:install --agent claude,cursor
 ```
 
-### auth:notifications:publish
+### mail:publish
 
-Copy the built-in auth notifications (such as email verification and password reset) into your app so you can edit them. Existing files are skipped.
+Copy the files that shape your mail into your app so you can edit them. The copies have the same content Holo uses by default, so publishing without editing them doesn't change any email.
 
 ```bash
-npx holo auth:notifications:publish
+npx holo mail:publish [--force]
 ```
+
+| File | Replaces |
+| --- | --- |
+| `server/mail/layout.html`, `server/mail/layout.txt` | The default [Mail layout](/mail/layouts-and-themes#custom-layout) |
+| `server/mail/components/{button,panel,table,subcopy}.{html,txt}` | The built-in [Mail components](/mail/markdown#overriding-components) |
+| `server/mail/themes/default.css` | The built-in `default` [Mail theme](/mail/layouts-and-themes#themes) |
+| `server/mail/templates/notifications/email.md` | The [notification email](/notifications/channels#email) Mail template |
+| `server/notifications/auth/email-verification.ts`, `server/notifications/auth/password-reset.ts` | The [auth emails](/auth/email-verification#customize-the-email) |
+
+The command lists each file it publishes. A file that already exists is skipped and listed as skipped. The auth files are notifications, so without `@holo-js/notifications` installed they are skipped and listed as needing it.
+
+| Flag | Description |
+| --- | --- |
+| `--force` | Overwrite files that already exist. |
 
 ## Generators
 
