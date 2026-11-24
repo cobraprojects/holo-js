@@ -39,7 +39,7 @@ Mail templates are `.md` files under `server/mail/templates`. A template's name 
 
 `npx holo make:mail` creates a mail definition together with its template. See [Writing mail](/mail/writing-mail#generate-a-mail-file).
 
-`holo prepare` compiles every template into the generated registry, so your app doesn't read template files when it sends mail. `holo dev` recompiles a template when you save it. After adding or changing a template outside `holo dev`, run `npx holo prepare`. A template with a syntax error, such as an unclosed `{{` or `@if`, or an include cycle, fails `holo prepare` with the template name and line.
+`holo prepare` compiles every template into the generated registry, so your app doesn't read template files when it sends mail. `holo dev` recompiles a template when you save it, and `holo` commands such as `holo queue:work` recompile changed mail files before they run. Otherwise, run `npx holo prepare` after adding or changing a template. A template with a syntax error, such as an unclosed `{{` or `@if`, or an include cycle, fails `holo prepare` with the template name and line.
 
 ## Placeholders
 

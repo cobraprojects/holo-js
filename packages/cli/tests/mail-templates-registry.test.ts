@@ -5,7 +5,7 @@ import ts from 'typescript'
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderGeneratedSchemaPlaceholder } from '@holo-js/db'
 import { normalizeHoloProjectConfig } from '@holo-js/kernel'
-import { prepareProjectDiscovery } from '../src/project/discovery'
+import { discoverAppCommands, prepareProjectDiscovery } from '../src/project/discovery'
 
 const tempDirs: string[] = []
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
@@ -208,6 +208,33 @@ export const badItem = defineMail({ to: 'a@example.com', subject: 'S', markdown:
 export const missingRoot = defineMail({ to: 'a@example.com', subject: 'S', markdown: 'orders/shipped', data: { order: { id: 1, lines: [] } } })
 `, 'utf8')
     expect(typeErrors(root, 'check-mail-errors.ts')).toHaveLength(2)
+  })
+
+  it('re-prepares before running commands when a Mail file changed since the last prepare', async () => {
+    const root = await createProject()
+    const config = normalizeHoloProjectConfig()
+    await writeTemplate(root, 'welcome', '# Welcome')
+    await prepareProjectDiscovery(root, config)
+    const readMail = async () => {
+      return (JSON.parse(await readFile(join(root, '.holo-js/generated/registry.json'), 'utf8')) as Awaited<ReturnType<typeof prepareProjectDiscovery>>).mail
+    }
+
+    await writeTemplate(root, 'welcome', '# Welcome back')
+    await discoverAppCommands(root, config)
+    expect(JSON.stringify((await readMail())?.templates.welcome)).toContain('# Welcome back')
+
+    await writeMailFile(root, 'layout.html', '<main>{!! body !!}</main>')
+    await writeMailFile(root, 'themes/receipt.css', 'h1 { color: blue; }')
+    await writeMailFile(root, 'components/alert.html', '<div>{!! slot !!}</div>')
+    await discoverAppCommands(root, config)
+    const updated = await readMail()
+    expect(Object.keys(updated?.layouts ?? {})).toEqual(['html'])
+    expect(Object.keys(updated?.themes ?? {})).toEqual(['receipt'])
+    expect(Object.keys(updated?.components ?? {})).toContain('alert')
+
+    await rm(join(root, 'server/mail/themes/receipt.css'))
+    await discoverAppCommands(root, config)
+    expect((await readMail())?.themes).toEqual({})
   })
 
   it('fails prepare on an include cycle', async () => {
