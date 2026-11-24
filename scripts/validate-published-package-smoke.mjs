@@ -392,22 +392,24 @@ export async function copyExternalDependencyClosure(
       }
       continue
     }
-    if (options.includeAppDependencies === false && appDependencyNames.has(packageName)) {
-      continue
-    }
     if (!source) {
       continue
     }
     const sourceIdentity = await realpath(source)
     const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'))
     const hoistedTarget = join(nodeModulesRoot, ...packageName.split('/'))
+    const isLinkedAppDependency = options.linkedAppDependencies === true && appDependencyNames.has(packageName)
     if (!hoistedNames.has(packageName)) {
       hoistedNames.add(packageName)
-      if (options.replaceExisting || !existsSync(hoistedTarget)) {
+      const keepsExistingCopy = isLinkedAppDependency || !options.replaceExisting
+      if (keepsExistingCopy && existsSync(hoistedTarget)) {
+        targetSources.set(hoistedTarget, await realpath(join(sourceAppRoot, 'node_modules', ...packageName.split('/'))))
+        if (isLinkedAppDependency) {
+          expandedTargets.add(hoistedTarget)
+        }
+      } else {
         await copyPackageWithoutNestedDependencies(source, hoistedTarget)
         targetSources.set(hoistedTarget, sourceIdentity)
-      } else {
-        targetSources.set(hoistedTarget, await realpath(join(sourceAppRoot, 'node_modules', ...packageName.split('/'))))
       }
     }
     let target = resolveVisiblePackageRoot(issuerTarget ?? appRoot, appRoot, packageName)
@@ -479,7 +481,7 @@ export async function createFrameworkNodeModules(sourceAppRoot, appRoot, stagedN
   await symlink(join(nodeModulesRoot, '@holo-js/cli/dist/bin/holo.mjs'), holoBinary)
 }
 
-async function createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules) {
+export async function createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules) {
   const sourceNodeModules = join(sourceAppRoot, 'node_modules')
   const nodeModulesRoot = join(appRoot, 'node_modules')
   await mkdir(nodeModulesRoot, { recursive: true })
@@ -503,7 +505,7 @@ async function createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNo
     dereference: true,
   })
   await copyExternalDependencyClosure(sourceAppRoot, nodeModulesRoot, stagedNodeModules, {
-    includeAppDependencies: false,
+    linkedAppDependencies: true,
     replaceExisting: true,
   })
   const binRoot = join(nodeModulesRoot, '.bin')

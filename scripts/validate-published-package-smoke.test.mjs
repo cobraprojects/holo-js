@@ -9,6 +9,7 @@ import {
   assertProductionApp,
   copyExternalDependencyClosure,
   createFrameworkNodeModules,
+  createLinkedFrameworkNodeModules,
 } from './validate-published-package-smoke.mjs'
 
 test('resolves catalog and workspace ranges in published manifests', () => {
@@ -267,6 +268,27 @@ test('staged framework packages resolve dependencies from their own installation
     await createFrameworkNodeModules(sourceAppRoot, join(root, 'app'), stagedNodeModules)
 
     assert.deepEqual(requireChain('dep'), ['1.0.0'])
+    assert.deepEqual(requireChain('@holo-js/thing', 'dep'), ['staged', '2.0.0'])
+  })
+})
+
+test('linked framework packages get their own copy of an app dependency version they need', async () => {
+  await withClosureFixture(async ({ root, storeRoot, sourceAppRoot, installApp, requireChain }) => {
+    await writeStorePackage(storeRoot, 'dep', '2.0.0')
+    const appDep = await writeStorePackage(storeRoot, 'dep', '1.0.0')
+    await installApp({
+      dep: appDep,
+      '@holo-js/thing': await writeStorePackage(storeRoot, '@holo-js/thing', '1.0.0', { dep: '2.0.0' }),
+    })
+    const stagedNodeModules = join(root, 'registry/node_modules')
+    await mkdir(join(stagedNodeModules, '@holo-js/thing'), { recursive: true })
+    await writeFile(join(stagedNodeModules, '@holo-js/thing/package.json'), JSON.stringify({ name: '@holo-js/thing', version: '1.0.0', dependencies: { dep: '2.0.0' } }))
+    await writeFile(join(stagedNodeModules, '@holo-js/thing/index.js'), 'module.exports = \'staged\'\n')
+
+    await createLinkedFrameworkNodeModules(sourceAppRoot, join(root, 'app'), stagedNodeModules)
+
+    assert.deepEqual(requireChain('dep'), ['1.0.0'])
+    assert.equal(await realpath(join(root, 'app/node_modules/dep')), await realpath(appDep))
     assert.deepEqual(requireChain('@holo-js/thing', 'dep'), ['staged', '2.0.0'])
   })
 })
