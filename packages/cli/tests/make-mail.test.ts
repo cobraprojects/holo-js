@@ -111,5 +111,7 @@ describe('holo make:mail', () => {
     expect(Object.keys((await loadGeneratedProjectRegistry(root))?.mail?.templates ?? {})).toEqual(['orders/receipt'])
     await expect(runMakeMail(io, root, { args: ['Escape'], flags: { markdown: '../escape' } }))
       .rejects.toThrow('Invalid Mail template name "../escape".')
+    await expect(runMakeMail(io, root, { args: ['Dotted'], flags: { markdown: 'orders/shipped.v2' } }))
+      .rejects.toThrow('Invalid Mail template name "orders/shipped.v2".')
   })
 })

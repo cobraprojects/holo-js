@@ -1,6 +1,7 @@
 import { resolveMailComponentSources, type MailComponentFiles, type MailComponentSource } from './components'
 import { DEFAULT_MAIL_SOURCES } from './defaults'
 import { MailError } from './errors'
+import { isMailTemplateName } from './template-name'
 import { resolveTemplateData, type MailTemplateDataObjectShape } from './template-data'
 import {
   childNodeLists,
@@ -122,10 +123,20 @@ export const BUILT_IN_COMPILED_MAIL_TEMPLATES: Readonly<Record<string, CompiledM
   }),
 ))
 
+function assertMailTemplateFileName(name: string): void {
+  if (isMailTemplateName(name)) return
+
+  throw new MailError(
+    `[@holo-js/mail] "${name}" is not a Mail template name. Rename server/mail/templates/${name}.md to use letters, numbers, dashes, and underscores separated by "/", such as "orders/shipped.md".`,
+    'MAIL_TEMPLATE_NAME_INVALID',
+  )
+}
+
 export function compileMailRegistry(sources: MailRegistrySources): CompiledMailRegistry {
   const components = compileMailComponents(resolveMailComponentSources(sources.components ?? {}))
   const componentNames = new Set(Object.keys(components))
   const parsed = Object.fromEntries(Object.entries(sources.templates).map(([name, source]) => {
+    assertMailTemplateFileName(name)
     return [name, parseTemplateSyntax(name, source, componentNames)]
   }))
   const templateData = resolveTemplateData(parsed)

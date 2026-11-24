@@ -211,6 +211,14 @@ export const missingRoot = defineMail({ to: 'a@example.com', subject: 'S', markd
     expect(typeErrors(root, 'check-mail-errors.ts')).toHaveLength(2)
   })
 
+  it('fails prepare for a template file whose name a mail cannot reference', async () => {
+    const root = await createProject()
+    await writeTemplate(root, 'orders/shipped.v2', '# Shipped')
+
+    await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig()))
+      .rejects.toThrow('"orders/shipped.v2" is not a Mail template name. Rename server/mail/templates/orders/shipped.v2.md')
+  })
+
   it('re-prepares before running commands when a Mail file changed since the last prepare', async () => {
     const root = await createProject()
     const config = normalizeHoloProjectConfig()

@@ -1,5 +1,6 @@
 import { MailError } from './errors'
 import { findOwnEntry } from './own-entry'
+import { isMailTemplateName } from './template-name'
 
 export type MailTemplateValueNode
   = { readonly type: 'text', readonly value: string }
@@ -132,7 +133,6 @@ const DIRECTIVE_ARGUMENTS: Readonly<Record<string, string>> = {
 }
 const BLOCK_CLOSERS: Readonly<Record<DirectiveBlock, string>> = { if: 'endif', foreach: 'endforeach' }
 const FOREACH_ARGUMENT_PATTERN = /^(\S+)\s+as\s+([A-Za-z_]\w*)$/
-const TEMPLATE_NAME_PATTERN = /^[\w-][\w.-]*(?:\/[\w-][\w.-]*)*$/
 const PATH_SEGMENT_PATTERN = /^[A-Za-z_]\w*$/
 const RESERVED_NAMES: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
 
@@ -394,7 +394,7 @@ function closeComponent(template: string, blocks: OpenBlock[], token: Extract<Co
 }
 
 function parseInclude(template: string, token: DirectiveToken): IncludeReference {
-  if (!TEMPLATE_NAME_PATTERN.test(token.argument)) {
+  if (!isMailTemplateName(token.argument)) {
     throw new MailTemplateSyntaxError(template, token.line, `"${token.argument}" is not a Mail template name, such as "partials/order-summary".`)
   }
 
