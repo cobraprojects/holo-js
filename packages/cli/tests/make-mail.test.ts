@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -18,17 +18,24 @@ declare module '@holo-js/mail' {
 const tempDirs: string[] = []
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
 
-async function createProject(): Promise<string> {
+async function createProject(options: { readonly mail?: boolean } = {}): Promise<string> {
+  const mail = options.mail ?? true
   const root = await mkdtemp(join(tmpdir(), 'holo-cli-make-mail-'))
   tempDirs.push(root)
   await mkdir(join(root, 'config'), { recursive: true })
   await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
   await mkdir(join(root, '.holo-js/generated'), { recursive: true })
-  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'make-mail-fixture', private: true, type: 'module' }, null, 2))
+  await writeFile(join(root, 'package.json'), JSON.stringify({
+    name: 'make-mail-fixture',
+    private: true,
+    type: 'module',
+    dependencies: mail ? { '@holo-js/mail': 'workspace:*' } : {},
+  }, null, 2))
   await writeFile(join(root, 'config/app.ts'), 'export default {}', 'utf8')
   await writeFile(join(root, 'config/database.ts'), 'export default {}', 'utf8')
+  if (mail) await writeFile(join(root, 'config/mail.ts'), 'export default {}', 'utf8')
   await writeFile(join(root, '.holo-js/generated/schema.generated.ts'), renderGeneratedSchemaPlaceholder(), 'utf8')
-  await Promise.all(['config', 'db', 'kernel', 'mail'].map(async (name) => {
+  await Promise.all(['config', 'db', 'kernel', ...(mail ? ['mail'] : [])].map(async (name) => {
     await symlink(join(workspaceRoot, 'packages', name), join(root, 'node_modules/@holo-js', name))
   }))
   return root
@@ -113,5 +120,14 @@ describe('holo make:mail', () => {
       .rejects.toThrow('Invalid Mail template name "../escape".')
     await expect(runMakeMail(io, root, { args: ['Dotted'], flags: { markdown: 'orders/shipped.v2' } }))
       .rejects.toThrow('Invalid Mail template name "orders/shipped.v2".')
+  })
+
+  it('fails with an install hint and writes nothing when @holo-js/mail is not installed', async () => {
+    const root = await createProject({ mail: false })
+    const { io } = createIo(root)
+
+    await expect(runMakeMail(io, root, { args: ['OrderShippedMail'], flags: {} }))
+      .rejects.toThrow('Mail generation requires @holo-js/mail. Install mail first with `holo install mail`.')
+    await expect(readdir(join(root, 'server'))).rejects.toThrow()
   })
 })
