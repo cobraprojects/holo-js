@@ -408,7 +408,6 @@ describe('@holo-js/core auth/session boot', () => {
         label: 'Verify email address',
         url: `http://localhost:3000/verify-email?token=${encodeURIComponent(verificationToken?.plainTextToken ?? '')}`,
       },
-      html: expect.stringContaining(`/verify-email?token=${encodeURIComponent(verificationToken?.plainTextToken ?? '')}`),
       metadata: {
         provider: 'users',
         tokenId: verificationToken?.id,

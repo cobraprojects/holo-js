@@ -149,7 +149,7 @@ interface MailViewContentInput {
   readonly theme?: never
 }
 
-type MailTemplateDataInput<TData>
+export type MailTemplateDataInput<TData>
   = Record<string, never> extends TData
     ? { readonly data?: TData }
     : { readonly data: TData }

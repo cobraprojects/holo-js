@@ -98,10 +98,7 @@ import {
 import { createCoreNotificationStore } from './notificationPersistence'
 import { createCoreDatabaseSessionAdapter } from './sessionPersistence'
 import { createCsrfSessionAccessor } from './csrfSession'
-import {
-  createCoreNotificationMailSender,
-  createNotificationMailText,
-} from './authMailDelivery'
+import { createCoreNotificationMailSender } from './authMailDelivery'
 import { createAuthMailDeliveryHook, createAuthNotificationsDeliveryHook, createCoreAuthDeliveryHook } from './authDelivery'
 import { createOptionalFeatureModuleLoader } from './optionalFeatureLoader'
 import {
@@ -1736,7 +1733,7 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
       plugins: loadedConfig.app.plugins,
       store: existingNotificationsBindings.store ?? createCoreNotificationStore(loadedConfig),
       ...(!existingNotificationsBindings.mailer && mailModule
-        ? { mailer: createCoreNotificationMailSender(mailModule) }
+        ? { mailer: createCoreNotificationMailSender(mailModule, loadedConfig.app.name) }
         : {}),
       ...(!existingNotificationsBindings.broadcaster && broadcastModule
         ? { broadcaster: createCoreNotificationBroadcaster(broadcastModule) }
@@ -1865,7 +1862,7 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
     const authPersistence = await createCoreAuthPersistence(projectRoot, loadedConfig)
 
     const delivery = createCoreAuthDeliveryHook({
-      appUrl: loadedConfig.app.url,
+      app: { name: loadedConfig.app.name, url: loadedConfig.app.url },
       projectRoot,
       notifications: notificationsModule,
       mail: mailModule,
@@ -2459,7 +2456,6 @@ export const holoRuntimeInternals = {
   createCoreAuthPersistence,
   createCoreHostedIdentityStore,
   createCoreNotificationStore,
-  createNotificationMailText,
   createCoreSessionStores,
   createCsrfSessionAccessor,
   registerProjectAuthorizationDefinitions,

@@ -1,25 +1,22 @@
+import type { MailJsonObject, MailRecipientsInput } from '@holo-js/mail'
+import type { NotificationEmailRoute, NotificationMailMessage } from '@holo-js/notifications'
+
+type MailContent = {
+  readonly text?: string
+  readonly html?: string
+  readonly markdown?: string
+  readonly data?: MailJsonObject
+}
+
 type MailSender = {
-  sendMail(mail: {
-    readonly to: unknown
+  sendMail(mail: MailContent & {
+    readonly to: MailRecipientsInput
     readonly subject: string
-    readonly text?: string
-    readonly html?: string
-    readonly metadata?: Readonly<Record<string, unknown>>
+    readonly metadata?: MailJsonObject
   }): PromiseLike<unknown>
 }
 
-type NotificationMailMessage = {
-  readonly subject: string
-  readonly greeting?: string
-  readonly lines?: readonly string[]
-  readonly action?: {
-    readonly label: string
-    readonly url: string
-  }
-  readonly html?: string
-  readonly text?: string
-  readonly metadata?: Readonly<Record<string, unknown>>
-}
+const NOTIFICATION_MAIL_TEMPLATE = 'notifications/email'
 
 const authEmailDateFormatter = new Intl.DateTimeFormat('en-US', {
   dateStyle: 'long',
@@ -31,50 +28,6 @@ export function formatAuthEmailExpiration(expiresAt: Date): string {
   return `${authEmailDateFormatter.format(expiresAt)} UTC`
 }
 
-export function escapeAuthEmailHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('\'', '&#39;')
-}
-
-export function createNotificationMailText(message: Omit<NotificationMailMessage, 'subject'>): string | undefined {
-  const parts = [
-    typeof message.greeting === 'string' ? message.greeting.trim() : undefined,
-    ...(message.lines ?? []).map(line => line.trim()).filter(Boolean),
-    message.action ? `${message.action.label}: ${message.action.url}` : undefined,
-  ].filter((value): value is string => typeof value === 'string' && value.length > 0)
-  return parts.length > 0 ? parts.join('\n\n') : undefined
-}
-
-export function createNotificationMailHtml(message: NotificationMailMessage): string {
-  const greeting = typeof message.greeting === 'string' ? message.greeting.trim() : undefined
-  const lines = (message.lines ?? []).map(line => line.trim()).filter(Boolean)
-  const sections = [
-    greeting ? `<p style="margin:0 0 16px;">${escapeAuthEmailHtml(greeting)}</p>` : '',
-    ...lines.map(line => `<p style="margin:0 0 16px;">${escapeAuthEmailHtml(line)}</p>`),
-    message.action
-      ? `<p style="margin:24px 0;"><a href="${escapeAuthEmailHtml(message.action.url)}" style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">${escapeAuthEmailHtml(message.action.label)}</a></p>`
-      : '',
-    message.action
-      ? `<p style="margin:0;color:#475569;font-size:14px;">If the button does not work, open this link: <a href="${escapeAuthEmailHtml(message.action.url)}">${escapeAuthEmailHtml(message.action.url)}</a></p>`
-      : '',
-  ].join('')
-
-  return [
-    '<!doctype html>',
-    '<html><head><meta charset="utf-8">',
-    `<title>${escapeAuthEmailHtml(message.subject)}</title>`,
-    '</head><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#0f172a;background:#f8fafc;">',
-    '<div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:32px;">',
-    `<h1 style="margin:0 0 24px;font-size:24px;line-height:1.3;">${escapeAuthEmailHtml(message.subject)}</h1>`,
-    sections,
-    '</div></body></html>',
-  ].join('')
-}
-
 export function createAuthActionUrl(appUrl: string, path: string, token: string): string {
   const normalizedBaseUrl = appUrl.endsWith('/') ? appUrl.slice(0, -1) : appUrl
   const normalizedPath = path.startsWith('/') ? path : `/${path}`
@@ -83,31 +36,61 @@ export function createAuthActionUrl(appUrl: string, path: string, token: string)
   return url.toString()
 }
 
-export function createAuthEmailHtml(message: NotificationMailMessage & {
-  readonly lines: readonly string[]
-  readonly action: { readonly label: string, readonly url: string }
-}): string {
-  return createNotificationMailHtml(message)
+function createNotificationMailData(message: NotificationMailMessage, appName: string): MailJsonObject {
+  const level = message.level ?? 'info'
+  return {
+    greeting: message.greeting || (level === 'error' ? 'Whoops!' : 'Hello!'),
+    level,
+    lines: [...(message.lines ?? [])],
+    ...(message.action ? { action: { label: message.action.label, url: message.action.url } } : {}),
+    actionColor: level === 'info' ? 'primary' : level,
+    outroLines: [...(message.outroLines ?? [])],
+    salutation: message.salutation || `Regards,\\\n${appName}`,
+  }
 }
 
-export function createCoreNotificationMailSender(mailModule: MailSender): {
-  send(message: NotificationMailMessage, context: {
-    readonly route?: string | { readonly email: string, readonly name?: string }
-  }): Promise<void>
+function resolveNotificationMailContent(message: NotificationMailMessage, appName: string): MailContent {
+  if (typeof message.markdown === 'string') {
+    return {
+      markdown: message.markdown,
+      data: message.data ?? {},
+      ...(typeof message.text === 'string' ? { text: message.text } : {}),
+    }
+  }
+
+  if (typeof message.html === 'string' || typeof message.text === 'string') {
+    return {
+      ...(typeof message.html === 'string' ? { html: message.html } : {}),
+      ...(typeof message.text === 'string' ? { text: message.text } : {}),
+    }
+  }
+
+  return { markdown: NOTIFICATION_MAIL_TEMPLATE, data: createNotificationMailData(message, appName) }
+}
+
+export async function sendNotificationMail(
+  mailModule: MailSender,
+  appName: string,
+  to: NotificationEmailRoute,
+  message: NotificationMailMessage,
+): Promise<void> {
+  await mailModule.sendMail({
+    to,
+    subject: message.subject,
+    ...resolveNotificationMailContent(message, appName),
+    ...(message.metadata ? { metadata: message.metadata } : {}),
+  })
+}
+
+export function createCoreNotificationMailSender(mailModule: MailSender, appName: string): {
+  send(message: NotificationMailMessage, context: { readonly route?: NotificationEmailRoute }): Promise<void>
 } {
   return Object.freeze({
     async send(message, context): Promise<void> {
       if (!context.route) {
         throw new Error('[@holo-js/core] Email notifications require a resolved email route before bridging into mail.')
       }
-      const fallbackText = createNotificationMailText(message)
-      await mailModule.sendMail({
-        to: context.route,
-        subject: message.subject,
-        html: typeof message.html === 'string' ? message.html : createNotificationMailHtml(message),
-        ...(typeof (message.text ?? fallbackText) === 'string' ? { text: message.text ?? fallbackText } : {}),
-        ...(message.metadata ? { metadata: message.metadata } : {}),
-      })
+      await sendNotificationMail(mailModule, appName, context.route, message)
     },
   })
 }

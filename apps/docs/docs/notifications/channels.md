@@ -39,15 +39,20 @@ email(recipient) {
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `subject` | `string` | Required. The subject, also shown as the heading. |
-| `greeting` | `string` | First paragraph, such as `Hi Ava,`. |
-| `lines` | `string[]` | One paragraph per line. |
-| `action` | `{ label, url }` | A button, plus a plain link underneath for clients that hide buttons. |
-| `html` | `string` | Your own HTML body. Replaces the generated layout. |
-| `text` | `string` | Your own plain-text body. |
+| `subject` | `string` | Required. The subject line. |
+| `level` | `'info' \| 'success' \| 'error'` | Sets the button color. Defaults to `'info'`. |
+| `greeting` | `string` | The heading. Defaults to `Hello!`, or `Whoops!` for `'error'`. |
+| `lines` | `string[]` | Paragraphs before the button. |
+| `action` | `{ label, url }` | A button, plus a copyable link underneath for clients that hide buttons. |
+| `outroLines` | `string[]` | Paragraphs after the button. |
+| `salutation` | `string` | The sign-off. Defaults to `Regards,` and your app name. |
+| `markdown` | `string` | One of your Mail templates, used instead of the notification email template. |
+| `data` | object | The data for `markdown`, typed by that template. |
+| `html` | `string` | Your own HTML body, sent as given. |
+| `text` | `string` | Your own plain-text body, sent as given. |
 | `metadata` | JSON object | Passed to the mail as `metadata`. |
 
-Holo builds a simple HTML email from `subject`, `greeting`, `lines`, and `action`, escaping all of them. It also builds a plain-text version unless you pass `text`.
+Holo renders these fields with the `notifications/email` [Mail template](/mail/markdown#mail-templates), inside your app's [Mail layout and theme](/mail/layouts-and-themes), and escapes every value. To change how every notification email looks, add your own `server/mail/templates/notifications/email.md`; it receives `greeting`, `level`, `lines`, `action`, `outroLines`, `salutation`, and `actionColor` (`primary`, `success`, or `error`), and replaces the built-in template after `holo prepare`.
 
 The email channel supports only these fields. If you need attachments, `cc`, or a custom sender, send a [mail](/mail/sending) directly instead.
 

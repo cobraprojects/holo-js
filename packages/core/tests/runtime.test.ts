@@ -34,8 +34,9 @@ import {
   getNotificationsRuntimeBindings,
   notify,
   resetNotificationsRuntime,
+  type NotificationMailMessage,
 } from '@holo-js/notifications'
-import { configureMailRuntime, listFakeSentMails, previewMail, renderMailPreview, resetFakeSentMails, sendMail, type CompiledMailRegistry } from '@holo-js/mail'
+import { configureMailRuntime, listFakeSentMails, previewMail, renderMailPreview, resetFakeSentMails, sendMail, type CompiledMailRegistry, type FakeSentMail } from '@holo-js/mail'
 import { compileMailRegistry } from '../../mail/src/templates'
 import { mailRuntimeInternals } from '../../mail/src/runtime'
 import {
@@ -3478,54 +3479,149 @@ export default defineAppConfig({ name: 'Runtime App', key: 'base64:key', env: 'd
     })
   })
 
-  it('bridges notification email delivery into mail when notifications and mail are both installed', async () => {
-    const root = await createProject()
-    await writeBaseConfig(root)
-    await writeMailConfig(root)
-    await writeNotificationsConfig(root)
-
-    const runtime = await initializeHolo(root)
-
-    const notification = defineNotification({
-      type: 'invoice-paid',
-      via() {
-        return ['email']
-      },
-      build: {
-        email() {
-          return {
-            subject: 'Invoice paid',
-            lines: [
-              'Your invoice was paid.',
-            ],
-            metadata: {
-              invoiceId: 'inv-1',
-            },
-          }
+  describe('notification mail', () => {
+    async function sendEmailNotification(message: NotificationMailMessage): Promise<FakeSentMail> {
+      await notify({ email: 'ava@example.com', name: 'Ava' }, defineNotification({
+        type: 'invoice-paid',
+        via() {
+          return ['email']
         },
-      },
+        build: {
+          email() {
+            return message
+          },
+        },
+      }))
+
+      const [sent] = listFakeSentMails()
+      if (!sent) throw new Error('Expected a sent notification mail')
+      return sent
+    }
+
+    async function bootNotificationMail(mail?: CompiledMailRegistry): Promise<void> {
+      const root = await createProject()
+      await writeBaseConfig(root)
+      await writeMailConfig(root)
+      await writeNotificationsConfig(root)
+      if (mail) await writeRegistry(root, { models: [], mail })
+      await initializeHolo(root)
+    }
+
+    it('greets with Hello! and signs off with Regards and the app name by default', async () => {
+      await bootNotificationMail()
+
+      const sent = await sendEmailNotification({
+        subject: 'Invoice paid',
+        lines: ['Your invoice was paid.'],
+        metadata: { invoiceId: 'inv-1' },
+      })
+
+      expect(sent.mail).toMatchObject({
+        subject: 'Invoice paid',
+        to: [{ email: 'ava@example.com', name: 'Ava' }],
+        metadata: { invoiceId: 'inv-1' },
+      })
+      expect(sent.mail.html).toMatch(/<h1[^>]*>Hello!<\/h1>\s*<p[^>]*>Your invoice was paid\.<\/p>\s*<p[^>]*>Regards,<br\s*\/?>\s*Runtime App<\/p>/)
+      expect(sent.mail.text).toBe(`Runtime App: https://runtime.test\n\nHello!\n\nYour invoice was paid.\n\nRegards,\nRuntime App\n\n© ${new Date().getFullYear()} Runtime App. All rights reserved.`)
     })
 
-    await notify({
-      email: 'ava@example.com',
-      name: 'Ava',
-    }, notification)
+    it('renders intro lines, the level-colored Mail action, outro lines, and the action subcopy in order', async () => {
+      await bootNotificationMail()
 
-    expect(listFakeSentMails()).toHaveLength(1)
-    expect(listFakeSentMails()[0]!.mail).toMatchObject({
-      subject: 'Invoice paid',
-      to: [
-        {
-          email: 'ava@example.com',
-          name: 'Ava',
-        },
-      ],
-      text: 'Your invoice was paid.',
-      metadata: {
-        invoiceId: 'inv-1',
-      },
+      const sent = await sendEmailNotification({
+        subject: 'Payment failed',
+        level: 'error',
+        lines: ['Your payment failed.'],
+        action: { label: 'Update card', url: 'https://runtime.test/billing?card=1&retry=2' },
+        outroLines: ['Contact support if this continues.'],
+      })
+
+      const html = sent.mail.html ?? ''
+      const order = ['Whoops!', 'Your payment failed.', 'class="button button-error"', 'Contact support if this continues.', 'Regards,', 'class="subcopy"']
+        .map(fragment => html.indexOf(fragment))
+      expect(order.every(index => index >= 0)).toBe(true)
+      expect(order).toEqual([...order].sort((left, right) => left - right))
+      expect(html).toMatch(/<a href="https:\/\/runtime\.test\/billing\?card=1&amp;retry=2" class="button button-error"[^>]*>Update card<\/a>/)
+      expect(html).toContain('If you\'re having trouble clicking the &quot;Update card&quot; button, copy and paste the URL below\ninto your web browser:')
+      expect(html).toMatch(/<span class="break-all"[^>]*><a href="https:\/\/runtime\.test\/billing\?card=1&amp;retry=2"[^>]*>https:\/\/runtime\.test\/billing\?card=1&amp;retry=2<\/a><\/span>/)
+      expect(sent.mail.text).toContain([
+        'Whoops!',
+        'Your payment failed.',
+        'Update card: https://runtime.test/billing?card=1&retry=2',
+        'Contact support if this continues.',
+        'Regards,\nRuntime App',
+        'If you\'re having trouble clicking the "Update card" button, copy and paste the URL below\ninto your web browser: https://runtime.test/billing?card=1&retry=2',
+      ].join('\n\n'))
     })
-    expect(runtime.initialized).toBe(true)
+
+    it.each([
+      ['info', 'button-primary'],
+      ['success', 'button-success'],
+    ] as const)('colors the Mail action of %s notifications with %s', async (level, buttonClass) => {
+      await bootNotificationMail()
+
+      const sent = await sendEmailNotification({ subject: 'Done', level, action: { label: 'View', url: 'https://runtime.test/view' } })
+
+      expect(sent.mail.html).toContain(`class="button ${buttonClass}"`)
+      expect(sent.mail.html).toMatch(/<h1[^>]*>Hello!<\/h1>/)
+    })
+
+    it('uses a custom greeting and salutation and omits the subcopy without a Mail action', async () => {
+      await bootNotificationMail()
+
+      const sent = await sendEmailNotification({
+        subject: 'Welcome',
+        greeting: 'Hi <Ava>',
+        lines: ['Welcome aboard.'],
+        salutation: 'Cheers, the team',
+      })
+
+      expect(sent.mail.html).toMatch(/<h1[^>]*>Hi &lt;Ava&gt;<\/h1>/)
+      expect(sent.mail.html).toMatch(/<p[^>]*>Cheers, the team<\/p>/)
+      expect(sent.mail.html).not.toContain('Hello!')
+      expect(sent.mail.html).not.toContain('Regards,')
+      expect(sent.mail.html).not.toContain('subcopy')
+      expect(sent.mail.text).toContain('Hi <Ava>\n\nWelcome aboard.\n\nCheers, the team\n\n©')
+    })
+
+    it('renders a custom Mail template with its data inside the app Mail layout', async () => {
+      await bootNotificationMail(compileMailRegistry({ templates: { 'orders/shipped': '# Order {{ order.id }}\n\nThanks, {{ name }}.' } }))
+
+      const sent = await sendEmailNotification({
+        subject: 'Shipped',
+        markdown: 'orders/shipped',
+        data: { order: { id: 42 }, name: 'Ava' },
+      })
+
+      expect(sent.mail.html).toMatch(/<h1[^>]*>Order 42<\/h1>\s*<p[^>]*>Thanks, Ava\.<\/p>/)
+      expect(sent.mail.html).toMatch(/<a href="https:\/\/runtime\.test"[^>]*>\s*Runtime App\s*<\/a>/)
+      expect(sent.mail.html).not.toContain('Regards,')
+      expect(sent.mail.text).toBe(`Runtime App: https://runtime.test\n\nOrder 42\n\nThanks, Ava.\n\n© ${new Date().getFullYear()} Runtime App. All rights reserved.`)
+    })
+
+    it('renders an app notifications/email Mail template instead of the built-in one', async () => {
+      await bootNotificationMail(compileMailRegistry({
+        templates: { 'notifications/email': '## {{ greeting }} ({{ level }})\n\n@foreach (lines as line)\n- {{ line }}\n@endforeach\n\n{{ salutation }}' },
+      }))
+
+      const sent = await sendEmailNotification({ subject: 'Paid', level: 'success', lines: ['Paid in full.'], salutation: 'Thanks' })
+
+      expect(sent.mail.html).toMatch(/<h2[^>]*>Hello! \(success\)<\/h2>\s*<ul[^>]*>\s*<li[^>]*>Paid in full\.<\/li>\s*<\/ul>\s*<p[^>]*>Thanks<\/p>/)
+      expect(sent.mail.html).not.toContain('<h1')
+    })
+
+    it.each([
+      ['html and text', { html: '<p>Raw <b>HTML</b></p>', text: 'Raw text' }],
+      ['text only', { text: 'Raw text' }],
+      ['html only', { html: '<p>Raw <b>HTML</b></p>' }],
+    ] as const)('sends explicit %s exactly as given', async (_case, content) => {
+      await bootNotificationMail()
+
+      const sent = await sendEmailNotification({ subject: 'Raw', greeting: 'Ignored', lines: ['Ignored'], ...content })
+
+      expect(sent.mail.html).toBe('html' in content ? content.html : undefined)
+      expect(sent.mail.text).toBe('text' in content ? content.text : undefined)
+    })
   })
 
   it('bridges notification broadcast delivery into @holo-js/broadcast raw runtime', async () => {

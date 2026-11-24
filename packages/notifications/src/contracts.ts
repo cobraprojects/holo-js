@@ -1,3 +1,4 @@
+import type { MailTemplateData, MailTemplateDataInput, MailTemplateName } from '@holo-js/mail'
 import type { NormalizedHoloNotificationsConfig } from './config'
 import { normalizeNotificationQueueOptions } from './queueOptions'
 
@@ -48,18 +49,41 @@ function normalizeDelayValue(value: NotificationDelayValue, label: string): Noti
   return value
 }
 
-export interface NotificationMailMessage {
+interface NotificationMailMessageFields {
   readonly subject: string
+  readonly level?: 'info' | 'success' | 'error'
+  readonly text?: string
+  readonly metadata?: Readonly<Record<string, NotificationJsonValue>>
+}
+
+interface NotificationMailLinesContent {
   readonly greeting?: string
   readonly lines?: readonly string[]
   readonly action?: {
     readonly label: string
     readonly url: string
   }
+  readonly outroLines?: readonly string[]
+  readonly salutation?: string
   readonly html?: string
-  readonly text?: string
-  readonly metadata?: Readonly<Record<string, NotificationJsonValue>>
+  readonly markdown?: never
+  readonly data?: never
 }
+
+type NotificationMailTemplateContent<TTemplate extends MailTemplateName> = TTemplate extends MailTemplateName
+  ? {
+      readonly markdown: TTemplate
+      readonly greeting?: never
+      readonly lines?: never
+      readonly action?: never
+      readonly outroLines?: never
+      readonly salutation?: never
+      readonly html?: never
+    } & MailTemplateDataInput<MailTemplateData<TTemplate>>
+  : never
+
+export type NotificationMailMessage<TTemplate extends MailTemplateName = MailTemplateName>
+  = NotificationMailMessageFields & (NotificationMailLinesContent | NotificationMailTemplateContent<TTemplate>)
 
 export interface NotificationDatabaseMessage<TData extends NotificationJsonValue = NotificationJsonValue> {
   readonly data: TData

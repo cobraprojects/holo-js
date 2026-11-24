@@ -348,3 +348,29 @@ img {
     word-break: break-all;
 }
 `
+
+export const DEFAULT_NOTIFICATION_MAIL_TEMPLATE = `# {{ greeting }}
+
+@foreach (lines as line)
+{{ line }}
+
+@endforeach
+@if (action)
+<mail::button url="{{ action.url }}" color="{{ actionColor }}">
+{{ action.label }}
+</mail::button>
+
+@endif
+@foreach (outroLines as line)
+{{ line }}
+
+@endforeach
+{{ salutation }}
+@if (action)
+
+<mail::subcopy>
+If you're having trouble clicking the "{{ action.label }}" button, copy and paste the URL below
+into your web browser: <span class="break-all">[{{ action.url }}]({{ action.url }})</span>
+</mail::subcopy>
+@endif
+`

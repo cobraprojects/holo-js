@@ -52,6 +52,7 @@ export type {
   MailStorageAttachment,
   MailStorageAttachmentHelperOptions,
   MailTemplateData,
+  MailTemplateDataInput,
   MailTemplateName,
   MailThemeName,
   MailViewRenderInput,

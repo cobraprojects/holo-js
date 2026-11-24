@@ -6,7 +6,12 @@ import {
   type MailComponentSource,
 } from './components'
 import type { MailJsonObject, MailJsonValue } from './contracts-types'
-import { DEFAULT_MAIL_LAYOUT_HTML, DEFAULT_MAIL_LAYOUT_TEXT, DEFAULT_MAIL_THEME_CSS } from './defaults'
+import {
+  DEFAULT_MAIL_LAYOUT_HTML,
+  DEFAULT_MAIL_LAYOUT_TEXT,
+  DEFAULT_MAIL_THEME_CSS,
+  DEFAULT_NOTIFICATION_MAIL_TEMPLATE,
+} from './defaults'
 import { MailError } from './errors'
 import { renderMarkdown, renderMarkdownInline } from './markdown'
 
@@ -657,7 +662,9 @@ function compileMailComponents(sources: Readonly<Record<string, MailComponentSou
   return components
 }
 
-const BUILT_IN_MAIL_COMPONENT_NAMES: ReadonlySet<string> = new Set(Object.keys(resolveMailComponentSources({})))
+const BUILT_IN_COMPILED_MAIL_COMPONENTS: CompiledMailRegistry['components'] = compileMailComponents(resolveMailComponentSources({}))
+
+const BUILT_IN_MAIL_COMPONENT_NAMES: ReadonlySet<string> = new Set(Object.keys(BUILT_IN_COMPILED_MAIL_COMPONENTS))
 
 const MAIL_LAYOUT_FILE_NAMES: Readonly<Record<MailTemplateFormat, string>> = {
   html: 'layout.html',
@@ -677,6 +684,12 @@ function compileWithTemplates(
 const DEFAULT_MAIL_LAYOUTS: Readonly<Record<MailTemplateFormat, CompiledMailTemplate>> = Object.freeze({
   html: compileWithTemplates(MAIL_LAYOUT_FILE_NAMES.html, DEFAULT_MAIL_LAYOUT_HTML, {}, BUILT_IN_MAIL_COMPONENT_NAMES),
   text: compileWithTemplates(MAIL_LAYOUT_FILE_NAMES.text, DEFAULT_MAIL_LAYOUT_TEXT, {}, BUILT_IN_MAIL_COMPONENT_NAMES),
+})
+
+const NOTIFICATION_MAIL_TEMPLATE_NAME = 'notifications/email'
+
+const BUILT_IN_MAIL_TEMPLATES: Readonly<Record<string, CompiledMailTemplate>> = Object.freeze({
+  [NOTIFICATION_MAIL_TEMPLATE_NAME]: compileWithTemplates(NOTIFICATION_MAIL_TEMPLATE_NAME, DEFAULT_NOTIFICATION_MAIL_TEMPLATE, {}, BUILT_IN_MAIL_COMPONENT_NAMES),
 })
 
 function compileMailLayouts(
@@ -705,6 +718,10 @@ export function compileMailRegistry(sources: MailRegistrySources): CompiledMailR
     layouts: compileMailLayouts(sources.layouts, parsed, componentNames),
     themes: Object.freeze({ ...sources.themes }),
   })
+}
+
+function findCompiledEntry<TEntry>(entries: Readonly<Record<string, TEntry>>, name: string): TEntry | undefined {
+  return Object.hasOwn(entries, name) ? entries[name] : undefined
 }
 
 function isJsonObject(value: MailJsonValue | undefined): value is MailJsonObject {
@@ -749,7 +766,7 @@ function renderAttributeValue(context: RenderContext, nodes: readonly MailTempla
 }
 
 function resolveComponent(context: RenderContext, name: string): CompiledMailComponent {
-  const component = Object.hasOwn(context.registry.components, name) ? context.registry.components[name] : undefined
+  const component = findCompiledEntry(context.registry.components, name) ?? findCompiledEntry(BUILT_IN_COMPILED_MAIL_COMPONENTS, name)
   if (!component) {
     throw new MailError(`[@holo-js/mail] Mail component "${name}" is not registered. Run "holo prepare".`, 'MAIL_COMPONENT_NOT_FOUND')
   }
@@ -818,7 +835,7 @@ export function renderMailTemplate(
   data: MailJsonObject,
   format: MailTemplateFormat,
 ): string {
-  const template = Object.hasOwn(registry.templates, name) ? registry.templates[name] : undefined
+  const template = findCompiledEntry(registry.templates, name) ?? findCompiledEntry(BUILT_IN_MAIL_TEMPLATES, name)
   if (!template) {
     throw new MailError(
       `[@holo-js/mail] Mail template "${name}" is not registered. Run "holo prepare" after adding it under server/mail/templates.`,
