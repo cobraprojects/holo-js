@@ -37,14 +37,41 @@ function forbidUnsafeUrls(state: StateCore): void {
   }
 }
 
-function createMarkdownParser(): MarkdownIt {
+export interface MarkdownHtmlRenderer {
+  readonly render: (markdown: string) => string
+  readonly renderInline: (markdown: string) => string
+}
+
+function keepCharacterReferences(characters: ReadonlySet<string>): (state: StateCore) => void {
+  return (state) => {
+    for (const token of state.tokens.flatMap(blockToken => blockToken.children ?? [])) {
+      if (token.type === 'text_special' && token.info === 'entity' && characters.has(token.content)) {
+        token.type = 'html_inline'
+        token.content = token.markup
+      }
+    }
+  }
+}
+
+function createMarkdownParser(keptCharacterReferences: ReadonlySet<string> = new Set()): MarkdownIt {
   const parser = new MarkdownItParser('commonmark', { html: true }).enable('table')
   parser.validateLink = () => true
   parser.core.ruler.push('mail_unsafe_urls', forbidUnsafeUrls)
+  parser.core.ruler.before('text_join', 'mail_kept_character_references', keepCharacterReferences(keptCharacterReferences))
   return parser
 }
 
+export function createMarkdownHtmlRenderer(keptCharacterReferences?: ReadonlySet<string>): MarkdownHtmlRenderer {
+  const parser = createMarkdownParser(keptCharacterReferences)
+  return Object.freeze({
+    render: (markdown: string) => parser.render(markdown).trimEnd(),
+    renderInline: (markdown: string) => parser.renderInline(markdown),
+  })
+}
+
 const markdownParser = createMarkdownParser()
+
+export const MARKDOWN_HTML_RENDERER = createMarkdownHtmlRenderer()
 
 function renderInlineText(tokens: readonly Token[]): string {
   const parts: string[] = []
@@ -86,11 +113,7 @@ export function escapeMarkdown(text: string): string {
 }
 
 export function renderMarkdown(markdown: string): string {
-  return markdownParser.render(markdown).trimEnd()
-}
-
-export function renderMarkdownInline(markdown: string): string {
-  return markdownParser.renderInline(markdown)
+  return MARKDOWN_HTML_RENDERER.render(markdown)
 }
 
 export function renderMarkdownText(markdown: string): string {

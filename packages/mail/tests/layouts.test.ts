@@ -1,3 +1,4 @@
+import { decodeHTML } from 'entities'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   configureMailRuntime,
@@ -81,6 +82,17 @@ describe('@holo-js/mail Mail layout', () => {
     })
 
     expect((await send()).html).toMatch(/<h1[^>]*>Welcome<\/h1><footer>Sent by Acme &amp; Co<\/footer>$/)
+  })
+  it('escapes {{ }} values in Mail components of an app layout with securedEncoding', async () => {
+    configureMail({
+      layouts: { html: '<mail::panel>{{ subject }}</mail::panel>{!! body !!}', text: '{{ subject }}\n{!! body !!}' },
+    }, { markdown: { securedEncoding: true } })
+
+    const mail = await send(defineMail({ to: 'ava@example.com', subject: '[Claim your prize](https://evil.test)', markdown: 'welcome' }))
+
+    expect(mail.html).not.toContain('href=')
+    expect(decodeHTML(mail.html)).toContain('[Claim your prize](https://evil.test)')
+    expect(mail.text).toBe('[Claim your prize](https://evil.test)\nWelcome')
   })
 })
 
