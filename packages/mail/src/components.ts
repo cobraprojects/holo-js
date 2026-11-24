@@ -1,3 +1,4 @@
+import { DEFAULT_MAIL_COMPONENTS, MAIL_COMPONENT_SLOT_TEXT } from './defaults'
 import { MailError } from './errors'
 
 export interface MailComponentSource {
@@ -15,69 +16,6 @@ export interface MailComponentBehavior {
   readonly urlAttributes: readonly string[]
 }
 
-const BUTTON_HTML = [
-  '<table class="action" align="center" width="100%" cellpadding="0" cellspacing="0" role="presentation">',
-  '<tr>',
-  '<td align="center">',
-  '<table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation">',
-  '<tr>',
-  '<td align="center">',
-  '<table border="0" cellpadding="0" cellspacing="0" role="presentation">',
-  '<tr>',
-  '<td>',
-  '<a href="{{ url }}" class="button button-{{ color }}" target="_blank" rel="noopener">{!! slot !!}</a>',
-  '</td>',
-  '</tr>',
-  '</table>',
-  '</td>',
-  '</tr>',
-  '</table>',
-  '</td>',
-  '</tr>',
-  '</table>',
-].join('\n')
-
-const PANEL_HTML = [
-  '<table class="panel" width="100%" cellpadding="0" cellspacing="0" role="presentation">',
-  '<tr>',
-  '<td class="panel-content">',
-  '<table width="100%" cellpadding="0" cellspacing="0" role="presentation">',
-  '<tr>',
-  '<td class="panel-item">',
-  '{!! slot !!}',
-  '</td>',
-  '</tr>',
-  '</table>',
-  '</td>',
-  '</tr>',
-  '</table>',
-].join('\n')
-
-const TABLE_HTML = [
-  '<div class="table">',
-  '{!! slot !!}',
-  '</div>',
-].join('\n')
-
-const SUBCOPY_HTML = [
-  '<table class="subcopy" width="100%" cellpadding="0" cellspacing="0" role="presentation">',
-  '<tr>',
-  '<td>',
-  '{!! slot !!}',
-  '</td>',
-  '</tr>',
-  '</table>',
-].join('\n')
-
-const SLOT_TEXT = '{!! slot !!}'
-
-const BUILT_IN_MAIL_COMPONENTS: Readonly<Record<string, MailComponentSource>> = Object.freeze({
-  button: { html: BUTTON_HTML, text: `${SLOT_TEXT}: {{ url }}` },
-  panel: { html: PANEL_HTML, text: SLOT_TEXT },
-  table: { html: TABLE_HTML, text: SLOT_TEXT },
-  subcopy: { html: SUBCOPY_HTML, text: SLOT_TEXT },
-})
-
 const MAIL_COMPONENT_NAME_PATTERN = /^[a-z][\w-]*$/
 
 function resolveAppMailComponent(name: string, files: MailComponentFiles): MailComponentSource {
@@ -88,7 +26,7 @@ function resolveAppMailComponent(name: string, files: MailComponentFiles): MailC
     )
   }
 
-  const builtIn = Object.hasOwn(BUILT_IN_MAIL_COMPONENTS, name) ? BUILT_IN_MAIL_COMPONENTS[name] : undefined
+  const builtIn = Object.hasOwn(DEFAULT_MAIL_COMPONENTS, name) ? DEFAULT_MAIL_COMPONENTS[name] : undefined
   const html = files.html ?? builtIn?.html
   if (html === undefined) {
     throw new MailError(
@@ -97,14 +35,14 @@ function resolveAppMailComponent(name: string, files: MailComponentFiles): MailC
     )
   }
 
-  return { html, text: files.text ?? builtIn?.text ?? SLOT_TEXT }
+  return { html, text: files.text ?? builtIn?.text ?? MAIL_COMPONENT_SLOT_TEXT }
 }
 
 export function resolveMailComponentSources(
   appComponents: Readonly<Record<string, MailComponentFiles>>,
 ): Readonly<Record<string, MailComponentSource>> {
   return Object.freeze({
-    ...BUILT_IN_MAIL_COMPONENTS,
+    ...DEFAULT_MAIL_COMPONENTS,
     ...Object.fromEntries(Object.entries(appComponents).map(([name, files]) => [name, resolveAppMailComponent(name, files)])),
   })
 }
