@@ -662,14 +662,30 @@ function compileMailComponents(sources: Readonly<Record<string, MailComponentSou
   return components
 }
 
-const BUILT_IN_COMPILED_MAIL_COMPONENTS: CompiledMailRegistry['components'] = compileMailComponents(resolveMailComponentSources({}))
-
-const BUILT_IN_MAIL_COMPONENT_NAMES: ReadonlySet<string> = new Set(Object.keys(BUILT_IN_COMPILED_MAIL_COMPONENTS))
-
 const MAIL_LAYOUT_FILE_NAMES: Readonly<Record<MailTemplateFormat, string>> = {
   html: 'layout.html',
   text: 'layout.txt',
 }
+
+const NOTIFICATION_MAIL_TEMPLATE_NAME = 'notifications/email'
+
+export interface DefaultMailSources {
+  readonly templates: Readonly<Record<string, string>>
+  readonly components: Readonly<Record<string, MailComponentSource>>
+  readonly layouts: Readonly<Record<MailTemplateFormat, string>>
+  readonly themes: Readonly<Record<string, string>>
+}
+
+export const DEFAULT_MAIL_SOURCES: DefaultMailSources = Object.freeze({
+  templates: Object.freeze({ [NOTIFICATION_MAIL_TEMPLATE_NAME]: DEFAULT_NOTIFICATION_MAIL_TEMPLATE }),
+  components: resolveMailComponentSources({}),
+  layouts: Object.freeze({ html: DEFAULT_MAIL_LAYOUT_HTML, text: DEFAULT_MAIL_LAYOUT_TEXT }),
+  themes: Object.freeze({ default: DEFAULT_MAIL_THEME_CSS }),
+})
+
+const BUILT_IN_COMPILED_MAIL_COMPONENTS: CompiledMailRegistry['components'] = compileMailComponents(DEFAULT_MAIL_SOURCES.components)
+
+const BUILT_IN_MAIL_COMPONENT_NAMES: ReadonlySet<string> = new Set(Object.keys(BUILT_IN_COMPILED_MAIL_COMPONENTS))
 
 function compileWithTemplates(
   name: string,
@@ -682,15 +698,15 @@ function compileWithTemplates(
 }
 
 const DEFAULT_MAIL_LAYOUTS: Readonly<Record<MailTemplateFormat, CompiledMailTemplate>> = Object.freeze({
-  html: compileWithTemplates(MAIL_LAYOUT_FILE_NAMES.html, DEFAULT_MAIL_LAYOUT_HTML, {}, BUILT_IN_MAIL_COMPONENT_NAMES),
-  text: compileWithTemplates(MAIL_LAYOUT_FILE_NAMES.text, DEFAULT_MAIL_LAYOUT_TEXT, {}, BUILT_IN_MAIL_COMPONENT_NAMES),
+  html: compileWithTemplates(MAIL_LAYOUT_FILE_NAMES.html, DEFAULT_MAIL_SOURCES.layouts.html, {}, BUILT_IN_MAIL_COMPONENT_NAMES),
+  text: compileWithTemplates(MAIL_LAYOUT_FILE_NAMES.text, DEFAULT_MAIL_SOURCES.layouts.text, {}, BUILT_IN_MAIL_COMPONENT_NAMES),
 })
 
-const NOTIFICATION_MAIL_TEMPLATE_NAME = 'notifications/email'
-
-const BUILT_IN_MAIL_TEMPLATES: Readonly<Record<string, CompiledMailTemplate>> = Object.freeze({
-  [NOTIFICATION_MAIL_TEMPLATE_NAME]: compileWithTemplates(NOTIFICATION_MAIL_TEMPLATE_NAME, DEFAULT_NOTIFICATION_MAIL_TEMPLATE, {}, BUILT_IN_MAIL_COMPONENT_NAMES),
-})
+const BUILT_IN_MAIL_TEMPLATES: Readonly<Record<string, CompiledMailTemplate>> = Object.freeze(Object.fromEntries(
+  Object.entries(DEFAULT_MAIL_SOURCES.templates).map(([name, source]) => {
+    return [name, compileWithTemplates(name, source, {}, BUILT_IN_MAIL_COMPONENT_NAMES)]
+  }),
+))
 
 function compileMailLayouts(
   layouts: MailRegistrySources['layouts'] = {},
@@ -853,7 +869,7 @@ export function renderMailLayout(registry: CompiledMailRegistry, format: MailTem
 
 export function resolveMailTheme(registry: CompiledMailRegistry, name: string): string {
   if (Object.hasOwn(registry.themes, name)) return registry.themes[name] ?? ''
-  if (name === 'default') return DEFAULT_MAIL_THEME_CSS
+  if (Object.hasOwn(DEFAULT_MAIL_SOURCES.themes, name)) return DEFAULT_MAIL_SOURCES.themes[name] ?? ''
   throw new MailError(
     `[@holo-js/mail] Mail theme "${name}" is not registered. Run "holo prepare" after adding it under server/mail/themes.`,
     'MAIL_THEME_NOT_FOUND',
