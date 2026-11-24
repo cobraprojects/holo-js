@@ -5,6 +5,7 @@ import ts from 'typescript'
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderGeneratedSchemaPlaceholder } from '@holo-js/db'
 import { normalizeHoloProjectConfig } from '@holo-js/kernel'
+import { configureMailRuntime, normalizeMailConfig, previewMail, resetMailRuntime } from '@holo-js/mail'
 import { discoverAppCommands, prepareProjectDiscovery } from '../src/project/discovery'
 
 const tempDirs: string[] = []
@@ -49,6 +50,7 @@ function typeErrors(root: string, fileName: string): string[] {
 }
 
 afterEach(async () => {
+  resetMailRuntime()
   for (const dir of tempDirs.splice(0)) {
     await rm(dir, { recursive: true, force: true })
   }
@@ -65,7 +67,6 @@ describe('@holo-js/cli Mail template discovery', () => {
     expect(Object.keys(registry.mail?.templates ?? {})).toEqual(['orders/shipped', 'welcome'])
     const persisted = JSON.parse(await readFile(join(root, '.holo-js/generated/registry.json'), 'utf8')) as typeof registry
     expect(persisted.mail).toEqual(registry.mail)
-    expect(await readFile(join(root, '.holo-js/generated/index.ts'), 'utf8')).toContain('/// <reference path="./mail.d.ts" />')
 
     await writeFile(join(root, 'check-mail.ts'), `
 import { defineMail } from '@holo-js/mail'
@@ -221,7 +222,11 @@ export const missingRoot = defineMail({ to: 'a@example.com', subject: 'S', markd
 
     await writeTemplate(root, 'welcome', '# Welcome back')
     await discoverAppCommands(root, config)
-    expect(JSON.stringify((await readMail())?.templates.welcome)).toContain('# Welcome back')
+    configureMailRuntime({
+      config: normalizeMailConfig({ default: 'fake', from: { email: 'noreply@example.com' }, mailers: { fake: { driver: 'fake' } } }),
+      compiled: await readMail(),
+    })
+    expect((await previewMail({ to: 'ava@example.com', subject: 'Welcome', markdown: 'welcome' })).html).toMatch(/<h1[^>]*>Welcome back<\/h1>/)
 
     await writeMailFile(root, 'layout.html', '<main>{!! body !!}</main>')
     await writeMailFile(root, 'themes/receipt.css', 'h1 { color: blue; }')

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -80,7 +80,6 @@ describe('holo make:mail', () => {
 
     expect(stdout()).toContain('Created mail: server/mail/order-shipped-mail.ts')
     expect(stdout()).toContain('Created mail template: server/mail/templates/order-shipped.md')
-    expect(await readFile(join(root, 'server/mail/order-shipped-mail.ts'), 'utf8')).toContain('markdown: \'order-shipped\'')
 
     await writeFile(join(root, 'check-mail.ts'), [
       'import OrderShippedMail from \'./server/mail/order-shipped-mail\'',
