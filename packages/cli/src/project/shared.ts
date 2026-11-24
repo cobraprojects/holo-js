@@ -55,6 +55,11 @@ export type GeneratedSeederRegistryEntry = {
   readonly name: string
 }
 
+export type GeneratedSourceFileEntry = {
+  readonly sourcePath: string
+  readonly sourceHash?: string
+}
+
 export type GeneratedCommandRegistryEntry = {
   readonly sourcePath: string
   readonly name: string
@@ -156,6 +161,7 @@ export type GeneratedProjectRegistry = {
   readonly authorizationPolicies: readonly GeneratedAuthorizationPolicyRegistryEntry[]
   readonly authorizationAbilities: readonly GeneratedAuthorizationAbilityRegistryEntry[]
   readonly mail?: CompiledMailRegistry
+  readonly mailSources?: readonly GeneratedSourceFileEntry[]
 }
 
 export type SupportedScaffoldFramework = SupportedFrameworkId
@@ -273,7 +279,7 @@ export type NotificationsInstallResult = {
 export type MailPublishResult = {
   readonly publishedFiles: readonly string[]
   readonly skippedFiles: readonly string[]
-  readonly filesRequiringNotifications: readonly string[]
+  readonly filesMissingPackages: readonly { readonly path: string, readonly packages: readonly string[] }[]
 }
 
 export type MailInstallResult = {

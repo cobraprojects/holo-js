@@ -85,6 +85,35 @@ describe('App Mail components', () => {
     expect(mail.html).toBe('<div class="alert alert-&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"><p>Careful</p></div>')
   })
 
+  it('escapes {{ }} placeholders in attributes even when the component outputs them raw', async () => {
+    const mail = await sendWithComponents(
+      '<mail::alert type="{{ kind }}">Careful</mail::alert>',
+      { alert: { html: '<div class="alert alert-{!! type !!}">{!! slot !!}</div>' } },
+      { kind: '"><script>alert(1)</script>' },
+    )
+
+    expect(mail.html).toBe('<div class="alert alert-&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"><p>Careful</p></div>')
+  })
+
+  it('outputs attributes without placeholders exactly as written through {!! !!}', async () => {
+    const mail = await sendWithComponents(
+      '<mail::alert type="<b>new</b>">Careful</mail::alert>',
+      { alert: { html: '<div>{!! type !!} {{ type }}</div>' } },
+    )
+
+    expect(mail.html).toBe('<div><b>new</b> &lt;b&gt;new&lt;/b&gt;</div>')
+  })
+
+  it('outputs the rendered slot once through {{ slot }}', async () => {
+    const mail = await sendWithComponents(
+      '<mail::alert type="info">Read **{{ name }}**</mail::alert>',
+      { alert: { html: '<div>{{ slot }}</div>' } },
+      { name: 'Tom & Jerry' },
+    )
+
+    expect(mail.html).toBe('<div><p>Read <strong>Tom &amp; Jerry</strong></p></div>')
+  })
+
   it('lets app components use other Mail components', async () => {
     const mail = await sendWithComponents(
       '<mail::notice>Check it</mail::notice>',
@@ -122,6 +151,13 @@ describe('App Mail components', () => {
     ],
   ])('rejects %s when compiling', (_label, components, message) => {
     expect(() => compileMailRegistry({ templates: {}, components })).toThrow(message)
+  })
+
+  it.each([
+    ['a component name that cannot be used as a tag', { Alert: { html: '{!! slot !!}' } }, 'MAIL_COMPONENT_NAME_INVALID'],
+    ['a text form without an HTML form', { alert: { text: '{!! slot !!}' } }, 'MAIL_COMPONENT_HTML_MISSING'],
+  ])('reports %s with its own error code', (_label, components, code) => {
+    expect(() => compileMailRegistry({ templates: {}, components })).toThrow(expect.objectContaining({ code }))
   })
 
   it('makes app components valid tags in Mail templates', () => {

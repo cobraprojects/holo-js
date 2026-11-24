@@ -63,9 +63,12 @@ function composeAuthEmail(purpose: AuthEmailPurpose, input: AuthDeliveryInput, a
   }
 }
 
+function hasStringName(user: unknown): user is { readonly name: string } {
+  return typeof user === 'object' && user !== null && 'name' in user && typeof user.name === 'string'
+}
+
 function resolveRecipientName(user: unknown): string | undefined {
-  const name = (user as { name?: unknown } | null)?.name
-  return typeof name === 'string' ? name.trim() || undefined : undefined
+  return hasStringName(user) ? user.name.trim() || undefined : undefined
 }
 
 function createAuthDeliveryHook(appUrl: string, send: (email: AuthEmail) => Promise<void>) {

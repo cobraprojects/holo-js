@@ -9,6 +9,7 @@ const MAIL_TEMPLATE_FILE_PATTERN = /\.md$/
 const MAIL_THEME_FILE_PATTERN = /\.css$/
 const MAIL_COMPONENT_HTML_FILE_PATTERN = /\.html$/
 const MAIL_COMPONENT_TEXT_FILE_PATTERN = /\.txt$/
+export const MAIL_SOURCE_FILE_PATTERN = /\.(?:md|css|html|txt)$/
 const MAIL_LAYOUT_FILES: Readonly<Record<MailTemplateFormat, string>> = {
   html: `${MAIL_ROOT}/layout.html`,
   text: `${MAIL_ROOT}/layout.txt`,

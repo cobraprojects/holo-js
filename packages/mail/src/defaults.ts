@@ -1,4 +1,6 @@
-export const DEFAULT_MAIL_LAYOUT_HTML = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+import type { MailComponentSource } from './components'
+
+const DEFAULT_MAIL_LAYOUT_HTML = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <title>{{ app.name }}</title>
@@ -69,14 +71,14 @@ width: 100% !important;
 </html>
 `
 
-export const DEFAULT_MAIL_LAYOUT_TEXT = `{{ app.name }}: {{ app.url }}
+const DEFAULT_MAIL_LAYOUT_TEXT = `{{ app.name }}: {{ app.url }}
 
 {!! body !!}
 
 © {{ year }} {{ app.name }}. All rights reserved.
 `
 
-export const DEFAULT_MAIL_THEME_CSS = `body,
+const DEFAULT_MAIL_THEME_CSS = `body,
 body *:not(html):not(style):not(br):not(tr):not(code) {
     box-sizing: border-box;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif,
@@ -349,7 +351,7 @@ img {
 }
 `
 
-export const DEFAULT_NOTIFICATION_MAIL_TEMPLATE = `# {{ greeting }}
+const DEFAULT_NOTIFICATION_MAIL_TEMPLATE = `# {{ greeting }}
 
 @foreach (lines as line)
 {{ line }}
@@ -374,3 +376,82 @@ into your web browser: <span class="break-all">[{{ action.url }}]({{ action.url 
 </mail::subcopy>
 @endif
 `
+
+const BUTTON_HTML = [
+  '<table class="action" align="center" width="100%" cellpadding="0" cellspacing="0" role="presentation">',
+  '<tr>',
+  '<td align="center">',
+  '<table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation">',
+  '<tr>',
+  '<td align="center">',
+  '<table border="0" cellpadding="0" cellspacing="0" role="presentation">',
+  '<tr>',
+  '<td>',
+  '<a href="{{ url }}" class="button button-{{ color }}" target="_blank" rel="noopener">{!! slot !!}</a>',
+  '</td>',
+  '</tr>',
+  '</table>',
+  '</td>',
+  '</tr>',
+  '</table>',
+  '</td>',
+  '</tr>',
+  '</table>',
+].join('\n')
+
+const PANEL_HTML = [
+  '<table class="panel" width="100%" cellpadding="0" cellspacing="0" role="presentation">',
+  '<tr>',
+  '<td class="panel-content">',
+  '<table width="100%" cellpadding="0" cellspacing="0" role="presentation">',
+  '<tr>',
+  '<td class="panel-item">',
+  '{!! slot !!}',
+  '</td>',
+  '</tr>',
+  '</table>',
+  '</td>',
+  '</tr>',
+  '</table>',
+].join('\n')
+
+const TABLE_HTML = [
+  '<div class="table">',
+  '{!! slot !!}',
+  '</div>',
+].join('\n')
+
+const SUBCOPY_HTML = [
+  '<table class="subcopy" width="100%" cellpadding="0" cellspacing="0" role="presentation">',
+  '<tr>',
+  '<td>',
+  '{!! slot !!}',
+  '</td>',
+  '</tr>',
+  '</table>',
+].join('\n')
+
+export const MAIL_COMPONENT_SLOT_TEXT = '{!! slot !!}'
+
+export const DEFAULT_MAIL_COMPONENTS: Readonly<Record<string, MailComponentSource>> = Object.freeze({
+  button: { html: BUTTON_HTML, text: `${MAIL_COMPONENT_SLOT_TEXT}: {{ url }}` },
+  panel: { html: PANEL_HTML, text: MAIL_COMPONENT_SLOT_TEXT },
+  table: { html: TABLE_HTML, text: MAIL_COMPONENT_SLOT_TEXT },
+  subcopy: { html: SUBCOPY_HTML, text: MAIL_COMPONENT_SLOT_TEXT },
+})
+
+const NOTIFICATION_MAIL_TEMPLATE_NAME = 'notifications/email'
+
+export interface DefaultMailSources {
+  readonly templates: Readonly<Record<string, string>>
+  readonly components: Readonly<Record<string, MailComponentSource>>
+  readonly layouts: Readonly<Record<'html' | 'text', string>>
+  readonly themes: Readonly<Record<string, string>>
+}
+
+export const DEFAULT_MAIL_SOURCES: DefaultMailSources = Object.freeze({
+  templates: Object.freeze({ [NOTIFICATION_MAIL_TEMPLATE_NAME]: DEFAULT_NOTIFICATION_MAIL_TEMPLATE }),
+  components: DEFAULT_MAIL_COMPONENTS,
+  layouts: Object.freeze({ html: DEFAULT_MAIL_LAYOUT_HTML, text: DEFAULT_MAIL_LAYOUT_TEXT }),
+  themes: Object.freeze({ default: DEFAULT_MAIL_THEME_CSS }),
+})

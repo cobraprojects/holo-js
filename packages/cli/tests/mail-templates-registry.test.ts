@@ -1,16 +1,16 @@
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import ts from 'typescript'
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderGeneratedSchemaPlaceholder } from '@holo-js/db'
 import { normalizeHoloProjectConfig } from '@holo-js/kernel'
-import { prepareProjectDiscovery } from '../src/project/discovery'
+import { discoverAppCommands, prepareProjectDiscovery } from '../src/project/discovery'
 
 const tempDirs: string[] = []
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
 
-async function createProject(): Promise<string> {
+async function createProject(packages: readonly string[] = ['config', 'db', 'kernel', 'mail']): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-cli-mail-templates-'))
   tempDirs.push(root)
   await mkdir(join(root, 'config'), { recursive: true })
@@ -20,7 +20,7 @@ async function createProject(): Promise<string> {
   await writeFile(join(root, 'config/app.ts'), 'export default {}', 'utf8')
   await writeFile(join(root, 'config/database.ts'), 'export default {}', 'utf8')
   await writeFile(join(root, '.holo-js/generated/schema.generated.ts'), renderGeneratedSchemaPlaceholder(), 'utf8')
-  await Promise.all(['config', 'db', 'kernel', 'mail'].map(async (name) => {
+  await Promise.all(packages.map(async (name) => {
     await symlink(join(workspaceRoot, 'packages', name), join(root, 'node_modules/@holo-js', name))
   }))
   return root
@@ -180,6 +180,107 @@ export const badItem = defineMail({ to: 'a@example.com', subject: 'R', markdown:
 export const date = defineMail({ to: 'a@example.com', subject: 'R', markdown: 'orders/receipt', data: { order: { ...order, coupon: new Date() }, support: { email: 'e' } } })
 `, 'utf8')
     expect(typeErrors(root, 'check-mail-errors.ts')).toHaveLength(4)
+  })
+
+  it('types the loop item paths of a template included inside @foreach as the item shape', async () => {
+    const root = await createProject()
+    await writeTemplate(root, 'orders/shipped', '# Order {{ order.id }}\n\n@foreach (order.lines as line)\n@include (partials/line)\n@endforeach')
+    await writeTemplate(root, 'partials/line', '- {{ line.name }} x {{ line.quantity }} for {{ customer.name }}')
+
+    await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    await writeFile(join(root, 'check-mail.ts'), `
+import { defineMail } from '@holo-js/mail'
+
+export const shipped = defineMail({
+  to: 'ava@example.com',
+  subject: 'Shipped',
+  markdown: 'orders/shipped',
+  data: { order: { id: 42, lines: [{ name: 'Mug', quantity: 2 }] }, customer: { name: 'Ava' } },
+})
+`, 'utf8')
+    expect(typeErrors(root, 'check-mail.ts')).toEqual([])
+
+    await writeFile(join(root, 'check-mail-errors.ts'), `
+import { defineMail } from '@holo-js/mail'
+
+export const badItem = defineMail({ to: 'a@example.com', subject: 'S', markdown: 'orders/shipped', data: { order: { id: 1, lines: [{ name: 'Mug' }] }, customer: { name: 'Ava' } } })
+export const missingRoot = defineMail({ to: 'a@example.com', subject: 'S', markdown: 'orders/shipped', data: { order: { id: 1, lines: [] } } })
+`, 'utf8')
+    expect(typeErrors(root, 'check-mail-errors.ts')).toHaveLength(2)
+  })
+
+  it('re-prepares before running commands when a Mail file changed since the last prepare', async () => {
+    const root = await createProject()
+    const config = normalizeHoloProjectConfig()
+    await writeTemplate(root, 'welcome', '# Welcome')
+    await prepareProjectDiscovery(root, config)
+    const readMail = async () => {
+      return (JSON.parse(await readFile(join(root, '.holo-js/generated/registry.json'), 'utf8')) as Awaited<ReturnType<typeof prepareProjectDiscovery>>).mail
+    }
+
+    await writeTemplate(root, 'welcome', '# Welcome back')
+    await discoverAppCommands(root, config)
+    expect(JSON.stringify((await readMail())?.templates.welcome)).toContain('# Welcome back')
+
+    await writeMailFile(root, 'layout.html', '<main>{!! body !!}</main>')
+    await writeMailFile(root, 'themes/receipt.css', 'h1 { color: blue; }')
+    await writeMailFile(root, 'components/alert.html', '<div>{!! slot !!}</div>')
+    await discoverAppCommands(root, config)
+    const updated = await readMail()
+    expect(Object.keys(updated?.layouts ?? {})).toEqual(['html'])
+    expect(Object.keys(updated?.themes ?? {})).toEqual(['receipt'])
+    expect(Object.keys(updated?.components ?? {})).toContain('alert')
+
+    await rm(join(root, 'server/mail/themes/receipt.css'))
+    await discoverAppCommands(root, config)
+    expect((await readMail())?.themes).toEqual({})
+  })
+
+  it('types notification mail templates and data from the generated registry', async () => {
+    const root = await createProject(['config', 'db', 'kernel', 'mail', 'notifications'])
+    await writeTemplate(root, 'invoices/paid', '# Invoice {{ invoice.id }} paid')
+
+    await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    await writeFile(join(root, 'check-notification.ts'), `
+import type { NotificationMailMessage } from '@holo-js/notifications'
+
+export const paid = { subject: 'Paid', markdown: 'invoices/paid', data: { invoice: { id: 7 } } } satisfies NotificationMailMessage
+export const lines = { subject: 'Paid', lines: ['Paid.'] } satisfies NotificationMailMessage
+`, 'utf8')
+    expect(typeErrors(root, 'check-notification.ts')).toEqual([])
+
+    await writeFile(join(root, 'check-notification-errors.ts'), `
+import type { NotificationMailMessage } from '@holo-js/notifications'
+
+export const typo = { subject: 'Paid', markdown: 'invoices/payed', data: { invoice: { id: 7 } } } satisfies NotificationMailMessage
+export const badData = { subject: 'Paid', markdown: 'invoices/paid', data: { invoice: { id: true } } } satisfies NotificationMailMessage
+`, 'utf8')
+    expect(typeErrors(root, 'check-notification-errors.ts')).toHaveLength(2)
+  })
+
+  it('types notification mail messages without Mail templates when @holo-js/mail is not installed', async () => {
+    const root = await createProject(['config', 'db', 'kernel'])
+    const notificationsRoot = join(root, 'node_modules/@holo-js/notifications')
+    await mkdir(notificationsRoot, { recursive: true })
+    await cp(join(workspaceRoot, 'packages/notifications/dist'), join(notificationsRoot, 'dist'), { recursive: true })
+    await cp(join(workspaceRoot, 'packages/notifications/package.json'), join(notificationsRoot, 'package.json'))
+
+    await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    await writeFile(join(root, 'check-notification.ts'), `
+import type { NotificationMailMessage } from '@holo-js/notifications'
+
+export const lines = { subject: 'Hi', greeting: 'Hello', lines: ['Line.'], action: { label: 'Open', url: 'https://example.com' } } satisfies NotificationMailMessage
+export const template = { subject: 'Hi', markdown: 'welcome', data: {} } satisfies NotificationMailMessage
+export const level = { subject: 'Hi', level: 'warning' } satisfies NotificationMailMessage
+`, 'utf8')
+    expect(typeErrors(root, 'check-notification.ts')).toEqual([
+      'Type \'string\' is not assignable to type \'undefined\'.',
+      'Type \'{}\' is not assignable to type \'undefined\'.',
+      'Type \'"warning"\' is not assignable to type \'"info" | "success" | "error" | undefined\'.',
+    ])
   })
 
   it('fails prepare on an include cycle', async () => {

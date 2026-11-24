@@ -4,8 +4,8 @@ import type { MailJsonObject } from './contracts-types'
 import { renderMarkdown, renderMarkdownText } from './markdown'
 import { renderMailLayout, renderMailTemplate, resolveMailTheme, type CompiledMailRegistry } from './templates'
 
-export interface MarkdownMailSource {
-  readonly markdown: string
+export interface MailTemplateSelection {
+  readonly name: string
   readonly data: MailJsonObject
 }
 
@@ -23,7 +23,7 @@ const THEME_INLINING_OPTIONS = Object.freeze({
 })
 
 export function renderMarkdownMail(
-  source: MarkdownMailSource,
+  template: MailTemplateSelection,
   context: MarkdownMailContext,
 ): { readonly html: string, readonly text: string } {
   const { registry } = context
@@ -33,8 +33,8 @@ export function renderMarkdownMail(
     subject: context.subject,
     year: new Date().getFullYear(),
   }
-  const htmlBody = renderMarkdown(renderMailTemplate(registry, source.markdown, source.data, 'html'))
-  const textBody = renderMarkdownText(renderMailTemplate(registry, source.markdown, source.data, 'text'))
+  const htmlBody = renderMarkdown(renderMailTemplate(registry, template.name, template.data, 'html'))
+  const textBody = renderMarkdownText(renderMailTemplate(registry, template.name, template.data, 'text'))
   const html = renderMailLayout(registry, 'html', { ...layoutData, body: htmlBody })
   const text = renderMailLayout(registry, 'text', { ...layoutData, body: escapeUTF8(textBody) })
 

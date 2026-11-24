@@ -1,4 +1,3 @@
-import type { MailTemplateData, MailTemplateDataInput, MailTemplateName } from '@holo-js/mail'
 import type { NormalizedHoloNotificationsConfig } from './config'
 import { normalizeNotificationQueueOptions } from './queueOptions'
 
@@ -70,7 +69,17 @@ interface NotificationMailLinesContent {
   readonly data?: never
 }
 
-type NotificationMailTemplateContent<TTemplate extends MailTemplateName> = TTemplate extends MailTemplateName
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface HoloNotificationMailTemplateRegistry {}
+
+type NotificationMailTemplateName = Extract<keyof HoloNotificationMailTemplateRegistry, string>
+
+type NotificationMailTemplateDataInput<TData>
+  = Record<string, never> extends TData
+    ? { readonly data?: TData }
+    : { readonly data: TData }
+
+type NotificationMailTemplateContent<TTemplate extends NotificationMailTemplateName> = TTemplate extends NotificationMailTemplateName
   ? {
       readonly markdown: TTemplate
       readonly greeting?: never
@@ -79,10 +88,10 @@ type NotificationMailTemplateContent<TTemplate extends MailTemplateName> = TTemp
       readonly outroLines?: never
       readonly salutation?: never
       readonly html?: never
-    } & MailTemplateDataInput<MailTemplateData<TTemplate>>
+    } & NotificationMailTemplateDataInput<HoloNotificationMailTemplateRegistry[TTemplate]>
   : never
 
-export type NotificationMailMessage<TTemplate extends MailTemplateName = MailTemplateName>
+export type NotificationMailMessage<TTemplate extends NotificationMailTemplateName = NotificationMailTemplateName>
   = NotificationMailMessageFields & (NotificationMailLinesContent | NotificationMailTemplateContent<TTemplate>)
 
 export interface NotificationDatabaseMessage<TData extends NotificationJsonValue = NotificationJsonValue> {

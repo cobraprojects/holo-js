@@ -39,7 +39,7 @@ Mail templates are `.md` files under `server/mail/templates`. A template's name 
 
 `npx holo make:mail` creates a mail definition together with its template. See [Writing mail](/mail/writing-mail#generate-a-mail-file).
 
-`holo prepare` compiles every template into the generated registry, so your app doesn't read template files when it sends mail. `holo dev` recompiles a template when you save it. After adding or changing a template outside `holo dev`, run `npx holo prepare`. A template with a syntax error, such as an unclosed `{{` or `@if`, or an include cycle, fails `holo prepare` with the template name and line.
+`holo prepare` compiles every template into the generated registry, so your app doesn't read template files when it sends mail. `holo dev` recompiles a template when you save it, and `holo` commands such as `holo queue:work` recompile changed mail files before they run. Otherwise, run `npx holo prepare` after adding or changing a template. A template with a syntax error, such as an unclosed `{{` or `@if`, or an include cycle, fails `holo prepare` with the template name and line.
 
 ## Placeholders
 
@@ -49,7 +49,7 @@ Mail templates are `.md` files under `server/mail/templates`. A template's name 
 | `{!! name !!}` | The value of `name` exactly as given. |
 | `{{ customer.address.city }}` | A nested value, reached with a dot path. |
 
-A placeholder holds a dot path and nothing else. Templates never run JavaScript: there are no operators, function calls, or filters, so format values before you pass them.
+A placeholder holds a dot path and nothing else. Templates never run JavaScript: there are no operators, function calls, or filters, so format values before you pass them. The names `__proto__`, `constructor`, and `prototype` can't appear in a dot path, a loop item name, or a component attribute name; a template that uses them fails `holo prepare`.
 
 ::: danger
 `{!! !!}` outputs HTML exactly as given. Never use it for values that come from users, or they can inject HTML into your email. Use it only for HTML you built yourself.
@@ -71,7 +71,7 @@ Templates support Blade-style directives. Each takes a dot path or a template na
 | --- | --- |
 | `@if (path)` … `@else` … `@endif` | The first block when the value at `path` is truthy, otherwise the `@else` block. `@else` is optional. |
 | `@foreach (path as name)` … `@endforeach` | The block once for each item of the list at `path`. Inside the block, `name` is the current item. |
-| `@include (name)` | Another Mail template, which sees the same `data`. |
+| `@include (name)` | Another Mail template, which sees the same `data` and the loop items in scope where it is included. |
 
 ```md [server/mail/templates/orders/shipped.md]
 # Order {{ order.number }} shipped
@@ -95,11 +95,11 @@ Thanks for your order!
 Questions? Contact us at {{ support.email }}.
 ```
 
-`@if` only tests whether a value is truthy. A missing value, `null`, `false`, `0`, and `''` are false; every other value, including an empty list, is true. There are no operators, comparisons, or function calls, so compute flags such as `isOverdue` before you pass them.
+`@if` only tests whether a value is truthy, the way Laravel's Blade does. A missing value, `null`, `false`, `0`, `''`, `'0'`, an empty list, and an empty object are false; every other value is true. There are no operators, comparisons, or function calls, so compute flags such as `isOverdue` before you pass them.
 
 A line that holds only a directive leaves no blank line behind, so `@foreach` can produce the rows of a Markdown table. Directives also work inside a line, as long as the `@` doesn't follow a letter, digit, or `_`. Any other `@` word, such as `@holo` or `@media`, is output as written. To output a directive name as text, write `@@`, as in `@@if`. Email addresses such as `help@example.com` need no escaping.
 
-A loop item's name hides a `data` value with the same name inside the loop. An included template always sees the mail's `data`, even inside a loop. An included template can include others, but a template that includes itself, directly or through other templates, fails `holo prepare`.
+A loop item's name hides a `data` value with the same name inside the loop. An included template sees the mail's `data` and, when it is included inside `@foreach`, the loop's current item by its name. An included template can include others, but a template that includes itself, directly or through other templates, fails `holo prepare`.
 
 ## Typed data
 
@@ -108,7 +108,7 @@ A loop item's name hides a `data` value with the same name inside the loop. An i
 - A value used in `{{ }}` or `{!! !!}` must be a `string` or `number`.
 - A value used only in `@if` is optional and can be any JSON value.
 - A value used in `@foreach` must be a list. The shape of its items comes from how the loop uses them: `line.name` in the example above requires items with a `name`.
-- The values an included template uses are required by every template that includes it.
+- The values an included template uses are required by every template that includes it. Inside `@foreach`, the included template's values that start with the loop item's name are part of the item shape: `{{ line.name }}` in a template included in the loop above requires items with a `name`.
 
 An unknown template name, a missing value, or a value of the wrong type is a type error, and your editor autocompletes template names and `data`.
 
@@ -161,7 +161,7 @@ Questions? [Contact support](https://example.com/support).
 
 The content of a component is Markdown, so you can use bold text, links, and tables inside it. Put each opening and closing tag on its own line with a blank line before and after the component, as in the example above.
 
-Attribute values are strings and can contain placeholders. A component escapes attribute values when it outputs them, so `url="{{ order.url }}"` is safe for values that come from users.
+Attribute values are strings and can contain placeholders. A `{{ }}` placeholder inside an attribute is escaped where the attribute is written, so `url="{{ order.url }}"` is safe for values that come from users, whichever way the component outputs it.
 
 A button's `url` must be an absolute `http:` or `https:` URL. Sending a mail whose button has a missing, relative, `javascript:`, or `mailto:` URL throws an error, so a broken button is never sent. Plain Markdown links such as `[Track order](https://example.com)` stay normal links.
 
@@ -187,7 +187,7 @@ Your plan expires on **{{ date }}**.
 </mail::alert>
 ```
 
-`slot` is HTML that Holo already rendered from the tag's Markdown content, so output it with `{!! slot !!}`. Output attributes with `{{ }}`, as `{{ type }}` does above, so they are escaped. An attribute the tag doesn't set is missing, so check optional attributes with `@if` before you output them.
+`slot` is HTML that Holo already rendered from the tag's Markdown content, so output it with `{!! slot !!}`. Output attributes with `{{ }}`, as `{{ type }}` does above. An attribute that contains a placeholder is already escaped HTML, so `{{ }}` outputs it as is and doesn't escape it twice. An attribute written without placeholders is plain text: `{{ }}` escapes it and `{!! !!}` outputs it exactly as written. An attribute the tag doesn't set is missing, so check optional attributes with `@if` before you output them.
 
 Add `server/mail/components/<name>.txt` for the component's plain-text form. It receives the same values, and its `slot` is the content's Markdown, which the plain-text part turns into plain text:
 

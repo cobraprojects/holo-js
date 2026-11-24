@@ -597,6 +597,10 @@ function renderGeneratedMailTypes(mail: GeneratedProjectRegistry['mail']): strin
     ...renderAugmentationInterface('HoloMailThemeRegistry', themeMembers),
     '}',
     '',
+    'declare module \'@holo-js/notifications\' {',
+    ...renderAugmentationInterface('HoloNotificationMailTemplateRegistry', templateMembers),
+    '}',
+    '',
     'export {}',
     '',
   ].join('\n')

@@ -117,6 +117,12 @@ declare module '@holo-js/mail' {
   }
 }
 
+declare module '@holo-js/notifications' {
+  interface HoloNotificationMailTemplateRegistry {
+    readonly 'orders/shipped': { readonly order: { readonly id: string | number }, readonly name: string | number }
+  }
+}
+
 async function createProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-core-runtime-'))
   tempDirs.push(root)

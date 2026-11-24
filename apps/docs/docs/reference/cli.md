@@ -295,7 +295,7 @@ npx holo mail:publish [--force]
 | `server/mail/templates/notifications/email.md` | The [notification email](/notifications/channels#email) Mail template |
 | `server/notifications/auth/email-verification.ts`, `server/notifications/auth/password-reset.ts` | The [auth emails](/auth/email-verification#customize-the-email) |
 
-The command lists each file it publishes. A file that already exists is skipped and listed as skipped. The auth files are notifications, so without `@holo-js/notifications` installed they are skipped and listed as needing it.
+The command lists each file it publishes. A file that already exists is skipped and listed as skipped. The auth files are notifications for auth emails, so without `@holo-js/auth` and `@holo-js/notifications` installed they are skipped and listed with the packages they need.
 
 | Flag | Description |
 | --- | --- |

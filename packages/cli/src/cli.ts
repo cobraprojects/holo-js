@@ -1268,8 +1268,8 @@ export function createInternalCommands(
           writeLine(context.stdout, `  - skipped existing ${filePath}`)
         }
 
-        for (const filePath of result.filesRequiringNotifications) {
-          writeLine(context.stdout, `  - skipped ${filePath} (requires @holo-js/notifications)`)
+        for (const file of result.filesMissingPackages) {
+          writeLine(context.stdout, `  - skipped ${file.path} (requires ${file.packages.join(' and ')})`)
         }
       },
     },

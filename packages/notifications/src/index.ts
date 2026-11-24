@@ -28,6 +28,7 @@ export type {
   AnonymousNotificationTarget,
   BuiltInNotificationChannelRegistry,
   HoloNotificationChannelRegistry,
+  HoloNotificationMailTemplateRegistry,
   InferNotificationChannels,
   InferNotificationNotifiable,
   NotificationBroadcastMessage,
