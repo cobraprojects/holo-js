@@ -200,6 +200,31 @@ export const date = defineMail({ to: 'a@example.com', subject: 'R', markdown: 'o
       .rejects.toThrow('Mail template "broken" line 2: "{{" is not closed with "}}".')
   })
 
+  it('compiles app Mail components into the generated registry and accepts their tags', async () => {
+    const root = await createProject()
+    await writeMailFile(root, 'components/alert.html', '<div class="alert">{!! slot !!}</div>')
+    await writeMailFile(root, 'components/button.txt', '{!! slot !!} -> {!! url !!}')
+    await writeTemplate(root, 'welcome', '<mail::alert>Hi</mail::alert>')
+
+    const registry = await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    expect(Object.keys(registry.mail?.components ?? {}).sort()).toEqual(['alert', 'button', 'panel', 'subcopy', 'table'])
+    expect(registry.mail?.components.button?.text).toEqual([
+      { type: 'output', path: ['slot'], escaped: false },
+      { type: 'text', value: ' -> ' },
+      { type: 'output', path: ['url'], escaped: false },
+    ])
+  })
+
+  it('fails prepare on a cycle between app Mail components', async () => {
+    const root = await createProject()
+    await writeMailFile(root, 'components/alert.html', '<mail::box>{!! slot !!}</mail::box>')
+    await writeMailFile(root, 'components/box.html', '<mail::alert>{!! slot !!}</mail::alert>')
+
+    await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig()))
+      .rejects.toThrow('Mail component "alert" creates a component cycle: alert -> box -> alert.')
+  })
+
   it('fails prepare on an unknown Mail component tag', async () => {
     const root = await createProject()
     await writeTemplate(root, 'welcome', '# Welcome\n\n<mail::buton url="https://example.test">Open</mail::buton>')
