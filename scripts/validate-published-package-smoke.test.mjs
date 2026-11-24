@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { resolveReleaseManifest } from './release-manifests.mjs'
-import { assertProductionApp } from './validate-published-package-smoke.mjs'
+import { assertProductionApp, copyExternalDependencyClosure } from './validate-published-package-smoke.mjs'
 
 test('resolves catalog and workspace ranges in published manifests', () => {
   const manifest = {
@@ -99,4 +100,41 @@ test('a production app that exits before listening fails with its exit code and 
   await withFakeApp(`console.error('missing build output'); process.exit(3)\n`, async (appRoot) => {
     await assert.rejects(assertProductionApp(appRoot, app, {}), /exited with code 3[\s\S]*missing build output/)
   })
+})
+
+async function writeStorePackage(storeRoot, name, version, dependencies = {}) {
+  const packageRoot = join(storeRoot, `${name}@${version}/node_modules/${name}`)
+  await mkdir(packageRoot, { recursive: true })
+  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name, version, dependencies }))
+  await writeFile(join(packageRoot, 'index.js'), `module.exports = ${JSON.stringify(version)}\n`)
+  for (const [dependencyName, dependencyVersion] of Object.entries(dependencies)) {
+    await symlink(join(storeRoot, `${dependencyName}@${dependencyVersion}/node_modules/${dependencyName}`), join(packageRoot, '..', dependencyName))
+  }
+  return packageRoot
+}
+
+test('copied app dependencies keep the transitive versions each package was installed with', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'holo-smoke-closure-'))
+  try {
+    const storeRoot = join(root, 'store')
+    await writeStorePackage(storeRoot, 'entities', '7.0.1')
+    const entities = await writeStorePackage(storeRoot, 'entities', '9.0.0')
+    const parser = await writeStorePackage(storeRoot, 'parser', '1.0.0', { entities: '7.0.1' })
+    const sourceAppRoot = join(root, 'source-app')
+    await mkdir(join(sourceAppRoot, 'node_modules'), { recursive: true })
+    await writeFile(join(sourceAppRoot, 'package.json'), JSON.stringify({ dependencies: { parser: '1.0.0', entities: '9.0.0' } }))
+    await symlink(parser, join(sourceAppRoot, 'node_modules/parser'))
+    await symlink(entities, join(sourceAppRoot, 'node_modules/entities'))
+    const nodeModulesRoot = join(root, 'app/node_modules')
+    await mkdir(nodeModulesRoot, { recursive: true })
+
+    await copyExternalDependencyClosure(sourceAppRoot, nodeModulesRoot, join(root, 'staged'))
+
+    const requireFromApp = createRequire(join(root, 'app/index.js'))
+    const requireFromParser = createRequire(requireFromApp.resolve('parser'))
+    assert.equal(requireFromApp('entities'), '9.0.0')
+    assert.equal(requireFromParser('entities'), '7.0.1')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
