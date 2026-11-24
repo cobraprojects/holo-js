@@ -98,7 +98,7 @@ import {
 import { createCoreNotificationStore } from './notificationPersistence'
 import { createCoreDatabaseSessionAdapter } from './sessionPersistence'
 import { createCsrfSessionAccessor } from './csrfSession'
-import { createCoreNotificationMailSender } from './authMailDelivery'
+import { createCoreNotificationMailSender, isCoreNotificationMailSender } from './authMailDelivery'
 import { createAuthMailDeliveryHook, createAuthNotificationsDeliveryHook, createCoreAuthDeliveryHook } from './authDelivery'
 import { createOptionalFeatureModuleLoader } from './optionalFeatureLoader'
 import {
@@ -1739,7 +1739,7 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
       projectRoot,
       plugins: loadedConfig.app.plugins,
       store: existingNotificationsBindings.store ?? createCoreNotificationStore(loadedConfig),
-      ...(!existingNotificationsBindings.mailer && mailModule
+      ...((!existingNotificationsBindings.mailer || isCoreNotificationMailSender(existingNotificationsBindings.mailer)) && mailModule
         ? { mailer: createCoreNotificationMailSender(mailModule, loadedConfig.app.name) }
         : {}),
       ...(!existingNotificationsBindings.broadcaster && broadcastModule

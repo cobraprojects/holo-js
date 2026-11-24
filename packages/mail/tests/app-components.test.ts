@@ -123,6 +123,38 @@ describe('App Mail components', () => {
     expect(mail.html).toBe('<div class="alert alert-info"><p>Check it</p></div>')
   })
 
+  it('renders a Mail template included from an app component', async () => {
+    configureFakeMailerWithTemplates(
+      { fixture: '<mail::notice>Check it</mail::notice>', 'partials/footer': 'See you soon.' },
+      { notice: { html: '<div>{!! slot !!}</div>\n\n@include (partials/footer)', text: '{!! slot !!}\n\n@include (partials/footer)' } },
+    )
+    await sendMail(defineMail({ to: 'ava@example.com', subject: 'Components', markdown: 'fixture', data: {} }))
+    const mail = listFakeSentMails()[0]?.mail
+
+    expect(mail?.html).toBe('<div><p>Check it</p></div>\n<p>See you soon.</p>')
+    expect(mail?.text).toBe('Check it\n\nSee you soon.')
+  })
+
+  it('compiles components that reference each other only across HTML and text forms', async () => {
+    const mail = await sendWithComponents(
+      '<mail::alert>Hi</mail::alert>',
+      { alert: { html: '<mail::box>{!! slot !!}</mail::box>', text: '{!! slot !!}' }, box: { html: '<div>{!! slot !!}</div>', text: '<mail::alert>{!! slot !!}</mail::alert>' } },
+    )
+
+    expect(mail.html).toBe('<div><p>Hi</p></div>')
+    expect(mail.text).toBe('Hi')
+  })
+
+  it.each([
+    ['a component', { welcome: '<mail::notice>Hi</mail::notice>' }, 'welcome -> <mail::notice> -> welcome'],
+    ['an included template', { welcome: '@include (partials/body)', 'partials/body': '<mail::notice>Hi</mail::notice>' }, 'welcome -> partials/body -> <mail::notice> -> welcome'],
+  ])('rejects a Mail template that reaches itself again through %s when compiling', (_label, templates, cycle) => {
+    const components = { notice: { html: '<div>{!! slot !!}</div>\n\n@include (welcome)' } }
+
+    expect(() => compileMailRegistry({ templates, components }))
+      .toThrow(`Mail template "welcome" creates a cycle through Mail components: ${cycle}.`)
+  })
+
   it.each([
     [
       'a cycle between app components',

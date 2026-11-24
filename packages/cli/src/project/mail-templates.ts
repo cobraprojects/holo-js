@@ -3,7 +3,7 @@ import { relative, resolve } from 'node:path'
 import type { CompiledMailRegistry, MailRegistrySources, MailTemplateDataShape, MailTemplateFormat } from '@holo-js/mail/templates'
 import { collectFiles } from './discovery-helpers'
 import { loadMailTemplatesModule } from './runtime'
-import { MAIL_COMPONENTS_ROOT, MAIL_ROOT, MAIL_TEMPLATES_ROOT, MAIL_THEMES_ROOT, pathExists, toPosixPath } from './shared'
+import { MAIL_COMPONENTS_ROOT, MAIL_ROOT, MAIL_TEMPLATES_ROOT, MAIL_THEMES_ROOT, toPosixPath } from './shared'
 
 const MAIL_TEMPLATE_FILE_PATTERN = /\.md$/
 const MAIL_THEME_FILE_PATTERN = /\.css$/
@@ -20,21 +20,25 @@ export interface PublishableFile {
   readonly contents: string
 }
 
-async function readNamedFiles(root: string, pattern: RegExp): Promise<Record<string, string>> {
-  const files = await collectFiles(root, pattern)
-  const entries = await Promise.all(files.map(async filePath => {
-    return [toPosixPath(relative(root, filePath)).replace(pattern, ''), await readFile(filePath, 'utf8')] as const
-  }))
+export type MailSourceSnapshot = ReadonlyMap<string, Buffer>
+
+export async function readMailSourceSnapshot(projectRoot: string): Promise<MailSourceSnapshot> {
+  const files = await collectFiles(resolve(projectRoot, MAIL_ROOT), MAIL_SOURCE_FILE_PATTERN)
+  return new Map(await Promise.all(files.sort().map(async filePath => [filePath, await readFile(filePath)] as const)))
+}
+
+function namedSources(snapshot: MailSourceSnapshot, root: string, pattern: RegExp): Record<string, string> {
+  const entries = [...snapshot].flatMap(([filePath, contents]) => {
+    const relativePath = toPosixPath(relative(root, filePath))
+    if (relativePath.startsWith('../') || !pattern.test(relativePath)) return []
+    return [[relativePath.replace(pattern, ''), contents.toString('utf8')] as const]
+  })
   return Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right)))
 }
 
-async function readOptionalFile(filePath: string): Promise<string | undefined> {
-  return await pathExists(filePath) ? await readFile(filePath, 'utf8') : undefined
-}
-
-async function readMailComponents(root: string): Promise<NonNullable<MailRegistrySources['components']>> {
-  const html = await readNamedFiles(root, MAIL_COMPONENT_HTML_FILE_PATTERN)
-  const text = await readNamedFiles(root, MAIL_COMPONENT_TEXT_FILE_PATTERN)
+function mailComponentSources(snapshot: MailSourceSnapshot, root: string): NonNullable<MailRegistrySources['components']> {
+  const html = namedSources(snapshot, root, MAIL_COMPONENT_HTML_FILE_PATTERN)
+  const text = namedSources(snapshot, root, MAIL_COMPONENT_TEXT_FILE_PATTERN)
   const names = [...new Set([...Object.keys(html), ...Object.keys(text)])].sort()
   return Object.fromEntries(names.map(name => [name, {
     ...(Object.hasOwn(html, name) ? { html: html[name] } : {}),
@@ -42,12 +46,15 @@ async function readMailComponents(root: string): Promise<NonNullable<MailRegistr
   }]))
 }
 
-export async function discoverMailRegistry(projectRoot: string): Promise<CompiledMailRegistry | undefined> {
-  const templates = await readNamedFiles(resolve(projectRoot, MAIL_TEMPLATES_ROOT), MAIL_TEMPLATE_FILE_PATTERN)
-  const themes = await readNamedFiles(resolve(projectRoot, MAIL_THEMES_ROOT), MAIL_THEME_FILE_PATTERN)
-  const components = await readMailComponents(resolve(projectRoot, MAIL_COMPONENTS_ROOT))
-  const html = await readOptionalFile(resolve(projectRoot, MAIL_LAYOUT_FILES.html))
-  const text = await readOptionalFile(resolve(projectRoot, MAIL_LAYOUT_FILES.text))
+export async function discoverMailRegistry(
+  projectRoot: string,
+  snapshot: MailSourceSnapshot,
+): Promise<CompiledMailRegistry | undefined> {
+  const templates = namedSources(snapshot, resolve(projectRoot, MAIL_TEMPLATES_ROOT), MAIL_TEMPLATE_FILE_PATTERN)
+  const themes = namedSources(snapshot, resolve(projectRoot, MAIL_THEMES_ROOT), MAIL_THEME_FILE_PATTERN)
+  const components = mailComponentSources(snapshot, resolve(projectRoot, MAIL_COMPONENTS_ROOT))
+  const html = snapshot.get(resolve(projectRoot, MAIL_LAYOUT_FILES.html))?.toString('utf8')
+  const text = snapshot.get(resolve(projectRoot, MAIL_LAYOUT_FILES.text))?.toString('utf8')
   const layouts = {
     ...(typeof html === 'string' ? { html } : {}),
     ...(typeof text === 'string' ? { text } : {}),
@@ -87,7 +94,7 @@ export function usesMailJsonValue(shape: MailTemplateDataShape): boolean {
 
 function renderListItemType(shape: MailTemplateDataShape): string {
   const item = renderMailTemplateDataType(shape)
-  return shape.kind === 'value' ? `(${item})` : item
+  return shape.kind === 'value' || shape.kind === 'list' ? `(${item})` : item
 }
 
 export function renderMailTemplateDataType(shape: MailTemplateDataShape): string {

@@ -76,10 +76,14 @@ export async function sendNotificationMail(
   })
 }
 
-export function createCoreNotificationMailSender(mailModule: MailSender, appName: string): {
+type CoreNotificationMailSender = {
   send(message: NotificationMailMessage, context: { readonly route?: NotificationEmailRoute }): Promise<void>
-} {
-  return Object.freeze({
+}
+
+const coreNotificationMailSenders = new WeakSet<object>()
+
+export function createCoreNotificationMailSender(mailModule: MailSender, appName: string): CoreNotificationMailSender {
+  const sender: CoreNotificationMailSender = Object.freeze({
     async send(message, context): Promise<void> {
       if (!context.route) {
         throw new Error('[@holo-js/core] Email notifications require a resolved email route before bridging into mail.')
@@ -87,4 +91,10 @@ export function createCoreNotificationMailSender(mailModule: MailSender, appName
       await sendNotificationMail(mailModule, appName, context.route, message)
     },
   })
+  coreNotificationMailSenders.add(sender)
+  return sender
+}
+
+export function isCoreNotificationMailSender(sender: object | undefined): boolean {
+  return sender !== undefined && coreNotificationMailSenders.has(sender)
 }

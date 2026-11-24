@@ -8,6 +8,7 @@ import { renderGeneratedSchemaPlaceholder } from '@holo-js/db'
 import { configureMailRuntime, listFakeSentMails, normalizeMailConfig, resetFakeSentMails, resetMailRuntime, sendMail } from '@holo-js/mail'
 import { runMakeMail } from '../src/generators'
 import { loadGeneratedProjectRegistry } from '../src/project/registry'
+import { importProjectModule } from '../src/project/runtime'
 
 declare module '@holo-js/mail' {
   interface HoloMailTemplateRegistry {
@@ -100,8 +101,12 @@ describe('holo make:mail', () => {
       config: normalizeMailConfig({ default: 'fake', from: { email: 'noreply@example.com' }, mailers: { fake: { driver: 'fake' } } }),
       compiled: (await loadGeneratedProjectRegistry(root))?.mail,
     })
-    await sendMail({ to: 'ava@example.com', subject: 'Welcome', markdown: 'order-shipped', data: { name: 'Ava', url: 'https://example.test/welcome' } })
+    const generated = await importProjectModule(root, join(root, 'server/mail/order-shipped-mail.ts')) as {
+      readonly default: (input: { readonly to: string, readonly name: string, readonly url: string }) => Parameters<typeof sendMail>[0]
+    }
+    await sendMail(generated.default({ to: 'ava@example.com', name: 'Ava', url: 'https://example.test/welcome' }))
     const sent = listFakeSentMails()[0]?.mail
+    expect(sent?.subject).toBe('Welcome, Ava')
     expect(sent?.html).toMatch(/<h1[^>]*>Welcome<\/h1>\s*<p[^>]*>Hello Ava,<\/p>\s*<p[^>]*>Your mail is ready\.<\/p>/)
     expect(sent?.html).toMatch(/<a href="https:\/\/example\.test\/welcome" class="button button-primary" target="_blank" rel="noopener" style="[^"]+">Get Started<\/a>/)
     expect(sent?.text).toContain('Welcome\n\nHello Ava,\n\nYour mail is ready.\n\nGet Started: https://example.test/welcome')

@@ -133,7 +133,7 @@ defineMail({
 })
 ```
 
-`holo prepare` generates the theme names, so an unknown name in `theme` or `markdown.theme` is a type error. If a mail names a theme that isn't in the generated registry, for example after you delete the file without running `holo prepare`, sending it throws `Mail theme "receipt" is not registered`.
+`holo prepare` generates the theme names, so an unknown name in `theme` or `markdown.theme` is a type error. If a mail names a theme that isn't in the generated registry, sending it throws `Mail theme "receipt" is not registered`. Deleting `receipt.css` alone doesn't cause this, because the registry keeps the theme until the next `holo prepare`; the error appears once `holo prepare` has run without the file and the app loads the updated registry.
 
 ## Publishing the defaults
 

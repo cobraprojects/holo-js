@@ -10,6 +10,7 @@ interface TextBlock {
   readonly group: number | undefined
 }
 
+const MARKDOWN_PUNCTUATION_PATTERN = /[!-/:-@[-`{-~]/g
 const UNSAFE_URL_SCHEME_PATTERN = /^(?:javascript|vbscript|file|data):/i
 const SAFE_DATA_IMAGE_PATTERN = /^data:image\/(?:png|gif|jpeg|webp)/i
 
@@ -78,6 +79,10 @@ function joinTextBlocks(blocks: readonly TextBlock[]): string {
     const separator = block.group !== undefined && block.group === previous?.group ? '\n' : '\n\n'
     return `${separator}${block.text}`
   }).join('')
+}
+
+export function escapeMarkdown(text: string): string {
+  return text.replace(MARKDOWN_PUNCTUATION_PATTERN, '\\$&')
 }
 
 export function renderMarkdown(markdown: string): string {

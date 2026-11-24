@@ -97,6 +97,18 @@ describe('Mail components', () => {
     expect(mail.text).toBe('Search: https://example.test/search?a=1&b="x"')
   })
 
+  it('keeps button URLs containing Markdown delimiters exactly in the text', async () => {
+    const url = 'https://example.test/_reset_/token*1*/[a](b)/`code`/~x~/<y>/#z\\w'
+    const mail = await sendTemplate(
+      '<mail::button url="{{ url }}">Reset</mail::button>\n\n<mail::button url="https://example.test/__literal__/*path*">Literal</mail::button>',
+      { url },
+    )
+
+    expect(mail.text).toBe(`Reset: ${url}\n\nLiteral: https://example.test/__literal__/*path*`)
+    expect(mail.html).toContain('<a href="https://example.test/_reset_/token*1*/[a](b)/`code`/~x~/&lt;y&gt;/#z\\w" class="button button-primary"')
+    expect(mail.html).toContain('<a href="https://example.test/__literal__/*path*" class="button button-primary"')
+  })
+
   it('escapes the written parts of an attribute with placeholders once and validates the unescaped URL', async () => {
     const mail = await sendTemplate(
       '<mail::button url="https://example.test/orders?id={{ id }}&ref=mail">Open</mail::button>',

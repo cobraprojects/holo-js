@@ -189,6 +189,28 @@ export const date = defineMail({ to: 'a@example.com', subject: 'R', markdown: 'o
     expect(typeErrors(root, 'check-mail-errors.ts')).toHaveLength(4)
   })
 
+  it('types nested @foreach loops as lists of lists', async () => {
+    const root = await createProject()
+    await writeTemplate(root, 'grid', '@foreach (rows as row)\n@foreach (row as cell)\n{{ cell }}\n@endforeach\n@endforeach')
+
+    await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    await writeFile(join(root, 'check-mail.ts'), `
+import { defineMail } from '@holo-js/mail'
+
+const rows: readonly (readonly (string | number)[])[] = [['a', 1], []]
+export const grid = defineMail({ to: 'ava@example.com', subject: 'Grid', markdown: 'grid', data: { rows } })
+`, 'utf8')
+    expect(typeErrors(root, 'check-mail.ts')).toEqual([])
+
+    await writeFile(join(root, 'check-mail-errors.ts'), `
+import { defineMail } from '@holo-js/mail'
+
+export const flat = defineMail({ to: 'ava@example.com', subject: 'Grid', markdown: 'grid', data: { rows: ['a'] } })
+`, 'utf8')
+    expect(typeErrors(root, 'check-mail-errors.ts')).toHaveLength(1)
+  })
+
   it('types the loop item paths of a template included inside @foreach as the item shape', async () => {
     const root = await createProject()
     await writeTemplate(root, 'orders/shipped', '# Order {{ order.id }}\n\n@foreach (order.lines as line)\n@include (partials/line)\n@endforeach')
@@ -351,6 +373,15 @@ export const level = { subject: 'Hi', level: 'warning' } satisfies NotificationM
 
     await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig()))
       .rejects.toThrow('Mail component "alert" creates a component cycle: alert -> box -> alert.')
+  })
+
+  it('fails prepare on a cycle between a Mail template and an app Mail component', async () => {
+    const root = await createProject()
+    await writeMailFile(root, 'components/notice.html', '<div>{!! slot !!}</div>\n\n@include (welcome)')
+    await writeTemplate(root, 'welcome', '<mail::notice>Hi</mail::notice>')
+
+    await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig()))
+      .rejects.toThrow('Mail template "welcome" creates a cycle through Mail components: welcome -> <mail::notice> -> welcome.')
   })
 
   it('fails prepare on an unknown Mail component tag', async () => {

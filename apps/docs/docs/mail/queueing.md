@@ -126,7 +126,7 @@ The first retry waits 10 seconds and the second waits 60. A single number such a
 
 Holo resolves the mail when you send it and stores the result on the queue. The worker doesn't call your mail function again, so changes you deploy to a mail file only affect mail queued after the deploy.
 
-A Markdown mail stores its Mail template name and `data`, and the worker renders the template when it sends the mail, so a queued mail renders the same as one sent immediately. `html`, `text`, and `render` mails store their rendered subject, HTML, and text.
+A Markdown mail stores its Mail template name and `data`, and the worker renders it with the template deployed when it sends the mail. If you change the template after the mail is queued, the worker renders the new version, so the result can differ from an immediate send. `html`, `text`, and `render` mails store their rendered subject, HTML, and text.
 
 See [Attachments and queues](/mail/attachments#attachments-and-queues) for how files are stored with the job. Failed deliveries show up in [failed jobs](/queue/failed-jobs).
 
