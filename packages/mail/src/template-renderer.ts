@@ -4,6 +4,7 @@ import type { MailJsonObject, MailJsonValue } from './contracts-types'
 import { DEFAULT_MAIL_SOURCES } from './defaults'
 import { MailError } from './errors'
 import { renderMarkdown, renderMarkdownInline } from './markdown'
+import { findOwnEntry } from './own-entry'
 import {
   BUILT_IN_COMPILED_MAIL_COMPONENTS,
   BUILT_IN_COMPILED_MAIL_LAYOUTS,
@@ -48,10 +49,6 @@ const HTML_ESCAPES: Readonly<Record<string, string>> = {
   '>': '&gt;',
   '"': '&quot;',
   '\'': '&#039;',
-}
-
-function findCompiledEntry<TEntry>(entries: Readonly<Record<string, TEntry>>, name: string): TEntry | undefined {
-  return Object.hasOwn(entries, name) ? entries[name] : undefined
 }
 
 function isJsonObject(value: MailJsonValue | undefined): value is MailJsonObject {
@@ -113,7 +110,7 @@ function renderAttribute(context: RenderContext, nodes: readonly MailTemplateVal
 }
 
 function resolveComponent(context: RenderContext, name: string): CompiledMailComponent {
-  const component = findCompiledEntry(context.registry.components, name) ?? findCompiledEntry(BUILT_IN_COMPILED_MAIL_COMPONENTS, name)
+  const component = findOwnEntry(context.registry.components, name) ?? findOwnEntry(BUILT_IN_COMPILED_MAIL_COMPONENTS, name)
   if (!component) {
     throw new MailError(`[@holo-js/mail] Mail component "${name}" is not registered. Run "holo prepare".`, 'MAIL_COMPONENT_NOT_FOUND')
   }
@@ -186,8 +183,8 @@ function renderNodes(context: RenderContext, nodes: readonly MailTemplateNode[])
 }
 
 function renderTemplate(context: RenderContext): string {
-  const template = findCompiledEntry(context.registry.templates, context.template)
-    ?? findCompiledEntry(BUILT_IN_COMPILED_MAIL_TEMPLATES, context.template)
+  const template = findOwnEntry(context.registry.templates, context.template)
+    ?? findOwnEntry(BUILT_IN_COMPILED_MAIL_TEMPLATES, context.template)
   if (!template) {
     throw new MailError(
       `[@holo-js/mail] Mail template "${context.template}" is not registered. Run "holo prepare" after adding it under server/mail/templates.`,
@@ -213,7 +210,7 @@ export function renderMailLayout(registry: CompiledMailRegistry, format: MailTem
 }
 
 export function resolveMailTheme(registry: CompiledMailRegistry, name: string): string {
-  const theme = findCompiledEntry(registry.themes, name) ?? findCompiledEntry(DEFAULT_MAIL_SOURCES.themes, name)
+  const theme = findOwnEntry(registry.themes, name) ?? findOwnEntry(DEFAULT_MAIL_SOURCES.themes, name)
   if (theme !== undefined) return theme
   throw new MailError(
     `[@holo-js/mail] Mail theme "${name}" is not registered. Run "holo prepare" after adding it under server/mail/themes.`,

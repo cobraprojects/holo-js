@@ -1,4 +1,5 @@
 import { MailError } from './errors'
+import { findOwnEntry } from './own-entry'
 
 export type MailTemplateValueNode
   = { readonly type: 'text', readonly value: string }
@@ -212,7 +213,7 @@ function scanDirective(template: string, source: string, match: RegExpExecArray)
   const afterName = match.index + found.length
   if (escape) return { token: { type: 'text', value: found.slice(1) }, end: afterName }
 
-  const expected = Object.hasOwn(DIRECTIVE_ARGUMENTS, name) ? DIRECTIVE_ARGUMENTS[name] : undefined
+  const expected = findOwnEntry(DIRECTIVE_ARGUMENTS, name)
   if (expected === undefined) return { token: { type: 'text', value: found }, end: afterName }
 
   const line = lineAt(source, match.index)
