@@ -614,11 +614,14 @@ async function readDependencyPresence(projectRoot: string): Promise<(name: strin
   return name => Boolean(dependencies[name] ?? devDependencies[name])
 }
 
-export async function assertMailPackageInstalled(projectRoot: string, feature: string): Promise<void> {
-  const hasDependency = await readDependencyPresence(projectRoot)
+function assertMailDependencyPresent(hasDependency: (name: string) => boolean, feature: string): void {
   if (!hasDependency('@holo-js/mail')) {
     throw new Error(`${feature} requires @holo-js/mail. Install mail first with \`holo install mail\`.`)
   }
+}
+
+export async function assertMailPackageInstalled(projectRoot: string, feature: string): Promise<void> {
+  assertMailDependencyPresent(await readDependencyPresence(projectRoot), feature)
 }
 
 export async function publishMailIntoProject(
@@ -626,8 +629,8 @@ export async function publishMailIntoProject(
   options: { readonly force?: boolean } = {},
 ): Promise<MailPublishResult> {
   await loadProjectConfig(projectRoot, { required: true })
-  await assertMailPackageInstalled(projectRoot, 'Mail publishing')
   const hasDependency = await readDependencyPresence(projectRoot)
+  assertMailDependencyPresent(hasDependency, 'Mail publishing')
 
   const mailFiles = await loadPublishableMailFiles(projectRoot)
   const authFiles = AUTH_NOTIFICATION_FILES.map(file => ({ path: file.path, contents: file.render() }))
