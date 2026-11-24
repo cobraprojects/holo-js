@@ -335,7 +335,7 @@ email(recipient) {
 
 ### email: html
 
-An optional HTML body. When you set `html` or `text`, Holo sends them exactly as given instead of rendering a Mail template.
+An optional HTML body. When you set `html` or `text`, Holo sends them exactly as given instead of rendering a Mail template. The exception is `text` together with `markdown`: the Mail template still renders the HTML, and `text` replaces only its plain-text version.
 
 ```ts
 email() {

@@ -76,7 +76,7 @@ Templates support these Blade directives and no others: `@if`, `@else`, `@endif`
 | `@include (name)` | Another Mail template, which sees the same `data` and the loop items in scope where it is included. |
 
 ```md [server/mail/templates/orders/shipped.md]
-# Order {{ order.number }} shipped
+# Order {{ order.number }} shipped on {{ shippedOn }}
 
 @if (order.isGift)
 This order is wrapped as a gift.
@@ -120,8 +120,9 @@ defineMail({
   subject: 'Your order shipped',
   markdown: 'orders/shipped',
   data: {
-    order: { number: 'A-1001' },
+    order: { number: 'A-1001', lines: [{ name: 'Notebook', quantity: 2 }] },
     shippedOn: new Date().toLocaleDateString('en-US'),
+    support: { email: 'help@example.com' },
   },
 })
 ```
@@ -163,7 +164,7 @@ Questions? [Contact support](https://example.com/support).
 
 The content of a component is Markdown, so you can use bold text, links, and tables inside it. Put each opening and closing tag on its own line with a blank line before and after the component, as in the example above.
 
-Attribute values are strings and can contain placeholders. A `{{ }}` placeholder inside an attribute is escaped where the attribute is written, so `url="{{ order.url }}"` is safe for values that come from users, whichever way the component outputs it.
+Attribute values are strings and can contain placeholders. A `{{ }}` placeholder inside an attribute is HTML-escaped where the attribute is written, so `url="{{ order.url }}"` is safe for values that come from users as long as the component writes the value inside a quoted HTML attribute, as Holo's components do. Escaping doesn't encode spaces or `=`, so a component that writes it unquoted, such as `href={{ url }}`, lets a user value add other attributes.
 
 A button's `url` must be an absolute `http:` or `https:` URL. Sending a mail whose button has a missing, relative, `javascript:`, or `mailto:` URL throws an error, so a broken button is never sent. Plain Markdown links such as `[Track order](https://example.com)` stay normal links.
 

@@ -41,7 +41,7 @@ defineMail({
 Hello {{ name }},
 ```
 
-`{{ name }}` escapes HTML in the value. HTML written in the template itself is output as written. Values used in a template must be strings or numbers, so format dates before passing them. Passing Markdown text to `markdown` is now a type error, and sending it throws `Mail template "<text>" is not registered.`
+`{{ name }}` escapes HTML in the value. HTML written in the template itself is output as written. Values output through `{{ }}` or `{!! !!}` must be strings or numbers, so format dates before passing them. Lists for `@foreach`, nested objects, and any JSON value tested by `@if` stay valid. Passing Markdown text to `markdown` is now a type error, and sending it throws `Mail template "<text>" is not registered.`
 
 ### `markdown.wrapper` and `markdownWrapper` are removed
 
