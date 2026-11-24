@@ -138,6 +138,7 @@ const UNSUPPORTED_BLADE_DIRECTIVES: ReadonlySet<string> = new Set([
   'section', 'endsection', 'show', 'yield', 'extends', 'parent', 'component', 'endcomponent', 'slot', 'endslot', 'props', 'aware',
   'verbatim', 'endverbatim', 'json', 'method', 'csrf', 'error', 'enderror', 'once', 'endonce',
   'push', 'endpush', 'prepend', 'endprepend', 'stack', 'class', 'style',
+  'includeIf', 'includeWhen', 'includeUnless', 'includeFirst', 'includeIsolated', 'each',
 ])
 const BLOCK_CLOSERS: Readonly<Record<DirectiveBlock, string>> = { if: 'endif', foreach: 'endforeach' }
 const FOREACH_ARGUMENT_PATTERN = /^(\S+)\s+as\s+([A-Za-z_]\w*)$/
