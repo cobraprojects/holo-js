@@ -2,10 +2,10 @@ import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { NotificationDefinition, defineNotification, notify, NotificationMailSender } from '@holo-js/notifications'
 import { importBundledRuntimeModule } from '../runtimeModule'
-import { createAuthActionUrl, createAuthEmailHtml, type createCoreNotificationMailSender, createNotificationMailText, formatAuthEmailExpiration } from './authMailDelivery'
+import { createAuthActionUrl, formatAuthEmailExpiration, sendNotificationMail } from './authMailDelivery'
 
 type NotificationsModule = { readonly defineNotification: typeof defineNotification, readonly notify: typeof notify }
-type MailSender = Parameters<typeof createCoreNotificationMailSender>[0]
+type MailSender = Parameters<typeof sendNotificationMail>[0]
 type AuthDeliveryInput = {
   readonly provider: string
   readonly email: string
@@ -60,17 +60,12 @@ function createAuthDeliveryHook(appUrl: string, send: (delivery: ReturnType<type
   })
 }
 
-export function createAuthMailDeliveryHook(mail: MailSender, appUrl: string) {
-  return createAuthDeliveryHook(appUrl, async ({ purpose, recipient, message }) => {
-    await mail.sendMail({
-      to: purpose === 'email-verification'
-        ? { email: recipient.email, ...(recipient.name ? { name: recipient.name } : {}) }
-        : recipient.email,
-      subject: message.subject,
-      html: createAuthEmailHtml(message),
-      text: createNotificationMailText(message),
-      metadata: message.metadata,
-    })
+export function createAuthMailDeliveryHook(mail: MailSender, app: { readonly name: string, readonly url: string }) {
+  return createAuthDeliveryHook(app.url, async ({ purpose, recipient, message }) => {
+    const to = purpose === 'email-verification'
+      ? { email: recipient.email, ...(recipient.name ? { name: recipient.name } : {}) }
+      : recipient.email
+    await sendNotificationMail(mail, app.name, to, message)
   })
 }
 
@@ -85,7 +80,7 @@ export function createAuthNotificationsDeliveryHook(notifications: Notifications
       type: `auth.${purpose}`,
       via() { return ['email'] },
       build: {
-        email() { return { ...message, html: createAuthEmailHtml(message) } },
+        email() { return message },
       },
     })
     await notifications.notify(recipient, notification)
@@ -93,16 +88,16 @@ export function createAuthNotificationsDeliveryHook(notifications: Notifications
 }
 
 export function createCoreAuthDeliveryHook(options: {
-  readonly appUrl: string
+  readonly app: { readonly name: string, readonly url: string }
   readonly projectRoot?: string
   readonly notifications?: NotificationsModule
   readonly mail?: MailSender
   readonly notificationsMailer?: NotificationMailSender
 }) {
   if (options.notifications && (options.mail || options.notificationsMailer)) {
-    return createAuthNotificationsDeliveryHook(options.notifications, options.appUrl, options.projectRoot)
+    return createAuthNotificationsDeliveryHook(options.notifications, options.app.url, options.projectRoot)
   }
-  return options.mail ? createAuthMailDeliveryHook(options.mail, options.appUrl) : undefined
+  return options.mail ? createAuthMailDeliveryHook(options.mail, options.app) : undefined
 }
 
 type AuthNotificationModule = {

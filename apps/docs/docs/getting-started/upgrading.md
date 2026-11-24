@@ -55,6 +55,10 @@ Every Markdown mail is now wrapped in the default Mail layout, with a header tha
 
 `npx holo make:mail` now creates the mail definition and its Mail template. `--markdown` takes the template name, such as `--markdown=orders/shipped`; without it the name is the kebab-case mail name without a `Mail` suffix.
 
+### Notification emails render through Mail templates
+
+Email notifications are now rendered by the `notifications/email` [Mail template](/notifications/channels#email) inside your Mail layout and theme, like Laravel's notification emails. They start with `Hello!` (or `Whoops!` for `level: 'error'`) unless you set `greeting`, and end with `Regards,` and your app name unless you set `salutation`. The subject is no longer repeated as a heading, `lines` are no longer trimmed or filtered, and the link under the button now reads `If you're having trouble clicking the "{label}" button, copy and paste the URL below into your web browser:`. A notification that sets only `text` is now sent as plain text without a generated HTML body. Notifications that set `html` are sent unchanged.
+
 ### A single line break no longer adds `<br>` in Markdown mail
 
 Markdown mail is rendered with CommonMark. A single line break inside a paragraph now stays inside the paragraph as a space instead of becoming a `<br>`. End the line with two spaces or a `\` to keep a line break, or separate the lines with a blank line to start a new paragraph.

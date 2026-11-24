@@ -2,7 +2,7 @@ import { expectTypeOf, it } from 'vitest'
 import { holoRuntimeInternals } from '../src/portable/holo'
 
 it('retains concrete Auth delivery inputs and asynchronous completion', () => {
-  const delivery = holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail() {} }, 'https://example.com')
+  const delivery = holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail() {} }, { name: 'Holo', url: 'https://example.com' })
   type VerificationInput = Parameters<typeof delivery.sendEmailVerification>[0]
   type ResetInput = Parameters<typeof delivery.sendPasswordReset>[0]
   expectTypeOf<VerificationInput['email']>().toEqualTypeOf<string>()
@@ -20,7 +20,7 @@ it('retains concrete Auth delivery inputs and asynchronous completion', () => {
 })
 
 function rejectInvalidAuthDeliveryInputs() {
-  const delivery = holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail() {} }, 'https://example.com')
+  const delivery = holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail() {} }, { name: 'Holo', url: 'https://example.com' })
   const input = { provider: 'users', email: 'ava@example.com', token: { id: 'id', plainTextToken: 'token', expiresAt: new Date() }, route: '/reset' }
   // @ts-expect-error Password reset requires its broker
   void delivery.sendPasswordReset(input)

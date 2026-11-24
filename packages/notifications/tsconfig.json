@@ -5,6 +5,9 @@
     "paths": {
       "@holo-js/kernel": [
         "../kernel/src/index.ts"
+      ],
+      "@holo-js/mail": [
+        "../mail/src/index.ts"
       ]
     }
   },

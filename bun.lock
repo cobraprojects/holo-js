@@ -1000,6 +1000,7 @@
       },
       "devDependencies": {
         "@holo-js/db": "catalog:",
+        "@holo-js/mail": "catalog:",
         "@holo-js/queue": "catalog:",
         "@types/node": "catalog:",
         "tsup": "catalog:",
@@ -1007,9 +1008,11 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
+        "@holo-js/mail": ">=0.4.0",
         "@holo-js/queue": ">=0.4.0",
       },
       "optionalPeers": [
+        "@holo-js/mail",
         "@holo-js/queue",
       ],
     },

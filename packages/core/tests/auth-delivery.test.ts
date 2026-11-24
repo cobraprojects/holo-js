@@ -6,7 +6,9 @@ import { configureNotificationsRuntime, defineNotification, notify, resetNotific
 import { holoRuntimeInternals } from '../src/portable/holo'
 import { createCoreAuthDeliveryHook } from '../src/portable/authDelivery'
 
-type DeliveredMessage = NotificationMailMessage | Parameters<Parameters<typeof holoRuntimeInternals.createAuthMailDeliveryHook>[0]['sendMail']>[0]
+type SentMail = Parameters<Parameters<typeof holoRuntimeInternals.createAuthMailDeliveryHook>[0]['sendMail']>[0]
+type DeliveredMessage = NotificationMailMessage | SentMail
+const app = { name: 'Holo App', url: 'https://example.com' }
 const roots: string[] = []
 const token = { id: 'token-id', plainTextToken: 'a&b +/#', expiresAt: new Date('2026-10-08T12:30:00Z') }
 const verification = { provider: 'users', user: { name: '  Ava <&"\'>  ' }, email: 'ava@example.com', token, route: 'verify?source=email&token=old#finish' }
@@ -17,23 +19,27 @@ afterEach(async () => {
 })
 
 describe('Auth delivery', () => {
-  it('delivers the same escaped verification content through Notifications and Mail', async () => {
-    const messages: DeliveredMessage[] = []
-    configureNotificationsRuntime({ mailer: { async send(message) { messages.push(message) } } })
+  it('delivers the same verification content through Notifications and the notification Mail template', async () => {
+    const notified: NotificationMailMessage[] = []
+    const mailed: SentMail[] = []
+    configureNotificationsRuntime({ mailer: { async send(message) { notified.push(message) } } })
     await holoRuntimeInternals.createAuthNotificationsDeliveryHook({ defineNotification, notify }, 'https://example.com/base/').sendEmailVerification(verification)
-    await holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail(mail) { messages.push(mail) } }, 'https://example.com/base/').sendEmailVerification(verification)
+    await holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail(mail) { mailed.push(mail) } }, { ...app, url: 'https://example.com/base/' }).sendEmailVerification(verification)
 
-    expect(messages).toHaveLength(2)
-    for (const message of messages) {
-      expect(message.subject).toBe('Verify your email address')
-      expect(message.html).toContain('Hello Ava &lt;&amp;&quot;&#39;&gt;,')
-      expect(message.html).toContain('https://example.com/base/verify?source=email&amp;token=a%26b+%2B%2F%23#finish')
-      expect(message.html).toContain('October 8, 2026 at 12:30 PM UTC')
-      expect(message.metadata).toEqual({ provider: 'users', tokenId: 'token-id' })
+    const url = 'https://example.com/base/verify?source=email&token=a%26b+%2B%2F%23#finish'
+    const content = {
+      greeting: 'Hello Ava <&"\'>,',
+      lines: ['Confirm your account to finish signing in.', 'This verification link expires at October 8, 2026 at 12:30 PM UTC.'],
+      action: { label: 'Verify email address', url },
     }
-    expect(messages[1]?.html).toBe(messages[0]?.html)
-    expect(messages[1]?.text).toContain('Hello Ava <&"\'>,')
-    expect(messages[1]?.text).toContain('Verify email address: https://example.com/base/verify?source=email&token=a%26b+%2B%2F%23#finish')
+    expect(notified).toEqual([{ subject: 'Verify your email address', ...content, metadata: { provider: 'users', tokenId: 'token-id' } }])
+    expect(mailed).toEqual([{
+      to: { email: 'ava@example.com', name: 'Ava <&"\'>' },
+      subject: 'Verify your email address',
+      markdown: 'notifications/email',
+      data: { ...content, level: 'info', actionColor: 'primary', outroLines: [], salutation: 'Regards,\\\nHolo App' },
+      metadata: { provider: 'users', tokenId: 'token-id' },
+    }])
   })
 
   it('lets a project notification replace the complete default delivery', async () => {
@@ -55,39 +61,41 @@ export default { via() { return ['email'] }, build: { email() { return { subject
     await delivery.sendEmailVerification(verification)
     expect(messages[0]?.subject).toBe('Verify your email address')
     expect(messages[1]).toEqual({ subject: 'Project verification', text: 'https://example.com/verify?source=email&token=a%26b+%2B%2F%23#finish', metadata: { custom: true, name: 'Ava <&"\'>' } })
-    await holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail(mail) { messages.push(mail) } }, 'https://example.com').sendEmailVerification(verification)
+    await holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail(mail) { messages.push(mail) } }, app).sendEmailVerification(verification)
     expect(messages[2]?.subject).toBe('Verify your email address')
   })
 
   it.each([{ name: '   ' }, { name: 42 }, null])('omits unusable verification names for %j', async (user) => {
-    const sent: Parameters<Parameters<typeof holoRuntimeInternals.createAuthMailDeliveryHook>[0]['sendMail']>[0][] = []
-    const delivery = holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail(mail) { sent.push(mail) } }, 'https://example.com')
+    const sent: SentMail[] = []
+    const delivery = holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail(mail) { sent.push(mail) } }, app)
     await delivery.sendEmailVerification({ ...verification, user })
     expect(sent[0]?.to).toEqual({ email: 'ava@example.com' })
-    expect(sent[0]?.text).not.toContain('Hello')
+    expect(sent[0]?.data).toMatchObject({ greeting: 'Hello!' })
   })
 
   it('delivers password reset content without a recipient name or broker metadata', async () => {
-    const messages: DeliveredMessage[] = []
+    const notified: NotificationMailMessage[] = []
+    const mailed: SentMail[] = []
     const input = { broker: 'admins', provider: 'users', email: 'ava@example.com', token, route: '/reset-password' }
     configureNotificationsRuntime({ mailer: { async send(message, context) {
       expect(context.route).toEqual({ email: 'ava@example.com' })
-      messages.push(message)
+      notified.push(message)
     } } })
     await holoRuntimeInternals.createAuthNotificationsDeliveryHook({ defineNotification, notify }, 'https://example.com').sendPasswordReset(input)
-    await holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail(mail) {
-      expect(mail.to).toBe('ava@example.com')
-      messages.push(mail)
-    } }, 'https://example.com').sendPasswordReset(input)
-    expect(messages).toHaveLength(2)
-    for (const message of messages) {
-      expect(message.subject).toBe('Reset your password')
-      expect(message.html).toContain('Click the link below to choose a new password.')
-      expect(message.html).toContain('This reset link expires at October 8, 2026 at 12:30 PM UTC.')
-      expect(message.html).toContain('Reset password</a>')
-      expect(message.metadata).toEqual({ provider: 'users', tokenId: 'token-id' })
+    await holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail(mail) { mailed.push(mail) } }, app).sendPasswordReset(input)
+
+    const content = {
+      lines: ['Click the link below to choose a new password.', 'This reset link expires at October 8, 2026 at 12:30 PM UTC.'],
+      action: { label: 'Reset password', url: 'https://example.com/reset-password?token=a%26b+%2B%2F%23' },
     }
-    expect(messages[1]?.html).toBe(messages[0]?.html)
+    expect(notified).toEqual([{ subject: 'Reset your password', ...content, metadata: { provider: 'users', tokenId: 'token-id' } }])
+    expect(mailed).toEqual([{
+      to: 'ava@example.com',
+      subject: 'Reset your password',
+      markdown: 'notifications/email',
+      data: { ...content, greeting: 'Hello!', level: 'info', actionColor: 'primary', outroLines: [], salutation: 'Regards,\\\nHolo App' },
+      metadata: { provider: 'users', tokenId: 'token-id' },
+    }])
   })
 
   it('propagates a selected invalid custom definition instead of using another export or file', async () => {
@@ -109,7 +117,7 @@ export default { via() { return ['email'] }, build: { email() { return { subject
     let mailAttempts = 0
     configureNotificationsRuntime({ mailer: { async send() { notificationsAttempts++; throw failure } } })
     const delivery = createCoreAuthDeliveryHook({
-      appUrl: 'https://example.com',
+      app,
       notifications: { defineNotification, notify },
       mail: { async sendMail() { mailAttempts++ } },
     })
@@ -123,7 +131,7 @@ export default { via() { return ['email'] }, build: { email() { return { subject
 
   it('propagates the original direct Mail failure', async () => {
     const failure = new Error('Transport unavailable')
-    const delivery = holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail() { throw failure } }, 'https://example.com')
+    const delivery = holoRuntimeInternals.createAuthMailDeliveryHook({ async sendMail() { throw failure } }, app)
     await expect(delivery.sendEmailVerification(verification)).rejects.toBe(failure)
   })
 })

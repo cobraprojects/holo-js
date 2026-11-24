@@ -147,9 +147,13 @@ Everything you can set on `defineNotification()`, plus the fields each built-in 
 <div class="method-list">
 
 - [email: subject](#email-subject)
+- [email: level](#email-level)
 - [email: greeting](#email-greeting)
 - [email: lines](#email-lines)
 - [email: action](#email-action)
+- [email: outroLines](#email-outrolines)
+- [email: salutation](#email-salutation)
+- [email: markdown and data](#email-markdown-and-data)
 - [email: html](#email-html)
 - [email: text](#email-text)
 - [email: metadata](#email-metadata)
@@ -239,7 +243,7 @@ delay: { email: 600 }
 
 ### email: subject
 
-Required. The subject line, also shown as the heading of the generated email.
+Required. The subject line.
 
 ```ts
 email() {
@@ -247,9 +251,19 @@ email() {
 }
 ```
 
+### email: level
+
+`'info'` (the default), `'success'`, or `'error'`. It sets the [Mail action](#email-action) button color (`primary`, `success`, or `error`), and `'error'` changes the default greeting to `Whoops!`.
+
+```ts
+email() {
+  return { subject: 'Payment failed', level: 'error', lines: ['We could not charge your card.'] }
+}
+```
+
 ### email: greeting
 
-An optional first paragraph, such as `Hi Ava,`.
+The heading at the top of the email. Defaults to `Hello!`, or `Whoops!` when `level` is `'error'`.
 
 ```ts
 email(recipient) {
@@ -259,7 +273,7 @@ email(recipient) {
 
 ### email: lines
 
-An optional list of paragraphs. Each line is trimmed, and blank lines are dropped.
+An optional list of intro paragraphs, shown before the [Mail action](#email-action).
 
 ```ts
 email() {
@@ -269,7 +283,7 @@ email() {
 
 ### email: action
 
-An optional button with a `label` and a `url`. Holo also prints the link as plain text under the button, for clients that hide buttons.
+An optional Mail action: a button with a `label` and a `url`. The email also ends with the line `If you're having trouble clicking the "{label}" button, copy and paste the URL below into your web browser:` followed by the URL, for clients that hide buttons.
 
 ```ts
 email(recipient) {
@@ -280,9 +294,48 @@ email(recipient) {
 }
 ```
 
+### email: outroLines
+
+An optional list of paragraphs shown after the [Mail action](#email-action).
+
+```ts
+email(recipient) {
+  return {
+    subject: 'Reset your password',
+    lines: ['You asked to reset your password.'],
+    action: { label: 'Reset password', url: recipient.resetUrl },
+    outroLines: ['If you did not ask for this, no further action is required.'],
+  }
+}
+```
+
+### email: salutation
+
+The sign-off at the end of the email. Defaults to `Regards,` followed by a line break and your app name from `config/app.ts`.
+
+```ts
+email() {
+  return { subject: 'Welcome', salutation: 'Cheers, the Acme team' }
+}
+```
+
+### email: markdown and data
+
+Renders one of your [Mail templates](/mail/markdown#mail-templates) instead of the notification email template. `markdown` is the template name and `data` is its data, typed exactly as in [`defineMail()`](/mail/markdown#typed-data). A notification with `markdown` cannot also set `greeting`, `lines`, `action`, `outroLines`, or `salutation`.
+
+```ts
+email(recipient) {
+  return {
+    subject: 'Your order shipped',
+    markdown: 'orders/shipped',
+    data: { order: { number: recipient.orderNumber } },
+  }
+}
+```
+
 ### email: html
 
-An optional HTML body. When you set it, Holo sends this HTML instead of building one from `greeting`, `lines`, and `action`.
+An optional HTML body. When you set `html` or `text`, Holo sends them exactly as given instead of rendering a Mail template.
 
 ```ts
 email() {
@@ -292,7 +345,7 @@ email() {
 
 ### email: text
 
-An optional plain-text body. If you leave it out, Holo builds one from `greeting`, `lines`, and `action`.
+An optional plain-text body. When you set it without `html`, the email has only this plain-text body. With `markdown`, it replaces the plain-text version of the Mail template.
 
 ```ts
 email() {
