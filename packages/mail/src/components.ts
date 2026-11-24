@@ -1,7 +1,11 @@
+import { MailError } from './errors'
+
 export interface MailComponentSource {
   readonly html: string
   readonly text: string
 }
+
+export type MailComponentFiles = Partial<MailComponentSource>
 
 export type MailComponentSlot = 'inline' | 'block'
 
@@ -67,12 +71,43 @@ const SUBCOPY_HTML = [
 
 const SLOT_TEXT = '{!! slot !!}'
 
-export const BUILT_IN_MAIL_COMPONENTS: Readonly<Record<string, MailComponentSource>> = Object.freeze({
+const BUILT_IN_MAIL_COMPONENTS: Readonly<Record<string, MailComponentSource>> = Object.freeze({
   button: { html: BUTTON_HTML, text: `${SLOT_TEXT}: {{ url }}` },
   panel: { html: PANEL_HTML, text: SLOT_TEXT },
   table: { html: TABLE_HTML, text: SLOT_TEXT },
   subcopy: { html: SUBCOPY_HTML, text: SLOT_TEXT },
 })
+
+const MAIL_COMPONENT_NAME_PATTERN = /^[a-z][\w-]*$/
+
+function resolveAppMailComponent(name: string, files: MailComponentFiles): MailComponentSource {
+  if (!MAIL_COMPONENT_NAME_PATTERN.test(name)) {
+    throw new MailError(
+      `[@holo-js/mail] "${name}" is not a Mail component name. Start it with a lowercase letter and use letters, digits, "-" and "_".`,
+      'MAIL_TEMPLATE_SYNTAX',
+    )
+  }
+
+  const builtIn = Object.hasOwn(BUILT_IN_MAIL_COMPONENTS, name) ? BUILT_IN_MAIL_COMPONENTS[name] : undefined
+  const html = files.html ?? builtIn?.html
+  if (html === undefined) {
+    throw new MailError(
+      `[@holo-js/mail] Mail component "${name}" has a text form but no HTML form. Add server/mail/components/${name}.html.`,
+      'MAIL_TEMPLATE_SYNTAX',
+    )
+  }
+
+  return { html, text: files.text ?? builtIn?.text ?? SLOT_TEXT }
+}
+
+export function resolveMailComponentSources(
+  appComponents: Readonly<Record<string, MailComponentFiles>>,
+): Readonly<Record<string, MailComponentSource>> {
+  return Object.freeze({
+    ...BUILT_IN_MAIL_COMPONENTS,
+    ...Object.fromEntries(Object.entries(appComponents).map(([name, files]) => [name, resolveAppMailComponent(name, files)])),
+  })
+}
 
 const DEFAULT_MAIL_COMPONENT_BEHAVIOR: MailComponentBehavior = Object.freeze({
   slot: 'block',

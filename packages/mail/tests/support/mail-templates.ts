@@ -1,5 +1,5 @@
 import { configureMailRuntime, normalizeMailConfig, type MailJsonObject } from '../../src'
-import { compileMailRegistry, type CompiledMailRegistry } from '../../src/templates'
+import { compileMailRegistry, type CompiledMailRegistry, type MailRegistrySources } from '../../src/templates'
 
 declare module '../../src/contracts-types' {
   interface HoloMailTemplateRegistry {
@@ -13,15 +13,22 @@ declare module '../../src/contracts-types' {
   }
 }
 
-export function compileWithoutLayout(templates: Readonly<Record<string, string>>): CompiledMailRegistry {
+export function compileWithoutLayout(
+  templates: Readonly<Record<string, string>>,
+  components: MailRegistrySources['components'] = {},
+): CompiledMailRegistry {
   return compileMailRegistry({
     templates,
+    components,
     layouts: { html: '{!! body !!}', text: '{!! body !!}' },
     themes: { default: '' },
   })
 }
 
-export function configureFakeMailerWithTemplates(templates: Readonly<Record<string, string>>): void {
+export function configureFakeMailerWithTemplates(
+  templates: Readonly<Record<string, string>>,
+  components: MailRegistrySources['components'] = {},
+): void {
   configureMailRuntime({
     config: normalizeMailConfig({
       default: 'fake',
@@ -29,6 +36,6 @@ export function configureFakeMailerWithTemplates(templates: Readonly<Record<stri
       mailers: { fake: { driver: 'fake' } },
     }),
     environment: 'test',
-    compiled: compileWithoutLayout(templates),
+    compiled: compileWithoutLayout(templates, components),
   })
 }
