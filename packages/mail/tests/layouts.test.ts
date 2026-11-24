@@ -83,6 +83,7 @@ describe('@holo-js/mail Mail layout', () => {
 
     expect((await send()).html).toMatch(/<h1[^>]*>Welcome<\/h1><footer>Sent by Acme &amp; Co<\/footer>$/)
   })
+
   it('escapes {{ }} values in Mail components of an app layout with securedEncoding', async () => {
     configureMail({
       layouts: { html: '<mail::panel>{{ subject }}</mail::panel>{!! body !!}', text: '{{ subject }}\n{!! body !!}' },

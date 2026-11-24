@@ -141,6 +141,7 @@
     "@holo-js/storage": "catalog:",
     "@holo-js/storage-s3": "catalog:",
     "@types/node": "catalog:",
+    "entities": "catalog:",
     "tsup": "catalog:",
     "vitest": "catalog:"
   },
