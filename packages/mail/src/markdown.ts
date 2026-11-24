@@ -53,25 +53,28 @@ function keepCharacterReferences(characters: ReadonlySet<string>): (state: State
   }
 }
 
-function createMarkdownParser(keptCharacterReferences: ReadonlySet<string> = new Set()): MarkdownIt {
+function createMarkdownParser(charactersKeptAsReferences: ReadonlySet<string> = new Set()): MarkdownIt {
   const parser = new MarkdownItParser('commonmark', { html: true }).enable('table')
   parser.validateLink = () => true
   parser.core.ruler.push('mail_unsafe_urls', forbidUnsafeUrls)
-  parser.core.ruler.before('text_join', 'mail_kept_character_references', keepCharacterReferences(keptCharacterReferences))
+  parser.core.ruler.before('text_join', 'mail_kept_character_references', keepCharacterReferences(charactersKeptAsReferences))
   return parser
 }
 
-export function createMarkdownHtmlRenderer(keptCharacterReferences?: ReadonlySet<string>): MarkdownHtmlRenderer {
-  const parser = createMarkdownParser(keptCharacterReferences)
+function toMarkdownHtmlRenderer(parser: MarkdownIt): MarkdownHtmlRenderer {
   return Object.freeze({
     render: (markdown: string) => parser.render(markdown).trimEnd(),
     renderInline: (markdown: string) => parser.renderInline(markdown),
   })
 }
 
+export function createMarkdownHtmlRenderer(charactersKeptAsReferences?: ReadonlySet<string>): MarkdownHtmlRenderer {
+  return toMarkdownHtmlRenderer(createMarkdownParser(charactersKeptAsReferences))
+}
+
 const markdownParser = createMarkdownParser()
 
-export const MARKDOWN_HTML_RENDERER = createMarkdownHtmlRenderer()
+export const MARKDOWN_HTML_RENDERER = toMarkdownHtmlRenderer(markdownParser)
 
 function renderInlineText(tokens: readonly Token[]): string {
   const parts: string[] = []
