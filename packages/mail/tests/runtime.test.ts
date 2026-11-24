@@ -330,6 +330,18 @@ describe('@holo-js/mail runtime', () => {
       expect(listFakeSentMails()[0]?.mail.html).toBe('<h1>Order 7</h1>\n<p>Mug of <strong>$12</strong>\nTea of <strong>$12</strong>\nThanks!</p>')
     })
 
+    it('compiles a deep chain of templates that include the next one from both @if branches', () => {
+      const depth = 25
+      const templates: Record<string, string> = Object.fromEntries(Array.from({ length: depth }, (_, level) => {
+        return [`level${level}`, `@if (paid)\n@include (level${level + 1})\n@else\n@include (level${level + 1})\n@endif`]
+      }))
+      templates[`level${depth}`] = 'Done'
+      const startedAt = performance.now()
+
+      expect(compileMailRegistry({ templates }).templates.level0?.data).toEqual({ kind: 'object', properties: { paid: { kind: 'json' } } })
+      expect(performance.now() - startedAt).toBeLessThan(1000)
+    })
+
     it('rejects template syntax errors when compiling', () => {
       expect(() => compileMailRegistry({ templates: { broken: 'Hello\n{{ name' } }))
         .toThrow('Mail template "broken" line 2: "{{" is not closed with "}}".')

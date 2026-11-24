@@ -163,7 +163,9 @@ function assertIncludesResolve(
   template: string,
   parsed: Readonly<Record<string, ParsedTemplateSyntax>>,
   chain: readonly string[],
+  validated: Set<string>,
 ): void {
+  if (validated.has(template)) return
   for (const include of parsed[template]?.includes ?? []) {
     if (!Object.hasOwn(parsed, include.template)) {
       throw new MailTemplateSyntaxError(template, include.line, `"@include (${include.template})" names a Mail template that does not exist.`)
@@ -173,19 +175,21 @@ function assertIncludesResolve(
       throw new MailTemplateSyntaxError(template, include.line, `"@include (${include.template})" creates an include cycle: ${cycle}.`)
     }
 
-    assertIncludesResolve(include.template, parsed, [...chain, include.template])
+    assertIncludesResolve(include.template, parsed, [...chain, include.template], validated)
   }
+  validated.add(template)
 }
 
 export function resolveTemplateData(
   parsed: Readonly<Record<string, ParsedTemplateSyntax>>,
 ): (template: string) => MailTemplateDataObjectShape {
   const resolved = new Map<string, MailTemplateDataObjectShape>()
+  const validated = new Set<string>()
   const resolve = (template: string): MailTemplateDataObjectShape => {
     const cached = resolved.get(template)
     if (cached) return cached
 
-    assertIncludesResolve(template, parsed, [template])
+    assertIncludesResolve(template, parsed, [template], validated)
     const data = new TemplateDataCollector(template, resolve).collect(parsed[template]?.nodes ?? [])
     resolved.set(template, data)
     return data
