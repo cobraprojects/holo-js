@@ -896,6 +896,21 @@ async function linkWorkspaceBroadcast(projectRoot: string): Promise<void> {
   await linkWorkspaceExternalDependency(projectRoot, 'valibot')
 }
 
+async function installWorkspaceMail(projectRoot: string): Promise<void> {
+  const { mailPackageRoot } = ensureBuiltWorkspacePackagesSync()
+  const packageJsonPath = join(projectRoot, 'package.json')
+  const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8')) as { dependencies?: Record<string, string> }
+  await writeFile(packageJsonPath, JSON.stringify({
+    ...packageJson,
+    dependencies: { ...packageJson.dependencies, '@holo-js/mail': 'workspace:*' },
+  }, null, 2))
+  await writeProjectFile(projectRoot, 'config/mail.ts', 'export default {}')
+  const targetDir = join(projectRoot, 'node_modules', '@holo-js')
+  await mkdir(targetDir, { recursive: true })
+  await rm(join(targetDir, 'mail'), { recursive: true, force: true }).catch(() => {})
+  await symlink(mailPackageRoot, join(targetDir, 'mail')).catch(() => {})
+}
+
 async function linkWorkspaceAuthorization(projectRoot: string): Promise<void> {
   const { authorizationPackageRoot } = ensureBuiltWorkspacePackagesSync()
   const targetDir = join(projectRoot, 'node_modules', '@holo-js')
@@ -9744,6 +9759,7 @@ export default defineMigration({
 
     const markdownMailProjectRoot = await createTempProject()
     tempDirs.push(markdownMailProjectRoot)
+    await installWorkspaceMail(markdownMailProjectRoot)
     const markdownMailIo = createIo(markdownMailProjectRoot)
     await (async () => runMakeMail(markdownMailIo.io, markdownMailProjectRoot, {
       args: ['auth/verify-email'],
@@ -10032,6 +10048,7 @@ export default defineEvent({ name: 'user.registered' })
     const jobCommandRoot = await createTempProject()
     tempDirs.push(jobCommandRoot)
     await linkWorkspaceBroadcast(jobCommandRoot)
+    await installWorkspaceMail(jobCommandRoot)
     const jobCommandIo = createIo(jobCommandRoot)
     const jobCommandContext = {
       ...jobCommandIo.io,
