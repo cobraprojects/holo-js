@@ -123,6 +123,15 @@ describe('App Mail components', () => {
     expect(mail.html).toBe('<div class="alert alert-info"><p>Check it</p></div>')
   })
 
+  it('forwards an attribute URL from an app component to a nested button exactly in both formats', async () => {
+    const url = 'https://example.test/reset/_token_/*1*?a=1&b=2'
+    const button = '<mail::button url="{{ url }}">{!! slot !!}</mail::button>'
+    const mail = await sendWithComponents('<mail::cta url="{{ url }}">Reset</mail::cta>', { cta: { html: button, text: button } }, { url })
+
+    expect(mail.html).toContain('<a href="https://example.test/reset/_token_/*1*?a=1&amp;b=2" class="button button-primary"')
+    expect(mail.text).toBe(`Reset: ${url}`)
+  })
+
   it('renders a Mail template included from an app component', async () => {
     configureFakeMailerWithTemplates(
       { fixture: '<mail::notice>Check it</mail::notice>', 'partials/footer': 'See you soon.' },
