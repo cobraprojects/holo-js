@@ -131,6 +131,14 @@ const DIRECTIVE_ARGUMENTS: Readonly<Record<string, string>> = {
   endforeach: '',
   include: 'a Mail template name',
 }
+const UNSUPPORTED_BLADE_DIRECTIVES: ReadonlySet<string> = new Set([
+  'elseif', 'unless', 'endunless', 'isset', 'endisset', 'empty', 'endempty', 'forelse', 'endforelse',
+  'for', 'endfor', 'while', 'endwhile', 'switch', 'case', 'break', 'continue', 'default', 'endswitch',
+  'php', 'endphp', 'lang', 'choice', 'auth', 'endauth', 'guest', 'endguest', 'env', 'endenv', 'production', 'endproduction',
+  'section', 'endsection', 'show', 'yield', 'extends', 'parent', 'component', 'endcomponent', 'slot', 'endslot', 'props', 'aware',
+  'verbatim', 'endverbatim', 'json', 'method', 'csrf', 'error', 'enderror', 'once', 'endonce',
+  'push', 'endpush', 'prepend', 'endprepend', 'stack', 'class', 'style',
+])
 const BLOCK_CLOSERS: Readonly<Record<DirectiveBlock, string>> = { if: 'endif', foreach: 'endforeach' }
 const FOREACH_ARGUMENT_PATTERN = /^(\S+)\s+as\s+([A-Za-z_]\w*)$/
 const PATH_SEGMENT_PATTERN = /^[A-Za-z_]\w*$/
@@ -213,10 +221,14 @@ function scanDirective(template: string, source: string, match: RegExpExecArray)
   const afterName = match.index + found.length
   if (escape) return { token: { type: 'text', value: found.slice(1) }, end: afterName }
 
+  const line = lineAt(source, match.index)
+  if (UNSUPPORTED_BLADE_DIRECTIVES.has(name)) {
+    throw new MailTemplateSyntaxError(template, line, `"@${name}" is not supported in Mail templates.`)
+  }
+
   const expected = findOwnEntry(DIRECTIVE_ARGUMENTS, name)
   if (expected === undefined) return { token: { type: 'text', value: found }, end: afterName }
 
-  const line = lineAt(source, match.index)
   if (!expected) {
     return { token: { type: 'directive', name, argument: '', line }, end: skipDirectiveLineBreak(source, afterName) }
   }

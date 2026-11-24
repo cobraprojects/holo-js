@@ -67,7 +67,7 @@ Placeholders are filled before the Markdown is parsed, and `{{ }}` escapes only 
 
 ## Conditions, loops, and includes
 
-Templates support Blade-style directives. Each takes a dot path or a template name and nothing else.
+Templates support these Blade directives and no others: `@if`, `@else`, `@endif`, `@foreach`, `@endforeach`, and `@include`. Each takes a dot path or a template name and nothing else.
 
 | Directive | Output |
 | --- | --- |
@@ -99,7 +99,7 @@ Questions? Contact us at {{ support.email }}.
 
 `@if` only tests whether a value is truthy, the way Laravel's Blade does. A missing value, `null`, `false`, `0`, `''`, `'0'`, an empty list, and an empty object are false; every other value is true. There are no operators, comparisons, or function calls, so compute flags such as `isOverdue` before you pass them.
 
-A line that holds only a directive leaves no blank line behind, so `@foreach` can produce the rows of a Markdown table. Directives also work inside a line, as long as the `@` doesn't follow a letter, digit, or `_`. Any other `@` word, such as `@holo` or `@media`, is output as written. To output a directive name as text, write `@@`, as in `@@if`. Email addresses such as `help@example.com` need no escaping.
+A line that holds only a directive leaves no blank line behind, so `@foreach` can produce the rows of a Markdown table. Directives also work inside a line, as long as the `@` doesn't follow a letter, digit, or `_`. Any other Blade directive, such as `@elseif`, `@unless`, `@isset`, `@forelse`, `@lang`, or `@php`, fails `holo prepare` with a "not supported in Mail templates" error, so a directive Laravel would run is never sent as text. Any other `@` word, such as `@holo` or `@media`, is output as written. To output a directive name as text, write `@@`, as in `@@if` or `@@unless`. Email addresses such as `help@example.com` need no escaping.
 
 A loop item's name hides a `data` value with the same name inside the loop. An included template sees the mail's `data` and, when it is included inside `@foreach`, the loop's current item by its name. An included template can include others, but a template that includes itself, directly or through other templates, fails `holo prepare`.
 

@@ -362,9 +362,25 @@ describe('@holo-js/mail runtime', () => {
       }
     })
 
+    it('rejects Blade directives that Mail templates do not support when compiling', () => {
+      const failures: readonly (readonly [string, string])[] = [
+        ['@if (paid)\nPaid\n@elseif (due)\nDue\n@endif', 'line 3: "@elseif" is not supported in Mail templates.'],
+        ['@unless (paid)\nDue\n@endunless', 'line 1: "@unless" is not supported in Mail templates.'],
+        ['@forelse (items as item)\n{{ item }}\n@empty\nNone\n@endforelse', 'line 1: "@forelse" is not supported in Mail templates.'],
+        ['Hello {{ name }}, @lang(\'welcome\')', 'line 1: "@lang" is not supported in Mail templates.'],
+        ['@php\n$x = 1;\n@endphp', 'line 1: "@php" is not supported in Mail templates.'],
+        ['Total: @json(order)', 'line 1: "@json" is not supported in Mail templates.'],
+      ]
+
+      for (const [source, message] of failures) {
+        expect(() => compileMailRegistry({ templates: { broken: source } })).toThrow(`Mail template "broken" ${message}`)
+      }
+    })
+
     it('outputs an escaped @@ directive as literal text', async () => {
       expect((await sendTemplate('Follow @@holo on social media')).html).toBe('<p>Follow @holo on social media</p>')
       expect((await sendTemplate('Write @@if (paid) to check a value')).html).toBe('<p>Write @if (paid) to check a value</p>')
+      expect((await sendTemplate('Write @@unless or @@php in a guide')).html).toBe('<p>Write @unless or @php in a guide</p>')
     })
 
     it('outputs an unknown @ word as literal text', async () => {
